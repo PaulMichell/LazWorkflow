@@ -14,9 +14,14 @@ import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
+import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.encodeConversations
+import computing.michell.monitor.protocol.encodeEnvelope
+import computing.michell.monitor.protocol.encodeModels
 import computing.michell.monitor.protocol.encodeTargets
+import computing.michell.monitor.protocol.statusToJson
 
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
@@ -137,6 +142,25 @@ class MonitorReducerTest {
     assertTrue(moved.conversationChoices.isEmpty())
     assertEquals("still typing", moved.draft)
     assertEquals("new", moved.turns.single().id)
+  }
+
+  @Test
+  fun modelsFrameFillsTheListAndATargetChangeKeepsIt() {
+    val choices = listOf(ModelChoice("grok-4", "grok-4 — 256k context"), ModelChoice("grok-3", "grok-3"))
+    val frame = encodeModels("models", "grok-4", "grok", "The rest of this list is in desktop Settings.", choices)
+    val filled = reduceMonitor(MonitorUi(view = emptyView().copy(model = "grok-4", targetRoot = "/old/")), message(frame))
+    assertEquals(choices, filled.modelChoices)
+    assertEquals("grok", filled.modelBackend)
+    assertEquals("The rest of this list is in desktop Settings.", filled.modelNote)
+    assertEquals("grok-4", filled.view.model)
+    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
+    assertEquals(choices, moved.modelChoices)
+    assertEquals("grok", moved.modelBackend)
+    assertEquals("The rest of this list is in desktop Settings.", moved.modelNote)
+    val status = encodeEnvelope(MessageKind.Status, "status-model", statusToJson(emptyView().copy(model = "grok-3")))
+    val checked = reduceMonitor(moved, message(status))
+    assertEquals("grok-3", checked.view.model)
+    assertEquals(choices, checked.modelChoices)
   }
 
   @Test

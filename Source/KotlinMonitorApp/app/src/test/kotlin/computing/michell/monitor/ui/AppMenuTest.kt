@@ -3,6 +3,7 @@ package computing.michell.monitor.ui
 /* App menu sections: host check, empty lists, disconnect (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.ConversationChoice
+import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.TargetChoice
 import org.junit.Assert.assertEquals
@@ -132,6 +133,42 @@ class AppMenuTest {
     assertEquals(rows.map { it.title }, section.rows.map { it.caption })
     val planning = sample().copy(view = sample().view.copy(planRunning = true), planRunning = true, conversationChoices = rows)
     assertTrue(appMenuSections(planning).first { it.kind == MenuSectionKind.Conversation }.enabled)
+  }
+
+  @Test
+  fun modelSectionUsesCaptionsAndTheStatusModel() {
+    val choices = listOf(ModelChoice("grok-4", "grok-4 — 256k context"), ModelChoice("grok-3", "grok-3"))
+    val ui = sample().copy(
+      view = sample().view.copy(model = "grok-4"),
+      modelChoices = choices,
+      modelBackend = "grok",
+      modelNote = "The rest of this list is in desktop Settings."
+    )
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Model }
+    assertEquals(listOf("grok-4 — 256k context", "grok-3"), section.rows.map { it.caption })
+    assertEquals(listOf("grok-4", "grok-3"), section.rows.map { it.id })
+    assertEquals("grok-4", section.currentId)
+    assertEquals(MenuTap.CloseOnly, menuTap("grok-4", section.currentId, section.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("grok-3", section.currentId, section.enabled))
+    assertEquals("The rest of this list is in desktop Settings.", section.note)
+    assertTrue(section.enabled)
+  }
+
+  @Test
+  fun modelRowsDisableWhileDisconnectedSendingOrPlanning() {
+    assertFalse(modelRowsEnabled(true, false, false))
+    assertFalse(modelRowsEnabled(false, true, false))
+    assertFalse(modelRowsEnabled(false, false, true))
+    assertTrue(modelRowsEnabled(false, false, false))
+    val rows = listOf(ModelChoice("grok-4", "grok-4"))
+    val planning = sample().copy(
+      view = sample().view.copy(planRunning = true, model = "grok-4"),
+      planRunning = true,
+      modelChoices = rows
+    )
+    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Model }
+    assertFalse(section.enabled)
+    assertEquals(listOf("grok-4"), section.rows.map { it.caption })
   }
 
   @Test

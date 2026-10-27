@@ -97,6 +97,10 @@ import computing.michell.monitor.protocol.encodePlanChoices
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.ConversationsMessage
+import computing.michell.monitor.protocol.ModelChoice
+import computing.michell.monitor.protocol.ModelsMessage
+import computing.michell.monitor.protocol.decodeModels
+import computing.michell.monitor.protocol.encodeSetModel
 import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.TargetsMessage
 import computing.michell.monitor.protocol.decodeConversations
@@ -137,6 +141,9 @@ data class MonitorUi(
   val conversationChoices: List<ConversationChoice> = emptyList(),
   val conversationCurrent: String = "",
   val conversationsTruncated: Boolean = false,
+  val modelChoices: List<ModelChoice> = emptyList(),
+  val modelBackend: String = "",
+  val modelNote: String = "",
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
   val banner: String = "",
@@ -196,6 +203,9 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     conversationChoices = state.conversationChoices,
     conversationCurrent = state.conversationCurrent,
     conversationsTruncated = state.conversationsTruncated,
+    modelChoices = state.modelChoices,
+    modelBackend = state.modelBackend,
+    modelNote = state.modelNote,
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
     connectionGeneration = state.connectionGeneration + 1
@@ -516,6 +526,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Target -> applyTarget(state, message.payloadJson)
     MessageKind.Targets -> applyTargets(state, message.payloadJson)
     MessageKind.Conversations -> applyConversations(state, message.payloadJson)
+    MessageKind.Models -> applyModels(state, message.payloadJson)
     MessageKind.Plan -> applyPlan(state, message.payloadJson)
     MessageKind.ApprovalRequested -> applyApprovalRequested(state, message.payloadJson)
     MessageKind.ApprovalClosed -> state.copy(approvalOpen = false)
@@ -677,6 +688,7 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Target -> applyTargetFrame(state, inbound.value.kind, inbound.value.display, inbound.value.root)
     is InboundPayload.Targets -> applyTargetsFrame(state, inbound.value)
     is InboundPayload.Conversations -> applyConversationsFrame(state, inbound.value)
+    is InboundPayload.Models -> applyModelsFrame(state, inbound.value)
     is InboundPayload.Plan -> state.copy(
       planPath = inbound.value.path,
       planTitle = inbound.value.title,
@@ -927,6 +939,20 @@ internal fun applyConversationsFrame(state: MonitorUi, conversations: Conversati
     conversationChoices = conversations.choices,
     conversationCurrent = conversations.current,
     conversationsTruncated = conversations.truncated
+  )
+}
+
+private fun applyModels(state: MonitorUi, payloadJson: String): MonitorUi {
+  val models = decodeModels(payloadJson) ?: return state
+  return applyModelsFrame(state, models)
+}
+
+/** Replaces the model list only. The check stays on view.model until a status frame moves it. */
+internal fun applyModelsFrame(state: MonitorUi, models: ModelsMessage): MonitorUi {
+  return state.copy(
+    modelChoices = models.choices,
+    modelBackend = models.backend,
+    modelNote = models.note
   )
 }
 
@@ -1415,6 +1441,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val selected = conversationSelectedId(state.conversationChoices, state.conversationCurrent)
     if (id == selected || state.conversationChoices.none { it.id == id }) return
     session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), id))
+  }
+
+  fun selectModel(id: String) {
+    val state = uiState.value
+    if (state.disconnected || state.view.sending || state.view.planRunning || state.planRunning) return
+    if (id == state.view.model || state.modelChoices.none { it.id == id }) return
+    session.sendCatalogue(encodeSetModel(session.nextCommandId(), id))
   }
 
   fun openPlan(path: String) {

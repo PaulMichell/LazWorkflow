@@ -43,6 +43,11 @@ fun targetRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Bool
 /** Shown under the history list when the host omitted older archives. */
 const val OlderConversationsSentence = "Older conversations stay on the desktop."
 
+/** Model rows stay put while disconnected, sending, or a plan run. */
+fun modelRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
+  return !disconnected && !sending && !planRunning
+}
+
 /** History rows stay put while disconnected or sending. A plan run does not lock them. */
 fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
   return !disconnected && !sending
@@ -95,7 +100,7 @@ fun menuHeader(ui: MonitorUi): String = ui.view.targetDisplay
 
 /**
  * Seven sections in drawer order. Mode and Plan are already on the phone.
- * Target and Conversation fill from their host frames. The rest stay empty until those frames arrive.
+ * Target, Conversation, and Model fill from their host frames. The rest stay empty until those frames arrive.
  * Disconnect disables rows and does not clear lists.
  */
 fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
@@ -104,6 +109,7 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
   val canSend = linkUp && ui.view.canChangeMode
   val targetEnabled = targetRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val historyEnabled = conversationRowsEnabled(ui.disconnected, ui.view.sending)
+  val modelEnabled = modelRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val historyNote = if (ui.conversationsTruncated) OlderConversationsSentence else ""
   return listOf(
     MenuSectionModel(
@@ -124,7 +130,11 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
     MenuSectionModel(
       MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
     ),
-    MenuSectionModel(MenuSectionKind.Model, "Model", emptyList(), "", linkUp),
+    MenuSectionModel(
+      MenuSectionKind.Model, "Model",
+      ui.modelChoices.map { MenuRow(it.id, it.caption) },
+      ui.view.model, modelEnabled, ui.modelNote
+    ),
     MenuSectionModel(MenuSectionKind.Reasoning, "Reasoning Level", emptyList(), "", linkUp),
     MenuSectionModel(MenuSectionKind.Permissions, "Tool Permissions", emptyList(), "", linkUp)
   )
@@ -137,7 +147,8 @@ fun AppMenu(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onTarget: (String) -> Unit,
-  onConversation: (String) -> Unit
+  onConversation: (String) -> Unit,
+  onModel: (String) -> Unit
 ) {
   Column(
     Modifier
@@ -153,7 +164,7 @@ fun AppMenu(
       modifier = Modifier.fillMaxWidth()
     )
     appMenuSections(ui).forEach { section ->
-      MenuSection(section, onClose, onMode, onPlan, onTarget, onConversation)
+      MenuSection(section, onClose, onMode, onPlan, onTarget, onConversation, onModel)
     }
   }
 }
@@ -165,7 +176,8 @@ private fun MenuSection(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onTarget: (String) -> Unit,
-  onConversation: (String) -> Unit
+  onConversation: (String) -> Unit,
+  onModel: (String) -> Unit
 ) {
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     Text(section.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -182,7 +194,7 @@ private fun MenuSection(
         MenuRowLine(row.caption, current, section.enabled) {
           val tap = menuTap(row.id, section.currentId, section.enabled) ?: return@MenuRowLine
           onClose()
-          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget, onConversation)
+          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget, onConversation, onModel)
         }
       }
     }
@@ -204,13 +216,15 @@ private fun sendMenuCommand(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onTarget: (String) -> Unit,
-  onConversation: (String) -> Unit
+  onConversation: (String) -> Unit,
+  onModel: (String) -> Unit
 ) {
   when (kind) {
     MenuSectionKind.Mode -> onMode(id)
     MenuSectionKind.Plan -> onPlan(id)
     MenuSectionKind.Target -> onTarget(id)
     MenuSectionKind.Conversation -> onConversation(id)
+    MenuSectionKind.Model -> onModel(id)
     else -> Unit
   }
 }
