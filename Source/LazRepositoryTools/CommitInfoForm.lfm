@@ -1,11 +1,11 @@
 object CommitInfoForm: TCommitInfoForm
-  Left = 485
-  Height = 560
-  Top = 177
-  Width = 640
+  Left = 604
+  Height = 479
+  Top = 217
+  Width = 559
   Caption = 'Commit'
-  ClientHeight = 560
-  ClientWidth = 640
+  ClientHeight = 479
+  ClientWidth = 559
   Constraints.MinHeight = 360
   Constraints.MinWidth = 520
   Position = poScreenCenter
@@ -13,7 +13,6 @@ object CommitInfoForm: TCommitInfoForm
   OnCreate = FormCreate
   OnShow = FormShow
   object IdLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     Left = 4
     Height = 18
     Top = 11
@@ -26,13 +25,11 @@ object CommitInfoForm: TCommitInfoForm
   object IdEdit: TEdit
     AnchorSideLeft.Control = IdLabel
     AnchorSideLeft.Side = asrBottom
-    AnchorSideTop.Control = CommitInfoForm
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
     Left = 136
     Height = 32
     Top = 4
-    Width = 500
+    Width = 419
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Left = 4
@@ -42,11 +39,9 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 0
   end
   object DateLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = DateEdit
     AnchorSideTop.Side = asrCenter
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 47
@@ -60,13 +55,12 @@ object CommitInfoForm: TCommitInfoForm
   end
   object DateEdit: TEdit
     AnchorSideLeft.Control = IdEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = IdEdit
     AnchorSideTop.Side = asrBottom
     Left = 136
     Height = 32
     Top = 40
-    Width = 160
+    Width = 139
     AutoSelect = False
     BorderSpacing.Top = 4
     ReadOnly = True
@@ -77,12 +71,12 @@ object CommitInfoForm: TCommitInfoForm
     AnchorSideLeft.Side = asrBottom
     AnchorSideTop.Control = DateEdit
     AnchorSideTop.Side = asrCenter
-    Left = 300
+    Left = 291
     Height = 18
     Top = 47
-    Width = 140
+    Width = 117
     AutoSize = False
-    BorderSpacing.Left = 4
+    BorderSpacing.Left = 16
     Caption = 'Time:'
     ParentColor = False
   end
@@ -90,13 +84,11 @@ object CommitInfoForm: TCommitInfoForm
     AnchorSideLeft.Control = TimeLabel
     AnchorSideLeft.Side = asrBottom
     AnchorSideTop.Control = DateEdit
-    AnchorSideTop.Side = asrTop
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
-    Left = 444
+    Left = 412
     Height = 32
     Top = 40
-    Width = 192
+    Width = 143
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Left = 4
@@ -105,11 +97,9 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 2
   end
   object AuthorLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = AuthorEdit
     AnchorSideTop.Side = asrCenter
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 83
@@ -123,15 +113,13 @@ object CommitInfoForm: TCommitInfoForm
   end
   object AuthorEdit: TEdit
     AnchorSideLeft.Control = IdEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = DateEdit
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
     Left = 136
     Height = 32
     Top = 76
-    Width = 500
+    Width = 419
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Top = 4
@@ -140,11 +128,9 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 3
   end
   object CommitterLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = CommitterEdit
     AnchorSideTop.Side = asrCenter
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 119
@@ -158,15 +144,13 @@ object CommitInfoForm: TCommitInfoForm
   end
   object CommitterEdit: TEdit
     AnchorSideLeft.Control = IdEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = AuthorEdit
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
     Left = 136
     Height = 32
     Top = 112
-    Width = 500
+    Width = 419
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Top = 4
@@ -175,11 +159,9 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 4
   end
   object CommitterDateLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = CommitterDateEdit
     AnchorSideTop.Side = asrCenter
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 155
@@ -193,7 +175,6 @@ object CommitInfoForm: TCommitInfoForm
   end
   object CommitterDateEdit: TEdit
     AnchorSideLeft.Control = DateEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = CommitterEdit
     AnchorSideTop.Side = asrBottom
     AnchorSideRight.Control = DateEdit
@@ -201,7 +182,7 @@ object CommitInfoForm: TCommitInfoForm
     Left = 136
     Height = 32
     Top = 148
-    Width = 160
+    Width = 139
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Top = 4
@@ -210,31 +191,27 @@ object CommitInfoForm: TCommitInfoForm
   end
   object CommitterTimeLabel: TLabel
     AnchorSideLeft.Control = TimeLabel
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = CommitterDateEdit
     AnchorSideTop.Side = asrCenter
     AnchorSideRight.Control = TimeLabel
     AnchorSideRight.Side = asrBottom
-    Left = 300
+    Left = 291
     Height = 18
     Top = 155
-    Width = 140
+    Width = 117
     Anchors = [akTop, akLeft, akRight]
     AutoSize = False
-    Caption = 'Committer time:'
+    Caption = 'Committer Time:'
     ParentColor = False
   end
   object CommitterTimeEdit: TEdit
     AnchorSideLeft.Control = TimeEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = CommitterDateEdit
-    AnchorSideTop.Side = asrTop
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
-    Left = 444
+    Left = 412
     Height = 32
     Top = 148
-    Width = 192
+    Width = 143
     Anchors = [akTop, akLeft, akRight]
     AutoSelect = False
     BorderSpacing.Right = 4
@@ -242,11 +219,8 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 6
   end
   object ParentsLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = ParentsMemo
-    AnchorSideTop.Side = asrTop
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 188
@@ -261,15 +235,14 @@ object CommitInfoForm: TCommitInfoForm
   end
   object ParentsMemo: TMemo
     AnchorSideLeft.Control = IdEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = CommitterDateEdit
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Control = Owner
     AnchorSideRight.Side = asrBottom
     Left = 136
     Height = 48
     Top = 184
-    Width = 500
+    Width = 419
     Anchors = [akTop, akLeft, akRight]
     BorderSpacing.Top = 4
     BorderSpacing.Right = 4
@@ -279,11 +252,8 @@ object CommitInfoForm: TCommitInfoForm
     WordWrap = False
   end
   object RefsLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = RefsMemo
-    AnchorSideTop.Side = asrTop
     AnchorSideRight.Control = IdEdit
-    AnchorSideRight.Side = asrTop
     Left = 4
     Height = 18
     Top = 240
@@ -298,15 +268,14 @@ object CommitInfoForm: TCommitInfoForm
   end
   object RefsMemo: TMemo
     AnchorSideLeft.Control = IdEdit
-    AnchorSideLeft.Side = asrTop
     AnchorSideTop.Control = ParentsMemo
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Control = Owner
     AnchorSideRight.Side = asrBottom
     Left = 136
     Height = 64
     Top = 236
-    Width = 500
+    Width = 419
     Anchors = [akTop, akLeft, akRight]
     BorderSpacing.Top = 4
     BorderSpacing.Right = 4
@@ -315,15 +284,13 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 8
   end
   object MessageLabel: TLabel
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = RefsMemo
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
     AnchorSideRight.Side = asrBottom
     Left = 4
     Height = 18
     Top = 304
-    Width = 632
+    Width = 551
     Anchors = [akTop, akLeft, akRight]
     AutoSize = False
     BorderSpacing.Left = 4
@@ -333,17 +300,15 @@ object CommitInfoForm: TCommitInfoForm
     ParentColor = False
   end
   object MessageMemo: TMemo
-    AnchorSideLeft.Control = CommitInfoForm
     AnchorSideTop.Control = MessageLabel
     AnchorSideTop.Side = asrBottom
-    AnchorSideRight.Control = CommitInfoForm
+    AnchorSideRight.Control = Owner
     AnchorSideRight.Side = asrBottom
     AnchorSideBottom.Control = ButtonPanel
-    AnchorSideBottom.Side = asrTop
-    Left = 4
-    Height = 187
+    Left = 6
+    Height = 108
     Top = 326
-    Width = 632
+    Width = 549
     Anchors = [akTop, akLeft, akRight, akBottom]
     BorderSpacing.Around = 4
     ReadOnly = True
@@ -351,10 +316,11 @@ object CommitInfoForm: TCommitInfoForm
     TabOrder = 9
   end
   object ButtonPanel: TButtonPanel
-    Left = 6
+    Left = 4
     Height = 37
-    Top = 517
-    Width = 628
+    Top = 438
+    Width = 551
+    BorderSpacing.Around = 4
     OKButton.Name = 'OKButton'
     OKButton.DefaultCaption = True
     HelpButton.Name = 'HelpButton'
