@@ -126,7 +126,7 @@ This does change the desktop conversation. That is the point. It is not `RemoteT
 
 ### 4.2 Phone conversation section
 
-Status: not started
+Status: complete
 
 Store the history rows on `MonitorUi`. The selected row is the choice whose `current` flag is true, or whose id equals `current`. A tap sends `select_conversation`. Rows are disabled while disconnected or sending.
 
