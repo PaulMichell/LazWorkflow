@@ -12,7 +12,8 @@ Unit AssistantMonitorSession;
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
   gates, approval, the in-memory carrier, the resume ring, and the outbound lanes
   are one state machine.
-  Reviewed 2026-10-26: no socket or form code in this unit. }
+  Reviewed 2026-10-27: select_conversation is busy only while a reply is sending.
+  No socket or form code in this unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -1211,6 +1212,13 @@ Begin
       Else If FHostFlags.PlanAgentRunning Then
         MessageText := 'A plan run is already active.';
     End
+  Else If Kind = Ord(mmkSelectConversation) Then
+    Begin
+      { The History combo refuses only while a reply is sending. }
+      Result := FHostFlags.Sending;
+      If Result Then
+        MessageText := 'Stop the current reply before switching History.';
+    End
   Else If Kind = Ord(mmkSteer) Then
     Begin
       Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
@@ -1390,7 +1398,8 @@ Begin
     mmkResume:
       HandleResume(Message.Id, Message.PayloadJson);
     mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
-    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
+    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkSelectConversation, mmkNewPlan, mmkRefresh, mmkTurn,
+    mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
   Else
     If (FState = mssLive) Or (FState = mssBusy) Then

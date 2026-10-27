@@ -417,6 +417,25 @@ Begin
   AddSample('select-target', mmkSelectTarget, EncodeMonitorPath(mmkSelectTarget, 'select-target', ''));
 End;
 
+Procedure AddConversationSamples;
+Var
+  Ids, Titles: TStringList;
+Begin
+  Ids := TStringList.Create;
+  Titles := TStringList.Create;
+  Try
+    Ids.Add('');
+    Titles.Add('Current — hello');
+    Ids.Add('20261019T120000000');
+    Titles.Add('Older (2)');
+    AddSample('conversations', mmkConversations, EncodeMonitorConversations('conversations', '', Ids, Titles, True));
+  Finally
+    Titles.Free;
+    Ids.Free;
+  End;
+  AddSample('select-conversation', mmkSelectConversation, EncodeMonitorSelectConversation('select-conversation', ''));
+End;
+
 Procedure BuildSamples;
 Var
   View: TAssistantMonitorView;
@@ -548,6 +567,7 @@ Begin
   End;
   AddSample('target', mmkTarget, EncodeMonitorTarget('target', 'project', 'LazWorkflow', '/work/LazWorkflow'));
   AddTargetSamples;
+  AddConversationSamples;
   PlanRows[0] := SamplePlanRow;
   AddSample('plan', mmkPlan, EncodeMonitorPlan('plan', 'Documents/Plan.md', 'Monitor plan', False, PlanRows));
   AddSample('select-plan', mmkSelectPlan, EncodeMonitorPath(mmkSelectPlan, 'select-plan', 'Documents/Plan.md'));
@@ -609,6 +629,8 @@ Var
   ModeMessage: TMonitorModeMessage;
   Target: TMonitorTargetMessage;
   Targets: TMonitorTargetsMessage;
+  Conversations: TMonitorConversationsMessage;
+  ArchiveId: String;
   Plan: TMonitorPathMessage;
   Index, Decoded: Integer;
   Command: TMonitorTaskCommand;
@@ -706,6 +728,13 @@ Begin
         (Targets.Choices[0].Caption = 'Current Project') And (Targets.Choices[1].Path = '/work/Other'));
     mmkSelectTarget:
       Check('select_target empty path', DecodeMonitorPath(Message.PayloadJson, Path) And (Path = ''));
+    mmkConversations:
+      Check('conversations fields', DecodeMonitorConversations(Message.PayloadJson, Conversations) And (Conversations.Current = '') And
+        Conversations.Truncated And (Length(Conversations.Choices) = 2) And (Conversations.Choices[0].Id = '') And
+        Conversations.Choices[0].Current And (Conversations.Choices[0].Title = 'Current — hello') And
+        (Conversations.Choices[1].Id = '20261019T120000000') And (Not Conversations.Choices[1].Current));
+    mmkSelectConversation:
+      Check('select_conversation empty id', DecodeMonitorSelectConversation(Message.PayloadJson, ArchiveId) And (ArchiveId = ''));
     mmkNewPlan:
       Check('new_plan title', DecodeMonitorNewPlan(Message.PayloadJson, Plan) And Plan.HasTitle And (Plan.Title = 'Monitor plan'));
     mmkWorkOnPlan:

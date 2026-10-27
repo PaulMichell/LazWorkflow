@@ -22,7 +22,8 @@ Unit ProjectAssistantForm;
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
   Dialog-free monitor fill and remote helpers stay here because they read private send and plan state.
   The elapsed timer publishes the live trace so a Codex or Claude poll reaches the phone before the turn finishes.
-  Reviewed 2026-10-22: plan sidebar status is an owner-drawn pill on BuildTodoList. }
+  Reviewed 2026-10-22: plan sidebar status is an owner-drawn pill on BuildTodoList.
+  Reviewed 2026-10-27: remote history selection stays with the other dialog-free helpers. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -554,6 +555,8 @@ Type
     Procedure FillMonitorPlanChoices(Paths, Captions: TStrings);
     /// Same rows and limit as RefreshTargetChoices. No package row and no browse action.
     Procedure FillMonitorTargetChoices(Paths, Captions: TStrings; Out Current: String);
+    /// ListHistory titles, current row first, then newest archives. At most 40 rows.
+    Procedure FillMonitorConversationChoices(Ids, Titles: TStrings; Out Current: String; Out Truncated: Boolean);
     /// Copies LoadAssistantTasks. NeedsNote uses AssistantTaskNeedsUserNote.
     Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
     Function RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
@@ -564,6 +567,8 @@ Type
     Function RemoteSelectPlan(Const RelativePath: String; Out ErrorText: String): Boolean;
     /// Empty Directory is Current Project. Does not open a folder dialog.
     Function RemoteSelectTarget(Const Directory: String; Out ErrorText: String): Boolean;
+    /// Empty ArchiveId is the open conversation and does not call ActivateArchive. Does not open a dialog.
+    Function RemoteSelectConversation(Const ArchiveId: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
@@ -1174,6 +1179,132 @@ Begin
   { BindToActiveProject reloads the store and does not publish a snapshot. }
   AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
   AssistantSessionObserve.AssistantSessionObserve(asnTarget);
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.FillMonitorConversationChoices(Ids, Titles: TStrings; Out Current: String; Out Truncated: Boolean);
+Const
+  ChoiceLimit = 40;
+Var
+  Items: TObjectList;
+  Hist: TConversationHistoryItem;
+  Index, Added, CurrentIndex: Integer;
+Begin
+  Current := '';
+  Truncated := False;
+  If Assigned(Ids) Then
+    Ids.Clear;
+  If Assigned(Titles) Then
+    Titles.Clear;
+  If Not Assigned(Ids) Or Not Assigned(Titles) Then
+    Exit;
+  EnsureConversationStore;
+  Items := TObjectList.Create(True);
+  Try
+    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+      ProjectAssistantConversation.ListHistory(Items);
+    CurrentIndex := -1;
+    For Index := 0 To Items.Count - 1 Do
+      Begin
+        Hist := TConversationHistoryItem(Items[Index]);
+        If Assigned(Hist) And Hist.IsCurrent Then
+          Begin
+            CurrentIndex := Index;
+            Current := Hist.ArchiveId;
+            Break;
+          End;
+      End;
+    Added := 0;
+    If CurrentIndex >= 0 Then
+      Begin
+        Hist := TConversationHistoryItem(Items[CurrentIndex]);
+        Ids.Add(Hist.ArchiveId);
+        Titles.Add(Hist.Title);
+        Inc(Added);
+      End;
+    For Index := 0 To Items.Count - 1 Do
+      Begin
+        If Index = CurrentIndex Then
+          Continue;
+        Hist := TConversationHistoryItem(Items[Index]);
+        If Not Assigned(Hist) Then
+          Continue;
+        If Added >= ChoiceLimit Then
+          Begin
+            Truncated := True;
+            Break;
+          End;
+        Ids.Add(Hist.ArchiveId);
+        Titles.Add(Hist.Title);
+        Inc(Added);
+      End;
+  Finally
+    Items.Free;
+  End;
+End;
+
+Function TProjectAssistantForm.RemoteSelectConversation(Const ArchiveId: String; Out ErrorText: String): Boolean;
+Var
+  Items: TObjectList;
+  Hist: TConversationHistoryItem;
+  Index: Integer;
+  Listed: Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If FSending Then
+    Begin
+      ErrorText := 'Stop the current reply before switching History.';
+      Exit;
+    End;
+  { The open conversation. Do not park and restore the same files. }
+  If ArchiveId = '' Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  EnsureConversationStore;
+  If Not Assigned(ProjectAssistantConversation) Then
+    Begin
+      ErrorText := 'That conversation is no longer in History.';
+      Exit;
+    End;
+  Items := TObjectList.Create(True);
+  Try
+    Listed := False;
+    If ProjectAssistantConversation.ProjectRoot <> '' Then
+      ProjectAssistantConversation.ListHistory(Items);
+    For Index := 0 To Items.Count - 1 Do
+      Begin
+        Hist := TConversationHistoryItem(Items[Index]);
+        If Assigned(Hist) And SameText(Hist.ArchiveId, ArchiveId) Then
+          Begin
+            Listed := True;
+            Break;
+          End;
+      End;
+  Finally
+    Items.Free;
+  End;
+  If Not Listed Then
+    Begin
+      ErrorText := 'That conversation is no longer in History.';
+      Exit;
+    End;
+  If Not ProjectAssistantConversation.ActivateArchive(ArchiveId) Then
+    Begin
+      ErrorText := ProjectAssistantConversation.LastError;
+      If ErrorText = '' Then
+        ErrorText := 'Could not open conversation.';
+      Exit;
+    End;
+  SelectMode(ModeOfLoadedConversation);
+  AssistantSessionObserve.AssistantSessionObserve(asnIdentity);
+  ApplyLoadedConversationToUi('Loaded conversation from History. Model context restored from its turns.');
+  PersistSession;
+  WorkflowLogger.Info('ProjectAssistant', 'History activated: ' + ArchiveId);
+  { ApplyLoadedConversationToUi does not publish a snapshot. The phone must replace the transcript. }
+  AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
   Result := True;
 End;
 

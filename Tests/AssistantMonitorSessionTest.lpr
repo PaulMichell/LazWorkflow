@@ -721,6 +721,52 @@ Begin
   End;
 End;
 
+Procedure TestSelectConversation;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Flags.CanChangeMode := True;
+    Session.SetHostFlags(Flags);
+    Check('select_conversation starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation', ''));
+    Check('empty id select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
+    Check('empty id select_conversation sends no error', Carrier.SentCount = 0);
+    Flags.PlanAgentRunning := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation-plan', '20261019T120000000'));
+    Check('plan-running select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
+    Check('plan-running select_conversation sends no error', Carrier.SentCount = 0);
+    Flags.PlanAgentRunning := False;
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation-busy', '20261019T120000000'));
+    Check('sending select_conversation is not queued', Sink.Calls = 0);
+    Check('sending select_conversation error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
+    Check('sending select_conversation sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Stop the current reply before switching History.'));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestUnknownTypeDoesNotChangeLive;
 Var
   Message: TMonitorMessage;
@@ -950,6 +996,7 @@ Begin
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
       TestSelectTarget;
+      TestSelectConversation;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
       TestDecisionIgnoredWhenDisabled;

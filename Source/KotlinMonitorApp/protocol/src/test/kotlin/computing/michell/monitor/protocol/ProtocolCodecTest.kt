@@ -49,6 +49,27 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun conversationChoiceKeepsAnEmptyArchiveId() {
+    val wire = encodeConversations("conversations", "", listOf(
+      ConversationChoice("", "Current — hello", true),
+      ConversationChoice("20261019T120000000", "Older (2)", false)
+    ), true)
+    val envelope = tryDecodeEnvelope(wire)
+    assertTrue(envelope.ok)
+    assertEquals(MessageKind.Conversations, envelope.message.kind)
+    val conversations = decodeConversations(envelope.message.payloadJson)
+    assertEquals("", conversations?.current)
+    assertEquals(true, conversations?.truncated)
+    assertEquals(listOf(
+      ConversationChoice("", "Current — hello", true),
+      ConversationChoice("20261019T120000000", "Older (2)", false)
+    ), conversations?.choices)
+    assertEquals("", decodeSelectConversation(tryDecodeEnvelope(encodeSelectConversation("select-conversation", "")).message.payloadJson))
+    assertNull(decodeSelectConversation("{\"title\":\"missing\"}"))
+    assertNull(decodeConversations("{\"current\":\"\",\"choices\":[]}"))
+  }
+
+  @Test
   fun helloShapesMatchTheHostFrames() {
     val first = encodeHello("hello-first", "Phone", "1", "")
     assertFalse(first.contains("client_id"))

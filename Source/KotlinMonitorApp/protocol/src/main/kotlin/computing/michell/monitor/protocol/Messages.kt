@@ -10,7 +10,7 @@ package computing.michell.monitor.protocol
    message types, payload fields, and limits. Splitting that table would hide a type.
    v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
-   Reviewed 2026-10-21: image assembly stays in SessionState. Inbound values are typed once.
+   Reviewed 2026-10-27: conversations stays in this table. Inbound values are typed once.
    No socket, TLS, or Android UI in this file. */
 
 const val NoSessionReason = "no_session"
@@ -72,7 +72,9 @@ enum class MessageKind(val wireName: String) {
   Catchup("catchup"),
   ConversationClosed("conversation_closed"),
   Targets("targets"),
-  SelectTarget("select_target");
+  SelectTarget("select_target"),
+  Conversations("conversations"),
+  SelectConversation("select_conversation");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -244,6 +246,10 @@ data class PlanChoice(val path: String, val caption: String)
 data class TargetChoice(val path: String, val caption: String)
 
 data class TargetsMessage(val current: String, val choices: List<TargetChoice>)
+
+data class ConversationChoice(val id: String, val title: String, val current: Boolean)
+
+data class ConversationsMessage(val current: String, val choices: List<ConversationChoice>, val truncated: Boolean)
 
 data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
 
@@ -459,6 +465,7 @@ fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
     MessageKind.Mode -> decodeMode(payload)?.let { InboundPayload.Mode(it) } ?: InboundPayload.None
     MessageKind.Target -> decodeTarget(payload)?.let { InboundPayload.Target(it) } ?: InboundPayload.None
     MessageKind.Targets -> decodeTargets(payload)?.let { InboundPayload.Targets(it) } ?: InboundPayload.None
+    MessageKind.Conversations -> decodeConversations(payload)?.let { InboundPayload.Conversations(it) } ?: InboundPayload.None
     MessageKind.Plan -> decodePlan(payload)?.let { InboundPayload.Plan(it) } ?: InboundPayload.None
     MessageKind.ApprovalRequested -> decodeApprovalRequested(payload)?.let { InboundPayload.ApprovalRequest(it) } ?: InboundPayload.None
     MessageKind.InsertResult -> decodeText(payload)?.let { InboundPayload.Insert(it) } ?: InboundPayload.None
@@ -740,6 +747,50 @@ fun decodeTargets(obj: JsonValue.Obj): TargetsMessage? {
     if (!path.ok || !caption.ok) null else TargetChoice(path.value, caption.value)
   } ?: return null
   return TargetsMessage(current.value, choices)
+}
+
+fun encodeConversations(id: String, current: String, choices: List<ConversationChoice>, truncated: Boolean): String {
+  val payload = JsonObjectBuilder()
+  payload.add("current", current)
+  payload.add("choices", JsonValue.Arr(choices.map { choice ->
+    val row = JsonObjectBuilder()
+    row.add("id", choice.id)
+    row.add("title", choice.title)
+    row.add("current", choice.current)
+    row.build()
+  }))
+  payload.add("truncated", truncated)
+  return encodeEnvelope(MessageKind.Conversations, id, payload.build())
+}
+
+fun decodeConversations(payloadJson: String): ConversationsMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  return decodeConversations(obj)
+}
+
+fun decodeConversations(obj: JsonValue.Obj): ConversationsMessage? {
+  val current = obj.readString("current", true)
+  if (!current.ok) return null
+  val truncated = obj.readBool("truncated", true)
+  if (!truncated.ok) return null
+  val choices = rowsFrom(obj.field("choices")) { choice ->
+    val archiveId = choice.readString("id", true)
+    val title = choice.readString("title", true)
+    val selected = choice.readBool("current", true)
+    if (!archiveId.ok || !title.ok || !selected.ok) null else ConversationChoice(archiveId.value, title.value, selected.value)
+  } ?: return null
+  return ConversationsMessage(current.value, choices, truncated.value)
+}
+
+fun encodeSelectConversation(id: String, archiveId: String): String {
+  return encodeOneString(MessageKind.SelectConversation, id, "id", archiveId)
+}
+
+fun decodeSelectConversation(payloadJson: String): String? {
+  val obj = parseObject(payloadJson) ?: return null
+  val archiveId = obj.readString("id", true)
+  if (!archiveId.ok) return null
+  return archiveId.value
 }
 
 fun decodePath(payloadJson: String): String? {

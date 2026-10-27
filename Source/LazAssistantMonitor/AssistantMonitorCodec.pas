@@ -12,7 +12,8 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-19: no socket, TLS, or form code in this unit.
+  Reviewed 2026-10-27: conversations and select_conversation stay in this table.
+  No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
 {$IFDEF FPC}
@@ -96,7 +97,9 @@ Type
     mmkCatchup,
     mmkConversationClosed,
     mmkTargets,
-    mmkSelectTarget
+    mmkSelectTarget,
+    mmkConversations,
+    mmkSelectConversation
   );
 
   TMonitorMessage = Record
@@ -172,6 +175,18 @@ Type
   TMonitorTargetsMessage = Record
     Current: String;
     Choices: Array Of TMonitorTargetChoice;
+  End;
+
+  TMonitorConversationChoice = Record
+    Id: String;
+    Title: String;
+    Current: Boolean;
+  End;
+
+  TMonitorConversationsMessage = Record
+    Current: String;
+    Choices: Array Of TMonitorConversationChoice;
+    Truncated: Boolean;
   End;
 
   TMonitorPathMessage = Record
@@ -365,6 +380,10 @@ Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
 Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
 Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
 Function DecodeMonitorTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
+Function DecodeMonitorConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
+Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
@@ -513,6 +532,8 @@ Begin
     mmkConversationClosed: Result := 'conversation_closed';
     mmkTargets: Result := 'targets';
     mmkSelectTarget: Result := 'select_target';
+    mmkConversations: Result := 'conversations';
+    mmkSelectConversation: Result := 'select_conversation';
   Else
     Result := '';
   End;
@@ -1258,6 +1279,84 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
+Var
+  Payload, Choice: TJSONObject;
+  Choices: TJSONArray;
+  Index: Integer;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('current', Current);
+  Choices := TJSONArray.Create;
+  Payload.Add('choices', Choices);
+  If Assigned(Ids) And Assigned(Titles) Then
+    For Index := 0 To Ids.Count - 1 Do
+      Begin
+        If Index >= Titles.Count Then
+          Break;
+        Choice := TJSONObject.Create;
+        Choice.Add('id', Ids[Index]);
+        Choice.Add('title', Titles[Index]);
+        Choice.Add('current', Ids[Index] = Current);
+        Choices.Add(Choice);
+      End;
+  Payload.Add('truncated', Truncated);
+  Result := EncodeWith(mmkConversations, Id, Payload);
+End;
+
+Function DecodeMonitorConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Var
+  Data, Node, Item: TJSONData;
+  Obj, Choice: TJSONObject;
+  Arr: TJSONArray;
+  Index: Integer;
+Begin
+  Result := False;
+  Conversations.Current := '';
+  SetLength(Conversations.Choices, 0);
+  Conversations.Truncated := False;
+  If Not ParseObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not ReadString(Obj, 'current', True, Conversations.Current) Then
+      Exit;
+    If Not ReadBool(Obj, 'truncated', True, Conversations.Truncated) Then
+      Exit;
+    Node := Obj.Find('choices');
+    If Not (Node Is TJSONArray) Then
+      Exit;
+    Arr := TJSONArray(Node);
+    SetLength(Conversations.Choices, Arr.Count);
+    For Index := 0 To Arr.Count - 1 Do
+      Begin
+        Item := Arr.Items[Index];
+        If Not (Item Is TJSONObject) Then
+          Exit;
+        Choice := TJSONObject(Item);
+        Conversations.Choices[Index].Id := '';
+        Conversations.Choices[Index].Title := '';
+        Conversations.Choices[Index].Current := False;
+        If Not ReadString(Choice, 'id', True, Conversations.Choices[Index].Id) Or
+          Not ReadString(Choice, 'title', True, Conversations.Choices[Index].Title) Or
+          Not ReadBool(Choice, 'current', True, Conversations.Choices[Index].Current) Then
+          Exit;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
+Begin
+  Result := EncodeOneString(mmkSelectConversation, Id, 'id', ArchiveId);
+End;
+
+Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, 'id', ArchiveId);
 End;
 
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;

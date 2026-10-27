@@ -9,7 +9,8 @@ Unit AssistantMonitorBridge;
   Size note: exceeds the 1000 line preference. The command pump, live patch,
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
-  Reviewed 2026-10-26: no provider or socket code in this unit.
+  Reviewed 2026-10-27: a conversation switch publishes its list after the snapshot.
+  No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -114,6 +115,7 @@ Type
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
     Procedure PushTargets(Form: TProjectAssistantForm);
+    Procedure PushConversations(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
     Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
@@ -730,6 +732,7 @@ Begin
   If Json <> '' Then
     SendJson(Json);
   PushPlan(Form);
+  PushConversations(Form);
 End;
 
 Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
@@ -1099,6 +1102,25 @@ Begin
   End;
 End;
 
+Procedure TAssistantMonitorBridge.PushConversations(Form: TProjectAssistantForm);
+Var
+  Ids, Titles: TStringList;
+  Current: String;
+  Truncated: Boolean;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  Ids := TStringList.Create;
+  Titles := TStringList.Create;
+  Try
+    Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
+    SendJson(EncodeMonitorConversations(HostId, Current, Ids, Titles, Truncated));
+  Finally
+    Titles.Free;
+    Ids.Free;
+  End;
+End;
+
 Procedure TAssistantMonitorBridge.DeliverNotice(Job: TMonitorNoticeJob);
 Var
   Form: TProjectAssistantForm;
@@ -1233,7 +1255,7 @@ End;
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
   Const Id, PayloadJson: String; Out ErrorText: String): Boolean;
 Var
-  Text, ModeText, Path, ApiText: String;
+  Text, ModeText, Path, ArchiveId, ApiText: String;
   Plan: TMonitorPathMessage;
   Task: TMonitorTaskCommand;
   Image: TMonitorImageGet;
@@ -1281,6 +1303,13 @@ Begin
         If Not DecodeMonitorPath(PayloadJson, Path) Then
           Exit;
         Result := Form.RemoteSelectTarget(Path, ErrorText);
+      End;
+    Ord(mmkSelectConversation):
+      Begin
+        { An empty id is the open conversation. A missing id is not that value. }
+        If Not DecodeMonitorSelectConversation(PayloadJson, ArchiveId) Then
+          Exit;
+        Result := Form.RemoteSelectConversation(ArchiveId, ErrorText);
       End;
     Ord(mmkNewPlan):
       Begin
