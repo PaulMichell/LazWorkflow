@@ -64,7 +64,7 @@ Remove `ModeCombo` from `SettingsScreen`. Settings keeps the connection fields a
 
 ### 2.2 Active plan uses the existing choice list
 
-Status: not started
+Status: complete
 
 `plan` already carries `choices` (`path`, `caption`). The phone already stores them on `MonitorUi.planChoices`. `openPlan` already sends `select_plan` and refuses a disconnected link, a disabled mode change, the current path, and a path that is not in the list.
 
