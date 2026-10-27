@@ -13,7 +13,9 @@ import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.PlanChoice
+import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.TargetChoice
+import computing.michell.monitor.protocol.encodeConversations
 import computing.michell.monitor.protocol.encodeTargets
 
 import computing.michell.monitor.protocol.WireSnapshot
@@ -82,6 +84,59 @@ class MonitorReducerTest {
     assertTrue(next.conversationChoices.isEmpty())
     assertEquals(-1, next.selectedPlan)
     assertEquals("New", next.view.targetDisplay)
+    assertEquals("", next.conversationCurrent)
+    assertFalse(next.conversationsTruncated)
+  }
+
+  @Test
+  fun conversationsFrameFillsHistoryAndLeavesTurnsAndDraft() {
+    val turns = listOf(WireTurn(0, "stored", "chat", "", "older", ""))
+    val state = MonitorUi(turns = turns, draft = "unsent", live = WireTurn(-2, "live", "chat", "", "now", ""))
+    val frame = encodeConversations("conversations", "", listOf(
+      ConversationChoice("", "Current — hello", true),
+      ConversationChoice("20261019T120000000", "Older (2)", false)
+    ), true)
+    val next = reduceMonitor(state, message(frame))
+    assertEquals("", next.conversationCurrent)
+    assertTrue(next.conversationsTruncated)
+    assertEquals(listOf(
+      ConversationChoice("", "Current — hello", true),
+      ConversationChoice("20261019T120000000", "Older (2)", false)
+    ), next.conversationChoices)
+    assertEquals(turns, next.turns)
+    assertEquals("live", next.live?.id)
+    assertEquals("unsent", next.draft)
+  }
+
+  @Test
+  fun snapshotReplacesTurnsAndKeepsAnUnsentDraft() {
+    val kept = listOf(ConversationChoice("", "Current", true))
+    val state = MonitorUi(
+      view = emptyView().copy(targetRoot = "/work"),
+      turns = listOf(WireTurn(0, "old", "chat", "", "gone", "")),
+      draft = "still typing",
+      conversationChoices = kept,
+      conversationCurrent = ""
+    )
+    val snapshot = WireSnapshot(
+      emptyView().copy(targetRoot = "/work", canSend = true),
+      listOf(WireTurn(1, "new", "chat", "", "loaded", "")),
+      WireTurn(-2, "live-2", "chat", "", "loaded", ""),
+      "",
+      "",
+      false,
+      emptyList(),
+      emptyList(),
+      ApprovalNotice(false, "", "", "", "", false)
+    )
+    val next = reduceMonitor(state, message(encodeSnapshot("snap", snapshot)))
+    assertEquals("new", next.turns.single().id)
+    assertEquals("still typing", next.draft)
+    assertEquals(kept, next.conversationChoices)
+    val moved = reduceMonitor(state, message(encodeSnapshot("moved", snapshot.copy(view = snapshot.view.copy(targetRoot = "/other")))))
+    assertTrue(moved.conversationChoices.isEmpty())
+    assertEquals("still typing", moved.draft)
+    assertEquals("new", moved.turns.single().id)
   }
 
   @Test

@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.TargetChoice
 
@@ -37,6 +38,21 @@ fun targetChoiceCaption(choice: TargetChoice): String {
 /** Target rows stay put while disconnected, sending, or a plan run. */
 fun targetRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
   return !disconnected && !sending && !planRunning
+}
+
+/** Shown under the history list when the host omitted older archives. */
+const val OlderConversationsSentence = "Older conversations stay on the desktop."
+
+/** History rows stay put while disconnected or sending. A plan run does not lock them. */
+fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
+  return !disconnected && !sending
+}
+
+/** The check is the flagged row, or the row whose id equals the host current. */
+fun conversationSelectedId(choices: List<ConversationChoice>, current: String): String {
+  val flagged = choices.firstOrNull { it.current }
+  if (flagged != null) return flagged.id
+  return current
 }
 
 enum class MenuSectionKind {
@@ -61,7 +77,8 @@ data class MenuSectionModel(
   val label: String,
   val rows: List<MenuRow>,
   val currentId: String,
-  val enabled: Boolean
+  val enabled: Boolean,
+  val note: String = ""
 )
 
 /** The check is the host id. A tap must not paint a new one before the next frame. */
@@ -77,14 +94,17 @@ fun menuTap(rowId: String, currentId: String, enabled: Boolean): MenuTap? {
 fun menuHeader(ui: MonitorUi): String = ui.view.targetDisplay
 
 /**
- * Seven sections in drawer order. Lists already on the phone are Mode and Plan.
- * The others stay empty until their frames arrive. Disconnect disables rows and does not clear lists.
+ * Seven sections in drawer order. Mode and Plan are already on the phone.
+ * Target and Conversation fill from their host frames. The rest stay empty until those frames arrive.
+ * Disconnect disables rows and does not clear lists.
  */
 fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
   val linkUp = !ui.disconnected
   // Mode sends set_mode only when canChangeMode is true and the link is up, the same gate setMode can complete.
   val canSend = linkUp && ui.view.canChangeMode
   val targetEnabled = targetRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
+  val historyEnabled = conversationRowsEnabled(ui.disconnected, ui.view.sending)
+  val historyNote = if (ui.conversationsTruncated) OlderConversationsSentence else ""
   return listOf(
     MenuSectionModel(
       MenuSectionKind.Target, "Target",
@@ -94,7 +114,12 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
     MenuSectionModel(
       MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
     ),
-    MenuSectionModel(MenuSectionKind.Conversation, "Conversation", emptyList(), "", linkUp),
+    MenuSectionModel(
+      MenuSectionKind.Conversation, "Conversation",
+      ui.conversationChoices.map { MenuRow(it.id, it.title) },
+      conversationSelectedId(ui.conversationChoices, ui.conversationCurrent),
+      historyEnabled, historyNote
+    ),
     // Captions from planChoices. The check is planPath. A different row calls openPlan.
     MenuSectionModel(
       MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
@@ -111,7 +136,8 @@ fun AppMenu(
   onClose: () -> Unit,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit
+  onTarget: (String) -> Unit,
+  onConversation: (String) -> Unit
 ) {
   Column(
     Modifier
@@ -127,7 +153,7 @@ fun AppMenu(
       modifier = Modifier.fillMaxWidth()
     )
     appMenuSections(ui).forEach { section ->
-      MenuSection(section, onClose, onMode, onPlan, onTarget)
+      MenuSection(section, onClose, onMode, onPlan, onTarget, onConversation)
     }
   }
 }
@@ -138,7 +164,8 @@ private fun MenuSection(
   onClose: () -> Unit,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit
+  onTarget: (String) -> Unit,
+  onConversation: (String) -> Unit
 ) {
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     Text(section.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -155,9 +182,17 @@ private fun MenuSection(
         MenuRowLine(row.caption, current, section.enabled) {
           val tap = menuTap(row.id, section.currentId, section.enabled) ?: return@MenuRowLine
           onClose()
-          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget)
+          if (tap == MenuTap.CloseAndSend) sendMenuCommand(section.kind, row.id, onMode, onPlan, onTarget, onConversation)
         }
       }
+    }
+    if (section.note.isNotEmpty()) {
+      Text(
+        section.note,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp)
+      )
     }
   }
 }
@@ -168,12 +203,14 @@ private fun sendMenuCommand(
   id: String,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit
+  onTarget: (String) -> Unit,
+  onConversation: (String) -> Unit
 ) {
   when (kind) {
     MenuSectionKind.Mode -> onMode(id)
     MenuSectionKind.Plan -> onPlan(id)
     MenuSectionKind.Target -> onTarget(id)
+    MenuSectionKind.Conversation -> onConversation(id)
     else -> Unit
   }
 }

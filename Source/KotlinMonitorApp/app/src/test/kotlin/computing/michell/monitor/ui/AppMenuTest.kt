@@ -2,6 +2,7 @@ package computing.michell.monitor.ui
 
 /* App menu sections: host check, empty lists, disconnect (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.TargetChoice
 import org.junit.Assert.assertEquals
@@ -91,6 +92,46 @@ class AppMenuTest {
       targetCurrent = ""
     )
     assertFalse(appMenuSections(busy).first { it.kind == MenuSectionKind.Target }.enabled)
+  }
+
+  @Test
+  fun conversationSectionUsesHistoryTitles() {
+    val choices = listOf(
+      ConversationChoice("", "Current — hello", true),
+      ConversationChoice("20261019T120000000", "Older (2)", false)
+    )
+    val ui = sample().copy(conversationChoices = choices, conversationCurrent = "", conversationsTruncated = true)
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Conversation }
+    assertEquals(listOf("Current — hello", "Older (2)"), section.rows.map { it.caption })
+    assertEquals(listOf("", "20261019T120000000"), section.rows.map { it.id })
+    assertEquals("", section.currentId)
+    assertEquals(MenuTap.CloseOnly, menuTap("", section.currentId, section.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("20261019T120000000", section.currentId, section.enabled))
+    assertEquals(OlderConversationsSentence, section.note)
+    assertTrue(section.enabled)
+    val byId = sample().copy(
+      conversationChoices = listOf(ConversationChoice("archive-1", "Yesterday", false)),
+      conversationCurrent = "archive-1"
+    )
+    assertEquals("archive-1", appMenuSections(byId).first { it.kind == MenuSectionKind.Conversation }.currentId)
+  }
+
+  @Test
+  fun conversationRowsDisableWhileDisconnectedOrSending() {
+    assertFalse(conversationRowsEnabled(true, false))
+    assertFalse(conversationRowsEnabled(false, true))
+    assertTrue(conversationRowsEnabled(false, false))
+    val rows = listOf(ConversationChoice("", "Current", true))
+    val sending = sample().copy(
+      view = sample().view.copy(sending = true, planRunning = true),
+      planRunning = true,
+      conversationChoices = rows
+    )
+    val section = appMenuSections(sending).first { it.kind == MenuSectionKind.Conversation }
+    assertFalse(section.enabled)
+    assertEquals(rows.map { it.title }, section.rows.map { it.caption })
+    val planning = sample().copy(view = sample().view.copy(planRunning = true), planRunning = true, conversationChoices = rows)
+    assertTrue(appMenuSections(planning).first { it.kind == MenuSectionKind.Conversation }.enabled)
   }
 
   @Test
