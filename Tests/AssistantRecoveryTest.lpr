@@ -162,11 +162,11 @@ Begin
   Check('truncated Codex frame does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Could not start Claude Code.', '', False);
   Check('Claude start failure retries the turn', Decision.Action = araRetryLastAction);
+  { A started Claude turn may have edited files or run commands. Replaying it would repeat them. }
   Decision := ClassifyDroppedTransport('Claude Code did not complete the turn.', '', False);
-  Check('incomplete Claude turn retries', Decision.Action = araRetryLastAction);
-  Decision := ClassifyDroppedTransport('Claude Code timed out.', '', False);
-  Check('Claude timeout retries as a lost connection', (Decision.Action = araRetryLastAction) And
-    (Decision.HttpWait = ahwConnection));
+  Check('incomplete Claude turn is not replayed', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Claude Code did not finish within the turn limit.', '', False);
+  Check('Claude turn limit is not replayed', Decision.Action = araStop);
 
   Decision := ClassifyDroppedTransport('quota exceeded', '', False);
   Check('process credit text waits for credits', (Decision.Action = araRetryLastAction) And

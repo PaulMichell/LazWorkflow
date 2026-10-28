@@ -33,8 +33,11 @@ Type
 
 Function DetectClaudeExecutable: String;
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
-Function ClaudePermissionMode(Const HelpText, ApprovalMode: String): String;
-Function PermissionFlagRefused(Const ProgramText: String): Boolean;
+/// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
+/// anything that needs approval in print mode.
+Function ClaudePermissionMode(Const ApprovalMode: String): String;
+/// True when Claude Code's stderr says it rejected the --permission-mode argument.
+Function PermissionFlagRefused(Const ErrorOutput: String): Boolean;
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
@@ -67,6 +70,8 @@ Procedure ForgetClaudeAccounts;
 Type
   TClaudeRunSnapshot = Record
     Content, ErrorText: String;
+    { The claude process was started. A failure after that may follow edits or commands, so it is not replayed. }
+    Started: Boolean;
     Done: Boolean;
   End;
 
@@ -79,6 +84,7 @@ Type
     FSnapshot: TClaudeRunSnapshot;
     FCancelled: LongInt;
     Function Cancelled: Boolean;
+    Procedure ProcessStarted;
   Protected
     Procedure Execute; Override;
   Public
@@ -95,7 +101,6 @@ Uses
   SysUtils, Process, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
 
 Const
-  ClaudeHelpTimeoutMs = 8000;
   ClaudeTurnTimeoutMs = 120000;
   ClaudeStatusTimeoutMs = 15000;
   { Each of these selects an API key, a gateway, or a cloud provider instead of the subscription. }
@@ -123,37 +128,6 @@ Begin
     Result := Copy(Result, 1, 1000);
 End;
 
-Function ContainsToken(Const Text, Token: String): Boolean;
-Var
-  StartAt, Found, TokenLen: Integer;
-  Before, After: Char;
-Begin
-  Result := False;
-  TokenLen := Length(Token);
-  If (TokenLen = 0) Or (Text = '') Then
-    Exit;
-  StartAt := 1;
-  While StartAt <= Length(Text) - TokenLen + 1 Do
-    Begin
-      Found := Pos(Token, Copy(Text, StartAt, MaxInt));
-      If Found = 0 Then
-        Exit;
-      Found := StartAt + Found - 1;
-      If Found = 1 Then
-        Before := ' '
-      Else
-        Before := Text[Found - 1];
-      If Found + TokenLen > Length(Text) Then
-        After := ' '
-      Else
-        After := Text[Found + TokenLen];
-      If Not (Before In ['A'..'Z', 'a'..'z', '0'..'9', '_', '-']) And
-        Not (After In ['A'..'Z', 'a'..'z', '0'..'9', '_', '-']) Then
-        Exit(True);
-      StartAt := Found + 1;
-    End;
-End;
-
 Function DetectClaudeExecutable: String;
 Begin
   Result := FindDefaultExecutablePath('claude');
@@ -172,45 +146,30 @@ Begin
     Result := Path;
 End;
 
-Function ClaudePermissionMode(Const HelpText, ApprovalMode: String): String;
+Function ClaudePermissionMode(Const ApprovalMode: String): String;
 Var
   Approval: String;
 Begin
-  Result := '';
-  If Pos('permission-mode', LowerCase(HelpText)) = 0 Then
-    Exit;
+  { Fixed values from the documented choices. The local 'auto' is not Claude Code's own auto mode. }
   Approval := LowerCase(Trim(ApprovalMode));
   If Approval = 'auto' Then
-    Begin
-      If ContainsToken(HelpText, 'acceptEdits') Then
-        Result := 'acceptEdits'
-      Else If ContainsToken(HelpText, 'accept-edits') Then
-        Result := 'accept-edits';
-    End
+    Result := 'acceptEdits'
   Else If Approval = 'always' Then
-    Begin
-      If ContainsToken(HelpText, 'bypassPermissions') Then
-        Result := 'bypassPermissions'
-      Else If ContainsToken(HelpText, 'bypass') Then
-        Result := 'bypass';
-    End
+    Result := 'bypassPermissions'
+  Else If Approval = 'plan' Then
+    Result := 'plan'
   Else
-    Begin
-      If ContainsToken(HelpText, 'ask') Then
-        Result := 'ask'
-      Else If ContainsToken(HelpText, 'default') Then
-        Result := 'default';
-    End;
+    Result := '';
 End;
 
-Function PermissionFlagRefused(Const ProgramText: String): Boolean;
+Function PermissionFlagRefused(Const ErrorOutput: String): Boolean;
 Var
-  Lower: String;
+  Lowered: String;
 Begin
-  Lower := LowerCase(ProgramText);
-  Result := (Pos('permission-mode', Lower) > 0) And
-    ((Pos('unknown', Lower) > 0) Or (Pos('unrecognized', Lower) > 0) Or
-    (Pos('unexpected', Lower) > 0) Or (Pos('invalid', Lower) > 0) Or (Pos('refused', Lower) > 0));
+  { Commander's wording: option '--permission-mode <mode>' argument 'x' is invalid. }
+  Lowered := LowerCase(ErrorOutput);
+  Result := (Pos('--permission-mode', Lowered) > 0) And
+    ((Pos('is invalid', Lowered) > 0) Or (Pos('unknown option', Lowered) > 0));
 End;
 
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
@@ -312,10 +271,11 @@ End;
 
 Type
   TClaudeStopQuery = Function: Boolean Of Object;
+  TClaudeStartedEvent = Procedure Of Object;
 
 Function RunCaptured(Const Executable, WorkingDirectory: String; Args, Environment: TStrings; Const InputText: String;
   TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String;
-  StopQuery: TClaudeStopQuery = Nil): Boolean;
+  StopQuery: TClaudeStopQuery = Nil; OnStarted: TClaudeStartedEvent = Nil): Boolean;
 Var
   Proc: TProcess;
   Buffer: Array[0..4095] Of Byte;
@@ -353,6 +313,8 @@ Begin
           Exit;
         End;
     End;
+    If Assigned(OnStarted) Then
+      OnStarted();
     Offset := 1;
     While Offset <= Length(InputText) Do
       Begin
@@ -402,7 +364,8 @@ Begin
             If Proc.Running Then
               Proc.Terminate(1);
             Proc.WaitOnExit(2000);
-            ErrorText := 'Claude Code timed out.';
+            { Not a network timeout. Recovery must not replay a turn that may have changed files. }
+            ErrorText := 'Claude Code did not finish within the turn limit.';
             Exit;
           End;
         If Proc.Running And (Proc.Output.NumBytesAvailable = 0) And (Proc.Stderr.NumBytesAvailable = 0) Then
@@ -412,26 +375,6 @@ Begin
     Result := True;
   Finally
     Proc.Free;
-  End;
-End;
-
-Function ProbeHelp(Const Executable: String; StopQuery: TClaudeStopQuery = Nil): String;
-Var
-  Args: TStringList;
-  StdoutText, StderrText, ErrorText: String;
-  ExitCode: Integer;
-Begin
-  Result := '';
-  If Assigned(StopQuery) And StopQuery() Then
-    Exit;
-  Args := TStringList.Create;
-  Try
-    Args.Add('--help');
-    If RunCaptured(Executable, '', Args, Nil, '', ClaudeHelpTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText,
-      StopQuery) Then
-      Result := StdoutText + LineEnding + StderrText;
-  Finally
-    Args.Free;
   End;
 End;
 
@@ -634,10 +577,11 @@ Begin
 End;
 
 Function RunClaudeTurnStopped(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  TimeoutMs: Integer; StopQuery: TClaudeStopQuery; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
+  TimeoutMs: Integer; StopQuery: TClaudeStopQuery; OnStarted: TClaudeStartedEvent; Out Turn: TClaudeTurnResult;
+  Out ErrorText: String): Boolean;
 Var
   Args, Environment: TStringList;
-  Mode, HelpText, StdoutText, StderrText, ProgramText: String;
+  StdoutText, StderrText, ProgramText, ResultError: String;
   ExitCode: Integer;
 Begin
   Result := False;
@@ -667,41 +611,45 @@ Begin
     TimeoutMs := ClaudeTurnTimeoutMs;
   If Not EnsureClaudeSubscription(Executable, ErrorText) Then
     Exit;
-  HelpText := ProbeHelp(Executable, StopQuery);
   If Assigned(StopQuery) And StopQuery() Then
     Begin
       ErrorText := 'Cancelled.';
       Exit;
     End;
-  Mode := ClaudePermissionMode(HelpText, ApprovalMode);
   Args := TStringList.Create;
   Environment := TStringList.Create;
   Try
-    AppendClaudeTurnArguments(Model, Mode, Args);
+    AppendClaudeTurnArguments(Model, ClaudePermissionMode(ApprovalMode), Args);
     BuildClaudeEnvironment(Environment);
     If Not RunCaptured(Executable, WorkingDirectory, Args, Environment, Prompt, TimeoutMs, StdoutText, StderrText,
-      ExitCode, ErrorText, StopQuery) Then
+      ExitCode, ErrorText, StopQuery, OnStarted) Then
       Exit;
   Finally
     Environment.Free;
     Args.Free;
   End;
-  ProgramText := StderrText;
-  If Trim(ProgramText) = '' Then
-    ProgramText := StdoutText;
-  { One attempt. A refused permission flag is reported and not tried again. }
-  If PermissionFlagRefused(StderrText + LineEnding + StdoutText) Then
-    Begin
-      ErrorText := BoundText(ProgramText);
-      If ErrorText = '' Then
-        ErrorText := 'Claude Code refused the permission mode flag.';
-      Exit;
-    End;
   If ExitCode <> 0 Then
     Begin
+      { The answer on stdout is never searched for flag errors. Only stderr says why the program refused. }
+      If PermissionFlagRefused(StderrText) Then
+        Begin
+          ErrorText := 'Claude Code refused the permission mode flag. ' + BoundText(StderrText);
+          Exit;
+        End;
+      { An error result on stdout says more than the exit code. }
+      If (Not ParseClaudeTurnResult(StdoutText, Turn, ResultError)) And (ResultError <> '') And
+        (ResultError <> 'Claude Code did not return a JSON result.') Then
+        Begin
+          ErrorText := ResultError;
+          Exit;
+        End;
+      ProgramText := StderrText;
+      If Trim(ProgramText) = '' Then
+        ProgramText := StdoutText;
       ErrorText := BoundText(ProgramText);
       If ErrorText = '' Then
         ErrorText := 'Claude Code did not complete the turn.';
+      ClearTurn(Turn);
       Exit;
     End;
   If Not ParseClaudeTurnResult(StdoutText, Turn, ErrorText) Then
@@ -712,6 +660,16 @@ End;
 Function TAssistantClaudeRun.Cancelled: Boolean;
 Begin
   Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
+End;
+
+Procedure TAssistantClaudeRun.ProcessStarted;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    FSnapshot.Started := True;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
 End;
 
 Constructor TAssistantClaudeRun.Create(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
@@ -732,6 +690,7 @@ Begin
   FCancelled := 0;
   FSnapshot.Content := '';
   FSnapshot.ErrorText := '';
+  FSnapshot.Started := False;
   FSnapshot.Done := False;
 End;
 
@@ -773,7 +732,7 @@ Begin
     If Cancelled Or Terminated Then
       ErrorText := 'Cancelled.'
     Else If Not RunClaudeTurnStopped(FExecutable, FModel, FApproval, FPrompt, FDirectory, FTimeoutMs, @Cancelled,
-      Turn, ErrorText) Then
+      @ProcessStarted, Turn, ErrorText) Then
       Begin
         If ErrorText = '' Then
           ErrorText := 'Claude Code did not complete the turn.';

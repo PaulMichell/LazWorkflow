@@ -17,8 +17,9 @@ Uses
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
   NoUsageFixture = '{"result":"plain answer"}';
-  HelpFixture = 'Usage: claude' + LineEnding +
-    '--permission-mode <mode>  choices: "default", "acceptEdits", "bypassPermissions"';
+  { Claude Code 2.1.312 stderr for an unknown mode. }
+  RefusedModeFixture = 'error: option ''--permission-mode <mode>'' argument ''ask'' is invalid. ' +
+    'Allowed choices are acceptEdits, auto, bypassPermissions, manual, dontAsk, plan.';
 
 Procedure Check(Const Name: String; OK: Boolean);
 Begin
@@ -111,12 +112,16 @@ Begin
     '{"is_error":true,"result":"quota exceeded"}', Turn, ErrorText)) And (Pos('quota', LowerCase(ErrorText)) > 0) And
     (Turn.Text = ''));
 
-  Check('ask maps to default when that is the accepted value', ClaudePermissionMode(HelpFixture, 'ask') = 'default');
-  Check('auto maps to accept edits', ClaudePermissionMode(HelpFixture, 'auto') = 'acceptEdits');
-  Check('always maps to bypass', ClaudePermissionMode(HelpFixture, 'always') = 'bypassPermissions');
-  Check('missing flag is not sent', ClaudePermissionMode('usage: claude', 'always') = '');
-  Check('refused flag text is recognised', PermissionFlagRefused('error: unknown option --permission-mode'));
+  Check('ask leaves the program default', ClaudePermissionMode('ask') = '');
+  Check('an empty approval leaves the program default', ClaudePermissionMode('') = '');
+  Check('auto maps to accept edits', ClaudePermissionMode('auto') = 'acceptEdits');
+  Check('always maps to bypass', ClaudePermissionMode(' Always ') = 'bypassPermissions');
+  Check('plan maps to plan', ClaudePermissionMode('plan') = 'plan');
+  Check('refused mode stderr is recognised', PermissionFlagRefused(RefusedModeFixture));
+  Check('unknown flag stderr is recognised', PermissionFlagRefused('error: unknown option ''--permission-mode'''));
   Check('a model error is not a refused flag', Not PermissionFlagRefused('model not found'));
+  Check('an answer about the flag is not a refused flag', Not PermissionFlagRefused(
+    'Use --permission-mode plan for read-only work; an invalid value stops the program.'));
 
   Args := TStringList.Create;
   Try

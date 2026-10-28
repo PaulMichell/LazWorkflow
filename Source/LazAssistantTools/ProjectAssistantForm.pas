@@ -237,6 +237,7 @@ Type
     FPollingClaude: Boolean;
     FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
     FClaudeLaunchReady: Boolean;
+    FClaudeStartAttempts: Integer;
     FTransportWait: Boolean;
     FTransportWaitStart, FTransportWaitMs: QWord;
     FTransportBackend, FTransportConnectionId: String;
@@ -5060,6 +5061,7 @@ Begin
   FClaudeConnectionId := FActiveConnectionId;
   FClaudeLaunchPrompt := Prompt;
   FClaudeLaunchReady := True;
+  FClaudeStartAttempts := 0;
   SetSending(True);
   BeginAssistantReply;
   Result := LaunchStoredClaudeRun;
@@ -5095,9 +5097,12 @@ Begin
     If Snapshot.Done Then
       Begin
         If FClaudeRun <> Run Then Exit;
-        { Do not finish the reply. The same stored turn starts again after the wait. }
-        If TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
+        { A started turn may already have edited files or run commands, so only a failure to start waits and
+          starts the same stored turn again, a bounded number of times. }
+        If (Not Snapshot.Started) And (FClaudeStartAttempts < AssistantFaultRetryCap(-1)) And
+          TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
           Begin
+            Inc(FClaudeStartAttempts);
             ReleaseClaudeProcess;
             Exit;
           End;

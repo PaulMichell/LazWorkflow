@@ -946,8 +946,8 @@ Begin
     (Pos('configure its pipes', Lowered) > 0) Or
     (Pos('pipe write', Lowered) > 0) Or
     (Pos('pipe signal', Lowered) > 0) Or
-    (Pos('could not start claude code', Lowered) > 0) Or
-    (Pos('did not complete the turn', Lowered) > 0);
+    { Nothing ran yet, so a retry cannot repeat work. A Claude turn that started is never replayed. }
+    (Pos('could not start claude code', Lowered) > 0);
 End;
 
 Function ClassifyDroppedTransport(Const ErrorText, ResponseBody: String; UserStopped: Boolean): TAssistantRecovery;
