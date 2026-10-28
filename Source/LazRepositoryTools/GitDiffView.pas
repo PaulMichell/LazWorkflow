@@ -17,7 +17,7 @@ Interface
 
 Uses
   Classes, SysUtils, Types, Controls, Graphics, ExtCtrls, ComCtrls, StdCtrls, Forms,
-  Menus, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
+  LMessages, Menus, SynEdit, SynEditTypes, SynHighlighterDiff, SynGutter, SynGutterBase,
   SynGutterLineOverview, GitJobRunner, GitDiffPatch;
 
 Type
@@ -92,6 +92,7 @@ Type
     MixedHigh: TObject; { TGitMixedDiffHighlighter; Create(Nil) — never Self-owned (would stream into host LFM) }
     PreviewPicture: TPicture;
     FAppearanceReady: Boolean;
+    FOverviewMapped: Boolean;
     FEditorOptsHooked: Boolean;
     SelectedLines: TGitLineNumberList; { 1-based display line numbers for Files multi-select }
     FLineDragActive: Boolean;
@@ -111,6 +112,7 @@ Type
     Procedure EditorOptionsChanged(Sender: TObject);
     Procedure EnsureAppearanceReady;
     Procedure DoDeferredInitAsync(Data: PtrInt);
+    Procedure CMShowingChanged(Var Message: TLMessage); Message CM_SHOWINGCHANGED;
     Function ScaleDesign(DesignPx: Integer): Integer;
     Function OverviewGutterWidth: Integer;
     Procedure ApplyEditorSelectionPolicy;
@@ -120,6 +122,8 @@ Type
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure EnsureDiffOverviewGutter;
+    Procedure ScheduleOverviewRealize;
+    Procedure DoRealizeOverviewAsync(Data: PtrInt);
     Procedure ScheduleOverviewRefresh;
     Procedure DoRefreshOverviewAsync(Data: PtrInt);
     Procedure ApplyViewMode;
@@ -257,6 +261,7 @@ Begin
   DiffOverviewProvider := Nil;
   OwnedLangHigh := Nil;
   FAppearanceReady := False;
+  FOverviewMapped := False;
   FEditorOptsHooked := False;
   SelectedLines := TGitLineNumberList.Create;
   LineDragSnapshot := TGitLineNumberList.Create;
@@ -327,10 +332,22 @@ Begin
     Else
       ShowBlankPane;
     UpdateActionEnabled;
+    { A frame created on an already-visible form never gets a later show message. }
+    If Showing Then
+      ScheduleOverviewRealize;
   Except
     On E: Exception Do
       WorkflowLogger.Error('GitDiffView', 'DoDeferredInitAsync: ' + E.Message);
   End;
+End;
+
+Procedure TGitDiffView.CMShowingChanged(Var Message: TLMessage);
+Begin
+  Inherited;
+  { Schedule only. Creating the overview child here is still before the toplevel
+    surface exists; the idle callback is the post-map step. }
+  If Showing Then
+    ScheduleOverviewRealize;
 End;
 
 Procedure TGitDiffView.Loaded;
@@ -444,9 +461,9 @@ Var
   I: Integer;
   StillInstalled: Boolean;
 Begin
-  { Overview paints on a child TWinControl (not Gutter.Paint). That child only
-    gets BoundsRect when the part is Visible and SynEdit has a handle — so we
-    reassert size/visibility after every load and after notebook tab shows. }
+  { Overview paints on a child TWinControl (not Gutter.Paint). Do not create or
+    show that child until the host form has been mapped — Wayland drops a
+    subsurface born before the toplevel wl_surface exists. }
   If Not Assigned(DiffEditor) Then
     Exit;
 
@@ -458,6 +475,13 @@ Begin
           StillInstalled := True;
           Break;
         End;
+
+  If Not FOverviewMapped Then
+    Begin
+      If Not StillInstalled Then
+        ScheduleOverviewRealize;
+      Exit;
+    End;
 
   If Not StillInstalled Then
     SetupDiffOverviewGutter;
@@ -479,6 +503,22 @@ Begin
       DiffEditor.RightGutter.RecalcBounds;
       DiffEditor.Invalidate;
     End;
+End;
+
+Procedure TGitDiffView.ScheduleOverviewRealize;
+Begin
+  If Not Assigned(DiffEditor) Then
+    Exit;
+  { Do not RemoveAsyncCalls — that would cancel scroll-to-change. }
+  Application.QueueAsyncCall(@DoRealizeOverviewAsync, 0);
+End;
+
+Procedure TGitDiffView.DoRealizeOverviewAsync(Data: PtrInt);
+Begin
+  { The post-map create lives in the next step. This callback is the schedule
+    target so show and load can queue it without building the child early. }
+  If (Data < 0) Or (Not IsAlive) Then
+    Exit;
 End;
 
 Procedure TGitDiffView.ScheduleOverviewRefresh;
@@ -728,7 +768,6 @@ Begin
           ConfigureDiffColors(TSynDiffSyn(MixedHigh));
         Except
         End;
-      SetupDiffOverviewGutter;
       HookEditorOptionsChanged;
       FAppearanceReady := True;
     End;
