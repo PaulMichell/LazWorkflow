@@ -190,6 +190,11 @@ Begin
   Check('Codex sign-in stops', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Claude Code refused the permission mode flag.', '', False);
   Check('refused Claude permission flag stops', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Claude Code is using an API key from ANTHROPIC_API_KEY, which is billed per use. ' +
+    'Remove it from Claude Code settings, or sign in with Claude.', '', False);
+  Check('Claude per-use billing refusal stops', Decision.Action = araStop);
+  Decision := ClassifyDroppedTransport('Claude Code is not signed in. Use Sign in with Claude.', '', False);
+  Check('Claude signed-out refusal stops', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Invalid or oversized Codex protocol frame.', '', False);
   Check('Codex protocol error stops', Decision.Action = araStop);
 

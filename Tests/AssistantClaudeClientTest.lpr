@@ -55,6 +55,33 @@ Begin
   End;
 End;
 
+{ Captured from Claude Code 2.1.312 and redacted. See Tests/Fixtures/Claude/README.md. }
+Function FixtureText(Const Name: String): String;
+Var
+  Candidates: Array[0..2] Of String;
+  Lines: TStringList;
+  I: Integer;
+Begin
+  Result := '';
+  Candidates[0] := ExpandFileName('Tests/Fixtures/Claude/' + Name);
+  Candidates[1] := ExpandFileName('../Tests/Fixtures/Claude/' + Name);
+  Candidates[2] := ExpandFileName(ExtractFilePath(ParamStr(0)) + '../Tests/Fixtures/Claude/' + Name);
+  Lines := TStringList.Create;
+  Try
+    For I := 0 To High(Candidates) Do
+      If FileExists(Candidates[I]) Then
+        Begin
+          Lines.LoadFromFile(Candidates[I]);
+          Result := Lines.Text;
+          Exit;
+        End;
+  Finally
+    Lines.Free;
+  End;
+  WriteLn('FAIL fixture not found: ', Name);
+  Halt(1);
+End;
+
 Function SourceContains(Const Source, Needle: String): Boolean;
 Begin
   Result := Pos(LowerCase(Needle), LowerCase(Source)) > 0;
@@ -63,7 +90,8 @@ End;
 Var
   Source, ErrorText, Script: String;
   Turn: TClaudeTurnResult;
-  Args: TStringList;
+  Account: TClaudeAccount;
+  Args, ParentVariables, Filtered: TStringList;
   {$IFDEF UNIX}
   Handle: THandle;
   {$ENDIF}
@@ -114,6 +142,45 @@ Begin
   Check('browsed executable is the expanded runtime path', ClaudeRuntimeFromBrowsedPath(Script) = ExpandFileName(Script));
   DeleteFile(Script);
   {$ENDIF}
+
+  Check('subscription status parses', ParseClaudeAccount(FixtureText('auth-sub.json'), Account));
+  Check('subscription status is a subscription', ClaudeAccountIsSubscription(Account));
+  Check('subscription text names the plan', ClaudeAccountText(Account) = 'Signed in with a Claude Pro subscription.');
+  Check('api key status parses', ParseClaudeAccount(FixtureText('auth-key.json'), Account));
+  Check('api key status is not a subscription', Not ClaudeAccountIsSubscription(Account));
+  Check('api key text says billed per use', Pos('billed per use', ClaudeAccountText(Account)) > 0);
+  Check('api key text names the key source', Pos('ANTHROPIC_API_KEY', ClaudeAccountText(Account)) > 0);
+  Check('signed-out status is not a subscription', ParseClaudeAccount('{"loggedIn":false}', Account) And
+    (Not ClaudeAccountIsSubscription(Account)) And (Pos('not signed in', ClaudeAccountText(Account)) > 0));
+  Check('cloud provider is not a subscription', ParseClaudeAccount(
+    '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"bedrock","subscriptionType":"pro"}', Account) And
+    (Not ClaudeAccountIsSubscription(Account)));
+  Check('non-status text is refused', Not ParseClaudeAccount('error: unknown command', Account));
+  Check('status without loggedIn is refused', Not ParseClaudeAccount('{"authMethod":"claude.ai"}', Account));
+
+  ParentVariables := TStringList.Create;
+  Filtered := TStringList.Create;
+  Try
+    ParentVariables.Add('PATH=/usr/bin');
+    ParentVariables.Add('ANTHROPIC_API_KEY=sk-ant-fixture');
+    ParentVariables.Add('ANTHROPIC_AUTH_TOKEN=fixture');
+    ParentVariables.Add('ANTHROPIC_BASE_URL=http://127.0.0.1:1');
+    ParentVariables.Add('CLAUDE_CODE_USE_BEDROCK=1');
+    ParentVariables.Add('CLAUDE_CODE_USE_VERTEX=1');
+    ParentVariables.Add('CLAUDE_CODE_USE_FOUNDRY=1');
+    ParentVariables.Add('ANTHROPIC_MODEL=sonnet');
+    ParentVariables.Add('HOME=/home/fixture');
+    FilterClaudeEnvironment(ParentVariables, Filtered);
+    Check('environment keeps ordinary variables', (Filtered.IndexOf('PATH=/usr/bin') >= 0) And
+      (Filtered.IndexOf('HOME=/home/fixture') >= 0) And (Filtered.IndexOf('ANTHROPIC_MODEL=sonnet') >= 0));
+    Check('environment drops every metered billing variable', Filtered.Count = 3);
+    BuildClaudeEnvironment(Filtered);
+    Check('this process environment is copied', Filtered.Count > 0);
+    Check('this process environment has no API key', Filtered.IndexOfName('ANTHROPIC_API_KEY') < 0);
+  Finally
+    Filtered.Free;
+    ParentVariables.Free;
+  End;
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');

@@ -40,6 +40,31 @@ Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResu
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
 
 Type
+  { The billing fields of claude auth status. Email and organisation are never read. }
+  TClaudeAccount = Record
+    SignedIn: Boolean;
+    AuthMethod: String;
+    ApiProvider: String;
+    KeySource: String;
+    SubscriptionType: String;
+  End;
+
+/// Copies NAME=VALUE lines from Source without the variables that move Claude Code onto metered billing.
+Procedure FilterClaudeEnvironment(Source, Environment: TStrings);
+/// FilterClaudeEnvironment applied to this process environment.
+Procedure BuildClaudeEnvironment(Environment: TStrings);
+/// Reads the billing fields from claude auth status --json output. False when the text is not that report.
+Function ParseClaudeAccount(Const JsonText: String; Out Account: TClaudeAccount): Boolean;
+/// Runs the program's own status report in the scrubbed environment.
+Function ReadClaudeAccount(Const Executable: String; Out Account: TClaudeAccount; Out ErrorText: String): Boolean;
+/// True only for a signed-in claude.ai subscription on the first-party service.
+Function ClaudeAccountIsSubscription(Const Account: TClaudeAccount): Boolean;
+/// One sentence for the settings page, or the reason a turn was refused.
+Function ClaudeAccountText(Const Account: TClaudeAccount): String;
+/// The next turn checks the account again. Call after saving settings or starting a sign-in.
+Procedure ForgetClaudeAccounts;
+
+Type
   TClaudeRunSnapshot = Record
     Content, ErrorText: String;
     Done: Boolean;
@@ -72,6 +97,15 @@ Uses
 Const
   ClaudeHelpTimeoutMs = 8000;
   ClaudeTurnTimeoutMs = 120000;
+  ClaudeStatusTimeoutMs = 15000;
+  { Each of these selects an API key, a gateway, or a cloud provider instead of the subscription. }
+  ClaudeMeteredVariables: Array[0..5] Of String = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY');
+
+Var
+  { Executables whose account was confirmed as a subscription in this IDE session. }
+  ConfirmedExecutables: TStringList;
+  AccountLock: TRTLCriticalSection;
 
 Procedure ClearTurn(Out Turn: TClaudeTurnResult);
 Begin
@@ -279,7 +313,7 @@ End;
 Type
   TClaudeStopQuery = Function: Boolean Of Object;
 
-Function RunCaptured(Const Executable, WorkingDirectory: String; Args: TStrings; Const InputText: String;
+Function RunCaptured(Const Executable, WorkingDirectory: String; Args, Environment: TStrings; Const InputText: String;
   TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String;
   StopQuery: TClaudeStopQuery = Nil): Boolean;
 Var
@@ -308,6 +342,8 @@ Begin
     Proc.Options := [poUsePipes, poNoConsole];
     If Assigned(Args) Then
       Proc.Parameters.Assign(Args);
+    If Assigned(Environment) Then
+      Proc.Environment.Assign(Environment);
     Try
       Proc.Execute;
     Except
@@ -391,7 +427,7 @@ Begin
   Args := TStringList.Create;
   Try
     Args.Add('--help');
-    If RunCaptured(Executable, '', Args, '', ClaudeHelpTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText,
+    If RunCaptured(Executable, '', Args, Nil, '', ClaudeHelpTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText,
       StopQuery) Then
       Result := StdoutText + LineEnding + StderrText;
   Finally
@@ -408,14 +444,199 @@ Begin
       ErrorText := 'Claude Code was not found. Browse to the installed executable.';
       Exit;
     End;
-  { Start the program's own login. Do not read its output or account files. }
-  Result := SpawnDetached(Executable, ['auth', 'login'], ErrorText);
+  { Start the program's own login on the subscription. Do not read its output or account files. }
+  ForgetClaudeAccounts;
+  Result := SpawnDetached(Executable, ['auth', 'login', '--claudeai'], ErrorText);
+End;
+
+Procedure FilterClaudeEnvironment(Source, Environment: TStrings);
+Var
+  I, J: Integer;
+  VariableName: String;
+  Metered: Boolean;
+Begin
+  If (Not Assigned(Source)) Or (Not Assigned(Environment)) Then
+    Exit;
+  Environment.Clear;
+  For I := 0 To Source.Count - 1 Do
+    Begin
+      VariableName := Copy(Source[I], 1, Pos('=', Source[I]) - 1);
+      Metered := False;
+      For J := Low(ClaudeMeteredVariables) To High(ClaudeMeteredVariables) Do
+        If CompareText(VariableName, ClaudeMeteredVariables[J]) = 0 Then
+          Metered := True;
+      If Not Metered Then
+        Environment.Add(Source[I]);
+    End;
+End;
+
+Procedure BuildClaudeEnvironment(Environment: TStrings);
+Var
+  Source: TStringList;
+  I: Integer;
+Begin
+  If Not Assigned(Environment) Then
+    Exit;
+  Source := TStringList.Create;
+  Try
+    For I := 1 To GetEnvironmentVariableCount Do
+      Source.Add(GetEnvironmentString(I));
+    FilterClaudeEnvironment(Source, Environment);
+  Finally
+    Source.Free;
+  End;
+End;
+
+Function JsonStringField(Root: TJSONObject; Const Key: String): String;
+Begin
+  { A missing subscription is a JSON null, not a string. }
+  If Root.Find(Key) Is TJSONString Then
+    Result := Root.Get(Key, '')
+  Else
+    Result := '';
+End;
+
+Function ParseClaudeAccount(Const JsonText: String; Out Account: TClaudeAccount): Boolean;
+Var
+  Data: TJSONData;
+  Root: TJSONObject;
+Begin
+  Result := False;
+  Account := Default(TClaudeAccount);
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(JsonObjectText(JsonText));
+    Except
+      On EParserError Do
+        Exit;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Root := TJSONObject(Data);
+    If Not (Root.Find('loggedIn') Is TJSONBoolean) Then
+      Exit;
+    Account.SignedIn := Root.Get('loggedIn', False);
+    Account.AuthMethod := JsonStringField(Root, 'authMethod');
+    Account.ApiProvider := JsonStringField(Root, 'apiProvider');
+    Account.KeySource := JsonStringField(Root, 'apiKeySource');
+    Account.SubscriptionType := JsonStringField(Root, 'subscriptionType');
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ReadClaudeAccount(Const Executable: String; Out Account: TClaudeAccount; Out ErrorText: String): Boolean;
+Var
+  Args, Environment: TStringList;
+  StdoutText, StderrText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  Account := Default(TClaudeAccount);
+  ErrorText := '';
+  Args := TStringList.Create;
+  Environment := TStringList.Create;
+  Try
+    Args.Add('auth');
+    Args.Add('status');
+    Args.Add('--json');
+    BuildClaudeEnvironment(Environment);
+    If Not RunCaptured(Executable, '', Args, Environment, '', ClaudeStatusTimeoutMs, StdoutText, StderrText, ExitCode,
+      ErrorText) Then
+      Exit;
+    If Not ParseClaudeAccount(StdoutText, Account) Then
+      Begin
+        ErrorText := 'Claude Code did not report its sign-in state.';
+        Exit;
+      End;
+    Result := True;
+  Finally
+    Environment.Free;
+    Args.Free;
+  End;
+End;
+
+Function ClaudeAccountIsSubscription(Const Account: TClaudeAccount): Boolean;
+Begin
+  Result := Account.SignedIn And (Account.AuthMethod = 'claude.ai') And (Account.ApiProvider = 'firstParty') And
+    (Account.SubscriptionType <> '');
+End;
+
+Function ClaudeAccountText(Const Account: TClaudeAccount): String;
+Begin
+  If ClaudeAccountIsSubscription(Account) Then
+    Result := 'Signed in with a Claude ' + UpperCase(Copy(Account.SubscriptionType, 1, 1)) +
+      Copy(Account.SubscriptionType, 2, MaxInt) + ' subscription.'
+  Else If Not Account.SignedIn Then
+    Result := 'Claude Code is not signed in. Use Sign in with Claude.'
+  Else If Account.ApiProvider <> 'firstParty' Then
+    Result := 'Claude Code is set to use ' + Account.ApiProvider + ', not a Claude subscription. ' +
+      'This assistant does not send Claude turns that are billed per use.'
+  Else If Account.KeySource <> '' Then
+    Result := 'Claude Code is using an API key from ' + Account.KeySource + ', which is billed per use. ' +
+      'Remove it from Claude Code settings, or sign in with Claude.'
+  Else
+    Result := 'Claude Code is not using a Claude subscription (found ' + Account.AuthMethod + '). ' +
+      'Use Sign in with Claude.';
+End;
+
+Procedure ForgetClaudeAccounts;
+Begin
+  EnterCriticalSection(AccountLock);
+  Try
+    ConfirmedExecutables.Clear;
+  Finally
+    LeaveCriticalSection(AccountLock);
+  End;
+End;
+
+Function ClaudeAccountConfirmed(Const Executable: String): Boolean;
+Begin
+  EnterCriticalSection(AccountLock);
+  Try
+    Result := ConfirmedExecutables.IndexOf(Executable) >= 0;
+  Finally
+    LeaveCriticalSection(AccountLock);
+  End;
+End;
+
+Procedure ConfirmClaudeAccount(Const Executable: String);
+Begin
+  EnterCriticalSection(AccountLock);
+  Try
+    If ConfirmedExecutables.IndexOf(Executable) < 0 Then
+      ConfirmedExecutables.Add(Executable);
+  Finally
+    LeaveCriticalSection(AccountLock);
+  End;
+End;
+
+{ Checked once per executable per IDE session, then trusted. The turn itself runs in the same scrubbed environment. }
+Function EnsureClaudeSubscription(Const Executable: String; Out ErrorText: String): Boolean;
+Var
+  Account: TClaudeAccount;
+Begin
+  Result := ClaudeAccountConfirmed(Executable);
+  ErrorText := '';
+  If Result Then
+    Exit;
+  If Not ReadClaudeAccount(Executable, Account, ErrorText) Then
+    Exit;
+  If Not ClaudeAccountIsSubscription(Account) Then
+    Begin
+      ErrorText := ClaudeAccountText(Account);
+      Exit;
+    End;
+  ConfirmClaudeAccount(Executable);
+  Result := True;
 End;
 
 Function RunClaudeTurnStopped(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
   TimeoutMs: Integer; StopQuery: TClaudeStopQuery; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 Var
-  Args: TStringList;
+  Args, Environment: TStringList;
   Mode, HelpText, StdoutText, StderrText, ProgramText: String;
   ExitCode: Integer;
 Begin
@@ -444,6 +665,8 @@ Begin
     End;
   If TimeoutMs < 1 Then
     TimeoutMs := ClaudeTurnTimeoutMs;
+  If Not EnsureClaudeSubscription(Executable, ErrorText) Then
+    Exit;
   HelpText := ProbeHelp(Executable, StopQuery);
   If Assigned(StopQuery) And StopQuery() Then
     Begin
@@ -452,12 +675,15 @@ Begin
     End;
   Mode := ClaudePermissionMode(HelpText, ApprovalMode);
   Args := TStringList.Create;
+  Environment := TStringList.Create;
   Try
     AppendClaudeTurnArguments(Model, Mode, Args);
-    If Not RunCaptured(Executable, WorkingDirectory, Args, Prompt, TimeoutMs, StdoutText, StderrText,
+    BuildClaudeEnvironment(Environment);
+    If Not RunCaptured(Executable, WorkingDirectory, Args, Environment, Prompt, TimeoutMs, StdoutText, StderrText,
       ExitCode, ErrorText, StopQuery) Then
       Exit;
   Finally
+    Environment.Free;
     Args.Free;
   End;
   ProgramText := StderrText;
@@ -576,5 +802,15 @@ Begin
     LeaveCriticalSection(FLock);
   End;
 End;
+
+Initialization
+
+InitCriticalSection(AccountLock);
+ConfirmedExecutables := TStringList.Create;
+
+Finalization
+
+FreeAndNil(ConfirmedExecutables);
+DoneCriticalSection(AccountLock);
 
 End.

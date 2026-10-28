@@ -1293,12 +1293,22 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.ClaudeCheckClick(Sender: TObject);
+Var
+  Account: TClaudeAccount;
+  ErrorText: String;
 Begin
   ClaudeRuntimeEdit.Text := Trim(ClaudeRuntimeEdit.Text);
-  If FileIsExecutable(ClaudeRuntimeEdit.Text) Then
-    ClaudeStatusLabel.Caption := 'Executable found. ' + ClaudeKeepsSessionText
+  If Not FileIsExecutable(ClaudeRuntimeEdit.Text) Then
+    Begin
+      ClaudeStatusLabel.Caption := 'Claude Code was not found. Browse to the installed executable. ' + ClaudeKeepsSessionText;
+      Exit;
+    End;
+  { The program's own status report. Billing fields only; the account email is not read. }
+  ForgetClaudeAccounts;
+  If ReadClaudeAccount(ClaudeRuntimeEdit.Text, Account, ErrorText) Then
+    ClaudeStatusLabel.Caption := ClaudeAccountText(Account)
   Else
-    ClaudeStatusLabel.Caption := 'Claude Code was not found. Browse to the installed executable. ' + ClaudeKeepsSessionText;
+    ClaudeStatusLabel.Caption := ErrorText;
 End;
 
 Procedure TAssistantSettingsForm.PopulateSkills;
@@ -1675,6 +1685,8 @@ Begin
     AssistantChatConfig.ApplyOAuthTokens(GrokOAuthClient.Tokens);
   AssistantChatConfig.Save;
   Connections.Save;
+  { A changed Claude executable or sign-in is checked again on its next turn. }
+  ForgetClaudeAccounts;
   GlobalSpellSettings.SaveToConfig;
   ProjectTestSettings.Save;
 End;
