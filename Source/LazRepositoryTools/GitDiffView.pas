@@ -122,6 +122,7 @@ Type
     Procedure ConfigureDiffColors(DiffHL: TSynDiffSyn);
     Procedure SetupDiffOverviewGutter;
     Procedure EnsureDiffOverviewGutter;
+    Procedure PlaceOverviewGutter;
     Procedure ScheduleOverviewRealize;
     Procedure DoRealizeOverviewAsync(Data: PtrInt);
     Procedure ScheduleOverviewRefresh;
@@ -488,6 +489,33 @@ Begin
     DiffEditor.RightGutter.RecalcBounds;
 End;
 
+Procedure TGitDiffView.PlaceOverviewGutter;
+Var
+  GutterWidth: Integer;
+Begin
+  If Not Assigned(DiffEditor) Or Not DiffEditor.HandleAllocated Then
+    Exit;
+  GutterWidth := OverviewGutterWidth;
+  DiffEditor.RightGutter.AutoSize := False;
+  DiffEditor.RightGutter.Visible := True;
+  DiffEditor.RightGutter.Width := GutterWidth;
+  If Assigned(OverviewGutter) Then
+    Begin
+      OverviewGutter.AutoSize := False;
+      OverviewGutter.Width := GutterWidth;
+      OverviewGutter.Visible := True;
+    End;
+  { RecalcBounds returns when Left/Top/Height are unchanged, so a part added
+    after the first layout never receives SetBounds. The child window stays
+    empty until the user resizes. Move the right edge by one pixel and back
+    so both passes lay that child out. }
+  DiffEditor.RightGutter.Width := GutterWidth + 1;
+  DiffEditor.RightGutter.RecalcBounds;
+  DiffEditor.RightGutter.Width := GutterWidth;
+  DiffEditor.RightGutter.RecalcBounds;
+  DiffEditor.Invalidate;
+End;
+
 Procedure TGitDiffView.ScheduleOverviewRealize;
 Begin
   If Not Assigned(DiffEditor) Then
@@ -497,8 +525,11 @@ Begin
 End;
 
 Procedure TGitDiffView.DoRealizeOverviewAsync(Data: PtrInt);
+Const
+  RealizeAfterShow = 4; { Gate has passed; create on the following idle. }
 Var
   HostForm: TCustomForm;
+  GateOpen: Boolean;
 Begin
   If Not IsAlive Or FOverviewMapped Then
     Exit;
@@ -506,35 +537,39 @@ Begin
   { Frame.Showing is true during the children-first pass, before the toplevel
     ShowHide. The host form's Showing is the post-map test. }
   HostForm := GetParentForm(Self);
-  If (Not Assigned(HostForm)) Or (Not HostForm.Showing) Or
-     (Not DiffEditor.HandleAllocated) Or (DiffEditor.ClientHeight <= 1) Then
+  GateOpen := Assigned(HostForm) And HostForm.Showing And DiffEditor.HandleAllocated And
+    (DiffEditor.ClientHeight > 1);
+  If Data = RealizeAfterShow Then
+    Begin
+      If Not GateOpen Then
+        Exit;
+      Try
+        { Setup frees any child born before map, then parents a new one.
+          Do not toggle Visible around this. }
+        SetupDiffOverviewGutter;
+        If Not Assigned(OverviewGutter) Then
+          Exit;
+        If Assigned(DiffOverviewProvider) And (Length(FDisplayedLines) > 0) Then
+          TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
+        PlaceOverviewGutter;
+        FOverviewMapped := True;
+      Except
+        On E: Exception Do
+          WorkflowLogger.Warning('GitDiffView', 'DoRealizeOverviewAsync: ' + E.Message);
+      End;
+      Exit;
+    End;
+
+  If Not GateOpen Then
     Begin
       If Data < 3 Then
         Application.QueueAsyncCall(@DoRealizeOverviewAsync, Data + 1);
       Exit;
     End;
 
-  Try
-    { Setup frees any child born before map, then parents a new one now that
-      the toplevel surface exists. Do not toggle Visible around this. }
-    SetupDiffOverviewGutter;
-    If Not Assigned(OverviewGutter) Then
-      Exit;
-    FOverviewMapped := True;
-    If Assigned(DiffOverviewProvider) And (Length(FDisplayedLines) > 0) Then
-      TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
-    DiffEditor.RightGutter.AutoSize := False;
-    DiffEditor.RightGutter.Width := OverviewGutterWidth;
-    DiffEditor.RightGutter.Visible := True;
-    OverviewGutter.AutoSize := False;
-    OverviewGutter.Width := OverviewGutterWidth;
-    If DiffEditor.HandleAllocated Then
-      DiffEditor.RightGutter.RecalcBounds;
-    DiffEditor.Invalidate;
-  Except
-    On E: Exception Do
-      WorkflowLogger.Warning('GitDiffView', 'DoRealizeOverviewAsync: ' + E.Message);
-  End;
+  { ShowHide has returned, but on Wayland the surface is not ready on that
+    same idle. Creating the child here leaves it unpositioned until resize. }
+  Application.QueueAsyncCall(@DoRealizeOverviewAsync, RealizeAfterShow);
 End;
 
 Procedure TGitDiffView.ScheduleOverviewRefresh;
