@@ -237,7 +237,11 @@ Type
     FPollingClaude: Boolean;
     FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
     FClaudeLaunchReady: Boolean;
-    FClaudeStartAttempts: Integer;
+    FClaudeRetries: Integer;
+    { Last rate-limit report applied to the footer, and the finished turn's usage for the usage log. }
+    FClaudeRateLimitJson: String;
+    FClaudeUsageReported: Boolean;
+    FClaudeInputTokens, FClaudeOutputTokens: Int64;
     FTransportWait: Boolean;
     FTransportWaitStart, FTransportWaitMs: QWord;
     FTransportBackend, FTransportConnectionId: String;
@@ -252,6 +256,8 @@ Type
     Function StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
     Procedure PollCodex;
     Procedure PollClaude;
+    Procedure ApplyClaudeRateLimit(Const RateLimitJson: String);
+    Procedure NoteClaudeKeySource(Const KeySource: String);
     Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
     Procedure ReleaseClaudeProcess;
@@ -625,7 +631,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
-  AssistantCodexUsage, AssistantHarness,
+  AssistantCodexUsage, AssistantHarness, AssistantClaudeStream,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
   AssistantFileDrop, AssistantTaskNoteForm, LResources;
@@ -4569,9 +4575,6 @@ Begin
   If Assigned(FClaudeRun) Then
     Begin
       FClaudeRun.Cancel;
-      { A suspended thread would make the reaper WaitFor hang. Cancelled Execute exits at once. }
-      If FClaudeRun.Suspended Then
-        FClaudeRun.Start;
       { Same off-thread join as a Codex worker. Do not WaitFor on the IDE thread. }
       ReapCodexWorker(FClaudeRun);
       FClaudeRun := Nil;
@@ -4697,14 +4700,20 @@ Begin
 End;
 
 Function TProjectAssistantForm.LaunchStoredClaudeRun: Boolean;
+Var
+  TurnSettings: TClaudeTurnSettings;
 Begin
   Result := False;
   If (Not FClaudeLaunchReady) Or (FClaudeRuntime = '') Or (FClaudeModel = '') Or (FClaudeLaunchPrompt = '') Then
     Exit;
+  TurnSettings := Default(TClaudeTurnSettings);
+  TurnSettings.Executable := FClaudeRuntime;
+  TurnSettings.Model := FClaudeModel;
+  TurnSettings.ApprovalMode := FClaudeApproval;
+  TurnSettings.WorkingDirectory := FClaudeDirectory;
+  TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
   Try
-    FClaudeRun := TAssistantClaudeRun.Create(FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeLaunchPrompt,
-      FClaudeDirectory, ClaudeRunTimeoutMs);
-    FClaudeRun.Start;
+    FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, FClaudeLaunchPrompt);
     SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
   Except
@@ -5061,13 +5070,38 @@ Begin
   FClaudeConnectionId := FActiveConnectionId;
   FClaudeLaunchPrompt := Prompt;
   FClaudeLaunchReady := True;
-  FClaudeStartAttempts := 0;
+  FClaudeRetries := 0;
+  FClaudeUsageReported := False;
   SetSending(True);
   BeginAssistantReply;
   Result := LaunchStoredClaudeRun;
   If (Not Result) And FSending And (Not FTransportWait) Then
     FinishAssistantReply('The run could not be restarted.');
   Result := FSending;
+End;
+
+Procedure TProjectAssistantForm.ApplyClaudeRateLimit(Const RateLimitJson: String);
+Var
+  Item: TAccountUsageSnapshot;
+  ErrorText: String;
+Begin
+  { The subscription's own windows, as Claude Code reported them during the turn. }
+  If (RateLimitJson = '') Or (RateLimitJson = FClaudeRateLimitJson) Then
+    Exit;
+  FClaudeRateLimitJson := RateLimitJson;
+  If Not ParseClaudeAccountUsage(RateLimitJson, FActiveConnectionId, Item, ErrorText) Then
+    Exit;
+  If Assigned(FAccountUsageSlot) Then
+    FAccountUsageSlot.StoreResult(Item, True);
+  ApplyAccountUsageLabel;
+End;
+
+Procedure TProjectAssistantForm.NoteClaudeKeySource(Const KeySource: String);
+Begin
+  { Checked once per session before the first turn, then trusted. This line is the evidence if that changes. }
+  If (KeySource <> '') And (KeySource <> 'none') Then
+    WorkflowLogger.Warning('ProjectAssistant', 'Claude Code reported billing source ' + KeySource +
+      ' instead of the Claude subscription.');
 End;
 
 Procedure TProjectAssistantForm.PollClaude;
@@ -5094,15 +5128,22 @@ Begin
     If FClaudeRun <> Run Then Exit;
     If Snapshot.Content <> '' Then
       ApplyAssistantSnapshots(Snapshot.Content, '');
+    If (Snapshot.ContextTokens > 0) And (Snapshot.ContextTokens < High(Integer)) Then
+      FContextUsed := Snapshot.ContextTokens;
+    ApplyClaudeRateLimit(Snapshot.RateLimitJson);
     If Snapshot.Done Then
       Begin
         If FClaudeRun <> Run Then Exit;
-        { A started turn may already have edited files or run commands, so only a failure to start waits and
-          starts the same stored turn again, a bounded number of times. }
-        If (Not Snapshot.Started) And (FClaudeStartAttempts < AssistantFaultRetryCap(-1)) And
+        NoteClaudeKeySource(Snapshot.KeySource);
+        FClaudeUsageReported := Snapshot.UsageState = ClaudeUsageReported;
+        FClaudeInputTokens := Snapshot.InputTokens;
+        FClaudeOutputTokens := Snapshot.OutputTokens;
+        { A turn that ran a tool may already have edited files or run commands, so only a turn that ran none
+          waits and starts the same stored prompt again, a bounded number of times. }
+        If (Snapshot.ToolCalls = 0) And (FClaudeRetries < AssistantFaultRetryCap(-1)) And
           TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
           Begin
-            Inc(FClaudeStartAttempts);
+            Inc(FClaudeRetries);
             ReleaseClaudeProcess;
             Exit;
           End;
@@ -7355,10 +7396,26 @@ Var
   HasReasoning, HasUsage: Boolean;
   Item: TAssistantUsageRecord;
 Begin
-  { Codex has no usage parser. A Claude turn is not this stream. }
-  If FUseCodex Or FUseClaude Or (FActiveConnectionId = '') Or (Not Assigned(AssistantClient)) Then
+  { Codex has no usage parser. A Claude turn reports its own usage in the stream. }
+  If FUseCodex Or (FActiveConnectionId = '') Then
     Exit;
-  HasUsage := AssistantClient.TakeReportedUsage(InputTokens, OutputTokens, ReasoningTokens, HasReasoning);
+  If FUseClaude Then
+    Begin
+      HasUsage := FClaudeUsageReported;
+      FClaudeUsageReported := False;
+      InputTokens := High(Integer);
+      If FClaudeInputTokens < High(Integer) Then
+        InputTokens := FClaudeInputTokens;
+      OutputTokens := High(Integer);
+      If FClaudeOutputTokens < High(Integer) Then
+        OutputTokens := FClaudeOutputTokens;
+      ReasoningTokens := 0;
+      HasReasoning := False;
+    End
+  Else If Assigned(AssistantClient) Then
+    HasUsage := AssistantClient.TakeReportedUsage(InputTokens, OutputTokens, ReasoningTokens, HasReasoning)
+  Else
+    HasUsage := False;
   If Not HasUsage Then
     Exit;
   Root := '';

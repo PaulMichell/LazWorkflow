@@ -105,6 +105,9 @@ Function ParseCodexAccountUsage(Const Body, ConnectionId: String; Out Snapshot: 
   Out ErrorText: String): Boolean;
 Function ParseGrokAccountUsage(Const Body, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
   Out ErrorText: String): Boolean;
+/// Reads rate_limit_info from a Claude Code rate_limit_event: the subscription's five-hour and seven-day windows.
+Function ParseClaudeAccountUsage(Const RateLimitJson, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
+  Out ErrorText: String): Boolean;
 /// Picks the Grok Build session from auth.json. Does not return an API key, email, or refresh token.
 Function SelectGrokCliCredential(Const AuthBody: String; Out Token, UserId: String): Boolean;
 /// Tests pass a stand-in auth.json. Empty body means no CLI session. Nil the override to read the file.
@@ -867,6 +870,113 @@ Begin
     Snapshot.Caption := Caption;
     Snapshot.Hint := Hint;
     NoteSnapshotUnixReset(Snapshot, ChosenCodexReset(Primary, Secondary, ReachedName));
+    NoteFetched(Snapshot);
+    RememberAccountUsage(Snapshot);
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+{ Claude Code reports utilization as a fraction, not a percentage. }
+Function ReadClaudeWindow(Windows: TJSONObject; Const Key: String; Minutes: Integer; Out Window: TUsageWindow): Boolean;
+Var
+  Node: TJSONObject;
+  Utilisation, ResetAt: Double;
+Begin
+  Result := False;
+  Window.Present := False;
+  Window.UsedPercent := 0;
+  Window.Minutes := Minutes;
+  Window.ResetsAt := 0;
+  Window.HasReset := False;
+  If Not Assigned(Windows) Then
+    Exit;
+  Node := JsonObject(Windows.Find(Key));
+  If (Not Assigned(Node)) Or (Not NumberValue(Node.Find('utilization'), Utilisation)) Then
+    Exit;
+  Window.Present := True;
+  Window.UsedPercent := Utilisation * 100;
+  If NumberValue(Node.Find('resetsAt'), ResetAt) And (ResetAt > 0) Then
+    Begin
+      Window.ResetsAt := Trunc(ResetAt);
+      Window.HasReset := True;
+    End;
+  Result := True;
+End;
+
+Function ParseClaudeAccountUsage(Const RateLimitJson, ConnectionId: String; Out Snapshot: TAccountUsageSnapshot;
+  Out ErrorText: String): Boolean;
+Var
+  Data: TJSONData;
+  Info, Windows: TJSONObject;
+  FiveHour, SevenDay: TUsageWindow;
+  Caption, Hint, LimitType: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  ClearAccountUsageSnapshot(Snapshot);
+  Snapshot.ConnectionId := ConnectionId;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(RateLimitJson);
+    Except
+      On EParserError Do
+        Begin
+          ErrorText := 'Claude rate limits were not JSON.';
+          Exit;
+        End;
+    End;
+    Info := JsonObject(Data);
+    If Not Assigned(Info) Then
+      Begin
+        ErrorText := 'Claude rate limits were not an object.';
+        Exit;
+      End;
+    Windows := JsonObject(Info.Find('unifiedWindows'));
+    ReadClaudeWindow(Windows, 'five_hour', 300, FiveHour);
+    ReadClaudeWindow(Windows, 'seven_day', 10080, SevenDay);
+    If (Not FiveHour.Present) And (Not SevenDay.Present) Then
+      Begin
+        ErrorText := 'Claude rate limits had no usage window.';
+        Exit;
+      End;
+    If FiveHour.Present Then
+      Begin
+        Caption := WindowCaption(FiveHour);
+        Hint := WindowHint(FiveHour);
+        If SevenDay.Present Then
+          Begin
+            If Length(Caption + ' · ' + WindowCaption(SevenDay)) <= AccountUsageCaptionLimit Then
+              Caption := Caption + ' · ' + WindowCaption(SevenDay);
+            Hint := Hint + '. ' + WindowHint(SevenDay);
+          End;
+      End
+    Else
+      Begin
+        Caption := WindowCaption(SevenDay);
+        Hint := WindowHint(SevenDay);
+      End;
+    LimitType := Info.Get('rateLimitType', '');
+    If (Info.Find('status') Is TJSONString) And (Info.Get('status', '') <> 'allowed') Then
+      Begin
+        Caption := 'Limit';
+        Hint := 'Claude subscription limit reached. ' + Hint;
+        If (LimitType = 'seven_day') And SevenDay.HasReset Then
+          NoteSnapshotUnixReset(Snapshot, SevenDay.ResetsAt)
+        Else If FiveHour.HasReset Then
+          NoteSnapshotUnixReset(Snapshot, FiveHour.ResetsAt)
+        Else
+          NoteSnapshotUnixReset(Snapshot, SevenDay.ResetsAt);
+      End
+    Else If FiveHour.HasReset Then
+      NoteSnapshotUnixReset(Snapshot, FiveHour.ResetsAt)
+    Else
+      NoteSnapshotUnixReset(Snapshot, SevenDay.ResetsAt);
+    Snapshot.Known := True;
+    Snapshot.Caption := Caption;
+    Snapshot.Hint := Hint;
     NoteFetched(Snapshot);
     RememberAccountUsage(Snapshot);
     Result := True;

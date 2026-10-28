@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, AssistantClaudeClient;
+  Classes, SysUtils, AssistantClaudeClient, AssistantClaudeStream;
 
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
@@ -108,6 +108,8 @@ Const
     '    wait ;;' + LineEnding +
     '  *)' + LineEnding +
     '    cat > /dev/null' + LineEnding +
+    '    printf ''%s\n'' ''{"type":"system","subtype":"init","apiKeySource":"none","session_id":"s1"}''' + LineEnding +
+    '    printf ''%s\n'' ''{"type":"assistant","message":{"content":[{"type":"text","text":"fake answer"}]}}''' + LineEnding +
     '    printf ''%s\n'' ''{"type":"result","subtype":"success","is_error":false,"result":"fake answer"}'' ;;' +
     LineEnding +
     'esac' + LineEnding;
@@ -165,6 +167,24 @@ Begin
 End;
 {$ENDIF}
 
+{ Folds every line of a stream-json fixture. }
+Function FoldFixture(Const Name: String): TClaudeStreamState;
+Var
+  Lines: TStringList;
+  I: Integer;
+Begin
+  ClearClaudeStream(Result);
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := FixtureText(Name);
+    For I := 0 To Lines.Count - 1 Do
+      If Trim(Lines[I]) <> '' Then
+        ApplyClaudeStreamLine(Lines[I], Result);
+  Finally
+    Lines.Free;
+  End;
+End;
+
 Function SourceContains(Const Source, Needle: String): Boolean;
 Begin
   Result := Pos(LowerCase(Needle), LowerCase(Source)) > 0;
@@ -174,6 +194,8 @@ Var
   Source, ErrorText, Script: String;
   Turn: TClaudeTurnResult;
   Account: TClaudeAccount;
+  Stream: TClaudeStreamState;
+  TurnSettings: TClaudeTurnSettings;
   Args, ParentVariables, Filtered: TStringList;
   {$IFDEF UNIX}
   Handle: THandle;
@@ -186,17 +208,66 @@ Begin
   Check('usage fixture records input tokens', ParseClaudeTurnResult(UsageFixture, Turn, ErrorText) And
     (Turn.InputTokens = 9));
   Check('usage fixture records output tokens', Turn.OutputTokens = 3);
-  Check('usage fixture leaves cost empty', Turn.Cost = '');
   Check('usage fixture is reported', Turn.UsageState = ClaudeUsageReported);
   Check('usage fixture keeps the answer', Turn.Text = 'fixture answer');
 
   Check('no-usage fixture parses', ParseClaudeTurnResult(NoUsageFixture, Turn, ErrorText));
   Check('no-usage fixture is unavailable', Turn.UsageState = ClaudeUsageUnavailable);
-  Check('no-usage fixture leaves cost empty', Turn.Cost = '');
   Check('no-usage fixture keeps the answer', Turn.Text = 'plain answer');
   Check('error result is not an answer', (Not ParseClaudeTurnResult(
     '{"is_error":true,"result":"quota exceeded"}', Turn, ErrorText)) And (Pos('quota', LowerCase(ErrorText)) > 0) And
     (Turn.Text = ''));
+
+  Stream := FoldFixture('plain.jsonl');
+  Check('plain stream finishes', Stream.Finished And (Not Stream.IsError));
+  Check('plain stream answer', Stream.Text = 'pong');
+  Check('plain stream is on the subscription', Stream.KeySource = 'none');
+  Check('plain stream has its session', Stream.SessionId <> '');
+  Check('plain stream counts cached prompt tokens', (Stream.Turn.UsageState = ClaudeUsageReported) And
+    (Stream.Turn.InputTokens = 2 + 6531 + 9013) And (Stream.Turn.OutputTokens = 4));
+  Check('plain stream context includes the cache', Stream.ContextTokens = 2 + 6531 + 9013);
+  Check('plain stream reports the subscription windows', (Stream.RateLimitStatus = 'allowed') And
+    (Pos('five_hour', Stream.RateLimitJson) > 0));
+  Check('plain stream ran no tool', Stream.ToolCalls = 0);
+  Check('plain stream outcome is an answer', ClaudeTurnOutcome(Stream, 0, '', ErrorText) And (ErrorText = ''));
+
+  Stream := FoldFixture('tool.jsonl');
+  Check('tool stream counts the tool call', Stream.ToolCalls = 1);
+  Check('tool stream answer', Stream.Text = 'Lazarus');
+  Check('tool stream outcome is an answer', ClaudeTurnOutcome(Stream, 0, '', ErrorText));
+
+  Stream := FoldFixture('resume.jsonl');
+  Check('resumed stream answer', Stream.Text = 'notes.txt');
+
+  Stream := FoldFixture('denied.jsonl');
+  Check('denied write still finishes', Stream.Finished And (Not Stream.IsError));
+  Check('denied write is counted', Stream.Denials = 1);
+  Check('denied write counts the attempted tool', Stream.ToolCalls = 1);
+
+  Stream := FoldFixture('maxturns.jsonl');
+  Check('turn limit is an error', Stream.Finished And Stream.IsError And (Stream.ResultSubtype = 'error_max_turns'));
+  Check('turn limit has a sentence', (Not ClaudeTurnOutcome(Stream, 1, '', ErrorText)) And
+    (ErrorText = 'Claude Code stopped at its turn limit.'));
+
+  Stream := FoldFixture('badresume.jsonl');
+  Check('unknown session reports the reason', (Not ClaudeTurnOutcome(Stream, 1, '', ErrorText)) And
+    (Pos('No conversation found', ErrorText) > 0));
+
+  ClearClaudeStream(Stream);
+  Check('noise line is not an event', Not ApplyClaudeStreamLine('Warning: config {legacy} ignored', Stream));
+  Check('no result after a clean exit is not an answer', (Not ClaudeTurnOutcome(Stream, 0, '', ErrorText)) And
+    (ErrorText <> ''));
+  Check('no result after a refused flag says so', (Not ClaudeTurnOutcome(Stream, 1, RefusedModeFixture, ErrorText)) And
+    (Pos('refused the permission mode flag', ErrorText) > 0));
+  ApplyClaudeStreamLine('{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}',
+    Stream);
+  ApplyClaudeStreamLine('{"type":"result","subtype":"success","is_error":true,"result":"Limit reached"}', Stream);
+  Check('a refused subscription window reads as quota', (Not ClaudeTurnOutcome(Stream, 1, '', ErrorText)) And
+    (Pos('quota', ErrorText) > 0));
+  Check('single json result parses', ParseClaudeTurnResult(FixtureText('plain-result.json'), Turn, ErrorText) And
+    (Turn.Text = 'pong'));
+  Check('single json result with noise parses', ParseClaudeTurnResult('Warning: config {legacy} ignored' + LineEnding +
+    '{"result":"hello","is_error":false}', Turn, ErrorText) And (Turn.Text = 'hello'));
 
   Check('ask leaves the program default', ClaudePermissionMode('ask') = '');
   Check('an empty approval leaves the program default', ClaudePermissionMode('') = '');
@@ -212,9 +283,10 @@ Begin
   Args := TStringList.Create;
   Try
     AppendClaudeTurnArguments('sonnet', 'acceptEdits', Args);
-    Check('turn is claude print json', (Args[0] = '-p') And (Args[1] = '--output-format') And (Args[2] = 'json'));
-    Check('turn sets the connection model', (Args[3] = '--model') And (Args[4] = 'sonnet'));
-    Check('turn maps the accepted permission mode', (Args[5] = '--permission-mode') And (Args[6] = 'acceptEdits'));
+    Check('turn is claude print stream-json', (Args[0] = '-p') And (Args[1] = '--output-format') And
+      (Args[2] = 'stream-json') And (Args[3] = '--verbose'));
+    Check('turn sets the connection model', (Args[4] = '--model') And (Args[5] = 'sonnet'));
+    Check('turn maps the accepted permission mode', (Args[6] = '--permission-mode') And (Args[7] = 'acceptEdits'));
     Check('turn does not send tools or skills', (Args.IndexOf('--tools') < 0) And (Args.IndexOf('--skill') < 0));
   Finally
     Args.Free;
@@ -278,13 +350,20 @@ Begin
   ForceDirectories(FakeDirectory);
   FakeClaude := WriteFakeClaude(FakeDirectory);
 
-  Run := TAssistantClaudeRun.Create(FakeClaude, 'answer', 'ask', 'hello', FakeDirectory, 20000);
+  TurnSettings := Default(TClaudeTurnSettings);
+  TurnSettings.Executable := FakeClaude;
+  TurnSettings.ApprovalMode := 'ask';
+  TurnSettings.WorkingDirectory := FakeDirectory;
+  TurnSettings.TimeoutMs := 20000;
+  TurnSettings.Model := 'answer';
+  Run := TAssistantClaudeRun.Create(TurnSettings, 'hello');
   Try
-    Run.Start;
     Snapshot := WaitForRun(Run, 20000);
     Check('fake turn completes', Snapshot.Done And (Snapshot.ErrorText = ''));
     Check('fake turn returns its answer', Snapshot.Content = 'fake answer');
     Check('fake turn records the start', Snapshot.Started);
+    Check('fake turn reports its session and billing source', (Snapshot.SessionId = 's1') And
+      (Snapshot.KeySource = 'none'));
   Finally
     Run.Free;
   End;
@@ -292,9 +371,9 @@ Begin
   { The fake exits before reading stdin. A 1 MB prompt cannot fit the pipe, so the write hits a closed pipe. }
   SetLength(LargePrompt, 1024 * 1024);
   FillChar(LargePrompt[1], Length(LargePrompt), Ord('x'));
-  Run := TAssistantClaudeRun.Create(FakeClaude, 'refuse', 'ask', LargePrompt, FakeDirectory, 20000);
+  TurnSettings.Model := 'refuse';
+  Run := TAssistantClaudeRun.Create(TurnSettings, LargePrompt);
   Try
-    Run.Start;
     Snapshot := WaitForRun(Run, 20000);
     Check('early exit during a large prompt does not end this process', Snapshot.Done);
     Check('early exit reports the refused flag from stderr',
@@ -303,9 +382,10 @@ Begin
     Run.Free;
   End;
 
-  Run := TAssistantClaudeRun.Create(FakeClaude, 'hang', 'ask', 'hello', FakeDirectory, 60000);
+  TurnSettings.Model := 'hang';
+  TurnSettings.TimeoutMs := 60000;
+  Run := TAssistantClaudeRun.Create(TurnSettings, 'hello');
   Try
-    Run.Start;
     ChildPid := ReadChildPid(FakeDirectory, 10000);
     Check('fake turn started a child command', ChildPid > 0);
     Run.Cancel;

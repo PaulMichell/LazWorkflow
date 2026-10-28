@@ -1,9 +1,13 @@
 Unit AssistantClaudeClient;
 
-{ Process wrapper for the installed Claude Code program. Not an HTTP client
-  and not an OAuth client. The assistant does not parse or copy sign-in files.
-  A Claude row does not receive this assistant's tool list, skill bodies, or
-  transcript compactor. (c) 2026 Michell Computing. }
+{ Process wrapper for the installed Claude Code program (c) 2026 Michell Computing.
+
+  Not an HTTP client and not an OAuth client: the assistant never reads or copies Claude sign-in files. Turns run
+  on the user's Claude subscription. The child environment drops the variables that select per-use billing, and
+  the program's own auth status is checked once per executable per IDE session. Each turn is claude -p with
+  stream-json output, folded into TClaudeStreamState so the IDE sees text, tool calls, usage and the
+  subscription's rate-limit windows while the turn runs. A Claude row does not receive this assistant's tool
+  list, skill bodies, or transcript compactor. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,34 +17,7 @@ Unit AssistantClaudeClient;
 Interface
 
 Uses
-  Classes;
-
-Const
-  ClaudeUsageReported = 'reported';
-  ClaudeUsageUnavailable = 'unavailable';
-  { Status text for a Claude connection row. }
-  ClaudeKeepsSessionText = 'Claude Code keeps the session.';
-
-Type
-  TClaudeTurnResult = Record
-    Text: String;
-    UsageState: String;
-    InputTokens: Integer;
-    OutputTokens: Integer;
-    { Always empty. This path does not record a cost. }
-    Cost: String;
-  End;
-
-Function DetectClaudeExecutable: String;
-Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
-/// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
-/// anything that needs approval in print mode.
-Function ClaudePermissionMode(Const ApprovalMode: String): String;
-/// True when Claude Code's stderr says it rejected the --permission-mode argument.
-Function PermissionFlagRefused(Const ErrorOutput: String): Boolean;
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
-Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
-Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
+  Classes, AssistantClaudeStream;
 
 Type
   { The billing fields of claude auth status. Email and organisation are never read. }
@@ -52,6 +29,66 @@ Type
     SubscriptionType: String;
   End;
 
+  TClaudeTurnSettings = Record
+    Executable: String;
+    Model: String;
+    ApprovalMode: String;
+    WorkingDirectory: String;
+    TimeoutMs: Integer;
+  End;
+
+  TClaudeRunSnapshot = Record
+    Content, ErrorText: String;
+    { The claude process was started. A failure after that may follow edits or commands. }
+    Started: Boolean;
+    ToolCalls: Integer;
+    Denials: Integer;
+    SessionId: String;
+    KeySource: String;
+    RateLimitJson: String;
+    RateLimitStatus: String;
+    UsageState: String;
+    InputTokens, OutputTokens, ContextTokens: Int64;
+    Done: Boolean;
+  End;
+
+  /// Worker for one Claude Code turn. Starts when created; the IDE timer reads Snapshot and Cancel stops the turn.
+  TAssistantClaudeRun = Class(TThread)
+  Private
+    Lock: TRTLCriticalSection;
+    Settings: TClaudeTurnSettings;
+    Prompt: String;
+    Stream: TClaudeStreamState;
+    Latest: TClaudeRunSnapshot;
+    CancelFlag: LongInt;
+    Function IsCancelled: Boolean;
+    Procedure ProcessStarted;
+    Procedure ReceiveLine(Const Line: String);
+  Protected
+    Procedure Execute; Override;
+  Public
+    /// The caller owns the thread and frees it off the IDE thread.
+    Constructor Create(Const TurnSettings: TClaudeTurnSettings; Const TurnPrompt: String);
+    Destructor Destroy; Override;
+    Procedure Cancel;
+    Function Snapshot: TClaudeRunSnapshot;
+  End;
+
+Const
+  { Status text for a Claude connection row. }
+  ClaudeKeepsSessionText = 'Claude Code keeps the session.';
+
+/// The claude program on PATH, or empty.
+Function DetectClaudeExecutable: String;
+/// The expanded path when it names an executable file, otherwise empty.
+Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
+/// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
+/// anything that needs approval in print mode.
+Function ClaudePermissionMode(Const ApprovalMode: String): String;
+/// Print-mode arguments for one stream-json turn.
+Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
+/// Starts the program's own subscription sign-in. Its output and account files are not read.
+Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
 /// Copies NAME=VALUE lines from Source without the variables that move Claude Code onto metered billing.
 Procedure FilterClaudeEnvironment(Source, Environment: TStrings);
 /// FilterClaudeEnvironment applied to this process environment.
@@ -67,38 +104,15 @@ Function ClaudeAccountText(Const Account: TClaudeAccount): String;
 /// The next turn checks the account again. Call after saving settings or starting a sign-in.
 Procedure ForgetClaudeAccounts;
 
-Type
-  TClaudeRunSnapshot = Record
-    Content, ErrorText: String;
-    { The claude process was started. A failure after that may follow edits or commands, so it is not replayed. }
-    Started: Boolean;
-    Done: Boolean;
-  End;
-
-  { Worker for one Claude Code turn. The IDE timer reads Snapshot. Stop sets Cancel. }
-  TAssistantClaudeRun = Class(TThread)
-  Private
-    FLock: TRTLCriticalSection;
-    FExecutable, FModel, FApproval, FPrompt, FDirectory: String;
-    FTimeoutMs: Integer;
-    FSnapshot: TClaudeRunSnapshot;
-    FCancelled: LongInt;
-    Function Cancelled: Boolean;
-    Procedure ProcessStarted;
-  Protected
-    Procedure Execute; Override;
-  Public
-    Constructor Create(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-      TimeoutMs: Integer = 0);
-    Destructor Destroy; Override;
-    Procedure Cancel;
-    Function Snapshot: TClaudeRunSnapshot;
-  End;
-
 Implementation
 
 Uses
   SysUtils, Process, Pipes, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
+
+Type
+  TClaudeStopQuery = Function: Boolean Of Object;
+  TClaudeStartedEvent = Procedure Of Object;
+  TClaudeLineEvent = Procedure(Const Line: String) Of Object;
 
 Const
   ClaudeTurnTimeoutMs = 120000;
@@ -111,22 +125,6 @@ Var
   { Executables whose account was confirmed as a subscription in this IDE session. }
   ConfirmedExecutables: TStringList;
   AccountLock: TRTLCriticalSection;
-
-Procedure ClearTurn(Out Turn: TClaudeTurnResult);
-Begin
-  Turn.Text := '';
-  Turn.UsageState := ClaudeUsageUnavailable;
-  Turn.InputTokens := 0;
-  Turn.OutputTokens := 0;
-  Turn.Cost := '';
-End;
-
-Function BoundText(Const Value: String): String;
-Begin
-  Result := Trim(Value);
-  If Length(Result) > 1000 Then
-    Result := Copy(Result, 1, 1000);
-End;
 
 Function DetectClaudeExecutable: String;
 Begin
@@ -162,23 +160,15 @@ Begin
     Result := '';
 End;
 
-Function PermissionFlagRefused(Const ErrorOutput: String): Boolean;
-Var
-  Lowered: String;
-Begin
-  { Commander's wording: option '--permission-mode <mode>' argument 'x' is invalid. }
-  Lowered := LowerCase(ErrorOutput);
-  Result := (Pos('--permission-mode', Lowered) > 0) And
-    ((Pos('is invalid', Lowered) > 0) Or (Pos('unknown option', Lowered) > 0));
-End;
-
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
 Begin
   If Not Assigned(Args) Then
     Exit;
   Args.Add('-p');
   Args.Add('--output-format');
-  Args.Add('json');
+  Args.Add('stream-json');
+  { Required with stream-json in print mode. }
+  Args.Add('--verbose');
   Args.Add('--model');
   Args.Add(Model);
   If PermissionMode <> '' Then
@@ -187,91 +177,6 @@ Begin
       Args.Add(PermissionMode);
     End;
 End;
-
-Function JsonObjectText(Const Output: String): String;
-Var
-  StartAt, EndAt, I: Integer;
-Begin
-  Result := Trim(Output);
-  StartAt := Pos('{', Result);
-  EndAt := 0;
-  For I := Length(Result) DownTo 1 Do
-    If Result[I] = '}' Then
-      Begin
-        EndAt := I;
-        Break;
-      End;
-  If (StartAt > 0) And (EndAt >= StartAt) Then
-    Result := Copy(Result, StartAt, EndAt - StartAt + 1);
-End;
-
-Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
-Var
-  Data: TJSONData;
-  Root, Usage: TJSONObject;
-  InputNode, OutputNode: TJSONData;
-Begin
-  Result := False;
-  ErrorText := '';
-  ClearTurn(Turn);
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(JsonObjectText(JsonText));
-    Except
-      On E: Exception Do
-        Begin
-          ErrorText := 'Claude Code did not return a JSON result.';
-          Exit;
-        End;
-    End;
-    If Not (Data Is TJSONObject) Then
-      Begin
-        ErrorText := 'Claude Code did not return a JSON result.';
-        Exit;
-      End;
-    Root := TJSONObject(Data);
-    If Root.Find('result') Is TJSONString Then
-      Turn.Text := Root.Get('result', '')
-    Else If Root.Find('text') Is TJSONString Then
-      Turn.Text := Root.Get('text', '');
-    { An error result is not an assistant answer. The form classifies that text. }
-    If Root.Get('is_error', False) Then
-      Begin
-        ErrorText := BoundText(Turn.Text);
-        If ErrorText = '' Then
-          ErrorText := BoundText(JsonText);
-        If ErrorText = '' Then
-          ErrorText := 'Claude Code did not complete the turn.';
-        ClearTurn(Turn);
-        Exit;
-      End;
-    Turn.Cost := '';
-    Usage := Nil;
-    If Root.Find('usage') Is TJSONObject Then
-      Usage := TJSONObject(Root.Find('usage'));
-    If Assigned(Usage) Then
-      Begin
-        InputNode := Usage.Find('input_tokens');
-        OutputNode := Usage.Find('output_tokens');
-        If Assigned(InputNode) And Assigned(OutputNode) And (InputNode.JSONType = jtNumber) And
-          (OutputNode.JSONType = jtNumber) Then
-          Begin
-            Turn.UsageState := ClaudeUsageReported;
-            Turn.InputTokens := InputNode.AsInteger;
-            Turn.OutputTokens := OutputNode.AsInteger;
-          End;
-      End;
-    Turn.Cost := '';
-    Result := True;
-  Finally
-    Data.Free;
-  End;
-End;
-
-Type
-  TClaudeStopQuery = Function: Boolean Of Object;
-  TClaudeStartedEvent = Procedure Of Object;
 
 Procedure DrainPipe(Pipe: TInputPipeStream; Buffer: TStream);
 Var
@@ -290,6 +195,30 @@ End;
 Function StreamText(Buffer: TMemoryStream): String;
 Begin
   SetString(Result, PAnsiChar(Buffer.Memory), Buffer.Size);
+End;
+
+{ Hands each complete line after LineStart to OnLine. Stream-json puts one event on each line. }
+Procedure DeliverLines(Buffer: TMemoryStream; Var LineStart: Int64; OnLine: TClaudeLineEvent);
+Var
+  Bytes: PAnsiChar;
+  I: Int64;
+  Line: String;
+Begin
+  Bytes := PAnsiChar(Buffer.Memory);
+  I := LineStart;
+  While I < Buffer.Size Do
+    Begin
+      If Bytes[I] = #10 Then
+        Begin
+          SetString(Line, Bytes + LineStart, I - LineStart);
+          LineStart := I + 1;
+          If (Line <> '') And (Line[Length(Line)] = #13) Then
+            SetLength(Line, Length(Line) - 1);
+          If Line <> '' Then
+            OnLine(Line);
+        End;
+      Inc(I);
+    End;
 End;
 
 {$IF FPC_FULLVERSION >= 30301}
@@ -370,11 +299,12 @@ End;
 
 Function RunCaptured(Const Executable, WorkingDirectory: String; Args, Environment: TStrings; Const InputText: String;
   TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String;
-  StopQuery: TClaudeStopQuery = Nil; OnStarted: TClaudeStartedEvent = Nil): Boolean;
+  StopQuery: TClaudeStopQuery = Nil; OnStarted: TClaudeStartedEvent = Nil; OnLine: TClaudeLineEvent = Nil): Boolean;
 Var
   ClaudeProcess: TProcess;
   StdoutBuffer, StderrBuffer: TMemoryStream;
   Started: QWord;
+  LineStart: Int64;
   {$IF FPC_FULLVERSION >= 30301}
   PromptFile: String;
   {$ELSE}
@@ -448,11 +378,14 @@ Begin
     ClaudeProcess.CloseInput;
     {$ENDIF}
     Started := GetTickCount64;
+    LineStart := 0;
     While ClaudeProcess.Running Or (ClaudeProcess.Output.NumBytesAvailable > 0) Or
       (ClaudeProcess.Stderr.NumBytesAvailable > 0) Do
       Begin
         DrainPipe(ClaudeProcess.Output, StdoutBuffer);
         DrainPipe(ClaudeProcess.Stderr, StderrBuffer);
+        If Assigned(OnLine) Then
+          DeliverLines(StdoutBuffer, LineStart, OnLine);
         If Assigned(StopQuery) And StopQuery() Then
           Begin
             TerminateSession(ClaudeProcess);
@@ -469,6 +402,13 @@ Begin
         If ClaudeProcess.Running And (ClaudeProcess.Output.NumBytesAvailable = 0) And
           (ClaudeProcess.Stderr.NumBytesAvailable = 0) Then
           Sleep(5);
+      End;
+    If Assigned(OnLine) Then
+      Begin
+        DeliverLines(StdoutBuffer, LineStart, OnLine);
+        { A last line without a line ending. }
+        If LineStart < StdoutBuffer.Size Then
+          OnLine(Copy(StreamText(StdoutBuffer), LineStart + 1, MaxInt));
       End;
     StdoutText := StreamText(StdoutBuffer);
     StderrText := StreamText(StderrBuffer);
@@ -688,189 +628,156 @@ Begin
   Result := True;
 End;
 
-Function RunClaudeTurnStopped(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  TimeoutMs: Integer; StopQuery: TClaudeStopQuery; OnStarted: TClaudeStartedEvent; Out Turn: TClaudeTurnResult;
-  Out ErrorText: String): Boolean;
-Var
-  Args, Environment: TStringList;
-  StdoutText, StderrText, ProgramText, ResultError: String;
-  ExitCode: Integer;
+Function TAssistantClaudeRun.IsCancelled: Boolean;
 Begin
-  Result := False;
-  ErrorText := '';
-  ClearTurn(Turn);
-  If Assigned(StopQuery) And StopQuery() Then
-    Begin
-      ErrorText := 'Cancelled.';
-      Exit;
-    End;
-  If Not FileIsExecutable(Executable) Then
-    Begin
-      ErrorText := 'Claude Code was not found. Browse to the installed executable.';
-      Exit;
-    End;
-  If (WorkingDirectory <> '') And (Not DirectoryExists(WorkingDirectory)) Then
-    Begin
-      ErrorText := 'The working directory does not exist.';
-      Exit;
-    End;
-  If Trim(Model) = '' Then
-    Begin
-      ErrorText := 'This connection has no model.';
-      Exit;
-    End;
-  If TimeoutMs < 1 Then
-    TimeoutMs := ClaudeTurnTimeoutMs;
-  If Not EnsureClaudeSubscription(Executable, ErrorText) Then
-    Exit;
-  If Assigned(StopQuery) And StopQuery() Then
-    Begin
-      ErrorText := 'Cancelled.';
-      Exit;
-    End;
-  Args := TStringList.Create;
-  Environment := TStringList.Create;
-  Try
-    AppendClaudeTurnArguments(Model, ClaudePermissionMode(ApprovalMode), Args);
-    BuildClaudeEnvironment(Environment);
-    If Not RunCaptured(Executable, WorkingDirectory, Args, Environment, Prompt, TimeoutMs, StdoutText, StderrText,
-      ExitCode, ErrorText, StopQuery, OnStarted) Then
-      Exit;
-  Finally
-    Environment.Free;
-    Args.Free;
-  End;
-  If ExitCode <> 0 Then
-    Begin
-      { The answer on stdout is never searched for flag errors. Only stderr says why the program refused. }
-      If PermissionFlagRefused(StderrText) Then
-        Begin
-          ErrorText := 'Claude Code refused the permission mode flag. ' + BoundText(StderrText);
-          Exit;
-        End;
-      { An error result on stdout says more than the exit code. }
-      If (Not ParseClaudeTurnResult(StdoutText, Turn, ResultError)) And (ResultError <> '') And
-        (ResultError <> 'Claude Code did not return a JSON result.') Then
-        Begin
-          ErrorText := ResultError;
-          Exit;
-        End;
-      ProgramText := StderrText;
-      If Trim(ProgramText) = '' Then
-        ProgramText := StdoutText;
-      ErrorText := BoundText(ProgramText);
-      If ErrorText = '' Then
-        ErrorText := 'Claude Code did not complete the turn.';
-      ClearTurn(Turn);
-      Exit;
-    End;
-  If Not ParseClaudeTurnResult(StdoutText, Turn, ErrorText) Then
-    Exit;
-  Result := True;
-End;
-
-Function TAssistantClaudeRun.Cancelled: Boolean;
-Begin
-  Result := InterlockedCompareExchange(FCancelled, 0, 0) <> 0;
+  Result := InterlockedCompareExchange(CancelFlag, 0, 0) <> 0;
 End;
 
 Procedure TAssistantClaudeRun.ProcessStarted;
 Begin
-  EnterCriticalSection(FLock);
+  EnterCriticalSection(Lock);
   Try
-    FSnapshot.Started := True;
+    Latest.Started := True;
   Finally
-    LeaveCriticalSection(FLock);
+    LeaveCriticalSection(Lock);
   End;
 End;
 
-Constructor TAssistantClaudeRun.Create(Const Executable, Model, ApprovalMode, Prompt, WorkingDirectory: String;
-  TimeoutMs: Integer);
+Procedure TAssistantClaudeRun.ReceiveLine(Const Line: String);
 Begin
-  Inherited Create(True);
+  If Not ApplyClaudeStreamLine(Line, Stream) Then
+    Exit;
+  EnterCriticalSection(Lock);
+  Try
+    Latest.Content := Stream.Text;
+    Latest.ToolCalls := Stream.ToolCalls;
+    Latest.Denials := Stream.Denials;
+    Latest.SessionId := Stream.SessionId;
+    Latest.KeySource := Stream.KeySource;
+    Latest.RateLimitJson := Stream.RateLimitJson;
+    Latest.RateLimitStatus := Stream.RateLimitStatus;
+    Latest.ContextTokens := Stream.ContextTokens;
+    Latest.UsageState := Stream.Turn.UsageState;
+    Latest.InputTokens := Stream.Turn.InputTokens;
+    Latest.OutputTokens := Stream.Turn.OutputTokens;
+  Finally
+    LeaveCriticalSection(Lock);
+  End;
+End;
+
+Constructor TAssistantClaudeRun.Create(Const TurnSettings: TClaudeTurnSettings; Const TurnPrompt: String);
+Begin
+  InitCriticalSection(Lock);
+  Settings := TurnSettings;
+  If Settings.TimeoutMs < 1 Then
+    Settings.TimeoutMs := ClaudeTurnTimeoutMs;
+  Prompt := TurnPrompt;
+  ClearClaudeStream(Stream);
+  Latest := Default(TClaudeRunSnapshot);
+  Latest.UsageState := ClaudeUsageUnavailable;
+  CancelFlag := 0;
   FreeOnTerminate := False;
-  InitCriticalSection(FLock);
-  FExecutable := Executable;
-  FModel := Model;
-  FApproval := ApprovalMode;
-  FPrompt := Prompt;
-  FDirectory := WorkingDirectory;
-  If TimeoutMs < 1 Then
-    FTimeoutMs := ClaudeTurnTimeoutMs
-  Else
-    FTimeoutMs := TimeoutMs;
-  FCancelled := 0;
-  FSnapshot.Content := '';
-  FSnapshot.ErrorText := '';
-  FSnapshot.Started := False;
-  FSnapshot.Done := False;
+  { Last: this starts the thread. }
+  Inherited Create(False);
 End;
 
 Destructor TAssistantClaudeRun.Destroy;
 Begin
   Cancel;
-  { A suspended thread must be started before WaitFor, or Destroy hangs.
-    Execute exits immediately once Cancel has been set. }
-  If Suspended Then
-    Start;
   WaitFor;
-  DoneCriticalSection(FLock);
+  DoneCriticalSection(Lock);
   Inherited Destroy;
 End;
 
 Procedure TAssistantClaudeRun.Cancel;
 Begin
-  InterlockedExchange(FCancelled, 1);
+  InterlockedExchange(CancelFlag, 1);
 End;
 
 Function TAssistantClaudeRun.Snapshot: TClaudeRunSnapshot;
 Begin
-  EnterCriticalSection(FLock);
+  EnterCriticalSection(Lock);
   Try
-    Result := FSnapshot;
+    Result := Latest;
   Finally
-    LeaveCriticalSection(FLock);
+    LeaveCriticalSection(Lock);
   End;
+End;
+
+Function CheckTurnSettings(Const Settings: TClaudeTurnSettings; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  If Not FileIsExecutable(Settings.Executable) Then
+    ErrorText := 'Claude Code was not found. Browse to the installed executable.'
+  Else If (Settings.WorkingDirectory <> '') And (Not DirectoryExists(Settings.WorkingDirectory)) Then
+    ErrorText := 'The working directory does not exist.'
+  Else If Trim(Settings.Model) = '' Then
+    ErrorText := 'This connection has no model.'
+  Else
+    Begin
+      ErrorText := '';
+      Result := True;
+    End;
 End;
 
 Procedure TAssistantClaudeRun.Execute;
 Var
-  Turn: TClaudeTurnResult;
-  ErrorText: String;
+  Args, Environment: TStringList;
+  StdoutText, StderrText, ErrorText: String;
+  ExitCode: Integer;
+  Answered: Boolean;
 Begin
   ErrorText := '';
-  ClearTurn(Turn);
+  Answered := False;
+  Args := TStringList.Create;
+  Environment := TStringList.Create;
   Try
-    If Cancelled Or Terminated Then
-      ErrorText := 'Cancelled.'
-    Else If Not RunClaudeTurnStopped(FExecutable, FModel, FApproval, FPrompt, FDirectory, FTimeoutMs, @Cancelled,
-      @ProcessStarted, Turn, ErrorText) Then
-      Begin
-        If ErrorText = '' Then
-          ErrorText := 'Claude Code did not complete the turn.';
-      End
-    Else If Cancelled Or Terminated Then
-      ErrorText := 'Cancelled.';
-  Except
-    On E: Exception Do
-      Begin
-        If Cancelled Or Terminated Then
+    Try
+      If IsCancelled Then
+        ErrorText := 'Cancelled.'
+      Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
+        Begin
+          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Args);
+          BuildClaudeEnvironment(Environment);
+          If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
+            StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then
+            Answered := ClaudeTurnOutcome(Stream, ExitCode, StderrText, ErrorText);
+        End;
+      If IsCancelled Then
+        ErrorText := 'Cancelled.'
+      Else If (Not Answered) And (ErrorText = '') Then
+        ErrorText := 'Claude Code did not complete the turn.';
+    Except
+      On Error: Exception Do
+        If IsCancelled Then
           ErrorText := 'Cancelled.'
-        Else If E.Message <> '' Then
-          ErrorText := E.Message
+        Else If Error.Message <> '' Then
+          ErrorText := Error.Message
         Else
-          ErrorText := E.ClassName;
-      End;
+          ErrorText := Error.ClassName;
+    End;
+  Finally
+    Environment.Free;
+    Args.Free;
   End;
-  EnterCriticalSection(FLock);
+  EnterCriticalSection(Lock);
   Try
     If ErrorText = '' Then
-      FSnapshot.Content := Turn.Text
+      Begin
+        { Every text block, so the final answer matches what was shown while it streamed. }
+        If Stream.Text <> '' Then
+          Latest.Content := Stream.Text
+        Else
+          Latest.Content := Stream.Turn.Text;
+      End
     Else
-      FSnapshot.ErrorText := ErrorText;
-    FSnapshot.Done := True;
+      Latest.ErrorText := ErrorText;
+    Latest.UsageState := Stream.Turn.UsageState;
+    Latest.InputTokens := Stream.Turn.InputTokens;
+    Latest.OutputTokens := Stream.Turn.OutputTokens;
+    Latest.Done := True;
   Finally
-    LeaveCriticalSection(FLock);
+    LeaveCriticalSection(Lock);
   End;
 End;
 

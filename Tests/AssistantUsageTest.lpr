@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, FileUtil, LazFileUtils, AssistantSampler, AssistantCompatibleClient, AssistantClaudeClient,
+  Classes, SysUtils, FileUtil, LazFileUtils, AssistantSampler, AssistantCompatibleClient, AssistantClaudeClient, AssistantClaudeStream,
   AssistantConnections, AssistantAccountUsage, AssistantCodexUsage, AssistantUsage;
 
 Const
