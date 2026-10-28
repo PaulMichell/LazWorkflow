@@ -236,6 +236,7 @@ Type
     FClaudeRun: TAssistantClaudeRun;
     FPollingClaude: Boolean;
     FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
+    FClaudeEffort: String;
     FClaudeLaunchReady: Boolean;
     FClaudeRetries: Integer;
     { Claude Code's session for this conversation. The key is connection, project and first turn. }
@@ -4480,6 +4481,7 @@ Begin
     FClaudeRuntime := '';
     FClaudeModel := '';
     FClaudeApproval := '';
+    FClaudeEffort := '';
     FActiveEffort := '';
     FActiveApproval := '';
     If Not Assigned(LazarusIDE) Then Exit;
@@ -4525,6 +4527,7 @@ Begin
           FClaudeRuntime := Item.Runtime;
           FClaudeModel := Item.Model;
           FClaudeApproval := Item.ApprovalMode;
+          FClaudeEffort := Item.ReasoningEffort;
         End;
     Finally Connections.Free; End;
   Except
@@ -4548,6 +4551,7 @@ Begin
         FClaudeRuntime := '';
         FClaudeModel := '';
         FClaudeApproval := '';
+    FClaudeEffort := '';
         FActiveEffort := '';
         FActiveApproval := '';
         WorkflowLogger.Error('PluginBoundary', 'TProjectAssistantForm.LoadConnectionSettings: ' + E.Message);
@@ -4715,6 +4719,7 @@ Begin
   TurnSettings.Executable := FClaudeRuntime;
   TurnSettings.Model := FClaudeModel;
   TurnSettings.ApprovalMode := FClaudeApproval;
+  TurnSettings.Effort := FClaudeEffort;
   TurnSettings.WorkingDirectory := FClaudeDirectory;
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
   TurnSettings.SessionId := FClaudeSessionId;

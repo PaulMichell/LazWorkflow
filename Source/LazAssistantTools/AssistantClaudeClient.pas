@@ -35,6 +35,8 @@ Type
     ApprovalMode: String;
     WorkingDirectory: String;
     TimeoutMs: Integer;
+    { Empty uses the model's default effort. }
+    Effort: String;
     { Claude Code's own session: started with --session-id, continued with --resume. }
     SessionId: String;
     Resume: Boolean;
@@ -88,8 +90,12 @@ Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 /// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
 /// anything that needs approval in print mode.
 Function ClaudePermissionMode(Const ApprovalMode: String): String;
-/// Print-mode arguments for one stream-json turn. An empty SessionId leaves the session to Claude Code.
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, SessionId: String; Resume: Boolean; Args: TStrings);
+/// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
+/// leave those choices to Claude Code.
+Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, Effort, SessionId: String; Resume: Boolean;
+  Args: TStrings);
+/// The models this sign-in offers, as Claude Code's own model picker lists them. No model call is made.
+Function ReadClaudeModels(Const Executable: String; Out ModelsJson, ErrorText: String): Boolean;
 /// A new lower-case UUID without braces, as --session-id requires. Empty on failure.
 Function NewClaudeSessionId: String;
 /// True when a resumed session no longer exists in Claude Code's history.
@@ -182,7 +188,8 @@ Begin
   Result := Pos('no conversation found', LowerCase(ErrorText)) > 0;
 End;
 
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, SessionId: String; Resume: Boolean; Args: TStrings);
+Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, Effort, SessionId: String; Resume: Boolean;
+  Args: TStrings);
 Begin
   If Not Assigned(Args) Then
     Exit;
@@ -191,8 +198,16 @@ Begin
   Args.Add('stream-json');
   { Required with stream-json in print mode. }
   Args.Add('--verbose');
-  Args.Add('--model');
-  Args.Add(Model);
+  If (Model <> '') And (Model <> ClaudeDefaultModel) Then
+    Begin
+      Args.Add('--model');
+      Args.Add(Model);
+    End;
+  If Effort <> '' Then
+    Begin
+      Args.Add('--effort');
+      Args.Add(Effort);
+    End;
   If PermissionMode <> '' Then
     Begin
       Args.Add('--permission-mode');
@@ -582,6 +597,47 @@ Begin
   End;
 End;
 
+Function ReadClaudeModels(Const Executable: String; Out ModelsJson, ErrorText: String): Boolean;
+Const
+  RequestId = 'lazarus-models';
+Var
+  Args, Environment: TStringList;
+  StdoutText, StderrText: String;
+  ExitCode: Integer;
+Begin
+  Result := False;
+  ModelsJson := '';
+  ErrorText := '';
+  Args := TStringList.Create;
+  Environment := TStringList.Create;
+  Try
+    { The SDK's initialize request. It answers from the sign-in without sending anything to a model. }
+    Args.Add('-p');
+    Args.Add('--input-format');
+    Args.Add('stream-json');
+    Args.Add('--output-format');
+    Args.Add('stream-json');
+    Args.Add('--verbose');
+    Args.Add('--no-session-persistence');
+    BuildClaudeEnvironment(Environment);
+    If Not RunCaptured(Executable, '', Args, Environment,
+      '{"type":"control_request","request_id":"' + RequestId + '","request":{"subtype":"initialize"}}' + LineEnding,
+      ClaudeStatusTimeoutMs, StdoutText, StderrText, ExitCode, ErrorText) Then
+      Exit;
+    If Not ClaudeModelsFromControlResponse(StdoutText, RequestId, ModelsJson) Then
+      Begin
+        ErrorText := 'Claude Code did not list its models.';
+        If Trim(StderrText) <> '' Then
+          ErrorText := ErrorText + ' ' + Trim(Copy(StderrText, 1, 300));
+        Exit;
+      End;
+    Result := True;
+  Finally
+    Environment.Free;
+    Args.Free;
+  End;
+End;
+
 Function ClaudeAccountIsSubscription(Const Account: TClaudeAccount): Boolean;
 Begin
   Result := Account.SignedIn And (Account.AuthMethod = 'claude.ai') And (Account.ApiProvider = 'firstParty') And
@@ -740,8 +796,6 @@ Begin
     ErrorText := 'Claude Code was not found. Browse to the installed executable.'
   Else If (Settings.WorkingDirectory <> '') And (Not DirectoryExists(Settings.WorkingDirectory)) Then
     ErrorText := 'The working directory does not exist.'
-  Else If Trim(Settings.Model) = '' Then
-    ErrorText := 'This connection has no model.'
   Else
     Begin
       ErrorText := '';
@@ -766,8 +820,8 @@ Begin
         ErrorText := 'Cancelled.'
       Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
         Begin
-          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Settings.SessionId,
-            Settings.Resume, Args);
+          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Settings.Effort,
+            Settings.SessionId, Settings.Resume, Args);
           BuildClaudeEnvironment(Environment);
           If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
             StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then

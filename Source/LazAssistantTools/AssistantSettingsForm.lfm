@@ -1250,7 +1250,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
             end
             object ClaudeModelGroup: TGroupBox
               Left = 8
-              Height = 76
+              Height = 108
               Top = 184
               Width = 700
               Anchors = [akTop, akLeft, akRight]
@@ -1264,18 +1264,55 @@ object AssistantSettingsForm: TAssistantSettingsForm
                 Caption = 'Model'
                 ParentColor = False
               end
-              object ClaudeModelEdit: TEdit
+              object ClaudeModelCombo: TComboBox
                 Left = 12
                 Height = 28
                 Top = 24
-                Width = 400
+                Width = 300
+                ItemHeight = 0
+                OnChange = ClaudeModelComboChange
                 TabOrder = 0
+              end
+              object ClaudeRefreshModelsButton: TButton
+                Left = 320
+                Height = 28
+                Top = 24
+                Width = 140
+                Caption = 'Refresh models'
+                OnClick = ClaudeRefreshModelsClick
+                TabOrder = 1
+              end
+              object ClaudeEffortLabel: TLabel
+                Left = 476
+                Height = 17
+                Top = 4
+                Width = 36
+                Caption = 'Effort'
+                ParentColor = False
+              end
+              object ClaudeEffortCombo: TComboBox
+                Left = 476
+                Height = 28
+                Top = 24
+                Width = 200
+                ItemHeight = 0
+                Style = csDropDownList
+                TabOrder = 2
+              end
+              object ClaudeModelHintLabel: TLabel
+                Left = 12
+                Height = 17
+                Top = 60
+                Width = 664
+                Anchors = [akTop, akLeft, akRight]
+                AutoSize = False
+                ParentColor = False
               end
             end
             object ClaudePermissionsGroup: TGroupBox
               Left = 8
               Height = 76
-              Top = 268
+              Top = 300
               Width = 700
               Anchors = [akTop, akLeft, akRight]
               Caption = 'Permissions'
@@ -1301,7 +1338,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
             object ClaudeUsageGroup: TGroupBox
               Left = 8
               Height = 52
-              Top = 352
+              Top = 384
               Width = 700
               Anchors = [akTop, akLeft, akRight]
               Caption = 'Usage'

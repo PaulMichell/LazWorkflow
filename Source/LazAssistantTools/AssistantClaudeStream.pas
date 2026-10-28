@@ -12,6 +12,9 @@ Unit AssistantClaudeStream;
 
 Interface
 
+Uses
+  Classes;
+
 Type
   TClaudeTurnResult = Record
     Text: String;
@@ -46,6 +49,10 @@ Type
 Const
   ClaudeUsageReported = 'reported';
   ClaudeUsageUnavailable = 'unavailable';
+  { The model value that leaves the choice to Claude Code. }
+  ClaudeDefaultModel = 'default';
+  { The documented aliases, offered before the program has been asked for its list. }
+  ClaudeModelAliases: Array[0..4] Of String = ('default', 'opus', 'sonnet', 'fable', 'haiku');
 
 /// An empty stream with usage marked unavailable.
 Procedure ClearClaudeStream(Out State: TClaudeStreamState);
@@ -58,13 +65,21 @@ Function ApplyClaudeStreamLine(Const Line: String; Var State: TClaudeStreamState
 /// The finished turn from its stream, exit code and stderr. False with ErrorText when it is not an answer.
 Function ClaudeTurnOutcome(Const State: TClaudeStreamState; ExitCode: Integer; Const ErrorOutput: String;
   Out ErrorText: String): Boolean;
+/// The models array from an initialize control response in OutputText, as JSON. Nothing else is kept.
+Function ClaudeModelsFromControlResponse(Const OutputText, RequestId: String; Out ModelsJson: String): Boolean;
+/// Model values in the order Claude Code lists them. Falls back to ClaudeModelAliases for an empty or bad list.
+Procedure CollectClaudeModels(Const ModelsJson: String; Values: TStrings);
+/// Display name and description of one model value, for a hint line. Empty when it is not in the list.
+Function ClaudeModelDescription(Const ModelsJson, Value: String): String;
+/// The effort levels one model accepts. False when the model is not listed or takes no effort level.
+Function CollectClaudeEffortLevels(Const ModelsJson, Value: String; Levels: TStrings): Boolean;
 /// One single-result JSON object (--output-format json), read as a finished stream.
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;
 
 Implementation
 
 Uses
-  Classes, SysUtils, fpjson, jsonparser;
+  SysUtils, fpjson, jsonparser;
 
 Const
   ClaudeNoJsonText = 'Claude Code did not return a JSON result.';
@@ -293,6 +308,160 @@ Begin
     ErrorText := BoundText(ErrorOutput)
   Else
     ErrorText := 'Claude Code did not complete the turn.';
+End;
+
+Function ClaudeModelsFromControlResponse(Const OutputText, RequestId: String; Out ModelsJson: String): Boolean;
+Var
+  Lines: TStringList;
+  Data: TJSONData;
+  Reply, Body: TJSONObject;
+  I: Integer;
+Begin
+  Result := False;
+  ModelsJson := '';
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := OutputText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        If Pos('"control_response"', Lines[I]) = 0 Then
+          Continue;
+        Data := Nil;
+        Try
+          Try
+            Data := GetJSON(Lines[I]);
+          Except
+            On EParserError Do
+              Continue;
+          End;
+          If Not (Data Is TJSONObject) Or Not (TJSONObject(Data).Find('response') Is TJSONObject) Then
+            Continue;
+          Reply := TJSONObject(TJSONObject(Data).Find('response'));
+          If (Reply.Get('request_id', '') <> RequestId) Or (Reply.Get('subtype', '') <> 'success') Or
+            Not (Reply.Find('response') Is TJSONObject) Then
+            Continue;
+          { The same response carries account details. Only the model list is copied out. }
+          Body := TJSONObject(Reply.Find('response'));
+          If Body.Find('models') Is TJSONArray Then
+            Begin
+              ModelsJson := Body.Find('models').AsJSON;
+              Exit(True);
+            End;
+        Finally
+          Data.Free;
+        End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+{ The model objects, or Nil for text that is not a list. The caller frees the result. }
+Function ParseModels(Const ModelsJson: String): TJSONArray;
+Var
+  Data: TJSONData;
+Begin
+  Result := Nil;
+  If Trim(ModelsJson) = '' Then
+    Exit;
+  Try
+    Data := GetJSON(ModelsJson);
+  Except
+    On EParserError Do
+      Exit;
+  End;
+  If Data Is TJSONArray Then
+    Result := TJSONArray(Data)
+  Else
+    Data.Free;
+End;
+
+Function FindModel(Models: TJSONArray; Const Value: String): TJSONObject;
+Var
+  I: Integer;
+Begin
+  Result := Nil;
+  If Not Assigned(Models) Then
+    Exit;
+  For I := 0 To Models.Count - 1 Do
+    If (Models.Items[I] Is TJSONObject) And (TJSONObject(Models.Items[I]).Get('value', '') = Value) Then
+      Exit(TJSONObject(Models.Items[I]));
+End;
+
+Procedure CollectClaudeModels(Const ModelsJson: String; Values: TStrings);
+Var
+  Models: TJSONArray;
+  Value: String;
+  I: Integer;
+Begin
+  If Not Assigned(Values) Then
+    Exit;
+  Values.Clear;
+  Models := ParseModels(ModelsJson);
+  Try
+    If Assigned(Models) Then
+      For I := 0 To Models.Count - 1 Do
+        If Models.Items[I] Is TJSONObject Then
+          Begin
+            Value := Trim(TJSONObject(Models.Items[I]).Get('value', ''));
+            If (Value <> '') And (Values.IndexOf(Value) < 0) Then
+              Values.Add(Value);
+          End;
+  Finally
+    Models.Free;
+  End;
+  If Values.Count > 0 Then
+    Exit;
+  For I := Low(ClaudeModelAliases) To High(ClaudeModelAliases) Do
+    Values.Add(ClaudeModelAliases[I]);
+End;
+
+Function ClaudeModelDescription(Const ModelsJson, Value: String): String;
+Var
+  Models: TJSONArray;
+  Model: TJSONObject;
+Begin
+  Result := '';
+  Models := ParseModels(ModelsJson);
+  Try
+    Model := FindModel(Models, Value);
+    If Not Assigned(Model) Then
+      Exit;
+    Result := Model.Get('displayName', '');
+    If Model.Get('description', '') <> '' Then
+      Begin
+        If Result <> '' Then
+          Result := Result + ' — ';
+        Result := Result + Model.Get('description', '');
+      End;
+  Finally
+    Models.Free;
+  End;
+End;
+
+Function CollectClaudeEffortLevels(Const ModelsJson, Value: String; Levels: TStrings): Boolean;
+Var
+  Models, Supported: TJSONArray;
+  Model: TJSONObject;
+  I: Integer;
+Begin
+  Result := False;
+  If Not Assigned(Levels) Then
+    Exit;
+  Levels.Clear;
+  Models := ParseModels(ModelsJson);
+  Try
+    Model := FindModel(Models, Value);
+    If (Not Assigned(Model)) Or (Not (Model.Find('supportedEffortLevels') Is TJSONArray)) Then
+      Exit;
+    Supported := TJSONArray(Model.Find('supportedEffortLevels'));
+    For I := 0 To Supported.Count - 1 Do
+      If Supported.Items[I] Is TJSONString Then
+        Levels.Add(Supported.Items[I].AsString);
+    Result := Levels.Count > 0;
+  Finally
+    Models.Free;
+  End;
 End;
 
 Function ParseClaudeTurnResult(Const JsonText: String; Out Turn: TClaudeTurnResult; Out ErrorText: String): Boolean;

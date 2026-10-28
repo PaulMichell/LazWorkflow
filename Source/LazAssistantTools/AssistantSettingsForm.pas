@@ -148,7 +148,11 @@ Type
     ClaudeStatusLabel: TLabel;
     ClaudeModelGroup: TGroupBox;
     ClaudeModelLabel: TLabel;
-    ClaudeModelEdit: TEdit;
+    ClaudeModelCombo: TComboBox;
+    ClaudeRefreshModelsButton: TButton;
+    ClaudeEffortLabel: TLabel;
+    ClaudeEffortCombo: TComboBox;
+    ClaudeModelHintLabel: TLabel;
     ClaudePermissionsGroup: TGroupBox;
     ClaudeApprovalLabel: TLabel;
     ClaudeApprovalCombo: TComboBox;
@@ -188,6 +192,8 @@ Type
     Procedure ClaudeDetectClick(Sender: TObject);
     Procedure ClaudeSignInClick(Sender: TObject);
     Procedure ClaudeCheckClick(Sender: TObject);
+    Procedure ClaudeRefreshModelsClick(Sender: TObject);
+    Procedure ClaudeModelComboChange(Sender: TObject);
     Procedure AddSkillButtonClick(Sender: TObject);
     Procedure RemoveSkillButtonClick(Sender: TObject);
     Procedure SkillsGridSelection(Sender: TObject; ACol, ARow: Integer);
@@ -204,6 +210,8 @@ Type
     FPlanUsageTimer: TTimer;
     FPlanUsageClosed: Boolean;
     FPlanUsageConnectionId: String;
+    { The model list Claude Code reported for the selected Claude connection. }
+    ClaudeModelsJson: String;
     Procedure EnsureStaticChoices;
     Procedure UpdateCompactAvailability;
     Function SettingsProjectRoot: String;
@@ -227,6 +235,9 @@ Type
     Procedure LoadGrokConnection(Item: TAssistantConnection);
     Procedure LoadCompatibleConnection(Item: TAssistantConnection);
     Procedure LoadClaudeConnection(Item: TAssistantConnection);
+    Procedure FillClaudeModels(Const SelectedModel: String);
+    Procedure FillClaudeEffort(Const SelectedEffort: String);
+    Function ClaudeEffort: String;
     Procedure AddKind(Const Backend, DisplayName: String);
     Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
     Procedure RefreshCompatibleModels;
@@ -247,7 +258,7 @@ Implementation
 
 Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
-  AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient,
+  AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient, AssistantClaudeStream,
   AssistantUsage, AssistantAccountUsage,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
@@ -788,7 +799,11 @@ Begin
   Else If Item.Backend = 'claude' Then
     Begin
       Item.Runtime := Trim(ClaudeRuntimeEdit.Text);
-      Item.Model := Trim(ClaudeModelEdit.Text);
+      Item.Model := Trim(ClaudeModelCombo.Text);
+      If Item.Model = '' Then
+        Item.Model := ClaudeDefaultModel;
+      Item.ReasoningEffort := ClaudeEffort;
+      Item.CachedModelsJson := ClaudeModelsJson;
       Item.ApprovalMode := ApprovalFromIndex(ClaudeApprovalCombo.ItemIndex);
     End;
 End;
@@ -983,7 +998,12 @@ End;
 Procedure TAssistantSettingsForm.LoadClaudeConnection(Item: TAssistantConnection);
 Begin
   ClaudeRuntimeEdit.Text := Item.Runtime;
-  ClaudeModelEdit.Text := Item.Model;
+  ClaudeModelsJson := Item.CachedModelsJson;
+  If Item.Model = '' Then
+    FillClaudeModels(ClaudeDefaultModel)
+  Else
+    FillClaudeModels(Item.Model);
+  FillClaudeEffort(Item.ReasoningEffort);
   ClaudeApprovalCombo.ItemIndex := ApprovalIndex(Item.ApprovalMode);
   ClaudeStatusLabel.Caption := ClaudeKeepsSessionText;
   ShowConnectionUsage(Item, ClaudeUsageLabel);
@@ -1309,6 +1329,99 @@ Begin
     ClaudeStatusLabel.Caption := ClaudeAccountText(Account)
   Else
     ClaudeStatusLabel.Caption := ErrorText;
+End;
+
+Procedure TAssistantSettingsForm.FillClaudeModels(Const SelectedModel: String);
+Var
+  Values: TStringList;
+Begin
+  Values := TStringList.Create;
+  Try
+    CollectClaudeModels(ClaudeModelsJson, Values);
+    ClaudeModelCombo.Items.Assign(Values);
+  Finally
+    Values.Free;
+  End;
+  { A full model name the list does not show is still a valid choice. }
+  ClaudeModelCombo.ItemIndex := ClaudeModelCombo.Items.IndexOf(SelectedModel);
+  If ClaudeModelCombo.ItemIndex < 0 Then
+    ClaudeModelCombo.Text := SelectedModel;
+  ClaudeModelHintLabel.Caption := ClaudeModelDescription(ClaudeModelsJson, SelectedModel);
+  If (ClaudeModelHintLabel.Caption = '') And (ClaudeModelsJson = '') Then
+    ClaudeModelHintLabel.Caption := 'Refresh models to list every model this sign-in offers.';
+End;
+
+Procedure TAssistantSettingsForm.FillClaudeEffort(Const SelectedEffort: String);
+Var
+  Levels: TStringList;
+Begin
+  Levels := TStringList.Create;
+  Try
+    ClaudeEffortCombo.Items.Clear;
+    ClaudeEffortCombo.Items.Add('Model default');
+    If CollectClaudeEffortLevels(ClaudeModelsJson, Trim(ClaudeModelCombo.Text), Levels) Then
+      ClaudeEffortCombo.Items.AddStrings(Levels);
+  Finally
+    Levels.Free;
+  End;
+  ClaudeEffortCombo.ItemIndex := ClaudeEffortCombo.Items.IndexOf(SelectedEffort);
+  If ClaudeEffortCombo.ItemIndex < 0 Then
+    ClaudeEffortCombo.ItemIndex := 0;
+  ClaudeEffortCombo.Enabled := ClaudeEffortCombo.Items.Count > 1;
+End;
+
+Function TAssistantSettingsForm.ClaudeEffort: String;
+Begin
+  If ClaudeEffortCombo.ItemIndex <= 0 Then
+    Result := ''
+  Else
+    Result := ClaudeEffortCombo.Items[ClaudeEffortCombo.ItemIndex];
+End;
+
+Procedure TAssistantSettingsForm.ClaudeModelComboChange(Sender: TObject);
+Begin
+  If FLoading Then
+    Exit;
+  ClaudeModelHintLabel.Caption := ClaudeModelDescription(ClaudeModelsJson, Trim(ClaudeModelCombo.Text));
+  FillClaudeEffort(ClaudeEffort);
+End;
+
+Procedure TAssistantSettingsForm.ClaudeRefreshModelsClick(Sender: TObject);
+Var
+  ModelsJson, ErrorText, Effort: String;
+  Values: TStringList;
+Begin
+  ClaudeRuntimeEdit.Text := Trim(ClaudeRuntimeEdit.Text);
+  If Not FileIsExecutable(ClaudeRuntimeEdit.Text) Then
+    Begin
+      ClaudeStatusLabel.Caption := 'Claude Code was not found. Browse to the installed executable.';
+      Exit;
+    End;
+  Effort := ClaudeEffort;
+  { About a second. The program answers from the sign-in; nothing is sent to a model. }
+  Screen.Cursor := crHourGlass;
+  Try
+    If Not ReadClaudeModels(ClaudeRuntimeEdit.Text, ModelsJson, ErrorText) Then
+      Begin
+        ClaudeStatusLabel.Caption := ErrorText;
+        Exit;
+      End;
+  Finally
+    Screen.Cursor := crDefault;
+  End;
+  ClaudeModelsJson := ModelsJson;
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) And
+    (Connections[SelectedConnection].Backend = 'claude') Then
+    Connections[SelectedConnection].CachedModelsJson := ModelsJson;
+  FillClaudeModels(Trim(ClaudeModelCombo.Text));
+  FillClaudeEffort(Effort);
+  Values := TStringList.Create;
+  Try
+    CollectClaudeModels(ModelsJson, Values);
+    ClaudeStatusLabel.Caption := Format('Claude Code offers %d models for this sign-in.', [Values.Count]);
+  Finally
+    Values.Free;
+  End;
 End;
 
 Procedure TAssistantSettingsForm.PopulateSkills;
@@ -1882,7 +1995,7 @@ Begin
           KeptText := CompatibleModelCombo.Text;
         End
       Else If Backend = 'claude' Then
-        KeptText := ClaudeModelEdit.Text;
+        KeptText := ClaudeModelCombo.Text;
     End;
   If FLoading Then
     Exit;
@@ -1919,8 +2032,8 @@ Begin
     End
   Else If Backend = 'claude' Then
     Begin
-      If ClaudeModelEdit.Text <> KeptText Then
-        ClaudeModelEdit.Text := KeptText;
+      If ClaudeModelCombo.Text <> KeptText Then
+        ClaudeModelCombo.Text := KeptText;
     End;
 End;
 

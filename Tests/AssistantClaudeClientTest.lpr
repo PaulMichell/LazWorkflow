@@ -275,6 +275,33 @@ Begin
   Check('single json result with noise parses', ParseClaudeTurnResult('Warning: config {legacy} ignored' + LineEnding +
     '{"result":"hello","is_error":false}', Turn, ErrorText) And (Turn.Text = 'hello'));
 
+  Check('models come from the initialize response', ClaudeModelsFromControlResponse(FixtureText('initialize.jsonl'),
+    'init-1', Script));
+  Check('another request id is not this response', Not ClaudeModelsFromControlResponse(
+    FixtureText('initialize.jsonl'), 'other', ErrorText));
+  Check('stream output without a control response has no models', Not ClaudeModelsFromControlResponse(
+    FixtureText('plain.jsonl'), 'init-1', ErrorText));
+  ParentVariables := TStringList.Create;
+  Try
+    CollectClaudeModels(Script, ParentVariables);
+    Check('every reported model is listed', ParentVariables.Count = 13);
+    Check('models keep the program order', (ParentVariables[0] = 'default') And (ParentVariables[1] = 'opus') And
+      (ParentVariables.IndexOf('claude-opus-4-8') >= 0));
+    Check('model description combines name and purpose',
+      Pos('Opus 5.5', ClaudeModelDescription(Script, 'opus')) = 1);
+    Check('unknown model has no description', ClaudeModelDescription(Script, 'nothing') = '');
+    Check('effort levels for a model', CollectClaudeEffortLevels(Script, 'fable', ParentVariables) And
+      (ParentVariables.IndexOf('max') >= 0) And (ParentVariables.IndexOf('low') = 0));
+    Check('a model without effort levels has none', Not CollectClaudeEffortLevels(Script,
+      'claude-haiku-4-5-20251001', ParentVariables));
+    CollectClaudeModels('', ParentVariables);
+    Check('no list falls back to the aliases', (ParentVariables.Count = 5) And (ParentVariables[0] = 'default'));
+    CollectClaudeModels('not json', ParentVariables);
+    Check('a bad list falls back to the aliases', ParentVariables.Count = 5);
+  Finally
+    FreeAndNil(ParentVariables);
+  End;
+
   Check('ask leaves the program default', ClaudePermissionMode('ask') = '');
   Check('an empty approval leaves the program default', ClaudePermissionMode('') = '');
   Check('auto maps to accept edits', ClaudePermissionMode('auto') = 'acceptEdits');
@@ -288,7 +315,7 @@ Begin
 
   Args := TStringList.Create;
   Try
-    AppendClaudeTurnArguments('sonnet', 'acceptEdits', '', False, Args);
+    AppendClaudeTurnArguments('sonnet', 'acceptEdits', '', '', False, Args);
     Check('turn is claude print stream-json', (Args[0] = '-p') And (Args[1] = '--output-format') And
       (Args[2] = 'stream-json') And (Args[3] = '--verbose'));
     Check('turn sets the connection model', (Args[4] = '--model') And (Args[5] = 'sonnet'));
@@ -297,13 +324,18 @@ Begin
     Check('turn without a session leaves it to Claude Code', (Args.IndexOf('--session-id') < 0) And
       (Args.IndexOf('--resume') < 0));
     Args.Clear;
-    AppendClaudeTurnArguments('sonnet', '', 'a1b2', False, Args);
+    AppendClaudeTurnArguments('sonnet', '', '', 'a1b2', False, Args);
     Check('first turn names its session', (Args.IndexOf('--session-id') >= 0) And
       (Args[Args.IndexOf('--session-id') + 1] = 'a1b2') And (Args.IndexOf('--permission-mode') < 0));
     Args.Clear;
-    AppendClaudeTurnArguments('sonnet', '', 'a1b2', True, Args);
+    AppendClaudeTurnArguments('sonnet', '', '', 'a1b2', True, Args);
     Check('later turn resumes its session', (Args.IndexOf('--resume') >= 0) And
       (Args[Args.IndexOf('--resume') + 1] = 'a1b2') And (Args.IndexOf('--session-id') < 0));
+    Check('turn without an effort leaves it to the model', Args.IndexOf('--effort') < 0);
+    Args.Clear;
+    AppendClaudeTurnArguments('default', '', 'high', '', False, Args);
+    Check('default model leaves the choice to Claude Code', Args.IndexOf('--model') < 0);
+    Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
   Finally
     Args.Free;
   End;

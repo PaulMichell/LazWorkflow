@@ -838,7 +838,8 @@ Begin
     End;
   If (Item.Backend = 'codex') Or (Item.Backend = 'claude') Then
     Result.Add('runtime', Item.Runtime);
-  If Item.Backend = 'codex' Then
+  { Codex and Claude both cache the model list their program reported. }
+  If (Item.Backend = 'codex') Or (Item.Backend = 'claude') Then
     Result.Add('models_json', Item.CachedModelsJson);
 End;
 
