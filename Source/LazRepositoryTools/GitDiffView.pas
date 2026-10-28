@@ -457,9 +457,6 @@ Begin
 End;
 
 Procedure TGitDiffView.EnsureDiffOverviewGutter;
-Var
-  I: Integer;
-  StillInstalled: Boolean;
 Begin
   { Overview paints on a child TWinControl (not Gutter.Paint). Do not create or
     show that child until the host form has been mapped — Wayland drops a
@@ -467,25 +464,16 @@ Begin
   If Not Assigned(DiffEditor) Then
     Exit;
 
-  StillInstalled := False;
-  If Assigned(OverviewGutter) Then
-    For I := 0 To DiffEditor.RightGutter.Parts.Count - 1 Do
-      If DiffEditor.RightGutter.Parts[I] = OverviewGutter Then
-        Begin
-          StillInstalled := True;
-          Break;
-        End;
-
   If Not FOverviewMapped Then
     Begin
-      If Not StillInstalled Then
-        ScheduleOverviewRealize;
+      { CancelPendingScroll drops every async call on Self, including realize.
+        Load paths call here afterwards, so schedule again until the child exists. }
+      ScheduleOverviewRealize;
       Exit;
     End;
 
-  If Not StillInstalled Then
-    SetupDiffOverviewGutter;
-
+  { Already created after map. Reassert size only — do not rebuild the part
+    and do not toggle Visible (that allocates FWinControl). }
   DiffEditor.RightGutter.AutoSize := False;
   DiffEditor.RightGutter.Width := OverviewGutterWidth;
   DiffEditor.RightGutter.Visible := True;
@@ -493,16 +481,11 @@ Begin
     Begin
       OverviewGutter.AutoSize := False;
       OverviewGutter.Width := OverviewGutterWidth;
-      { Toggle visibility so GutterVisibilityChanged / DoResize repositions FWinControl. }
-      OverviewGutter.Visible := False;
       OverviewGutter.Visible := True;
     End;
 
   If DiffEditor.HandleAllocated Then
-    Begin
-      DiffEditor.RightGutter.RecalcBounds;
-      DiffEditor.Invalidate;
-    End;
+    DiffEditor.RightGutter.RecalcBounds;
 End;
 
 Procedure TGitDiffView.ScheduleOverviewRealize;
@@ -514,11 +497,44 @@ Begin
 End;
 
 Procedure TGitDiffView.DoRealizeOverviewAsync(Data: PtrInt);
+Var
+  HostForm: TCustomForm;
 Begin
-  { The post-map create lives in the next step. This callback is the schedule
-    target so show and load can queue it without building the child early. }
-  If (Data < 0) Or (Not IsAlive) Then
+  If Not IsAlive Or FOverviewMapped Then
     Exit;
+
+  { Frame.Showing is true during the children-first pass, before the toplevel
+    ShowHide. The host form's Showing is the post-map test. }
+  HostForm := GetParentForm(Self);
+  If (Not Assigned(HostForm)) Or (Not HostForm.Showing) Or
+     (Not DiffEditor.HandleAllocated) Or (DiffEditor.ClientHeight <= 1) Then
+    Begin
+      If Data < 3 Then
+        Application.QueueAsyncCall(@DoRealizeOverviewAsync, Data + 1);
+      Exit;
+    End;
+
+  Try
+    { Setup frees any child born before map, then parents a new one now that
+      the toplevel surface exists. Do not toggle Visible around this. }
+    SetupDiffOverviewGutter;
+    If Not Assigned(OverviewGutter) Then
+      Exit;
+    FOverviewMapped := True;
+    If Assigned(DiffOverviewProvider) And (Length(FDisplayedLines) > 0) Then
+      TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
+    DiffEditor.RightGutter.AutoSize := False;
+    DiffEditor.RightGutter.Width := OverviewGutterWidth;
+    DiffEditor.RightGutter.Visible := True;
+    OverviewGutter.AutoSize := False;
+    OverviewGutter.Width := OverviewGutterWidth;
+    If DiffEditor.HandleAllocated Then
+      DiffEditor.RightGutter.RecalcBounds;
+    DiffEditor.Invalidate;
+  Except
+    On E: Exception Do
+      WorkflowLogger.Warning('GitDiffView', 'DoRealizeOverviewAsync: ' + E.Message);
+  End;
 End;
 
 Procedure TGitDiffView.ScheduleOverviewRefresh;
