@@ -98,7 +98,7 @@ Type
 Implementation
 
 Uses
-  SysUtils, Process, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
+  SysUtils, Process, Pipes, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
 
 Const
   ClaudeTurnTimeoutMs = 120000;
@@ -273,15 +273,113 @@ Type
   TClaudeStopQuery = Function: Boolean Of Object;
   TClaudeStartedEvent = Procedure Of Object;
 
+Procedure DrainPipe(Pipe: TInputPipeStream; Buffer: TStream);
+Var
+  Chunk: Array[0..4095] Of Byte;
+  Count: Integer;
+Begin
+  While Pipe.NumBytesAvailable > 0 Do
+    Begin
+      Count := Pipe.Read(Chunk, SizeOf(Chunk));
+      If Count <= 0 Then
+        Exit;
+      Buffer.WriteBuffer(Chunk, Count);
+    End;
+End;
+
+Function StreamText(Buffer: TMemoryStream): String;
+Begin
+  SetString(Result, PAnsiChar(Buffer.Memory), Buffer.Size);
+End;
+
+{$IF FPC_FULLVERSION >= 30301}
+{ FPC 3.3.1 TProcess: once Input has been used, its stream owns the pipe and CloseInput no longer closes it, so
+  claude would wait for the end of the prompt until the turn limit. A file as standard input needs no close,
+  cannot block on a full pipe, and cannot raise SIGPIPE. }
+Function WritePromptFile(Const InputText: String; Out PromptFile, ErrorText: String): Boolean;
+Var
+  Identifier: TGUID;
+  Handle: THandle;
+  Offset, Written: Integer;
+Begin
+  Result := False;
+  PromptFile := '';
+  ErrorText := '';
+  If CreateGUID(Identifier) <> 0 Then
+    Begin
+      ErrorText := 'Could not prepare the prompt for Claude Code.';
+      Exit;
+    End;
+  PromptFile := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'lazarus-claude-' +
+    LowerCase(Copy(GUIDToString(Identifier), 2, 36)) + '.txt';
+  { Owner-only. The prompt can hold project source. }
+  Handle := FileCreate(PromptFile, fmShareExclusive, &600);
+  If Handle = THandle(-1) Then
+    Begin
+      ErrorText := 'Could not prepare the prompt for Claude Code.';
+      PromptFile := '';
+      Exit;
+    End;
+  Try
+    Offset := 1;
+    While Offset <= Length(InputText) Do
+      Begin
+        Written := FileWrite(Handle, InputText[Offset], Length(InputText) - Offset + 1);
+        If Written <= 0 Then
+          Begin
+            ErrorText := 'Could not prepare the prompt for Claude Code.';
+            Exit;
+          End;
+        Inc(Offset, Written);
+      End;
+    Result := True;
+  Finally
+    FileClose(Handle);
+    If Not Result Then
+      Begin
+        DeleteFile(PromptFile);
+        PromptFile := '';
+      End;
+  End;
+End;
+{$ELSE}
+{ False when the pipe is closed. An early exit closes it; the reason is then read from stderr. }
+Function WriteInput(ClaudeProcess: TProcess; Const InputText: String; Offset: Integer; Out Written: Integer): Boolean;
+{$IFDEF UNIX}
+Var
+  Closed, Again: Boolean;
+  WriteError: String;
+{$ENDIF}
+Begin
+  Result := False;
+  Written := 0;
+  {$IFDEF UNIX}
+  { A plain write to a pipe whose reader has exited raises SIGPIPE in the IDE process. }
+  Repeat
+    If Not WritePipeNoSignal(ClaudeProcess.Input.Handle, InputText[Offset], Length(InputText) - Offset + 1, Written,
+      Closed, Again, WriteError) Then
+      Exit;
+  Until Not Again;
+  Result := (Not Closed) And (Written > 0);
+  {$ELSE}
+  Written := ClaudeProcess.Input.Write(InputText[Offset], Length(InputText) - Offset + 1);
+  Result := Written > 0;
+  {$ENDIF}
+End;
+{$ENDIF}
+
 Function RunCaptured(Const Executable, WorkingDirectory: String; Args, Environment: TStrings; Const InputText: String;
   TimeoutMs: Integer; Out StdoutText, StderrText: String; Out ExitCode: Integer; Out ErrorText: String;
   StopQuery: TClaudeStopQuery = Nil; OnStarted: TClaudeStartedEvent = Nil): Boolean;
 Var
-  Proc: TProcess;
-  Buffer: Array[0..4095] Of Byte;
+  ClaudeProcess: TProcess;
+  StdoutBuffer, StderrBuffer: TMemoryStream;
   Started: QWord;
-  Count, Wrote, Offset: Integer;
-  Piece: String;
+  {$IF FPC_FULLVERSION >= 30301}
+  PromptFile: String;
+  {$ELSE}
+  Offset, Written: Integer;
+  {$ENDIF}
 Begin
   Result := False;
   StdoutText := '';
@@ -293,21 +391,39 @@ Begin
       ErrorText := 'Claude Code was not found. Browse to the installed executable.';
       Exit;
     End;
-  FillChar(Buffer, SizeOf(Buffer), 0);
-  Proc := TProcess.Create(Nil);
+  {$IF FPC_FULLVERSION >= 30301}
+  PromptFile := '';
+  If (InputText <> '') And (Not WritePromptFile(InputText, PromptFile, ErrorText)) Then
+    Exit;
+  {$ENDIF}
+  StdoutBuffer := TMemoryStream.Create;
+  StderrBuffer := TMemoryStream.Create;
+  ClaudeProcess := TProcess.Create(Nil);
   Try
-    Proc.Executable := Executable;
+    ClaudeProcess.Executable := Executable;
     If WorkingDirectory <> '' Then
-      Proc.CurrentDirectory := WorkingDirectory;
-    Proc.Options := [poUsePipes, poNoConsole];
+      ClaudeProcess.CurrentDirectory := WorkingDirectory;
+    ClaudeProcess.Options := [poUsePipes, poNoConsole];
+    {$IF FPC_FULLVERSION >= 30301}
+    { After Options: poUsePipes resets every descriptor to a pipe. }
+    If PromptFile <> '' Then
+      Begin
+        ClaudeProcess.InputDescriptor.IOType := iotFile;
+        ClaudeProcess.InputDescriptor.FileName := PromptFile;
+      End
+    Else
+      ClaudeProcess.InputDescriptor.IOType := iotNull;
+    {$ENDIF}
     If Assigned(Args) Then
-      Proc.Parameters.Assign(Args);
+      ClaudeProcess.Parameters.Assign(Args);
     If Assigned(Environment) Then
-      Proc.Environment.Assign(Environment);
+      ClaudeProcess.Environment.Assign(Environment);
+    { Own process group, so a stop also ends the commands and servers Claude Code started. }
+    StartInOwnSession(ClaudeProcess);
     Try
-      Proc.Execute;
+      ClaudeProcess.Execute;
     Except
-      On E: Exception Do
+      On EProcess Do
         Begin
           ErrorText := 'Could not start Claude Code.';
           Exit;
@@ -315,66 +431,62 @@ Begin
     End;
     If Assigned(OnStarted) Then
       OnStarted();
+    {$IF FPC_FULLVERSION < 30301}
     Offset := 1;
     While Offset <= Length(InputText) Do
       Begin
         If Assigned(StopQuery) And StopQuery() Then
           Begin
-            If Proc.Running Then
-              Proc.Terminate(1);
-            Proc.WaitOnExit(2000);
+            TerminateSession(ClaudeProcess);
             ErrorText := 'Cancelled.';
             Exit;
           End;
-        Wrote := Proc.Input.Write(InputText[Offset], Length(InputText) - Offset + 1);
-        If Wrote <= 0 Then
+        If Not WriteInput(ClaudeProcess, InputText, Offset, Written) Then
           Break;
-        Inc(Offset, Wrote);
+        Inc(Offset, Written);
       End;
-    Proc.CloseInput;
+    ClaudeProcess.CloseInput;
+    {$ENDIF}
     Started := GetTickCount64;
-    While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Or (Proc.Stderr.NumBytesAvailable > 0) Do
+    While ClaudeProcess.Running Or (ClaudeProcess.Output.NumBytesAvailable > 0) Or
+      (ClaudeProcess.Stderr.NumBytesAvailable > 0) Do
       Begin
-        If Proc.Output.NumBytesAvailable > 0 Then
-          Begin
-            Count := Proc.Output.Read(Buffer, SizeOf(Buffer));
-            If Count <= 0 Then
-              Break;
-            SetString(Piece, PAnsiChar(@Buffer[0]), Count);
-            StdoutText := StdoutText + Piece;
-          End;
-        If Proc.Stderr.NumBytesAvailable > 0 Then
-          Begin
-            Count := Proc.Stderr.Read(Buffer, SizeOf(Buffer));
-            If Count <= 0 Then
-              Break;
-            SetString(Piece, PAnsiChar(@Buffer[0]), Count);
-            StderrText := StderrText + Piece;
-          End;
+        DrainPipe(ClaudeProcess.Output, StdoutBuffer);
+        DrainPipe(ClaudeProcess.Stderr, StderrBuffer);
         If Assigned(StopQuery) And StopQuery() Then
           Begin
-            If Proc.Running Then
-              Proc.Terminate(1);
-            Proc.WaitOnExit(2000);
+            TerminateSession(ClaudeProcess);
             ErrorText := 'Cancelled.';
             Exit;
           End;
-        If GetTickCount64 - Started >= TimeoutMs Then
+        If GetTickCount64 - Started >= QWord(TimeoutMs) Then
           Begin
-            If Proc.Running Then
-              Proc.Terminate(1);
-            Proc.WaitOnExit(2000);
+            TerminateSession(ClaudeProcess);
             { Not a network timeout. Recovery must not replay a turn that may have changed files. }
             ErrorText := 'Claude Code did not finish within the turn limit.';
             Exit;
           End;
-        If Proc.Running And (Proc.Output.NumBytesAvailable = 0) And (Proc.Stderr.NumBytesAvailable = 0) Then
+        If ClaudeProcess.Running And (ClaudeProcess.Output.NumBytesAvailable = 0) And
+          (ClaudeProcess.Stderr.NumBytesAvailable = 0) Then
           Sleep(5);
       End;
-    ExitCode := Proc.ExitStatus;
+    StdoutText := StreamText(StdoutBuffer);
+    StderrText := StreamText(StderrBuffer);
+    If ProcessWasSignalled(ClaudeProcess) Then
+      Begin
+        ErrorText := 'Claude Code was stopped by a signal.';
+        Exit;
+      End;
+    ExitCode := ClaudeProcess.ExitCode;
     Result := True;
   Finally
-    Proc.Free;
+    ClaudeProcess.Free;
+    StderrBuffer.Free;
+    StdoutBuffer.Free;
+    {$IF FPC_FULLVERSION >= 30301}
+    If PromptFile <> '' Then
+      DeleteFile(PromptFile);
+    {$ENDIF}
   End;
 End;
 

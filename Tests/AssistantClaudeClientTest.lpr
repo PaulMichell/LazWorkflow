@@ -83,6 +83,88 @@ Begin
   Halt(1);
 End;
 
+{$IFDEF UNIX}
+Const
+  { Stands in for claude. Answers auth status as a subscription; --model picks the behaviour. }
+  FakeClaudeScript =
+    '#!/bin/sh' + LineEnding +
+    'if [ "$1" = "auth" ]; then' + LineEnding +
+    '  printf ''%s\n'' ''{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"pro"}''' +
+    LineEnding +
+    '  exit 0' + LineEnding +
+    'fi' + LineEnding +
+    'model=""' + LineEnding +
+    'while [ $# -gt 0 ]; do' + LineEnding +
+    '  if [ "$1" = "--model" ]; then model="$2"; fi' + LineEnding +
+    '  shift' + LineEnding +
+    'done' + LineEnding +
+    'case "$model" in' + LineEnding +
+    '  refuse)' + LineEnding +
+    '    echo "error: option ''--permission-mode <mode>'' argument ''ask'' is invalid." >&2' + LineEnding +
+    '    exit 1 ;;' + LineEnding +
+    '  hang)' + LineEnding +
+    '    sleep 600 &' + LineEnding +
+    '    echo $! > child.pid' + LineEnding +
+    '    wait ;;' + LineEnding +
+    '  *)' + LineEnding +
+    '    cat > /dev/null' + LineEnding +
+    '    printf ''%s\n'' ''{"type":"result","subtype":"success","is_error":false,"result":"fake answer"}'' ;;' +
+    LineEnding +
+    'esac' + LineEnding;
+
+Function WriteFakeClaude(Const Directory: String): String;
+Var
+  Lines: TStringList;
+Begin
+  Result := IncludeTrailingPathDelimiter(Directory) + 'claude';
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := FakeClaudeScript;
+    Lines.SaveToFile(Result);
+  Finally
+    Lines.Free;
+  End;
+  FpChmod(Result, &755);
+End;
+
+Function WaitForRun(Run: TAssistantClaudeRun; TimeoutMs: Integer): TClaudeRunSnapshot;
+Var
+  Started: QWord;
+Begin
+  Started := GetTickCount64;
+  Result := Run.Snapshot;
+  While (Not Result.Done) And (GetTickCount64 - Started < QWord(TimeoutMs)) Do
+    Begin
+      Sleep(20);
+      Result := Run.Snapshot;
+    End;
+End;
+
+Function ReadChildPid(Const Directory: String; TimeoutMs: Integer): Integer;
+Var
+  Started: QWord;
+  Lines: TStringList;
+  PidFile: String;
+Begin
+  Result := 0;
+  PidFile := IncludeTrailingPathDelimiter(Directory) + 'child.pid';
+  Started := GetTickCount64;
+  While (Not FileExists(PidFile)) And (GetTickCount64 - Started < QWord(TimeoutMs)) Do
+    Sleep(20);
+  If Not FileExists(PidFile) Then
+    Exit;
+  Sleep(50);
+  Lines := TStringList.Create;
+  Try
+    Lines.LoadFromFile(PidFile);
+    If Lines.Count > 0 Then
+      Result := StrToIntDef(Trim(Lines[0]), 0);
+  Finally
+    Lines.Free;
+  End;
+End;
+{$ENDIF}
+
 Function SourceContains(Const Source, Needle: String): Boolean;
 Begin
   Result := Pos(LowerCase(Needle), LowerCase(Source)) > 0;
@@ -95,6 +177,10 @@ Var
   Args, ParentVariables, Filtered: TStringList;
   {$IFDEF UNIX}
   Handle: THandle;
+  FakeDirectory, FakeClaude, LargePrompt: String;
+  Run: TAssistantClaudeRun;
+  Snapshot: TClaudeRunSnapshot;
+  ChildPid: Integer;
   {$ENDIF}
 Begin
   Check('usage fixture records input tokens', ParseClaudeTurnResult(UsageFixture, Turn, ErrorText) And
@@ -186,6 +272,56 @@ Begin
     Filtered.Free;
     ParentVariables.Free;
   End;
+
+  {$IFDEF UNIX}
+  FakeDirectory := GetTempDir + 'laz-claude-fake-' + IntToStr(GetProcessID);
+  ForceDirectories(FakeDirectory);
+  FakeClaude := WriteFakeClaude(FakeDirectory);
+
+  Run := TAssistantClaudeRun.Create(FakeClaude, 'answer', 'ask', 'hello', FakeDirectory, 20000);
+  Try
+    Run.Start;
+    Snapshot := WaitForRun(Run, 20000);
+    Check('fake turn completes', Snapshot.Done And (Snapshot.ErrorText = ''));
+    Check('fake turn returns its answer', Snapshot.Content = 'fake answer');
+    Check('fake turn records the start', Snapshot.Started);
+  Finally
+    Run.Free;
+  End;
+
+  { The fake exits before reading stdin. A 1 MB prompt cannot fit the pipe, so the write hits a closed pipe. }
+  SetLength(LargePrompt, 1024 * 1024);
+  FillChar(LargePrompt[1], Length(LargePrompt), Ord('x'));
+  Run := TAssistantClaudeRun.Create(FakeClaude, 'refuse', 'ask', LargePrompt, FakeDirectory, 20000);
+  Try
+    Run.Start;
+    Snapshot := WaitForRun(Run, 20000);
+    Check('early exit during a large prompt does not end this process', Snapshot.Done);
+    Check('early exit reports the refused flag from stderr',
+      Pos('refused the permission mode flag', Snapshot.ErrorText) > 0);
+  Finally
+    Run.Free;
+  End;
+
+  Run := TAssistantClaudeRun.Create(FakeClaude, 'hang', 'ask', 'hello', FakeDirectory, 60000);
+  Try
+    Run.Start;
+    ChildPid := ReadChildPid(FakeDirectory, 10000);
+    Check('fake turn started a child command', ChildPid > 0);
+    Run.Cancel;
+    Snapshot := WaitForRun(Run, 10000);
+    Check('cancelled turn finishes', Snapshot.Done And (Snapshot.ErrorText = 'Cancelled.'));
+  Finally
+    Run.Free;
+  End;
+  Sleep(200);
+  Check('cancel also ends commands the turn started', (ChildPid > 0) And (FpKill(ChildPid, 0) <> 0));
+  If (ChildPid > 0) And (FpKill(ChildPid, 0) = 0) Then
+    FpKill(ChildPid, SIGKILL);
+  DeleteFile(IncludeTrailingPathDelimiter(FakeDirectory) + 'child.pid');
+  DeleteFile(FakeClaude);
+  RemoveDir(FakeDirectory);
+  {$ENDIF}
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');
