@@ -13,7 +13,7 @@ Unit AssistantClaudeClient;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantConnections;
+  Classes;
 
 Const
   ClaudeUsageReported = 'reported';
@@ -33,8 +33,6 @@ Type
 
 Function DetectClaudeExecutable: String;
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
-Function ApplyClaudeRuntime(Connection: TAssistantConnection; Const ExecutablePath: String;
-  Out ErrorText: String): Boolean;
 Function ClaudePermissionMode(Const HelpText, ApprovalMode: String): String;
 Function PermissionFlagRefused(Const ProgramText: String): Boolean;
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
@@ -69,7 +67,7 @@ Type
 Implementation
 
 Uses
-  Process, FileUtil, LazFileUtils, fpjson, ProcessSession;
+  SysUtils, Process, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
 
 Const
   ClaudeHelpTimeoutMs = 8000;
@@ -138,28 +136,6 @@ Begin
   Path := ExpandFileName(Path);
   If FileIsExecutable(Path) Then
     Result := Path;
-End;
-
-Function ApplyClaudeRuntime(Connection: TAssistantConnection; Const ExecutablePath: String;
-  Out ErrorText: String): Boolean;
-Var
-  Stored: String;
-Begin
-  Result := False;
-  ErrorText := '';
-  If Not Assigned(Connection) Then
-    Begin
-      ErrorText := 'A connection is required.';
-      Exit;
-    End;
-  Stored := ClaudeRuntimeFromBrowsedPath(ExecutablePath);
-  If Stored = '' Then
-    Begin
-      ErrorText := 'The selected file is not an executable.';
-      Exit;
-    End;
-  Connection.Runtime := Stored;
-  Result := True;
 End;
 
 Function ClaudePermissionMode(Const HelpText, ApprovalMode: String): String;

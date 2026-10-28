@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, AssistantConnections, AssistantClaudeClient;
+  Classes, SysUtils, AssistantClaudeClient;
 
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
@@ -63,7 +63,6 @@ End;
 Var
   Source, ErrorText, Script: String;
   Turn: TClaudeTurnResult;
-  Connection: TAssistantConnection;
   Args: TStringList;
   {$IFDEF UNIX}
   Handle: THandle;
@@ -103,26 +102,18 @@ Begin
   End;
   Check('row status says Claude Code keeps the session', ClaudeKeepsSessionText = 'Claude Code keeps the session.');
 
-  Connection := TAssistantConnection.Create;
-  Try
-    Connection.Model := 'keep-model';
-    Connection.Runtime := 'unchanged';
-    Check('a plain file is not stored', Not ApplyClaudeRuntime(Connection, ParamStr(0) + '.missing', ErrorText) And
-      (Connection.Runtime = 'unchanged'));
-    {$IFDEF UNIX}
-    Script := GetTempDir + 'laz-claude-runtime-' + IntToStr(GetProcessID);
-    Handle := FileCreate(Script);
-    Check('runtime fixture created', Handle >= 0);
-    If Handle >= 0 Then
-      FileClose(Handle);
-    Check('runtime fixture is executable', FpChmod(Script, &755) = 0);
-    Check('browsed executable is stored as the runtime path', ApplyClaudeRuntime(Connection, Script, ErrorText) And
-      (Connection.Runtime = ExpandFileName(Script)) And (Connection.Model = 'keep-model'));
-    DeleteFile(Script);
-    {$ENDIF}
-  Finally
-    Connection.Free;
-  End;
+  Check('a missing file is not a runtime', ClaudeRuntimeFromBrowsedPath(ParamStr(0) + '.missing') = '');
+  {$IFDEF UNIX}
+  Script := GetTempDir + 'laz-claude-runtime-' + IntToStr(GetProcessID);
+  Handle := FileCreate(Script);
+  Check('runtime fixture created', Handle >= 0);
+  If Handle >= 0 Then
+    FileClose(Handle);
+  Check('a plain file is not a runtime', ClaudeRuntimeFromBrowsedPath(Script) = '');
+  Check('runtime fixture is executable', FpChmod(Script, &755) = 0);
+  Check('browsed executable is the expanded runtime path', ClaudeRuntimeFromBrowsedPath(Script) = ExpandFileName(Script));
+  DeleteFile(Script);
+  {$ENDIF}
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');
