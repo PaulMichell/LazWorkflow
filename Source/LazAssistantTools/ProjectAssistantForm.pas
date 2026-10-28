@@ -238,6 +238,9 @@ Type
     FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
     FClaudeLaunchReady: Boolean;
     FClaudeRetries: Integer;
+    { Claude Code's session for this conversation. The key is connection, project and first turn. }
+    FClaudeSessionId, FClaudeSessionKey, FClaudeSubmitText: String;
+    FClaudeResume, FClaudeFreshRetried: Boolean;
     { Last rate-limit report applied to the footer, and the finished turn's usage for the usage log. }
     FClaudeRateLimitJson: String;
     FClaudeUsageReported: Boolean;
@@ -257,6 +260,8 @@ Type
     Procedure PollCodex;
     Procedure PollClaude;
     Procedure ApplyClaudeRateLimit(Const RateLimitJson: String);
+    Function ClaudeSessionKey: String;
+    Function ClaudeRecapPrompt(Const SubmitText: String): String;
     Procedure NoteClaudeKeySource(Const KeySource: String);
     Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
@@ -4712,6 +4717,8 @@ Begin
   TurnSettings.ApprovalMode := FClaudeApproval;
   TurnSettings.WorkingDirectory := FClaudeDirectory;
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
+  TurnSettings.SessionId := FClaudeSessionId;
+  TurnSettings.Resume := FClaudeResume;
   Try
     FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, FClaudeLaunchPrompt);
     SetStreamPhase(AssistantPhaseWaiting);
@@ -5017,12 +5024,43 @@ Begin
   Finally FPollingCodex := False; End;
 End;
 
-Function TProjectAssistantForm.StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
+Function TProjectAssistantForm.ClaudeSessionKey: String;
 Var
-  Prompt, SubmitText, Recap: String;
-  WithContext: Boolean;
+  Turn: TConversationTurn;
+Begin
+  { A new chat has no first turn and a History conversation has another one, so both start a new session. }
+  Result := FActiveConnectionId + '|' + ClaudeWorkDirectory + '|';
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) And
+    ProjectAssistantConversation.GetTurn(0, Turn) Then
+    Result := Result + Turn.Id;
+End;
+
+Function TProjectAssistantForm.ClaudeRecapPrompt(Const SubmitText: String): String;
+Var
+  Recap: String;
   I: Integer;
   Turn: TConversationTurn;
+Begin
+  { Only for a new Claude Code session in a conversation that already has turns: after a restart, a project or
+    connection switch, or a session Claude Code no longer has. A resumed session keeps its own history. }
+  Recap := '';
+  If Assigned(ProjectAssistantConversation) Then
+    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
+      Begin
+        If Length(Recap) >= 24000 Then Break;
+        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
+          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
+            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
+      End;
+  Result := SubmitText;
+  If Recap <> '' Then
+    Result := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+End;
+
+Function TProjectAssistantForm.StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
+Var
+  Prompt, SubmitText: String;
+  WithContext: Boolean;
   Refs: TAssistantImageRefArray;
 Begin
   Result := False;
@@ -5045,18 +5083,19 @@ Begin
   ShowChatSurfaceKeepMode;
   SubmitText := BuildSubmitApiText(ApiText, WithContext);
   FPendingTurnAttachments := '';
-  Recap := '';
-  If Assigned(ProjectAssistantConversation) Then
-    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
-      Begin
-        If Length(Recap) >= 24000 Then Break;
-        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
-          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
-            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
-      End;
-  Prompt := SubmitText;
-  If Recap <> '' Then
-    Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+  FClaudeSubmitText := SubmitText;
+  FClaudeFreshRetried := False;
+  If (FClaudeSessionId <> '') And (FClaudeSessionKey = ClaudeSessionKey) Then
+    Begin
+      FClaudeResume := True;
+      Prompt := SubmitText;
+    End
+  Else
+    Begin
+      FClaudeSessionId := NewClaudeSessionId;
+      FClaudeResume := False;
+      Prompt := ClaudeRecapPrompt(SubmitText);
+    End;
   { Do not copy this turn into the HTTP client. Claude Code keeps its own session. }
   SetCurrentUserDisplay(DisplayText, WithContext);
   FLiveUser := FDisplayUser;
@@ -5140,14 +5179,35 @@ Begin
         FClaudeOutputTokens := Snapshot.OutputTokens;
         { A turn that ran a tool may already have edited files or run commands, so only a turn that ran none
           waits and starts the same stored prompt again, a bounded number of times. }
+        If (Snapshot.ToolCalls = 0) And ClaudeSessionMissing(Snapshot.ErrorText) And (Not FClaudeFreshRetried) Then
+          Begin
+            { Claude Code no longer has this session. Start a new one once, with the recap in its place. }
+            FClaudeFreshRetried := True;
+            FClaudeSessionId := NewClaudeSessionId;
+            FClaudeResume := False;
+            FClaudeLaunchPrompt := ClaudeRecapPrompt(FClaudeSubmitText);
+            ReleaseClaudeProcess;
+            If Not LaunchStoredClaudeRun Then
+              FinishAssistantReply('The run could not be restarted.');
+            Exit;
+          End;
         If (Snapshot.ToolCalls = 0) And (FClaudeRetries < AssistantFaultRetryCap(-1)) And
           TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
           Begin
             Inc(FClaudeRetries);
+            { A first turn may have created its session; another --session-id with that id would be refused. }
+            If Not FClaudeResume Then
+              FClaudeSessionId := NewClaudeSessionId;
             ReleaseClaudeProcess;
             Exit;
           End;
         FinishAssistantReply(Snapshot.ErrorText);
+        If Snapshot.ErrorText = '' Then
+          { The turn is recorded now, so the key includes this conversation's first turn. }
+          FClaudeSessionKey := ClaudeSessionKey
+        Else If Not FClaudeResume Then
+          { The new session may not exist. The next turn starts another, with the recap. }
+          FClaudeSessionId := '';
       End
     Else If FSending And (FStatusPhase = '') Then
       SetStreamPhase(AssistantPhaseWaiting);

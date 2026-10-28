@@ -35,6 +35,9 @@ Type
     ApprovalMode: String;
     WorkingDirectory: String;
     TimeoutMs: Integer;
+    { Claude Code's own session: started with --session-id, continued with --resume. }
+    SessionId: String;
+    Resume: Boolean;
   End;
 
   TClaudeRunSnapshot = Record
@@ -85,8 +88,12 @@ Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 /// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
 /// anything that needs approval in print mode.
 Function ClaudePermissionMode(Const ApprovalMode: String): String;
-/// Print-mode arguments for one stream-json turn.
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
+/// Print-mode arguments for one stream-json turn. An empty SessionId leaves the session to Claude Code.
+Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, SessionId: String; Resume: Boolean; Args: TStrings);
+/// A new lower-case UUID without braces, as --session-id requires. Empty on failure.
+Function NewClaudeSessionId: String;
+/// True when a resumed session no longer exists in Claude Code's history.
+Function ClaudeSessionMissing(Const ErrorText: String): Boolean;
 /// Starts the program's own subscription sign-in. Its output and account files are not read.
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
 /// Copies NAME=VALUE lines from Source without the variables that move Claude Code onto metered billing.
@@ -160,7 +167,22 @@ Begin
     Result := '';
 End;
 
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode: String; Args: TStrings);
+Function NewClaudeSessionId: String;
+Var
+  Identifier: TGUID;
+Begin
+  Result := '';
+  If CreateGUID(Identifier) <> 0 Then
+    Exit;
+  Result := LowerCase(Copy(GUIDToString(Identifier), 2, 36));
+End;
+
+Function ClaudeSessionMissing(Const ErrorText: String): Boolean;
+Begin
+  Result := Pos('no conversation found', LowerCase(ErrorText)) > 0;
+End;
+
+Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, SessionId: String; Resume: Boolean; Args: TStrings);
 Begin
   If Not Assigned(Args) Then
     Exit;
@@ -176,6 +198,13 @@ Begin
       Args.Add('--permission-mode');
       Args.Add(PermissionMode);
     End;
+  If SessionId = '' Then
+    Exit;
+  If Resume Then
+    Args.Add('--resume')
+  Else
+    Args.Add('--session-id');
+  Args.Add(SessionId);
 End;
 
 Procedure DrainPipe(Pipe: TInputPipeStream; Buffer: TStream);
@@ -737,7 +766,8 @@ Begin
         ErrorText := 'Cancelled.'
       Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
         Begin
-          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Args);
+          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Settings.SessionId,
+            Settings.Resume, Args);
           BuildClaudeEnvironment(Environment);
           If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
             StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then

@@ -252,6 +252,12 @@ Begin
   Stream := FoldFixture('badresume.jsonl');
   Check('unknown session reports the reason', (Not ClaudeTurnOutcome(Stream, 1, '', ErrorText)) And
     (Pos('No conversation found', ErrorText) > 0));
+  Check('unknown session is recognised', ClaudeSessionMissing(ErrorText));
+  Check('a model error is not a missing session', Not ClaudeSessionMissing('model not found'));
+  Script := NewClaudeSessionId;
+  Check('session id is a bare lower-case UUID', (Length(Script) = 36) And (Script[9] = '-') And
+    (Script = LowerCase(Script)) And (Pos('{', Script) = 0));
+  Check('session ids differ', NewClaudeSessionId <> Script);
 
   ClearClaudeStream(Stream);
   Check('noise line is not an event', Not ApplyClaudeStreamLine('Warning: config {legacy} ignored', Stream));
@@ -282,12 +288,22 @@ Begin
 
   Args := TStringList.Create;
   Try
-    AppendClaudeTurnArguments('sonnet', 'acceptEdits', Args);
+    AppendClaudeTurnArguments('sonnet', 'acceptEdits', '', False, Args);
     Check('turn is claude print stream-json', (Args[0] = '-p') And (Args[1] = '--output-format') And
       (Args[2] = 'stream-json') And (Args[3] = '--verbose'));
     Check('turn sets the connection model', (Args[4] = '--model') And (Args[5] = 'sonnet'));
     Check('turn maps the accepted permission mode', (Args[6] = '--permission-mode') And (Args[7] = 'acceptEdits'));
     Check('turn does not send tools or skills', (Args.IndexOf('--tools') < 0) And (Args.IndexOf('--skill') < 0));
+    Check('turn without a session leaves it to Claude Code', (Args.IndexOf('--session-id') < 0) And
+      (Args.IndexOf('--resume') < 0));
+    Args.Clear;
+    AppendClaudeTurnArguments('sonnet', '', 'a1b2', False, Args);
+    Check('first turn names its session', (Args.IndexOf('--session-id') >= 0) And
+      (Args[Args.IndexOf('--session-id') + 1] = 'a1b2') And (Args.IndexOf('--permission-mode') < 0));
+    Args.Clear;
+    AppendClaudeTurnArguments('sonnet', '', 'a1b2', True, Args);
+    Check('later turn resumes its session', (Args.IndexOf('--resume') >= 0) And
+      (Args[Args.IndexOf('--resume') + 1] = 'a1b2') And (Args.IndexOf('--session-id') < 0));
   Finally
     Args.Free;
   End;
