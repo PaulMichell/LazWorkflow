@@ -9,10 +9,11 @@ Unit AssistantMonitorSession;
   fpsha256.TSHA256.HMAC. JSON stays in the codec. The pair code, session token,
   and HMAC are never logged.
 
-  Heartbeat: a ping goes out after MonitorHeartbeatMs with nothing sent, and the link
-  is dead after MonitorDeadSessionMs with nothing received. A ping is answered with a
-  pong on the control lane from the carrier thread. The phone's MonitorLimits holds the
-  same two values.
+  Threading: the carrier thread calls the frame handler under the session lock.
+  The IDE thread calls the public setters and must not touch the socket. A ping
+  goes out after MonitorHeartbeatMs with nothing sent, and the link is dead after
+  MonitorDeadSessionMs with nothing received. Pong is answered on the control lane
+  from the carrier thread. The phone's MonitorLimits holds the same two values.
 
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
   gates, approval, the in-memory carrier, the resume ring, and the outbound lanes

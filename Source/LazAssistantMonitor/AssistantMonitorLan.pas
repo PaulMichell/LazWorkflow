@@ -5,7 +5,11 @@ Unit AssistantMonitorLan;
   Size note: exceeds the 1000 line preference. The accept loop, per-socket frame
   buffer, and the locked queues are one carrier. Splitting the idle read from the
   thread would hide the single-read rule.
-  Reviewed 2026-10-19: no form code and no relay class.
+  Threading: the listen thread owns accept and every accepted SSL object. OnIdle
+  still polls every MonitorAcceptIdleMs. One pass reads, then writes. An owed read
+  or write is retried before the other call. SSL_accept still runs on the accept
+  path. The section 4 link thread is not this unit.
+  Reviewed 2026-10-29: no form code and no relay class.
 
   Listen path is ssockets.TInetServer. TLS is opensslsockets.TOpenSSLSocketHandler.
   Reads and writes go through the public SSL: TSSL property (Read, Write, Pending,
