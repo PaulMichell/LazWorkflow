@@ -18,7 +18,8 @@ data class HostRecord(
   val port: Int = MonitorLimits.ListenPort,
   val fingerprint: String = "",
   val clientId: String = "",
-  val sessionToken: String = ""
+  val sessionToken: String = "",
+  val hostId: String = ""
 ) {
   val paired: Boolean
     get() = clientId.isNotEmpty() && sessionToken.isNotEmpty()
@@ -80,7 +81,8 @@ class HostStore internal constructor(private val values: StringMap) {
       if (port in 1..65535) port else MonitorLimits.ListenPort,
       values.get(KeyFingerprint).orEmpty(),
       values.get(KeyClientId).orEmpty(),
-      values.get(KeySessionToken).orEmpty()
+      values.get(KeySessionToken).orEmpty(),
+      values.get(KeyHostId).orEmpty()
     )
   }
 
@@ -91,6 +93,11 @@ class HostStore internal constructor(private val values: StringMap) {
   fun savePairing(clientId: String, sessionToken: String) {
     val current = load()
     save(current.copy(clientId = clientId, sessionToken = sessionToken))
+  }
+
+  fun saveHostId(hostId: String) {
+    val current = load()
+    save(current.copy(hostId = hostId))
   }
 
   /** Forgets the pairing on this phone. Does not revoke the desktop client record. */
@@ -105,7 +112,8 @@ class HostStore internal constructor(private val values: StringMap) {
     const val KeyFingerprint = "fingerprint"
     const val KeyClientId = "client_id"
     const val KeySessionToken = "session_token"
-    val StoredKeys = setOf(KeyAddress, KeyPort, KeyFingerprint, KeyClientId, KeySessionToken)
+    const val KeyHostId = "host_id"
+    val StoredKeys = setOf(KeyAddress, KeyPort, KeyFingerprint, KeyClientId, KeySessionToken, KeyHostId)
   }
 }
 
@@ -115,6 +123,7 @@ private fun recordFields(record: HostRecord): Map<String, String> {
     HostStore.KeyPort to record.port.toString(),
     HostStore.KeyFingerprint to record.fingerprint,
     HostStore.KeyClientId to record.clientId,
-    HostStore.KeySessionToken to record.sessionToken
+    HostStore.KeySessionToken to record.sessionToken,
+    HostStore.KeyHostId to record.hostId
   )
 }

@@ -16,7 +16,9 @@ data class CacheIndexEntry(
   val updatedMs: Long,
   val turnCount: Int,
   val fileName: String,
-  val images: List<CacheImageNote> = emptyList()
+  val images: List<CacheImageNote> = emptyList(),
+  val epoch: String = "",
+  val cursor: Long = 0
 )
 
 fun encodeCacheIndex(entries: List<CacheIndexEntry>): String {
@@ -30,6 +32,8 @@ fun encodeCacheIndex(entries: List<CacheIndexEntry>): String {
     obj.add("turn_count", entry.turnCount)
     obj.add("file", entry.fileName)
     obj.add("images", JsonValue.Arr(entry.images.map { imageNoteToJson(it) }))
+    obj.add("epoch", entry.epoch)
+    obj.add("cursor", entry.cursor)
     obj.build()
   }
   val root = JsonObjectBuilder()
@@ -56,6 +60,9 @@ fun decodeCacheIndex(text: String): List<CacheIndexEntry>? {
     }
     if (!cacheFileNameIsSafe(fileName.value)) return null
     val images = imageNotesFrom(row.field("images")) ?: return null
+    val epoch = row.readString("epoch", false)
+    val cursor = row.readLong("cursor", false)
+    if (!epoch.ok || !cursor.ok || cursor.value < 0L) return null
     entries += CacheIndexEntry(
       fingerprint.value,
       projectRoot.value,
@@ -64,7 +71,9 @@ fun decodeCacheIndex(text: String): List<CacheIndexEntry>? {
       updated.value,
       turnCount.value,
       fileName.value,
-      images
+      images,
+      epoch.value,
+      cursor.value
     )
   }
   return entries

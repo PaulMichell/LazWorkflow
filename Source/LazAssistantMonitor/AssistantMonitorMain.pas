@@ -71,7 +71,7 @@ End;
 Function StartAssistantMonitorListener(Out ErrorText: String): Boolean;
 Var
   Settings: TMonitorSettings;
-  Address, Fingerprint: String;
+  Address, Fingerprint, HostId: String;
   Carrier: TMonitorLanCarrier;
   Session: TMonitorSession;
 Begin
@@ -134,6 +134,10 @@ Begin
   AttachAssistantMonitorBridge(LiveSession);
   If MonitorHostFingerprint(Fingerprint, ErrorText) Then
     LiveSession.SetHostFingerprint(Fingerprint);
+  If EnsureMonitorHostId(HostId, ErrorText) Then
+    LiveSession.SetInstallationHostId(HostId)
+  Else If ErrorText <> '' Then
+    WorkflowLogger.Warning('AssistantMonitor', 'host id was not stored: ' + ErrorText);
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
   LiveSession.SetRemoteApproval(Settings.RemoteApproval);
   ErrorText := '';

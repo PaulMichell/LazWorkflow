@@ -10446,13 +10446,13 @@ End;
 
 Procedure TProjectAssistantForm.FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
 Begin
-  ConversationId := 'current';
+  ConversationId := '';
   ProjectRoot := '';
   Title := '';
   If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   ProjectRoot := ProjectAssistantConversation.ProjectRoot;
-  ConversationId := ProjectAssistantConversation.OpenConversationId;
+  ConversationId := ProjectAssistantConversation.MonitorConversationId;
   Title := ProjectAssistantConversation.MonitorTitle;
 End;
 

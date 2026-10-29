@@ -14,6 +14,33 @@ import org.junit.Test
 
 class CacheDirectoryTest {
   @Test
+  fun twoConversationsKeepSeparateLogPositions() {
+    val root = tempRoot()
+    try {
+      val store = OfflineStore(root)
+      val host = "ab".repeat(32)
+      val first = "6f1d2c3a-8b4e-4c7d-9a2f-0e5b1c3d4a7f"
+      val second = "11111111-2222-4333-8444-555555555555"
+      store.save(host, "/one", first, "One", screen("One"), emptyList(), 1L, "epoch-a", 4L)
+      store.save(host, "/two", second, "Two", screen("Two"), emptyList(), 2L, "epoch-b", 9L)
+      store.save(host, "/moved", first, "One moved", screen("One"), emptyList(), 3L, "epoch-a", 5L)
+      val index = store.loadIndex()
+      assertEquals(2, index.size)
+      val kept = index.first { it.conversationId == first }
+      assertEquals("epoch-a", kept.epoch)
+      assertEquals(5L, kept.cursor)
+      assertEquals("/moved", kept.projectRoot)
+      assertEquals(cacheConversationFileName(host, first), kept.fileName)
+      val other = index.first { it.conversationId == second }
+      assertEquals("epoch-b", other.epoch)
+      assertEquals(9L, other.cursor)
+      assertFalse(kept.fileName == other.fileName)
+    } finally {
+      root.deleteRecursively()
+    }
+  }
+
+  @Test
   fun anUnreadableIndexStartsEmpty() {
     val root = tempRoot()
     try {
@@ -43,7 +70,7 @@ class CacheDirectoryTest {
       assertEquals(20, index.size)
       assertTrue(index.none { it.conversationId == "conversation-1" })
       assertTrue(index.any { it.conversationId == "conversation-21" })
-      val dropped = cacheConversationFileName(fingerprint, "/proj", "conversation-1")
+      val dropped = cacheConversationFileName(fingerprint, "conversation-1")
       assertFalse(File(store.directory, dropped).isFile)
       assertFalse(File(store.directory, dropped.removeSuffix(".json")).isDirectory)
       val other = "bb".repeat(32)
@@ -69,10 +96,10 @@ class CacheDirectoryTest {
       val kept = store.loadIndex().filter { it.fingerprint == fingerprint }
       val names = kept.flatMap { entry -> entry.images.map { it.imageId } }
       assertEquals(listOf("img-new"), names)
-      assertNull(store.readImage(cacheConversationFileName(fingerprint, "/proj", "one"), "img-old"))
-      val otherName = cacheConversationFileName(other, "/other", "current")
+      assertNull(store.readImage(cacheConversationFileName(fingerprint, "one"), "img-old"))
+      val otherName = cacheConversationFileName(other, "current")
       assertEquals(60, store.readImage(otherName, "img-keep")?.size)
-      val beside = File(store.directory, cacheConversationFileName(fingerprint, "/proj", "two").removeSuffix(".json"))
+      val beside = File(store.directory, cacheConversationFileName(fingerprint, "two").removeSuffix(".json"))
       assertTrue(File(beside, "img-new").isFile)
       assertFalse(File(beside, "img-mid").isFile)
     } finally {

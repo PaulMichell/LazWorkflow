@@ -114,7 +114,8 @@ data class HelloOkMessage(
   val cursor: Long,
   val conversationId: String,
   val projectRoot: String,
-  val title: String
+  val title: String,
+  val hostId: String = ""
 )
 data class AuthMessage(val clientId: String, val hmac: String)
 data class RejectedMessage(val reason: String, val hostVersion: Int, val clientVersion: Int)
@@ -576,6 +577,7 @@ fun encodeHelloOk(id: String, hello: HelloOkMessage): String {
   payload.add("conversation_id", hello.conversationId)
   payload.add("project_root", hello.projectRoot)
   payload.add("title", hello.title)
+  if (hostIdIsValid(hello.hostId)) payload.add("host_id", hello.hostId)
   return encodeEnvelope(MessageKind.HelloOk, id, payload.build())
 }
 
@@ -595,8 +597,10 @@ fun decodeHelloOk(obj: JsonValue.Obj): HelloOkMessage? {
   if (!nonce.ok || !serverName.ok || !epoch.ok || !cursor.ok || !conversationId.ok || !projectRoot.ok || !title.ok) {
     return null
   }
+  val hostRead = obj.readString("host_id", false)
+  val hostId = if (hostRead.ok && hostIdIsValid(hostRead.value)) hostRead.value else ""
   return HelloOkMessage(nonce.value, serverName.value, epoch.value, cursor.value, conversationId.value,
-    projectRoot.value, title.value)
+    projectRoot.value, title.value, hostId)
 }
 
 fun encodeAuth(id: String, clientId: String, hmac: String): String {

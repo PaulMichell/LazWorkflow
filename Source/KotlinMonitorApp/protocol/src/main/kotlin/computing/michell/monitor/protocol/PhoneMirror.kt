@@ -39,16 +39,10 @@ class MemoryConversationLibrary {
     rows[entry.fileName] = entry to document
   }
 
-  fun load(
-    fingerprint: String,
-    projectRoot: String,
-    conversationId: String,
-    socket: DisconnectedSocket
-  ): OfflineCacheDocument? {
+  fun load(hostFingerprint: String, conversationId: String, socket: DisconnectedSocket): OfflineCacheDocument? {
     if (socket.opened) return null
     val row = rows.values.firstOrNull { pair ->
-      pair.first.fingerprint == fingerprint && pair.first.projectRoot == projectRoot &&
-        pair.first.conversationId == conversationId
+      pair.first.fingerprint == hostFingerprint && pair.first.conversationId == conversationId
     }
     return row?.second
   }

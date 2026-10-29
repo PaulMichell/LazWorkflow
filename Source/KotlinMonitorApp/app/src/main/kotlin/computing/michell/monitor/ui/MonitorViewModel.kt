@@ -114,6 +114,7 @@ import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.TargetsMessage
 import computing.michell.monitor.protocol.decodeConversations
 import computing.michell.monitor.protocol.encodeSelectConversation
+import computing.michell.monitor.protocol.hostIdIsValid
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
@@ -1225,7 +1226,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
     val open = try {
-      newestCacheEntry(offlineStore.loadIndex(), record.fingerprint)
+      val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
+      newestCacheEntry(offlineStore.loadIndex(), key)
     } catch (error: Exception) {
       null
     }
@@ -1416,9 +1418,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
     cacheBackToListState.value = false
     viewModelScope.launch(Dispatchers.IO) {
-      val fingerprint = store.load().fingerprint
+      val record = store.load()
+      val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
       val rows = try {
-        cacheRowsForFingerprint(offlineStore.loadIndex(), fingerprint)
+        cacheRowsForFingerprint(offlineStore.loadIndex(), key)
       } catch (error: Exception) {
         emptyList()
       }
@@ -1466,7 +1469,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun forgetPairing() {
     leaveDictation()
-    val fingerprint = store.load().fingerprint
+    val record = store.load()
+    val fingerprint = record.fingerprint
+    val hostId = record.hostId
     synchronized(cacheGate) {
       suppressCache = true
       cacheWriteSerial += 1
@@ -1479,6 +1484,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     store.clear()
     try {
       offlineStore.forgetFingerprint(fingerprint)
+      if (hostIdIsValid(hostId)) offlineStore.forgetFingerprint(hostId)
     } catch (error: Exception) {
       // Forgetting the local copy must not drop the reset session.
     }
@@ -1628,7 +1634,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun writeCache(ui: MonitorUi, await: Boolean) {
     if (suppressCache) return
     val target = cacheSaveTarget(ui) ?: return
-    val fingerprint = cacheFingerprint(store.load().fingerprint)
     val document = offlineDocument(ui)
     val images = cachedImageBytes(ui)
     val serial = synchronized(cacheGate) { ++cacheWriteSerial }
@@ -1636,7 +1641,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       synchronized(cacheGate) {
         if (suppressCache || serial != cacheWriteSerial) return@Runnable
         try {
-          offlineStore.save(fingerprint, target.projectRoot, target.conversationId, target.title, document, images)
+          val hostId = store.load().hostId
+          if (!hostIdIsValid(hostId)) return@Runnable
+          offlineStore.save(hostId, target.projectRoot, target.conversationId, target.title, document, images,
+            epoch = ui.hostEpoch, cursor = ui.hostCursor)
         } catch (error: Exception) {
           // A failed local copy must not drop the live session.
         }
@@ -1646,15 +1654,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     else viewModelScope.launch(Dispatchers.IO) { write.run() }
   }
 
-  private fun fileClosed(id: String, title: String, projectRoot: String, document: String) {
-    if (id.isEmpty()) return
-    val fingerprint = cacheFingerprint(store.load().fingerprint)
+  private fun fileClosed(id: String, title: String, projectRoot: String, document: String, epoch: String, cursor: Long) {
+    if (id.isEmpty() || id == "current") return
+    val hostId = store.load().hostId
+    if (!hostIdIsValid(hostId)) return
     val images = cachedImageBytes(uiState.value)
     viewModelScope.launch(Dispatchers.IO) {
       synchronized(cacheGate) {
         if (suppressCache) return@synchronized
         try {
-          offlineStore.saveClosed(fingerprint, projectRoot, id, title, document, images)
+          offlineStore.saveClosed(hostId, projectRoot, id, title, document, images, epoch, cursor)
         } catch (error: Exception) {
           // A failed local copy must not drop the live session.
         }
@@ -1703,6 +1712,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private suspend fun applyIncoming(message: MonitorMessage) {
+    val hello = (message.inbound as? InboundPayload.HelloOk)?.value
+    if (hello != null && hostIdIsValid(hello.hostId)) store.saveHostId(hello.hostId)
     val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return
     execute(effects)
   }
@@ -1766,7 +1777,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
-        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.projectRoot, effect.document)
+        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.projectRoot, effect.document, effect.epoch, effect.cursor)
       }
     }
   }

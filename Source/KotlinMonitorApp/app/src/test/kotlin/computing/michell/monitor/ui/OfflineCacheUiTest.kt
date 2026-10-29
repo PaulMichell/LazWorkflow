@@ -58,19 +58,22 @@ class OfflineCacheUiTest {
   }
 
   @Test
-  fun currentOnAnotherProjectRootIsADifferentFile() {
-    val oldRoot = MonitorUi(conversationId = "current", projectRoot = "/old", draft = "keep")
+  fun aConversationIdIsOneFileAndCurrentIsNotAnIdentity() {
+    val id = "6f1d2c3a-8b4e-4c7d-9a2f-0e5b1c3d4a7f"
+    val oldRoot = MonitorUi(conversationId = id, projectRoot = "/old", draft = "keep")
     val newRoot = oldRoot.copy(projectRoot = "/work", conversationTitle = "Renamed")
     val oldTarget = cacheSaveTarget(oldRoot)
     val newTarget = cacheSaveTarget(newRoot)
-    assertEquals("current", oldTarget!!.conversationId)
+    assertEquals(id, oldTarget!!.conversationId)
     assertEquals("/old", oldTarget.projectRoot)
-    assertEquals("current", newTarget!!.conversationId)
+    assertEquals(id, newTarget!!.conversationId)
     assertEquals("/work", newTarget.projectRoot)
     assertEquals("Renamed", newTarget.title)
     assertTrue(cacheRowChanged(oldRoot, newRoot))
-    assertFalse(cacheConversationFileName("aa", oldTarget.projectRoot, oldTarget.conversationId) ==
-      cacheConversationFileName("aa", newTarget.projectRoot, newTarget.conversationId))
+    assertEquals(cacheConversationFileName("aa".repeat(32), oldTarget.conversationId),
+      cacheConversationFileName("aa".repeat(32), newTarget.conversationId))
+    assertNull(cacheSaveTarget(oldRoot.copy(conversationId = "current")))
+    assertNull(cacheSaveTarget(oldRoot.copy(conversationId = "")))
   }
 
   @Test

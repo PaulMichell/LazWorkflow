@@ -1,6 +1,14 @@
 Unit AssistantConversation;
 
-{ Project-local .assistant conversation turns: JSONL on disk, full turns cached in memory (c) 2026 Michell Computing. }
+{ Project-local .assistant conversation turns: JSONL on disk, full turns cached in memory (c) 2026 Michell Computing.
+
+  Each conversation has a GUID in conversation.identity.json, including a new unsaved one.
+  Archiving renames that file with the jsonl. `current` is not an identity.
+  The same file keeps the monitor log position (epoch and cursor) for that conversation.
+
+  Size note: exceeds the 1000 line preference. The turn cache, shell config, and
+  archive swap are one store. The identity sidecar is part of that swap.
+  Reviewed 2026-10-29: no separate archive unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -70,7 +78,8 @@ Type
 
   TAssistantConversationStore = Class
   Private
-    FProjectRoot, FTargetStoreKey, FOpenConversationId: String;
+    FProjectRoot, FTargetStoreKey, FMonitorId, FMonitorEpoch: String;
+    FMonitorCursor: Int64;
     FIndex: TObjectList; { of TConversationIndexEntry }
     FTurns: Array Of TConversationTurn; { full prompt/thinking/response cache }
     FLastError: String;
@@ -89,6 +98,11 @@ Type
     Function LoadConversationFileIntoMemory: Boolean;
     Procedure RewriteIndexFile;
     Function ArchivePathsForId(Const ArchiveId: String; Out ConvPath, IdxPath: String): Boolean;
+    Function IdentityPath: String;
+    Function ArchiveIdentityPath(Const ArchiveId: String): String;
+    Function ReadIdentityAt(Const Path: String; Out Id, Epoch: String; Out Cursor: Int64): Boolean;
+    Function WriteIdentityAt(Const Path, Id, Epoch: String; Cursor: Int64): Boolean;
+    Function MoveIdentityFile(Const FromPath, ToPath: String): Boolean;
     Function TitleFromIndexFile(Const IdxFile: String): String;
     Procedure CollectConversationFiles(Files: TStrings);
   Public
@@ -122,8 +136,15 @@ Type
     Function ActivateArchive(Const ArchiveId: String): Boolean;
     Function DeleteConversation(Const ArchiveId: String): Boolean; { '' deletes current }
     Function HistoryTitleForCurrent: String;
-    { `current` for the open conversation.jsonl, or the archive id when one is active. }
+    { Stable GUID for the open conversation. Never `current`. Minted and stored if missing. }
     Function OpenConversationId: String;
+    { Same GUID as OpenConversationId. Writes the sidecar when the conversation has none. }
+    Function MonitorConversationId: String;
+    { Remembers this conversation's monitor log position. No write when nothing changed. }
+    Procedure NoteMonitorLogPosition(Const Epoch: String; Cursor: Int64);
+    Procedure ReadMonitorLogPosition(Out Epoch: String; Out Cursor: Int64);
+    { Writes a closed conversation's position into its sidecar, open or archived. }
+    Function SaveClosedLogPosition(Const ConversationId, Epoch: String; Cursor: Int64): Boolean;
     { History title, or the first prompt preview when that title is empty. }
     Function MonitorTitle: String;
     { Directory that contains conversation.jsonl, including a package target store. }
@@ -137,6 +158,8 @@ Type
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Function StrToAssistantMode(Const ModeText: String): TAssistantMode;
 Function NewConversationTurnId: String;
+Function NewMonitorConversationId: String;
+Function MonitorConversationIdIsValid(Const ConversationId: String): Boolean;
 Function IsoNowUtc: String;
 Function ProjectAssistantRoot: String;
 /// Test hook. The next generated archive id uses this value once, then the clock. Empty clears it.
@@ -159,6 +182,8 @@ Const
   ConversationArchivePrefix = 'conversation-';
   ConversationArchiveSuffix = '.jsonl';
   ConversationArchiveIndexSuffix = '.index.jsonl';
+  IdentityFileName = 'conversation.identity.json';
+  IdentityArchiveSuffix = '.identity.json';
 
 Var
   ForcedArchiveId: String;
@@ -201,6 +226,39 @@ Begin
     IntToHex(Random($FFFF), 4) + IntToHex(Random($FFFF), 4);
 End;
 
+Function MonitorConversationIdIsValid(Const ConversationId: String): Boolean;
+Var
+  Index: Integer;
+  C: Char;
+Begin
+  Result := Length(ConversationId) = 36;
+  If Not Result Then
+    Exit;
+  For Index := 1 To 36 Do
+    Begin
+      C := ConversationId[Index];
+      If (Index = 9) Or (Index = 14) Or (Index = 19) Or (Index = 24) Then
+        Begin
+          If C <> '-' Then
+            Exit(False);
+        End
+      Else If Not (((C >= '0') And (C <= '9')) Or ((C >= 'a') And (C <= 'f'))) Then
+        Exit(False);
+    End;
+End;
+
+Function NewMonitorConversationId: String;
+Var
+  Guid: TGuid;
+Begin
+  Result := '';
+  If CreateGUID(Guid) <> 0 Then
+    Exit;
+  Result := LowerCase(Copy(GUIDToString(Guid), 2, 36));
+  If Not MonitorConversationIdIsValid(Result) Then
+    Result := '';
+End;
+
 Function IsoNowUtc: String;
 Begin
   Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss', LocalTimeToUniversal(Now)) + 'Z';
@@ -215,7 +273,9 @@ Constructor TAssistantConversationStore.Create;
 Begin
   Inherited Create;
   FProjectRoot := '';
-  FOpenConversationId := 'current';
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
   FLastError := '';
   FLoaded := False;
   FIndex := TObjectList.Create(True);
@@ -236,7 +296,9 @@ Begin
     FProjectRoot := ''
   Else
     FProjectRoot := IncludeTrailingPathDelimiter(ExpandFileName(RootPath));
-  FOpenConversationId := 'current';
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
   ClearAll;
   FLoaded := False;
 End;
@@ -1043,6 +1105,117 @@ Begin
   Result := True;
 End;
 
+Function TAssistantConversationStore.IdentityPath: String;
+Begin
+  Result := AssistantDir + IdentityFileName;
+End;
+
+Function TAssistantConversationStore.ArchiveIdentityPath(Const ArchiveId: String): String;
+Begin
+  Result := '';
+  If (AssistantDir = '') Or (Not ArchiveIdIsSafe(ArchiveId)) Then
+    Exit;
+  Result := AssistantDir + ConversationArchivePrefix + ArchiveId + IdentityArchiveSuffix;
+End;
+
+Function TAssistantConversationStore.ReadIdentityAt(Const Path: String; Out Id, Epoch: String; Out Cursor: Int64): Boolean;
+Var
+  Lines: TStringList;
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Node: TJSONData;
+Begin
+  Result := False;
+  Id := '';
+  Epoch := '';
+  Cursor := 0;
+  If (Path = '') Or (Not FileExistsUTF8(Path)) Or FileIsSymlink(Path) Then
+    Exit;
+  Lines := TStringList.Create;
+  Data := Nil;
+  Try
+    Try
+      Lines.LoadFromFile(Path);
+      Data := GetJSON(Lines.Text);
+      If Not (Data Is TJSONObject) Then
+        Exit;
+      Obj := TJSONObject(Data);
+      Id := LowerCase(Trim(Obj.Get('id', '')));
+      If Not MonitorConversationIdIsValid(Id) Then
+        Begin
+          Id := '';
+          Exit;
+        End;
+      Epoch := LowerCase(Trim(Obj.Get('epoch', '')));
+      Node := Obj.Find('cursor');
+      If Assigned(Node) And (Node.JSONType = jtNumber) Then
+        Cursor := Node.AsInt64;
+      If Cursor < 0 Then
+        Cursor := 0;
+      Result := True;
+    Except
+      Result := False;
+      Id := '';
+      Epoch := '';
+      Cursor := 0;
+    End;
+  Finally
+    Data.Free;
+    Lines.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.WriteIdentityAt(Const Path, Id, Epoch: String; Cursor: Int64): Boolean;
+Var
+  Obj: TJSONObject;
+  Lines: TStringList;
+Begin
+  Result := False;
+  If (Path = '') Or (Not MonitorConversationIdIsValid(Id)) Or (Cursor < 0) Then
+    Exit;
+  If FileExistsUTF8(Path) And FileIsSymlink(Path) Then
+    Begin
+      FLastError := 'Refusing to write a symbolic link.';
+      Exit;
+    End;
+  If Not EnsureDir Then
+    Exit;
+  Obj := TJSONObject.Create;
+  Lines := TStringList.Create;
+  Try
+    Obj.Add('id', Id);
+    Obj.Add('epoch', Epoch);
+    Obj.Add('cursor', Cursor);
+    Lines.Text := Obj.FormatJSON;
+    Try
+      Lines.SaveToFile(Path);
+      Result := True;
+    Except
+      On E: Exception Do
+        FLastError := E.Message;
+    End;
+  Finally
+    Lines.Free;
+    Obj.Free;
+  End;
+End;
+
+Function TAssistantConversationStore.MoveIdentityFile(Const FromPath, ToPath: String): Boolean;
+Begin
+  Result := True;
+  If (FromPath = '') Or (Not FileExistsUTF8(FromPath)) Then
+    Exit;
+  If FileIsSymlink(FromPath) Or ((ToPath <> '') And FileExistsUTF8(ToPath)) Then
+    Begin
+      FLastError := 'Could not move the conversation identity.';
+      Result := False;
+      Exit;
+    End;
+  Result := RenameFileUTF8(FromPath, ToPath);
+  If Not Result Then
+    FLastError := 'Could not move the conversation identity.';
+End;
+
 Function TAssistantConversationStore.TitleFromIndexFile(Const IdxFile: String): String;
 Var
   SL: TStringList;
@@ -1109,12 +1282,104 @@ Begin
     Result := Format('Current — %d turn(s)', [TurnCount]);
 End;
 
+Function TAssistantConversationStore.MonitorConversationId: String;
+Var
+  Id, Epoch: String;
+  Cursor: Int64;
+Begin
+  Result := '';
+  If FProjectRoot = '' Then
+    Exit;
+  If MonitorConversationIdIsValid(FMonitorId) And FileExistsUTF8(IdentityPath) And (Not FileIsSymlink(IdentityPath)) Then
+    Begin
+      Result := FMonitorId;
+      Exit;
+    End;
+  If ReadIdentityAt(IdentityPath, Id, Epoch, Cursor) Then
+    Begin
+      FMonitorId := Id;
+      FMonitorEpoch := Epoch;
+      FMonitorCursor := Cursor;
+      Result := FMonitorId;
+      Exit;
+    End;
+  Id := NewMonitorConversationId;
+  If Id = '' Then
+    Begin
+      FLastError := 'Could not mint a conversation id.';
+      Exit;
+    End;
+  If Not WriteIdentityAt(IdentityPath, Id, '', 0) Then
+    Exit;
+  FMonitorId := Id;
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
+  Result := FMonitorId;
+End;
+
 Function TAssistantConversationStore.OpenConversationId: String;
 Begin
-  If FOpenConversationId = '' Then
-    Result := 'current'
-  Else
-    Result := FOpenConversationId;
+  Result := MonitorConversationId;
+End;
+
+Procedure TAssistantConversationStore.NoteMonitorLogPosition(Const Epoch: String; Cursor: Int64);
+Begin
+  If Cursor < 0 Then
+    Exit;
+  If MonitorConversationId = '' Then
+    Exit;
+  If (Epoch = FMonitorEpoch) And (Cursor = FMonitorCursor) Then
+    Exit;
+  If Not WriteIdentityAt(IdentityPath, FMonitorId, Epoch, Cursor) Then
+    Exit;
+  FMonitorEpoch := Epoch;
+  FMonitorCursor := Cursor;
+End;
+
+Procedure TAssistantConversationStore.ReadMonitorLogPosition(Out Epoch: String; Out Cursor: Int64);
+Begin
+  Epoch := '';
+  Cursor := 0;
+  If MonitorConversationId = '' Then
+    Exit;
+  Epoch := FMonitorEpoch;
+  Cursor := FMonitorCursor;
+End;
+
+Function TAssistantConversationStore.SaveClosedLogPosition(Const ConversationId, Epoch: String; Cursor: Int64): Boolean;
+Var
+  Rec: TDirectoryScan;
+  Code: LongInt;
+  Path, Id, StoredEpoch: String;
+  StoredCursor: Int64;
+Begin
+  Result := False;
+  If (Not MonitorConversationIdIsValid(ConversationId)) Or (Cursor < 0) Then
+    Exit;
+  If FMonitorId = ConversationId Then
+    Begin
+      NoteMonitorLogPosition(Epoch, Cursor);
+      Result := (FMonitorEpoch = Epoch) And (FMonitorCursor = Cursor);
+      Exit;
+    End;
+  If AssistantDir = '' Then
+    Exit;
+  Code := StartDirectoryScan(AssistantDir + ConversationArchivePrefix + '*' + IdentityArchiveSuffix, faAnyFile, Rec);
+  Try
+    While Code = 0 Do
+      Begin
+        Path := AssistantDir + Rec.Name;
+        If ((Rec.Attr And faDirectory) = 0) And (Not FileIsSymlink(Path)) And
+          ReadIdentityAt(Path, Id, StoredEpoch, StoredCursor) And (Id = ConversationId) Then
+          Begin
+            Result := WriteIdentityAt(Path, ConversationId, Epoch, Cursor);
+            Exit;
+          End;
+        Code := AdvanceDirectoryScan(Rec);
+      End;
+  Finally
+    CloseDirectoryScan(Rec);
+  End;
 End;
 
 Function TAssistantConversationStore.MonitorTitle: String;
@@ -1135,10 +1400,12 @@ End;
 
 Function TAssistantConversationStore.ArchiveCurrent(Out ArchiveId: String): Boolean;
 Var
-  ConvPath, IdxPath, ArchConv, ArchIdx, ImageError: String;
+  ConvPath, IdxPath, ArchConv, ArchIdx, ArchIdent, ImageError: String;
+  MovedIdentity: Boolean;
 Begin
   Result := False;
   ArchiveId := '';
+  MovedIdentity := False;
   FLastError := '';
   If FProjectRoot = '' Then
     Begin
@@ -1157,6 +1424,8 @@ Begin
   If Not FLoaded Then
     Load;
   RewriteIndexFile;
+  If MonitorConversationId = '' Then
+    Exit;
   ArchiveId := NewArchiveId;
   If Not ArchivePathsForId(ArchiveId, ArchConv, ArchIdx) Then
     Begin
@@ -1184,8 +1453,21 @@ Begin
       ArchiveId := '';
       Exit;
     End;
+  ArchIdent := ArchiveIdentityPath(ArchiveId);
+  If Not MoveIdentityFile(IdentityPath, ArchIdent) Then
+    Begin
+      If FileExistsUTF8(ArchConv) And (Not FileExistsUTF8(ConvPath)) Then
+        RenameFileUTF8(ArchConv, ConvPath);
+      If (ArchIdx <> '') And FileExistsUTF8(ArchIdx) And (Not FileExistsUTF8(IdxPath)) Then
+        RenameFileUTF8(ArchIdx, IdxPath);
+      ArchiveId := '';
+      Exit;
+    End;
+  MovedIdentity := FileExistsUTF8(ArchIdent);
   If Not PreserveAssistantImages(AssistantDir, ArchiveId, ArchConv, ImageError) Then
     Begin
+      If MovedIdentity Then
+        RenameFileUTF8(ArchIdent, IdentityPath);
       If FileExistsUTF8(ArchConv) Then RenameFileUTF8(ArchConv, ConvPath);
       If (ArchIdx <> '') And FileExistsUTF8(ArchIdx) And (Not FileExistsUTF8(IdxPath)) Then
         RenameFileUTF8(ArchIdx, IdxPath);
@@ -1193,6 +1475,9 @@ Begin
       ArchiveId := '';
       Exit;
     End;
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
   ClearAll;
   FLoaded := False;
   Result := True;
@@ -1212,13 +1497,19 @@ Begin
     End;
   If Not ArchiveCurrent(ArchiveId) Then
     Exit;
-  FOpenConversationId := 'current';
+  If FileExistsUTF8(IdentityPath) And (Not FileIsSymlink(IdentityPath)) Then
+    DeleteFileUTF8(IdentityPath);
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
   ClearAll;
   FLoaded := True;
   If FileExistsUTF8(ConversationPath) Then
     DeleteFileUTF8(ConversationPath);
   If FileExistsUTF8(IndexPath) Then
     DeleteFileUTF8(IndexPath);
+  If MonitorConversationId = '' Then
+    Exit;
   Result := True;
 End;
 
@@ -1329,15 +1620,28 @@ End;
 
 Function TAssistantConversationStore.ActivateArchive(Const ArchiveId: String): Boolean;
 Var
-  ArchConv, ArchIdx, CurConv, CurIdx, TmpId, TmpConv, TmpIdx, ImageError: String;
-  ParkedConv, ParkedIdx: Boolean;
+  ArchConv, ArchIdx, ArchIdent, CurConv, CurIdx, CurIdent, TmpId, TmpConv, TmpIdx, TmpIdent, ImageError: String;
+  ParkedConv, ParkedIdx, ParkedIdent: Boolean;
+
+  Procedure RestorePark;
+  Begin
+    If ParkedIdent And (TmpIdent <> '') And FileExistsUTF8(TmpIdent) And (Not FileExistsUTF8(CurIdent)) Then
+      RenameFileUTF8(TmpIdent, CurIdent);
+    If ParkedConv And (TmpConv <> '') And FileExistsUTF8(TmpConv) And (Not FileExistsUTF8(CurConv)) Then
+      RenameFileUTF8(TmpConv, CurConv);
+    If ParkedIdx And (TmpIdx <> '') And FileExistsUTF8(TmpIdx) And (Not FileExistsUTF8(CurIdx)) Then
+      RenameFileUTF8(TmpIdx, CurIdx);
+  End;
+
 Begin
   Result := False;
   FLastError := '';
   ParkedConv := False;
   ParkedIdx := False;
+  ParkedIdent := False;
   TmpConv := '';
   TmpIdx := '';
+  TmpIdent := '';
   If FProjectRoot = '' Then
     Begin
       FLastError := 'No project root.';
@@ -1347,8 +1651,9 @@ Begin
     Begin
       If Not FLoaded Then
         Load;
-      FOpenConversationId := 'current';
-      Result := True;
+      Result := MonitorConversationId <> '';
+      If Not Result And (FLastError = '') Then
+        FLastError := 'Could not mint a conversation id.';
       Exit;
     End;
   If Not ArchivePathsForId(ArchiveId, ArchConv, ArchIdx) Then
@@ -1363,6 +1668,8 @@ Begin
 
   CurConv := ConversationPath;
   CurIdx := IndexPath;
+  CurIdent := IdentityPath;
+  ArchIdent := ArchiveIdentityPath(ArchiveId);
 
   If HasTurns Or FileExistsUTF8(CurConv) Then
     Begin
@@ -1370,11 +1677,14 @@ Begin
         Load;
       If HasTurns Then
         RewriteIndexFile;
+      If MonitorConversationId = '' Then
+        Exit;
       TmpId := NewArchiveId;
       While SameText(TmpId, ArchiveId) Do
         TmpId := NewArchiveId + 'x';
       If Not ArchivePathsForId(TmpId, TmpConv, TmpIdx) Then
         Exit;
+      TmpIdent := ArchiveIdentityPath(TmpId);
       If FileExistsUTF8(CurConv) Then
         If Not RenameFileUTF8(CurConv, TmpConv) Then
           Begin
@@ -1386,7 +1696,8 @@ Begin
       If FileExistsUTF8(CurIdx) Then
         If Not RenameFileUTF8(CurIdx, TmpIdx) Then
           Begin
-            If ParkedConv And (Not RenameFileUTF8(TmpConv, CurConv)) Then
+            RestorePark;
+            If ParkedConv And FileExistsUTF8(TmpConv) Then
               FLastError := 'Could not park current index and could not restore the conversation.'
             Else
               FLastError := 'Could not park current index.';
@@ -1394,22 +1705,29 @@ Begin
           End
         Else
           ParkedIdx := True;
+      If Not MoveIdentityFile(CurIdent, TmpIdent) Then
+        Begin
+          RestorePark;
+          Exit;
+        End;
+      ParkedIdent := FileExistsUTF8(TmpIdent);
       If ParkedConv And (Not PreserveAssistantImages(AssistantDir, TmpId, TmpConv, ImageError)) Then
         Begin
-          If ParkedConv Then RenameFileUTF8(TmpConv, CurConv);
-          If ParkedIdx Then RenameFileUTF8(TmpIdx, CurIdx);
+          RestorePark;
           FLastError := ImageError;
           Exit;
         End;
-    End;
+    End
+  Else If FileExistsUTF8(CurIdent) And (Not FileIsSymlink(CurIdent)) Then
+    DeleteFileUTF8(CurIdent);
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
 
   If Not RenameFileUTF8(ArchConv, CurConv) Then
     Begin
       FLastError := 'Could not activate archive ' + ArchiveId;
-      If ParkedConv Then
-        RenameFileUTF8(TmpConv, CurConv);
-      If ParkedIdx Then
-        RenameFileUTF8(TmpIdx, CurIdx);
+      RestorePark;
       Exit;
     End;
   If FileExistsUTF8(ArchIdx) And (Not RenameFileUTF8(ArchIdx, CurIdx)) Then
@@ -1422,18 +1740,28 @@ Begin
             FLastError := 'Could not activate archive ' + ArchiveId + ' and could not restore it.';
             Exit;
           End;
-      If ParkedConv Then
-        RenameFileUTF8(TmpConv, CurConv);
-      If ParkedIdx Then
-        RenameFileUTF8(TmpIdx, CurIdx);
+      RestorePark;
       FLastError := 'Could not activate archive ' + ArchiveId;
+      Exit;
+    End;
+  If (ArchIdent <> '') And FileExistsUTF8(ArchIdent) And (Not MoveIdentityFile(ArchIdent, CurIdent)) Then
+    Begin
+      If FileExistsUTF8(CurConv) And (Not FileExistsUTF8(ArchConv)) Then
+        RenameFileUTF8(CurConv, ArchConv);
+      If FileExistsUTF8(CurIdx) And (ArchIdx <> '') And (Not FileExistsUTF8(ArchIdx)) Then
+        RenameFileUTF8(CurIdx, ArchIdx);
+      RestorePark;
       Exit;
     End;
 
   ClearAll;
   FLoaded := False;
-  FOpenConversationId := ArchiveId;
+  FMonitorId := '';
+  FMonitorEpoch := '';
+  FMonitorCursor := 0;
   Result := Load;
+  If Result Then
+    MonitorConversationId;
   If Result And (Not RestoreAssistantImages(AssistantDir, ArchiveId, CurConv, ImageError)) Then
     WorkflowLogger.Warning('AssistantConversation', 'Could not restore images for ' + ArchiveId + ': ' + ImageError);
   WorkflowLogger.Info('AssistantConversation', 'Activated archive ' + ArchiveId);
@@ -1457,6 +1785,11 @@ Begin
         DeleteFileUTF8(ConversationPath);
       If FileExistsUTF8(IndexPath) Then
         DeleteFileUTF8(IndexPath);
+      If FileExistsUTF8(IdentityPath) And (Not FileIsSymlink(IdentityPath)) Then
+        DeleteFileUTF8(IdentityPath);
+      FMonitorId := '';
+      FMonitorEpoch := '';
+      FMonitorCursor := 0;
       ClearAll;
       FLoaded := True;
     End
@@ -1474,6 +1807,9 @@ Begin
         End;
       If FileExistsUTF8(IdxPath) Then
         DeleteFileUTF8(IdxPath);
+      If (ArchiveIdentityPath(ArchiveId) <> '') And FileExistsUTF8(ArchiveIdentityPath(ArchiveId)) And
+        (Not FileIsSymlink(ArchiveIdentityPath(ArchiveId))) Then
+        DeleteFileUTF8(ArchiveIdentityPath(ArchiveId));
       If Not DeleteAssistantImageArchive(AssistantDir, ArchiveId, ImageError) Then
         Begin
           FLastError := ImageError;

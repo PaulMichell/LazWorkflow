@@ -503,6 +503,7 @@ Begin
   HelloOk.ConversationId := 'current';
   HelloOk.ProjectRoot := '/work/LazWorkflow';
   HelloOk.Title := 'Current';
+  HelloOk.HostId := '';
   AddSample('hello-ok', mmkHelloOk, EncodeMonitorHelloOk('hello-ok', HelloOk));
   AddSample('auth', mmkAuth, EncodeMonitorAuth('auth', 'client-1', 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'));
   AddSample('rejected', mmkRejected, EncodeMonitorRejected('rejected', 'busy', 1, 1));

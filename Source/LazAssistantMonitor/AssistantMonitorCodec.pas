@@ -145,6 +145,8 @@ Type
     ConversationId: String;
     ProjectRoot: String;
     Title: String;
+    { Optional on catalogue 2. 32 lowercase hex. The phone's hostFingerprint. }
+    HostId: String;
   End;
 
   TMonitorAuth = Record
@@ -400,6 +402,8 @@ Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
 Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
 Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
 Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+{ 32 lowercase hex digits. Empty is not valid. }
+Function MonitorHostIdIsValid(Const HostId: String): Boolean;
 Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
 Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
 Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
@@ -1049,7 +1053,25 @@ Begin
   Payload.Add('conversation_id', HelloOk.ConversationId);
   Payload.Add('project_root', HelloOk.ProjectRoot);
   Payload.Add('title', HelloOk.Title);
+  If MonitorHostIdIsValid(HelloOk.HostId) Then
+    Payload.Add('host_id', HelloOk.HostId);
   Result := EncodeWith(mmkHelloOk, Id, Payload);
+End;
+
+Function MonitorHostIdIsValid(Const HostId: String): Boolean;
+Var
+  Index: Integer;
+  C: Char;
+Begin
+  Result := Length(HostId) = 32;
+  If Not Result Then
+    Exit;
+  For Index := 1 To 32 Do
+    Begin
+      C := HostId[Index];
+      If Not (((C >= '0') And (C <= '9')) Or ((C >= 'a') And (C <= 'f'))) Then
+        Exit(False);
+    End;
 End;
 
 Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
@@ -1065,6 +1087,7 @@ Begin
   HelloOk.ConversationId := '';
   HelloOk.ProjectRoot := '';
   HelloOk.Title := '';
+  HelloOk.HostId := '';
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
@@ -1072,6 +1095,13 @@ Begin
       ReadString(Obj, 'epoch', True, HelloOk.Epoch) And ReadInt64(Obj, 'cursor', HelloOk.Cursor) And
       ReadString(Obj, 'conversation_id', True, HelloOk.ConversationId) And
       ReadString(Obj, 'project_root', True, HelloOk.ProjectRoot) And ReadString(Obj, 'title', True, HelloOk.Title);
+    If Result Then
+      Begin
+        If Not ReadString(Obj, 'host_id', False, HelloOk.HostId) Then
+          Result := False
+        Else If (HelloOk.HostId <> '') And (Not MonitorHostIdIsValid(HelloOk.HostId)) Then
+          Result := False;
+      End;
   Finally
     Data.Free;
   End;

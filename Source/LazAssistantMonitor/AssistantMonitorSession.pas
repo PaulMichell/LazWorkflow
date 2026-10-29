@@ -94,6 +94,7 @@ Type
     FBindAddress: String;
     FPort: Integer;
     FHostFingerprint: String;
+    FInstallationHostId: String;
     FHostFlags: TMonitorHostFlags;
     FRemoteApproval: Boolean;
     FPairCode: String;
@@ -227,6 +228,7 @@ Type
     Procedure RequestPairCode;
     Function PairCode: String;
     Procedure SetHostFingerprint(Const Fingerprint: String);
+    Procedure SetInstallationHostId(Const HostId: String);
     Procedure SetHostFlags(Const Flags: TMonitorHostFlags);
     Procedure SetRemoteApproval(Enabled: Boolean);
     Procedure RevokeClient(Const ClientId: String);
@@ -234,6 +236,8 @@ Type
     Procedure NoteTurnEnded;
     { New epoch. Cursor returns to zero. Safe from the IDE thread. }
     Procedure BeginMirrorEpoch(Const Epoch, ConversationId, ProjectRoot, Title: String);
+    { Same conversation's stored epoch and cursor. The ring is empty, so resume snapshots. }
+    Procedure RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
     Function MirrorEpoch: String;
     Function MirrorCursor: Int64;
     { Same cursor while the bytes are unsent or already handed unchanged. }
@@ -516,7 +520,8 @@ Begin
   FHasUnsentTranscript := False;
   FTranscriptRevision := 0;
   FEpoch := '';
-  FConversationId := 'current';
+  FConversationId := '';
+  FInstallationHostId := '';
   FProjectRoot := '';
   FTitle := '';
   FCommittedCursor := 0;
@@ -1037,9 +1042,10 @@ Begin
   If FEpoch = '' Then
     Begin
       FEpoch := MintMonitorEpoch;
-      FConversationId := 'current';
       FCommittedCursor := 0;
     End;
+  If FConversationId = 'current' Then
+    FConversationId := '';
   HelloOk.Nonce := FNonceHex;
   HelloOk.ServerName := MonitorServerName;
   HelloOk.Epoch := FEpoch;
@@ -1047,6 +1053,7 @@ Begin
   HelloOk.ConversationId := FConversationId;
   HelloOk.ProjectRoot := FProjectRoot;
   HelloOk.Title := FTitle;
+  HelloOk.HostId := FInstallationHostId;
   QueueSend(EncodeMonitorHelloOk(NewHostId, HelloOk));
 End;
 
@@ -1696,6 +1703,19 @@ Begin
   End;
 End;
 
+Procedure TMonitorSession.SetInstallationHostId(Const HostId: String);
+Begin
+  LockSession;
+  Try
+    If MonitorHostIdIsValid(HostId) Then
+      FInstallationHostId := HostId
+    Else
+      FInstallationHostId := '';
+  Finally
+    UnlockSession;
+  End;
+End;
+
 Procedure TMonitorSession.SetHostFlags(Const Flags: TMonitorHostFlags);
 Begin
   LockSession;
@@ -1791,8 +1811,8 @@ Begin
   LockSession;
   Try
     FEpoch := LowerCase(Epoch);
-    If ConversationId = '' Then
-      FConversationId := 'current'
+    If ConversationId = 'current' Then
+      FConversationId := ''
     Else
       FConversationId := ConversationId;
     FProjectRoot := ProjectRoot;
@@ -1803,6 +1823,34 @@ Begin
     FReservedPayload := '';
     FReservedHanded := False;
     ClearRingLocked;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
+Begin
+  LockSession;
+  Try
+    FEpoch := LowerCase(Epoch);
+    If ConversationId = 'current' Then
+      FConversationId := ''
+    Else
+      FConversationId := ConversationId;
+    FProjectRoot := ProjectRoot;
+    FTitle := Title;
+    If Cursor < 0 Then
+      Cursor := 0;
+    FCommittedCursor := Cursor;
+    FNextCursor := Cursor;
+    FReservedCursor := 0;
+    FReservedPayload := '';
+    FReservedHanded := False;
+    FHasLivePatch := False;
+    FLiveCursor := 0;
+    SetLength(FLiveFrames, 0);
+    ClearRingLocked;
+    FRingDroppedCursor := Cursor;
   Finally
     UnlockSession;
   End;

@@ -36,12 +36,16 @@ Type
     BindAddress: String;
     BindAll: Boolean;
     RemoteApproval: Boolean;
+    { 32 lowercase hex. Stable across certificate renewal. Empty until ensured. }
+    HostId: String;
     Clients: TMonitorClientArray;
   End;
 
 Function DefaultMonitorSettings: TMonitorSettings;
 Function LoadMonitorSettings(Out Settings: TMonitorSettings; Out ErrorText: String): Boolean;
 Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: String): Boolean;
+{ Mints host_id once and keeps it in the monitor settings. }
+Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;
 Function MonitorCertificateFile: String;
 Function MonitorKeyFile: String;
 { bind_all true returns 0.0.0.0. Otherwise one IPv4 address is required. }
@@ -50,7 +54,7 @@ Function ResolveMonitorBind(Const Settings: TMonitorSettings; Out Address, Error
 Implementation
 
 Uses
-  fpjson, WorkflowSettings, AssistantMonitorCodec;
+  fpjson, fphashutils, WorkflowSettings, AssistantMonitorCodec;
 
 Function IsIPv4Address(Const Text: String): Boolean;
 Var
@@ -93,6 +97,7 @@ Begin
   Result.BindAddress := '';
   Result.BindAll := False;
   Result.RemoteApproval := False;
+  Result.HostId := '';
   SetLength(Result.Clients, 0);
 End;
 
@@ -199,6 +204,17 @@ Begin
         Exit;
       End;
     Settings.RemoteApproval := Section.Get('remote_approval', False);
+    If Assigned(Section.Find('host_id')) And (Section.Find('host_id').JSONType <> jtString) Then
+      Begin
+        ErrorText := 'Monitor host id must be a string.';
+        Exit;
+      End;
+    Settings.HostId := LowerCase(Section.Get('host_id', ''));
+    If (Settings.HostId <> '') And (Not MonitorHostIdIsValid(Settings.HostId)) Then
+      Begin
+        ErrorText := 'Monitor host id is not valid.';
+        Exit;
+      End;
     If Not ReadClients(Section.Find('clients'), Settings.Clients, ErrorText) Then
       Exit;
     Result := True;
@@ -207,11 +223,64 @@ Begin
   End;
 End;
 
+Function StoredHostId: String;
+Var
+  Section: TJSONObject;
+Begin
+  Result := '';
+  Section := ReadWorkflowSection(MonitorSettingsSection);
+  If Not Assigned(Section) Then
+    Exit;
+  Try
+    If Assigned(Section.Find('host_id')) And (Section.Find('host_id').JSONType = jtString) Then
+      Result := LowerCase(Section.Get('host_id', ''));
+  Finally
+    Section.Free;
+  End;
+  If Not MonitorHostIdIsValid(Result) Then
+    Result := '';
+End;
+
+Function NewMonitorHostId: String;
+Var
+  Bytes: TBytes;
+  Hex: AnsiString;
+  Guid: TGuid;
+  Index: Integer;
+  C: Char;
+Begin
+  Result := '';
+  Bytes := Nil;
+  SetLength(Bytes, 16);
+  If (Length(Bytes) = 16) And CryptoGetRandomBytes(@Bytes[0], 16) Then
+    Begin
+      Hex := BytesToHexStr(Bytes);
+      Result := LowerCase(String(Hex));
+      If MonitorHostIdIsValid(Result) Then
+        Exit;
+    End;
+  If CreateGUID(Guid) <> 0 Then
+    Exit;
+  Result := LowerCase(GUIDToString(Guid));
+  Index := 1;
+  While Index <= Length(Result) Do
+    Begin
+      C := Result[Index];
+      If ((C >= '0') And (C <= '9')) Or ((C >= 'a') And (C <= 'f')) Then
+        Inc(Index)
+      Else
+        Delete(Result, Index, 1);
+    End;
+  If Not MonitorHostIdIsValid(Result) Then
+    Result := '';
+End;
+
 Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: String): Boolean;
 Var
   Section, Client: TJSONObject;
   Clients: TJSONArray;
   I: Integer;
+  KeptHostId: String;
 Begin
   Result := False;
   ErrorText := '';
@@ -222,6 +291,11 @@ Begin
     Section.Add('bind_address', Settings.BindAddress);
     Section.Add('bind_all', Settings.BindAll);
     Section.Add('remote_approval', Settings.RemoteApproval);
+    KeptHostId := Settings.HostId;
+    If Not MonitorHostIdIsValid(KeptHostId) Then
+      KeptHostId := StoredHostId;
+    If MonitorHostIdIsValid(KeptHostId) Then
+      Section.Add('host_id', KeptHostId);
     Clients := TJSONArray.Create;
     Section.Add('clients', Clients);
     For I := 0 To High(Settings.Clients) Do
@@ -238,6 +312,33 @@ Begin
   Finally
     Section.Free;
   End;
+End;
+
+Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;
+Var
+  Settings: TMonitorSettings;
+Begin
+  Result := False;
+  HostId := '';
+  ErrorText := '';
+  If Not LoadMonitorSettings(Settings, ErrorText) Then
+    Exit;
+  If MonitorHostIdIsValid(Settings.HostId) Then
+    Begin
+      HostId := Settings.HostId;
+      Result := True;
+      Exit;
+    End;
+  Settings.HostId := NewMonitorHostId;
+  If Not MonitorHostIdIsValid(Settings.HostId) Then
+    Begin
+      ErrorText := 'Could not mint the monitor host id.';
+      Exit;
+    End;
+  If Not SaveMonitorSettings(Settings, ErrorText) Then
+    Exit;
+  HostId := Settings.HostId;
+  Result := True;
 End;
 
 Function MonitorCertificateFile: String;

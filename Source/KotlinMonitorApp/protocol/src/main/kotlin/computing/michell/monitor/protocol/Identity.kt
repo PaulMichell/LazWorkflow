@@ -10,6 +10,20 @@ enum class CursorStep {
   NewEpoch
 }
 
+/** 32 lowercase hex. This is the hostFingerprint of plan item 5.2, not the TLS certificate. */
+fun hostIdIsValid(text: String): Boolean {
+  if (text.length != 32) return false
+  for (ch in text) {
+    if (ch !in '0'..'9' && ch !in 'a'..'f') return false
+  }
+  return true
+}
+
+/** `current` is a file slot, not a conversation. */
+fun conversationIdIsIdentity(text: String): Boolean {
+  return text.isNotEmpty() && text != "current"
+}
+
 data class MirrorPlace(
   val epoch: String = "",
   val cursor: Long = 0,

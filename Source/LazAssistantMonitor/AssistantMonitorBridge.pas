@@ -42,7 +42,7 @@ Implementation
 
 Uses
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
-  AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, ProjectAssistantForm;
+  AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, AssistantConversation, ProjectAssistantForm;
 
 Type
   TMonitorQueuedCommand = Class
@@ -112,6 +112,7 @@ Type
     Procedure AnswerResume(Const Id, PayloadJson: String);
     Procedure RetryDeferredResumes;
     Procedure PushStatus(Form: TProjectAssistantForm);
+    Procedure NoteOpenLogPosition;
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
     Procedure PushMenuLists(Form: TProjectAssistantForm);
@@ -497,12 +498,36 @@ Begin
   TThread.Queue(Nil, @Job.Execute);
 End;
 
+Procedure TAssistantMonitorBridge.NoteOpenLogPosition;
+Var
+  Session: TMonitorSession;
+  Epoch: String;
+  Cursor: Int64;
+Begin
+  If Not Assigned(ProjectAssistantConversation) Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Not Assigned(Session) Then
+    Exit;
+  Epoch := Session.MirrorEpoch;
+  If Epoch = '' Then
+    Exit;
+  Cursor := Session.MirrorCursor;
+  ProjectAssistantConversation.NoteMonitorLogPosition(Epoch, Cursor);
+End;
+
 Procedure TAssistantMonitorBridge.PublishEpoch;
 Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
   Closed: TMonitorConversationClosed;
   ConversationId, ProjectRoot, Title, Epoch: String;
+  SavedCursor: Int64;
   HadEpoch: Boolean;
 Begin
   LockBridge;
@@ -511,9 +536,6 @@ Begin
   Finally
     UnlockBridge;
   End;
-  Epoch := MintMonitorEpoch;
-  If Epoch = '' Then
-    Exit;
   HadEpoch := False;
   If Assigned(Session) Then
     Begin
@@ -522,15 +544,32 @@ Begin
       HadEpoch := Session.CopyClosedMirror(Closed);
     End;
   If HadEpoch Then
-    SendJson(EncodeMonitorConversationClosed(HostId, Closed.Epoch, Closed.Cursor, Closed.ConversationId, Closed.Title));
-  ConversationId := 'current';
+    Begin
+      SendJson(EncodeMonitorConversationClosed(HostId, Closed.Epoch, Closed.Cursor, Closed.ConversationId, Closed.Title));
+      If Assigned(ProjectAssistantConversation) Then
+        ProjectAssistantConversation.SaveClosedLogPosition(Closed.ConversationId, Closed.Epoch, Closed.Cursor);
+    End;
+  ConversationId := '';
   ProjectRoot := '';
   Title := '';
+  Epoch := '';
+  SavedCursor := 0;
   Form := OpenForm;
   If Assigned(Form) Then
     Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
-  If Assigned(Session) Then
-    Session.BeginMirrorEpoch(Epoch, ConversationId, ProjectRoot, Title);
+  If Assigned(ProjectAssistantConversation) Then
+    ProjectAssistantConversation.ReadMonitorLogPosition(Epoch, SavedCursor);
+  If Not Assigned(Session) Then
+    Exit;
+  If (Epoch <> '') And (ConversationId <> '') And (ConversationId <> 'current') Then
+    Session.RestoreMirror(Epoch, ConversationId, ProjectRoot, Title, SavedCursor)
+  Else
+    Begin
+      Epoch := MintMonitorEpoch;
+      If Epoch = '' Then
+        Exit;
+      Session.BeginMirrorEpoch(Epoch, ConversationId, ProjectRoot, Title);
+    End;
   FSentEpoch := '';
   FPlanStamp := '';
   SetLength(FSentBlocks, 0);
@@ -1047,6 +1086,7 @@ Begin
       FPlanStamp := PlanStamp;
     End;
   FPumpedMirror := Seen;
+  NoteOpenLogPosition;
   Finally
     FPumping := False;
   End;

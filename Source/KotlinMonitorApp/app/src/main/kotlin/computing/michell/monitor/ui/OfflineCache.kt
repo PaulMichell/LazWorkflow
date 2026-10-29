@@ -16,6 +16,7 @@ import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.cacheFileNameIsSafe
 import computing.michell.monitor.protocol.cacheStemIsSafe
+import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.decodeCacheIndex
 import computing.michell.monitor.protocol.decodeClosedScreen
 import computing.michell.monitor.protocol.indexWithoutFingerprint
@@ -70,8 +71,9 @@ fun cacheFingerprint(text: String): String {
   return text.trim()
 }
 
-fun cacheConversationFileName(fingerprint: String, projectRoot: String, conversationId: String): String {
-  val key = cacheFingerprint(fingerprint) + "\u0000" + projectRoot + "\u0000" + conversationId
+/** One file per host and conversation. Project root is not part of the key. */
+fun cacheConversationFileName(hostFingerprint: String, conversationId: String): String {
+  val key = cacheFingerprint(hostFingerprint) + "\u0000" + conversationId
   return "c-" + sha256Hex(key.toByteArray(Charsets.UTF_8)) + ".json"
 }
 
@@ -122,12 +124,11 @@ fun firstUserPromptPreview(turns: List<WireTurn>, live: WireTurn?, history: List
 
 data class CacheSaveTarget(val conversationId: String, val projectRoot: String, val title: String)
 
-/** `current` plus project root is one file. Another project root is another file. */
+/** Empty and `current` are not identities. Project root is stored, not keyed. */
 fun cacheSaveTarget(ui: MonitorUi): CacheSaveTarget? {
-  if (!worthCaching(ui)) return null
-  val id = ui.conversationId.ifEmpty { "current" }
+  if (!worthCaching(ui) || !conversationIdIsIdentity(ui.conversationId)) return null
   val history = ui.history.values.toList()
-  return CacheSaveTarget(id, ui.projectRoot, cacheTitle(ui.conversationTitle, ui.turns, ui.live, history))
+  return CacheSaveTarget(ui.conversationId, ui.projectRoot, cacheTitle(ui.conversationTitle, ui.turns, ui.live, history))
 }
 
 fun cacheRowChanged(before: MonitorUi, after: MonitorUi): Boolean {
@@ -173,7 +174,9 @@ fun reviewedCacheState(state: MonitorUi, document: OfflineCacheDocument, entry: 
   return applyOfflineCache(state, document, hasAddress).copy(
     conversationId = entry.conversationId,
     projectRoot = entry.projectRoot,
-    conversationTitle = entry.title
+    conversationTitle = entry.title,
+    hostEpoch = entry.epoch,
+    hostCursor = entry.cursor
   )
 }
 
@@ -276,18 +279,20 @@ class OfflineStore(
     title: String,
     document: OfflineCacheDocument,
     images: List<CacheImageBytes> = emptyList(),
-    nowMs: Long = clock()
+    nowMs: Long = clock(),
+    epoch: String = "",
+    cursor: Long = 0
   ) = synchronized(gate) {
-    if (conversationId.isEmpty()) return
+    if (conversationId.isEmpty() || cursor < 0L) return
     val key = cacheFingerprint(fingerprint)
-    val fileName = cacheConversationFileName(key, projectRoot, conversationId)
+    val fileName = cacheConversationFileName(key, conversationId)
     if (!cacheFileNameIsSafe(fileName)) throw IOException("Unsafe cache file name.")
     writeAtomic(conversationFile(fileName) ?: throw IOException("Unsafe cache file name."), encodeOfflineCache(document))
     val written = writeImages(fileName, images, nowMs)
     var entries = readIndex().toMutableList()
-    val previous = entries.filter { entry -> sameConversation(entry, key, projectRoot, conversationId) }
+    val previous = entries.filter { entry -> sameConversation(entry, key, conversationId) }
     val previousImages = previous.flatMap { entry -> entry.images }
-    entries.removeAll { entry -> sameConversation(entry, key, projectRoot, conversationId) }
+    entries.removeAll { entry -> sameConversation(entry, key, conversationId) }
     val keptImages = mergeImageNotes(previousImages, written)
     entries += CacheIndexEntry(
       key,
@@ -297,7 +302,9 @@ class OfflineStore(
       nowMs,
       cacheTurnCount(document),
       fileName,
-      keptImages
+      keptImages,
+      epoch,
+      cursor
     )
     val dropped = evictConversations(entries, key)
     entries = dropped.kept
@@ -315,11 +322,13 @@ class OfflineStore(
     conversationId: String,
     title: String,
     documentText: String,
-    images: List<CacheImageBytes> = emptyList()
+    images: List<CacheImageBytes> = emptyList(),
+    epoch: String = "",
+    cursor: Long = 0
   ) {
     val document = decodeClosedScreen(documentText) ?: return
     val shown = title.ifEmpty { cacheTitle("", document.turns, document.live, document.history) }
-    save(fingerprint, projectRoot, conversationId, shown, document, images)
+    save(fingerprint, projectRoot, conversationId, shown, document, images, clock(), epoch, cursor)
   }
 
   fun forgetFingerprint(fingerprint: String) = synchronized(gate) {
@@ -403,8 +412,8 @@ class OfflineStore(
     return previous.filter { note -> note.imageId !in replaced } + written
   }
 
-  private fun sameConversation(entry: CacheIndexEntry, fingerprint: String, projectRoot: String, conversationId: String): Boolean {
-    return entry.fingerprint == fingerprint && entry.projectRoot == projectRoot && entry.conversationId == conversationId
+  private fun sameConversation(entry: CacheIndexEntry, fingerprint: String, conversationId: String): Boolean {
+    return entry.fingerprint == fingerprint && entry.conversationId == conversationId
   }
 
   private fun readIndex(): List<CacheIndexEntry> {
