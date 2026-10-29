@@ -615,10 +615,8 @@ Begin
   Case Message.Kind Of
     mmkPatch:
       Result := olLive;
-    { Plan rows are the phone's only copy. They must not wait behind snapshot pages. }
-    mmkPlan:
-      Result := olControl;
-    mmkSnapshot, mmkTranscript, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
+    { A plan frame must not sit ahead of a pong. A full control lane stops the transfer. }
+    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
       Result := olBulk;
   Else
     Result := olControl;

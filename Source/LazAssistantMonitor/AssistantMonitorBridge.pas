@@ -10,7 +10,8 @@ Unit AssistantMonitorBridge;
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
   Reviewed 2026-10-29: snapshot, transcript, and turn_data are no longer sent.
-  Snapshot pages replace them and do not carry plan rows. A plan notice sends the plan frame.
+  Snapshot pages replace them and do not carry plan rows. A plan notice sends the plan
+  frame without taking a patch cursor.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -727,10 +728,7 @@ Begin
               SendJson(Json);
               Form := OpenForm;
               If Assigned(Form) Then
-                Begin
-                  PushStatus(Form);
-                  PushPlan(Form);
-                End;
+                PushStatus(Form);
               Exit;
             End;
         End;
@@ -749,7 +747,6 @@ Begin
       Exit;
     End;
   SendCatchupSnapshot(Form, Id);
-  PushPlan(Form);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
@@ -962,8 +959,6 @@ Var
   View: TAssistantMonitorView;
   Rows: TAssistantMonitorPlanRows;
   Session: TMonitorSession;
-  Epoch, Stamp: String;
-  Cursor: Int64;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -973,31 +968,14 @@ Begin
   Finally
     UnlockBridge;
   End;
-  If Assigned(Session) Then
-    Session.FlushLivePatch;
   Paths := TStringList.Create;
   Captions := TStringList.Create;
   Try
+    { Not a log event. A cursor here skips a patch, and the phone stops applying the turn. }
     Form.FillMonitorPlanChoices(Paths, Captions);
     Form.FillMonitorView(View);
     Form.FillMonitorPlan(Rows);
-    Epoch := '';
-    Cursor := 0;
-    If Assigned(Session) Then
-      Begin
-        Epoch := Session.MirrorEpoch;
-        Stamp := 'plan' + #1 + View.PlanPath + #1 + View.PlanTitle + #1 + BoolToStr(View.PlanRunning, True);
-        If (Epoch <> '') And Session.CommitMirrorCursor(Stamp, Cursor) Then
-          Begin
-            SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions,
-              Epoch, Cursor));
-            Session.NoteMirrorHanded(Cursor);
-          End
-        Else
-          SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
-      End
-    Else
-      SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
+    SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
     If Assigned(Session) Then
       FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
   Finally
