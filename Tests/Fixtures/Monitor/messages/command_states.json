@@ -1,0 +1,1 @@
+{"v":3,"id":"h44","type":"command_states","payload":{"states":[{"ref":"send-0193","state":"done"},{"ref":"mode-0199","state":"rejected","reason":"host_busy"},{"ref":"stop-0195","state":"unknown"}]}}

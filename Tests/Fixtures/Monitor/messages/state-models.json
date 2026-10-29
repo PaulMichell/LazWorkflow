@@ -1,0 +1,1 @@
+{"v":3,"id":"h28","type":"state","payload":{"key":"models","value":{"current":"claude-opus-5-5","backend":"claude","choices":[{"id":"claude-opus-5-5","caption":"Opus 5.5"},{"id":"claude-sonnet-5-5","caption":"Sonnet 5.5"}],"note":""}}}

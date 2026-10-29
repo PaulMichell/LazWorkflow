@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..50] Of String = (
+  CoreTestNames: Array[0..51] Of String = (
     'AssistantUtf8StreamTest', 'AssistantClaudeClientTest', 'AssistantMCPProtocolTest', 'AssistantMCPListenerTest',
     'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
@@ -30,7 +30,7 @@ Const
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
     'AssistantTasksTest', 'AssistantMonitorAbsent', 'AssistantMonitorCodecTest', 'AssistantMonitorSessionTest',
     'AssistantMonitorLockupTest', 'AssistantMonitorOutboxTest', 'AssistantMonitorCommandIntakeTest',
-    'AssistantMonitorSocketTest', 'AssistantMonitorLinkTest', 'AssistantMonitorAcceptance');
+    'AssistantMonitorProtocolV3Test', 'AssistantMonitorSocketTest', 'AssistantMonitorLinkTest', 'AssistantMonitorAcceptance');
   GuiTestNames: Array[0..17] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',

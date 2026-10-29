@@ -1,0 +1,1 @@
+{"v":3,"id":"h19","type":"event","payload":{"conversation_id":"6f1d2c3a-8b4e-4c7d-9a2f-0e5b1c3d4a7f","stream_id":"9a4e1f7c3b2d48e6a0c5f19d7e3b2a64","seq":4237,"event":"block_close","data":{"block_id":"b-4","state":"ok","duration_ms":340}}}

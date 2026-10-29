@@ -1,0 +1,1 @@
+{"v":3,"id":"h23","type":"state","payload":{"key":"status","value":{"busy":true,"sending":true,"plan_running":false,"phase":"streaming","status_text":"Thinking…","elapsed_ms":4200,"can_send":false,"can_steer":true,"can_stop":true,"can_change_mode":false,"error_text":""}}}

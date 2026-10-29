@@ -1,0 +1,1 @@
+{"v":3,"id":"h30","type":"state","payload":{"key":"permissions","value":{"current":"ask","backend":"claude","choices":[{"id":"ask","caption":"Ask"},{"id":"auto","caption":"Allow edits"}],"note":"Applies from the next turn."}}}
