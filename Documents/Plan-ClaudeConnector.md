@@ -66,6 +66,20 @@ User action: Rebuild Lazarus from this branch, add a Claude connection (Auto-det
 
 Nothing so far has been exercised inside the running IDE. Every check used headless tests or probe programs driving the same client code against the real `claude`. This item confirms live text, the footer usage, session resume, and the settings panel in the IDE itself.
 
+### 2.10 Hold each turn to its conversation mode
+Status: complete
+
+Commits `a80d314` and `5699d05`. Found by trying the connection in the IDE: Chat mode could change code, because every turn had Claude Code's full tool set. Each turn now gets a `TClaudeToolScope` that the form maps from its mode:
+
+| Mode | Scope | Claude Code arguments |
+|------|-------|-----------------------|
+| Chat | `ctsNone` | `--tools=` and `--strict-mcp-config`: no tools, no MCP servers |
+| Inspect (and any other) | `ctsRead` | `--tools=Read,Grep,Glob` and `--strict-mcp-config` |
+| Document, Plan | `ctsMarkdown` | `--tools=Read,Grep,Glob,Edit,Write`, `--allowedTools=Edit(**/*.md),…` and `--strict-mcp-config` |
+| Build | `ctsProject` | Claude Code's own tools; the approval setting picks the permission mode |
+
+Options are passed as `--option=value` so an empty list cannot swallow the next option. Only the project scope applies the approval setting. Checked against the real program: Chat lists no tools, Inspect lists Glob, Grep and Read, and in Document a Markdown write succeeds while a `.pas` write is refused (the `Edit(...)` rule covers `Write`). The same work fixed the Claude model list not being read back from the connection settings. The scope type keeps the client free of IDE units, so its test stays headless.
+
 ## 3. Lazarus tools over MCP
 
 Claude Code reaches the IDE's `TAssistantToolBroker` through an MCP server inside the IDE (review §11.2). The broker is already backend-neutral: it runs on the IDE thread, works on editor buffers, publishes `ToolsJson`, runs `Execute(RunId, Tool, Arguments)`, scopes writes with `BeginRun(TAssistantWriteScope)`, and asks through `OnApproval`. The Codex path (`FCodexBroker` in `ProjectAssistantForm`) shows how it is driven.
@@ -79,7 +93,7 @@ New pure unit (no sockets, no IDE units), for example `AssistantMcpProtocol`. It
 
 - `initialize`: echo the client's `protocolVersion`, `capabilities: {"tools": {}}`, and `serverInfo` name `lazarus`.
 - `notifications/initialized` and other notifications: no response body (HTTP 202).
-- `tools/list`: the broker's tools as MCP tool objects (`name`, `description`, `inputSchema`) converted from `ToolsJson`.
+- `tools/list`: the broker's tools as MCP tool objects (`name`, `description`, `inputSchema`) converted from `ToolsJson`, which already carries those three fields in a `"type":"function"` wrapper. Claude Code names MCP tools `mcp__<server>__<tool>`, so with the broker's `lazarus_` names and a server called `lazarus` the result would be `mcp__lazarus__lazarus_read_buffer`. Either strip the `lazarus_` prefix in the MCP listing (and restore it on `tools/call`) or call the server `ide`; pick one and use it in 4.1's `--allowedTools`.
 - `tools/call`: name and arguments handed to a caller-supplied executor; the result becomes `content: [{"type":"text","text":…}]`, with `isError` for a tool failure.
 - `server/discover` and any unknown method: JSON-RPC error -32601. Claude Code tolerates it.
 
@@ -97,7 +111,9 @@ Done when a scripted HTTP client in a test can initialize, list, and call throug
 ### 3.3 Run tool calls on the IDE thread through the broker
 Status: not started
 
-A `tools/call` arriving on a listener thread is queued to the IDE thread, runs `Broker.Execute`, and its result is handed back to the waiting request. Cancel (Stop, or the run ending) releases any waiting request with an error. The broker run starts with the write scope the mode allows, as `LaunchStoredCodexRun` does (`amChat` → `awsNone`, `amBuild` → `awsProject`, `amDocument` and `amPlan` → `awsMarkdown`, otherwise `awsReadOnly`).
+A `tools/call` arriving on a listener thread is queued to the IDE thread, runs `Broker.Execute`, and its result is handed back to the waiting request. Cancel (Stop, or the run ending) releases any waiting request with an error.
+
+The broker run's write scope comes from the turn's `TClaudeToolScope` (item 2.10), so there is one mapping from mode to permissions, not two that can drift: `ctsNone` → `awsNone`, `ctsRead` → `awsReadOnly`, `ctsMarkdown` → `awsMarkdown`, `ctsProject` → `awsProject`. This matches what `LaunchStoredCodexRun` does for the same modes. With `awsNone` the broker lists no tools, which agrees with Chat having none.
 
 Done when a test drives a call from a listener thread into a broker with a test workspace adapter and gets the result, and Cancel unblocks a waiting call.
 
@@ -113,14 +129,20 @@ Done when an approval left open for longer than 60 s still completes the call, a
 ### 4.1 Launch Claude Code with the Lazarus server
 Status: not started
 
-When a Claude turn starts, the form starts the listener and broker run, and `TAssistantClaudeRun` passes `--mcp-config <file> --strict-mcp-config --tools "Read,Grep,Glob" --allowedTools "mcp__lazarus__*"`, with `MCP_TOOL_TIMEOUT` added to the scrubbed environment. Claude then has no write or shell tool of its own; every change and build goes through the broker. The temporary config file and the listener are cleaned up on finish, cancel, and failure.
+When a Claude turn whose scope is not `ctsNone` starts, the form starts the listener and broker run, and `MCP_TOOL_TIMEOUT` is added to the scrubbed environment. Extend `AppendClaudeModeArguments` (item 2.10) rather than adding a second argument builder, keeping the `--option=value` form:
+
+- `ctsNone`: unchanged (`--tools=`, `--strict-mcp-config`, no server).
+- Every other scope: `--tools=Read,Grep,Glob`, `--mcp-config=<file>`, `--strict-mcp-config`, and one `--allowedTools=` list naming the Lazarus tools. Emit a single list: it is not yet verified whether a second `--allowedTools=` adds to the first or replaces it.
+- `ctsMarkdown` drops Claude Code's own `Edit` and `Write` and the `Edit(**/*.md)` rule, and `ctsProject` drops Claude Code's full tool set: the broker's write scope now enforces Markdown-only or project writes, on editor buffers, with its approvals. One write path, not two.
+
+The temporary config file and the listener are cleaned up on finish, cancel, and failure. Update the 2.10 tests for the new arguments.
 
 Done when a real turn lists the Lazarus tools in its `init` event and can read a file through them, and an attempt to write without a Lazarus tool is reported by Claude as impossible rather than performed.
 
 ### 4.2 Map the approval setting onto the broker
 Status: not started
 
-Ask, Auto, and Always set the broker's approval behaviour the way they do for Codex, instead of choosing a Claude Code permission mode. Ask shows the broker's approval dialog for each write or build. Claude Code's own `--permission-mode` is no longer needed for writes; keep it at the program default. Update the settings label to say what each choice allows.
+Ask, Auto, and Always set the broker's approval behaviour the way they do for Codex, instead of choosing a Claude Code permission mode. Ask shows the broker's approval dialog for each write or build. Once 4.1 removes Claude Code's own write and shell tools, its `--permission-mode` has nothing left to approve: remove `ClaudeTurnPermissionMode` and the mapping in `ClaudePermissionMode` with their tests, and leave the program default. Update the settings label to say what each choice allows.
 
 Done when Ask produces a dialog for an edit and applies the edit to the editor buffer only after approval, and Auto applies project edits without asking.
 
@@ -131,7 +153,16 @@ Status: not started
 
 Done when a turn that reads and edits through Lazarus tools shows each call in the trace while the turn runs.
 
-### 4.4 Acceptance in the IDE
+### 4.4 Plan status changes from Claude follow the completion rule
+Status: not started
+
+The completion rule (commit the finished work, then set Status complete, then commit the plan) is enforced in `WriteMarkdownFile` and `ReplaceInMarkdownFile` through `PlanCompletionBlocked` and `NotePlanCompletionWrite`, and the turn-end commit is `RevertUncommittedPlanCompletion`. A Claude turn that edits the plan file with Claude Code's own `Edit` bypasses all of it, so an item can become complete with nothing committed. The progress list is also rescanned at turn end only in Build mode or after the assistant's own plan write, so a Plan- or Document-mode Claude edit does not show until something else refreshes it.
+
+Until 4.1, Claude edits plans with its own tools in every mode except Chat and Inspect. After 4.1 the edits arrive through the broker's buffer writes, which do not call those plan functions either. Route a broker write to a registered plan file through the same completion check and note, or have the form compare the plan before and after a Claude turn and apply the same rule. Refresh the progress list after any Claude turn that changed the active plan.
+
+Done when a Claude turn that sets an item complete without a commit is refused or reverted exactly as an assistant turn is, and the progress list shows a Claude plan edit without switching modes.
+
+### 4.5 Acceptance in the IDE
 Status: not started
 
 With the rebuilt IDE: an Ask-mode Claude turn edits a unit through the Lazarus tools, the approval dialog shows the change, the edit lands in the open editor buffer, a build runs through the broker, and the conversation resumes after an IDE restart. Record what was checked and what was not.
