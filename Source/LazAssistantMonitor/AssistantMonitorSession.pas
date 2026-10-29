@@ -29,7 +29,7 @@ Interface
 
 Uses
   SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
-  AssistantSessionObserve;
+  AssistantMonitorOutbox, AssistantSessionObserve;
 
 Const
   MonitorPairCodeLength = 10;
@@ -132,11 +132,7 @@ Type
     FRevokedIds: Array Of String;
     FControlSends: Array Of String;
     FBulkSends: Array Of String;
-    FUnsentTranscripts: Array Of String;
-    FUnsentTranscriptTurn: Integer;
-    FUnsentTranscriptAt: QWord;
-    FHasUnsentTranscript: Boolean;
-    FTranscriptRevision: Integer;
+    FOutbox: TMonitorOutbox;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -210,7 +206,9 @@ Type
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
     Procedure AdoptRunningHost;
-    Procedure FlushTranscriptLocked;
+    Procedure QueueBulkFramesLocked(Const Frames: TStringArray);
+    { Caller holds the session lock. Does not drain. }
+    Function QueueMirrorPagesLocked(Const Id: String): Boolean;
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
     Function GetLastError: String;
@@ -288,10 +286,14 @@ Type
     Function BareApprovalSignalIsAllow: Boolean;
     Procedure NoteApprovalCancel(Const ToolId: String);
     Function ToolExecutionRecorded: Boolean;
-    Function NextTranscriptRevision(TurnIndex: Integer): Integer;
-    Procedure QueueTranscript(TurnIndex: Integer; Const FrameJson: String);
-    { Replaces any unsent frames for this turn. Parts of one revision stay together. }
-    Procedure QueueTranscriptParts(TurnIndex: Integer; Const Frames: TStringArray);
+    { Splits a payload into outbox chunk frames and queues every frame. Drains. }
+    Procedure SendBulkPayload(Const ItemId, ItemType, PayloadJson: String);
+    { Queues frames already split for the outbox. Drains. }
+    Procedure SendPackedFrames(Const Frames: TStringArray);
+    { One snapshot page for a turn the phone asked for. Does not send turn_data. }
+    Procedure SendTurnPage(Const Id: String; Const Turn: TAssistantMonitorTurn);
+    { Snapshot pages for the open model. False when the mirror has no stream. }
+    Function SendMirrorPages(Const Id: String): Boolean;
     Property State: TMonitorSessionState Read FState;
     Property Carrier: IMonitorCarrier Read FCarrier;
     Property OnCommand: TMonitorCommandHandler Read FOnCommand Write FOnCommand;
@@ -483,6 +485,7 @@ Begin
   InitCriticalSection(FLock);
   FMirror := TMonitorMirror.Create;
   FCredit := TMonitorLogCredit.Create;
+  FOutbox := TMonitorOutbox.Create;
   FObserved := Default(TMonitorSnapshot);
   FHasObserved := False;
   FState := mssStopped;
@@ -530,11 +533,6 @@ Begin
   SetLength(FRevokedIds, 0);
   SetLength(FControlSends, 0);
   SetLength(FBulkSends, 0);
-  SetLength(FUnsentTranscripts, 0);
-  FUnsentTranscriptTurn := 0;
-  FUnsentTranscriptAt := 0;
-  FHasUnsentTranscript := False;
-  FTranscriptRevision := 0;
   FEpoch := '';
   FConversationId := '';
   FInstallationHostId := '';
@@ -561,6 +559,7 @@ End;
 Destructor TMonitorSession.Destroy;
 Begin
   AttachCarrier(Nil);
+  FreeAndNil(FOutbox);
   FreeAndNil(FCredit);
   FreeAndNil(FMirror);
   DoneCriticalSection(FLock);
@@ -606,7 +605,7 @@ Begin
   Case Message.Kind Of
     mmkPatch:
       Result := olLive;
-    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData:
+    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
       Result := olBulk;
   Else
     Result := olControl;
@@ -995,8 +994,8 @@ Begin
   FLastFrameMs := 0;
   LastSentMs := 0;
   PingQueuedMs := 0;
-  FHasUnsentTranscript := False;
-  SetLength(FUnsentTranscripts, 0);
+  If Assigned(FOutbox) Then
+    FOutbox.Clear;
   FHasLivePatch := False;
   FLiveCursor := 0;
   SetLength(FLiveFrames, 0);
@@ -1619,21 +1618,30 @@ Begin
   FPendingCommandPayload := PayloadJson;
 End;
 
-Procedure TMonitorSession.FlushTranscriptLocked;
+Procedure TMonitorSession.QueueBulkFramesLocked(Const Frames: TStringArray);
 Var
-  I: Integer;
+  Chunks: Array Of RawByteString;
+  Index: Integer;
+  Frame: RawByteString;
+  Lane: TMonitorOutboxLane;
 Begin
-  If Not FHasUnsentTranscript Then
+  If Length(Frames) = 0 Then
     Exit;
-  If ClockMs < FUnsentTranscriptAt + MonitorCoalesceWindowMs Then
-    Exit;
-  { Bulk may wait. The live lane does not share this cap. }
-  If Length(FBulkSends) + Length(FUnsentTranscripts) > MonitorOutboundQueueLimit Then
-    Exit;
-  FHasUnsentTranscript := False;
-  For I := 0 To High(FUnsentTranscripts) Do
-    QueueSend(FUnsentTranscripts[I]);
-  SetLength(FUnsentTranscripts, 0);
+  SetLength(Chunks, Length(Frames));
+  For Index := 0 To High(Frames) Do
+    Chunks[Index] := Frames[Index];
+  { The outbox already accepted the whole item. Do not drop the tail at the old 32-frame cap. }
+  If (Not Assigned(FOutbox)) Or (Not FOutbox.AddBulk(Chunks)) Then
+    Begin
+      Inc(FFramesDropped);
+      Exit;
+    End;
+  While FOutbox.Take(Frame, Lane) Do
+    Begin
+      Index := Length(FBulkSends);
+      SetLength(FBulkSends, Index + 1);
+      FBulkSends[Index] := String(Frame);
+    End;
 End;
 
 Procedure TMonitorSession.CheckTimeoutsLocked;
@@ -1818,7 +1826,6 @@ Begin
   Try
     FNowMs := NowMs;
     CheckTimeoutsLocked;
-    FlushTranscriptLocked;
     Idle := FOnIdle;
   Finally
     UnlockSession;
@@ -2386,28 +2393,52 @@ Begin
   Until Last;
 End;
 
+Function TMonitorSession.QueueMirrorPagesLocked(Const Id: String): Boolean;
+Var
+  Pages: TMonitorSnapshotPageArray;
+  Frames: TStringArray;
+  Index: Integer;
+Begin
+  Result := False;
+  SetLength(Pages, 0);
+  SetLength(Frames, 0);
+  If (Not Assigned(FMirror)) Or (FEpoch = '') Then
+    Exit;
+  If Not FMirror.BuildSnapshotPages(FEpoch, FCommittedCursor, Pages) Then
+    Exit;
+  For Index := 0 To High(Pages) Do
+    Begin
+      If Not PackMonitorBulkItem(Id, 'snapshot_page', Pages[Index].Json, Frames) Then
+        Exit;
+      QueueBulkFramesLocked(Frames);
+    End;
+  Result := Length(Pages) > 0;
+End;
+
 Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
 Var
   TurnIndex: Integer;
   Turn: TAssistantMonitorTurn;
+  Frames: TStringArray;
 Begin
   Result := False;
   TurnIndex := 0;
+  SetLength(Frames, 0);
   If Not DecodeMonitorTurnRequest(PayloadJson, TurnIndex) Then
     Exit;
   If Not FetchMirrorTurn(TurnIndex, Turn) Then
     Exit;
-  QueueSend(EncodeMonitorTurnData(Id, Turn));
+  If Not PackMonitorBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
+    Frames) Then
+    Exit;
+  QueueBulkFramesLocked(Frames);
   Result := True;
 End;
 
 Function TMonitorSession.ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
 Var
   Catchup: TMonitorCatchup;
-  Snapshot: TMonitorSnapshot;
-  Pages: TMonitorSnapshotPageArray;
   Json: String;
-  Index: Integer;
 Begin
   Result := False;
   If TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
@@ -2420,34 +2451,9 @@ Begin
         End;
       Exit;
     End;
-  If Not CopyObservedSnapshot(Snapshot) Then
+  If (Not Assigned(FMirror)) Or (Not FMirror.HasModel) Then
     Exit;
-  Catchup := Default(TMonitorCatchup);
-  Catchup.Mode := mcmSnapshot;
-  Catchup.HasSnapshot := True;
-  Catchup.Snapshot := Snapshot;
-  LockSession;
-  Try
-    Catchup.Epoch := FEpoch;
-    Catchup.Cursor := FCommittedCursor;
-    Catchup.ConversationId := FConversationId;
-    Catchup.ProjectRoot := FProjectRoot;
-    Catchup.Title := FTitle;
-  Finally
-    UnlockSession;
-  End;
-  Json := EncodeMonitorCatchup(Id, Catchup);
-  If Json <> '' Then
-    Begin
-      QueueSend(Json);
-      Result := True;
-      Exit;
-    End;
-  If Not BuildMirrorPages(Pages) Then
-    Exit;
-  For Index := 0 To High(Pages) Do
-    QueueSend('{"v":3,"id":"' + Id + '","type":"snapshot_page","payload":' + Pages[Index].Json + '}');
-  Result := Length(Pages) > 0;
+  Result := QueueMirrorPagesLocked(Id);
 End;
 
 Function TMonitorSession.CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
@@ -2577,57 +2583,68 @@ Begin
   Result := FToolExecuted;
 End;
 
-Function TMonitorSession.NextTranscriptRevision(TurnIndex: Integer): Integer;
-Begin
-  LockSession;
-  Try
-    If (FHasUnsentTranscript) And (FUnsentTranscriptTurn = TurnIndex) Then
-      Inc(FTranscriptRevision)
-    Else If FTranscriptRevision < 1 Then
-      FTranscriptRevision := 1
-    Else
-      Inc(FTranscriptRevision);
-    Result := FTranscriptRevision;
-  Finally
-    UnlockSession;
-  End;
-End;
-
-Procedure TMonitorSession.QueueTranscript(TurnIndex: Integer; Const FrameJson: String);
-Begin
-  LockSession;
-  Try
-    If FHasUnsentTranscript And (FUnsentTranscriptTurn = TurnIndex) Then
-      Inc(FFramesDropped);
-    SetLength(FUnsentTranscripts, 1);
-    FUnsentTranscripts[0] := FrameJson;
-    FUnsentTranscriptTurn := TurnIndex;
-    FUnsentTranscriptAt := ClockMs;
-    FHasUnsentTranscript := True;
-  Finally
-    UnlockSession;
-  End;
-End;
-
-Procedure TMonitorSession.QueueTranscriptParts(TurnIndex: Integer; Const Frames: TStringArray);
-Var
-  I: Integer;
+Procedure TMonitorSession.SendPackedFrames(Const Frames: TStringArray);
 Begin
   If Length(Frames) = 0 Then
     Exit;
   LockSession;
   Try
-    If FHasUnsentTranscript And (FUnsentTranscriptTurn = TurnIndex) Then
-      Inc(FFramesDropped, Length(FUnsentTranscripts));
-    SetLength(FUnsentTranscripts, Length(Frames));
-    For I := 0 To High(Frames) Do
-      FUnsentTranscripts[I] := Frames[I];
-    FUnsentTranscriptTurn := TurnIndex;
-    FUnsentTranscriptAt := ClockMs;
-    FHasUnsentTranscript := True;
+    QueueBulkFramesLocked(Frames);
   Finally
     UnlockSession;
   End;
+  DrainOutbound;
+End;
+
+Procedure TMonitorSession.SendBulkPayload(Const ItemId, ItemType, PayloadJson: String);
+Var
+  Frames: TStringArray;
+Begin
+  SetLength(Frames, 0);
+  LockSession;
+  Try
+    If Not PackMonitorBulkItem(ItemId, ItemType, PayloadJson, Frames) Then
+      Begin
+        Inc(FFramesDropped);
+        Exit;
+      End;
+    QueueBulkFramesLocked(Frames);
+  Finally
+    UnlockSession;
+  End;
+  DrainOutbound;
+End;
+
+Procedure TMonitorSession.SendTurnPage(Const Id: String; Const Turn: TAssistantMonitorTurn);
+Var
+  Frames: TStringArray;
+Begin
+  SetLength(Frames, 0);
+  LockSession;
+  Try
+    If Not PackMonitorBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
+      Frames) Then
+      Begin
+        Inc(FFramesDropped);
+        Exit;
+      End;
+    QueueBulkFramesLocked(Frames);
+  Finally
+    UnlockSession;
+  End;
+  DrainOutbound;
+End;
+
+Function TMonitorSession.SendMirrorPages(Const Id: String): Boolean;
+Begin
+  LockSession;
+  Try
+    Result := QueueMirrorPagesLocked(Id);
+  Finally
+    UnlockSession;
+  End;
+  If Result Then
+    DrainOutbound;
 End;
 
 Function TMonitorSession.SecondsSinceFrame: Integer;

@@ -12,7 +12,8 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-27: models, reasoning, permissions, and their set commands stay in this table.
+  Reviewed 2026-10-29: snapshot pages and image chunks stay in this table. The old snapshot,
+  transcript, and turn_data encoders remain so a catchup can still embed a snapshot object.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -40,6 +41,8 @@ Const
   MonitorImagePartBase64Chars = 253336;
   MonitorImageEnvelopeBytes = 8192;
   MonitorMaxImageFetchBytes = 1048576;
+  { A chunked item, joined, not one frame. Matches catalogue limit max_item_bytes. }
+  MonitorMaxItemBytes = 4 * 1024 * 1024;
   { AssistantImageMaxFileBytes (8 MiB) is the store limit, not this frame budget. }
   MonitorSnapshotStoredTurns = 30;
   MonitorNoSessionReason = 'no_session';
@@ -105,7 +108,9 @@ Type
     mmkReasoning,
     mmkSetReasoning,
     mmkPermissions,
-    mmkSetPermissions
+    mmkSetPermissions,
+    mmkSnapshotPage,
+    mmkChunk
   );
 
   TMonitorMessage = Record
@@ -526,11 +531,16 @@ Function DecodeMonitorImageGet(Const PayloadJson: String; Out Image: TMonitorIma
 { Messages are image_data envelopes, or empty when UnavailableReason is set. Does not close a socket. }
 Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
   Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
+{ One image_data item, split into outbox chunk frames when it does not fit in 32 KiB. }
+Function TryPackMonitorImage(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer; Const Bytes: TBytes;
+  Missing, Refused: Boolean; Out Frames: TStringArray; Out UnavailableReason: String): Boolean;
+{ Wraps PayloadJson as type ItemType. A frame over the outbox chunk size becomes chunk frames. }
+Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Frames: TStringArray): Boolean;
 
 Implementation
 
 Uses
-  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames;
+  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames, AssistantMonitorOutbox;
 
 {$IF MonitorListenPort <> GrokOAuthRedirectPort + 1}
   {$ERROR Listen port must stay one above GrokOAuthRedirectPort}
@@ -599,6 +609,8 @@ Begin
     mmkSetReasoning: Result := 'set_reasoning';
     mmkPermissions: Result := 'permissions';
     mmkSetPermissions: Result := 'set_permissions';
+    mmkSnapshotPage: Result := 'snapshot_page';
+    mmkChunk: Result := 'chunk';
   Else
     Result := '';
   End;
@@ -3263,6 +3275,200 @@ Begin
   Finally
     Parts.Free;
   End;
+End;
+
+Function EscapeChunkData(Const Text: String): String;
+Var
+  Index: Integer;
+  C: Char;
+Begin
+  Result := '';
+  For Index := 1 To Length(Text) Do
+    Begin
+      C := Text[Index];
+      Case C Of
+        '"': Result := Result + '\"';
+        '\': Result := Result + '\\';
+        #8: Result := Result + '\b';
+        #9: Result := Result + '\t';
+        #10: Result := Result + '\n';
+        #12: Result := Result + '\f';
+        #13: Result := Result + '\r';
+      Else
+        If Ord(C) < 32 Then
+          Result := Result + '\u00' + IntToHex(Ord(C), 2)
+        Else
+          Result := Result + C;
+      End;
+    End;
+End;
+
+Function ChunkFrame(Const Id, ItemId, ItemType, Data: String; Part, PartCount: Integer): String;
+Begin
+  Result := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + Id + '","type":"chunk","payload":{"item_id":"' +
+    ItemId + '","part":' + IntToStr(Part) + ',"part_count":' + IntToStr(PartCount) + ',"item_type":"' + ItemType +
+    '","data":"' + EscapeChunkData(Data) + '"}}';
+End;
+
+{ Last index of a slice that does not end inside a UTF-8 code point. }
+Function Utf8PrefixLen(Const Text: String; Start, Wanted: Integer): Integer;
+Var
+  Last, Lead, Need, Follow: Integer;
+Begin
+  Result := Wanted;
+  If Result > Length(Text) - Start + 1 Then
+    Result := Length(Text) - Start + 1;
+  If Result <= 0 Then
+    Exit;
+  Last := Start + Result - 1;
+  While (Result > 0) And ((Ord(Text[Last]) And $C0) = $80) Do
+    Begin
+      Dec(Result);
+      Dec(Last);
+    End;
+  If Result <= 0 Then
+    Exit;
+  Lead := Ord(Text[Last]);
+  If Lead < $80 Then
+    Exit;
+  If (Lead And $E0) = $C0 Then
+    Need := 2
+  Else If (Lead And $F0) = $E0 Then
+    Need := 3
+  Else If (Lead And $F8) = $F0 Then
+    Need := 4
+  Else
+    Need := 1;
+  Follow := 1;
+  While (Last + Follow <= Length(Text)) And (Follow < Need) And ((Ord(Text[Last + Follow]) And $C0) = $80) Do
+    Inc(Follow);
+  If Follow < Need Then
+    Dec(Result);
+End;
+
+Function FitChunkSlice(Const Item, FrameId, ItemId, ItemType: String; Start, PartCount: Integer): Integer;
+Var
+  Low, High, Mid: Integer;
+  Frame: String;
+Begin
+  Result := 0;
+  Low := 1;
+  High := Length(Item) - Start + 1;
+  While Low <= High Do
+    Begin
+      Mid := Utf8PrefixLen(Item, Start, (Low + High) Div 2);
+      If Mid < 1 Then
+        Begin
+          High := (Low + High) Div 2 - 1;
+          Continue;
+        End;
+      Frame := ChunkFrame(FrameId, ItemId, ItemType, Copy(Item, Start, Mid), 1, PartCount);
+      If Length(Frame) <= MonitorOutboxChunkBytes Then
+        Begin
+          Result := Mid;
+          Low := Mid + 1;
+        End
+      Else
+        High := Mid - 1;
+    End;
+End;
+
+Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Frames: TStringArray): Boolean;
+Var
+  Item, BudgetId: String;
+  Start, Taken, Part, Count: Integer;
+  Cuts: Array Of Integer;
+Begin
+  Result := False;
+  SetLength(Frames, 0);
+  If (ItemId = '') Or (ItemType = '') Or (PayloadJson = '') Or (Not MonitorMessageIdIsSafe(ItemId)) Then
+    Exit;
+  Item := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + ItemId + '","type":"' + ItemType + '","payload":' +
+    PayloadJson + '}';
+  If Length(Item) > MonitorMaxItemBytes Then
+    Exit;
+  If Length(Item) <= MonitorOutboxChunkBytes Then
+    Begin
+      SetLength(Frames, 1);
+      Frames[0] := Item;
+      Exit(True);
+    End;
+  { Size the slices against a full-length id so the real shorter id still fits. }
+  BudgetId := StringOfChar('a', MonitorMaxMessageIdChars);
+  SetLength(Cuts, 0);
+  Start := 1;
+  While Start <= Length(Item) Do
+    Begin
+      Taken := FitChunkSlice(Item, BudgetId, ItemId, ItemType, Start, 9999);
+      If Taken < 1 Then
+        Exit;
+      SetLength(Cuts, Length(Cuts) + 1);
+      Cuts[High(Cuts)] := Taken;
+      Inc(Start, Taken);
+    End;
+  Count := Length(Cuts);
+  SetLength(Frames, Count);
+  Start := 1;
+  For Part := 1 To Count Do
+    Begin
+      Frames[Part - 1] := ChunkFrame(ItemId + '-c' + IntToStr(Part), ItemId, ItemType, Copy(Item, Start, Cuts[Part - 1]),
+        Part, Count);
+      If (Length(Frames[Part - 1]) > MonitorOutboxChunkBytes) Or
+        (Not MonitorMessageIdIsSafe(ItemId + '-c' + IntToStr(Part))) Then
+        Begin
+          SetLength(Frames, 0);
+          Exit;
+        End;
+      Inc(Start, Cuts[Part - 1]);
+    End;
+  Result := True;
+End;
+
+Function TryPackMonitorImage(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer; Const Bytes: TBytes;
+  Missing, Refused: Boolean; Out Frames: TStringArray; Out UnavailableReason: String): Boolean;
+Var
+  Payload: TJSONObject;
+  Raw: RawByteString;
+  Encoded, PayloadJson: String;
+Begin
+  Result := False;
+  SetLength(Frames, 0);
+  UnavailableReason := '';
+  If MonitorImageFetchBlocked(Missing, Refused, Length(Bytes), UnavailableReason) Then
+    Begin
+      Result := UnavailableReason <> '';
+      Exit;
+    End;
+  SetLength(Raw, Length(Bytes));
+  If Length(Bytes) > 0 Then
+    Move(Bytes[0], Raw[1], Length(Bytes));
+  Encoded := FramedBase64(Raw);
+  If Length(Encoded) <> ExpectedBase64Chars(Length(Bytes)) Then
+    Begin
+      UnavailableReason := 'too_large';
+      Exit(True);
+    End;
+  Payload := TJSONObject.Create;
+  Try
+    Payload.Add('image_id', ImageId);
+    Payload.Add('mime', Mime);
+    Payload.Add('width', Width);
+    Payload.Add('height', Height);
+    Payload.Add('part', 1);
+    Payload.Add('part_count', 1);
+    Payload.Add('revision', Revision);
+    Payload.Add('bytes_base64', Encoded);
+    PayloadJson := Payload.AsJSON;
+  Finally
+    Payload.Free;
+  End;
+  If Not PackMonitorBulkItem(Id, 'image_data', PayloadJson, Frames) Then
+    Begin
+      UnavailableReason := 'too_large';
+      Exit(True);
+    End;
+  UnavailableReason := '';
+  Result := True;
 End;
 
 Procedure ClearPatch(Out Patch: TMonitorPatch);

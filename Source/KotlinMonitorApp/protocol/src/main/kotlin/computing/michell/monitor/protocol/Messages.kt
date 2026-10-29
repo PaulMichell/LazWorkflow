@@ -81,6 +81,8 @@ enum class MessageKind(val wireName: String) {
   SetReasoning("set_reasoning"),
   Permissions("permissions"),
   SetPermissions("set_permissions"),
+  SnapshotPage("snapshot_page"),
+  Chunk("chunk"),
   BlockGet("block_get"),
   BlockData("block_data"),
   Ack("ack");
@@ -485,10 +487,7 @@ private fun decodeEnvelope(root: JsonValue.Obj, wireJson: String): EnvelopeResul
 
 fun inboundPayload(kind: MessageKind, payload: JsonValue.Obj): InboundPayload {
   return when (kind) {
-    MessageKind.Snapshot -> decodeSnapshot(payload)?.let { InboundPayload.Snapshot(it) } ?: InboundPayload.None
-    MessageKind.Transcript -> decodeTranscript(payload)?.let { InboundPayload.TranscriptPart(it) } ?: InboundPayload.None
     MessageKind.ImageData -> decodeImagePart(payload) ?: InboundPayload.None
-    MessageKind.TurnData -> turnFromJson(payload, false)?.let { InboundPayload.Turn(it) } ?: InboundPayload.None
     MessageKind.Status -> statusFromJson(payload)?.let { InboundPayload.Status(it) } ?: InboundPayload.None
     MessageKind.Mode -> decodeMode(payload)?.let { InboundPayload.Mode(it) } ?: InboundPayload.None
     MessageKind.Target -> decodeTarget(payload)?.let { InboundPayload.Target(it) } ?: InboundPayload.None
@@ -1781,6 +1780,92 @@ fun encodeImageGet(id: String, turnIndex: Int, imageId: String): String {
   payload.add("turn_index", turnIndex)
   payload.add("image_id", imageId)
   return encodeEnvelope(MessageKind.ImageGet, id, payload.build())
+}
+
+/** A snapshot page turn, or null when this page is only an outline. */
+fun snapshotPageTurn(payloadJson: String): WireTurn? {
+  val obj = parseObject(payloadJson) ?: return null
+  val turn = obj.field("turn") as? JsonValue.Obj ?: return null
+  val id = turn.readString("turn_id", false)
+  val index = turn.readInt("turn_index", false)
+  if (!id.ok || !index.ok) return null
+  val blocks = mutableListOf<WireBlock>()
+  val rawBlocks = turn.field("blocks") as? JsonValue.Arr
+  if (rawBlocks != null) {
+    for (item in rawBlocks.items) {
+      val block = item as? JsonValue.Obj ?: continue
+      val blockId = block.readString("block_id", false)
+      val kind = block.readString("kind", false)
+      if (!blockId.ok || !kind.ok) continue
+      val state = block.readString("state", false).value
+      val body = block.readString("body", false).value
+      blocks += WireBlock(
+        kind.value,
+        blockId.value,
+        block.readString("title", false).value,
+        "",
+        "",
+        body,
+        state == "running",
+        state != "failed",
+        0,
+        emptyList()
+      )
+    }
+  }
+  return WireTurn(index.value, id.value, "", "", "", "", "", "", "", 0, false, blocks)
+}
+
+fun snapshotPageTurnIndex(payloadJson: String): Int? = snapshotPageTurn(payloadJson)?.turnIndex
+
+fun applySnapshotPageJson(stateTurns: List<WireTurn>, live: WireTurn?, payloadJson: String): Pair<List<WireTurn>, WireTurn?>? {
+  val turn = snapshotPageTurn(payloadJson) ?: return null
+  val current = live
+  val isLive = current != null && current.id.isNotEmpty() && current.id == turn.id
+  val shown = if (current != null && isLive) turn.copy(live = true, mode = current.mode, prompt = current.prompt,
+    thinking = current.thinking, response = current.response, promptPreview = current.promptPreview,
+    createdAt = current.createdAt, durationMs = current.durationMs, images = current.images) else turn
+  val turns = if (isLive) stateTurns else {
+    val kept = stateTurns.filter { it.turnIndex != turn.turnIndex }
+    (kept + turn).sortedBy { it.turnIndex }
+  }
+  return turns to if (isLive) shown else live
+}
+
+/** Joins chunk frames into the item they split. A partial item returns null. */
+class ChunkAssembly {
+  private class OpenItem(val partCount: Int, val parts: MutableMap<Int, String>)
+  private val open = linkedMapOf<String, OpenItem>()
+
+  fun accept(message: MonitorMessage): MonitorMessage? {
+    if (message.kind != MessageKind.Chunk) return message
+    val obj = parseObject(message.payloadJson) ?: return null
+    val itemId = obj.readString("item_id", true)
+    val part = obj.readInt("part", true)
+    val partCount = obj.readInt("part_count", true)
+    val data = obj.readString("data", true)
+    if (!itemId.ok || !part.ok || !partCount.ok || !data.ok) return null
+    if (part.value !in 1..partCount.value || partCount.value < 1) return null
+    if (open.size >= 8 && itemId.value !in open) return null
+    val current = open[itemId.value]
+    val item = if (current == null || current.partCount != partCount.value) {
+      OpenItem(partCount.value, linkedMapOf())
+    } else {
+      current
+    }
+    if (part.value in item.parts) return null
+    item.parts[part.value] = data.value
+    if (item.parts.size < item.partCount) {
+      open[itemId.value] = item
+      return null
+    }
+    open.remove(itemId.value)
+    val joined = StringBuilder()
+    for (index in 1..item.partCount) joined.append(item.parts.getValue(index))
+    val envelope = tryDecodeEnvelope(joined.toString())
+    if (!envelope.ok) return null
+    return envelope.message
+  }
 }
 
 fun encodeAck(id: String, conversationId: String, streamId: String, seq: Long): String {

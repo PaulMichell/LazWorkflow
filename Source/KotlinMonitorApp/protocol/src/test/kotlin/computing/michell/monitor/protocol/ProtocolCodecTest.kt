@@ -514,11 +514,8 @@ class ProtocolCodecTest {
     val part = envelope.message.inbound as? InboundPayload.TranscriptPart
     assertNotNull(part)
     assertEquals(listOf(block.body), part!!.value.blocks.map { it.body })
-    val joined = assembleTranscriptBlocks(listOf(part.value.blocks))
-    assertEquals("Hello", joined.single().body)
     val session = SessionState()
     session.apply(envelope.message)
-    assertEquals(2, session.liveRevision)
     assertEquals(0, session.retainedImageBytes())
   }
 

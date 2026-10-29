@@ -9,7 +9,8 @@ Unit AssistantMonitorBridge;
   Size note: exceeds the 1000 line preference. The command pump, live patch,
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
-  Reviewed 2026-10-27: a conversation switch publishes its list after the snapshot.
+  Reviewed 2026-10-29: snapshot, transcript, and turn_data are no longer sent.
+  Snapshot pages replace them. Status and plan notices no longer push a second frame.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -42,7 +43,7 @@ Implementation
 
 Uses
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
-  AssistantMonitorFrames, AssistantMonitorMirror, AssistantMonitorApproval, AssistantTools, AssistantConversation,
+  AssistantMonitorMirror, AssistantMonitorApproval, AssistantTools, AssistantConversation,
   ProjectAssistantForm;
 
 Type
@@ -106,8 +107,8 @@ Type
     Function HostId: String;
     Function OpenForm: TProjectAssistantForm;
     Procedure ApplyHostFlags(Const View: TAssistantMonitorView);
-    Procedure PushTranscript(Form: TProjectAssistantForm);
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+    Procedure PublishSamplingLists(Form: TProjectAssistantForm);
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
     Procedure SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure AnswerResume(Const Id, PayloadJson: String);
@@ -439,43 +440,20 @@ Begin
   Session.SetHostFlags(Flags);
 End;
 
-Procedure TAssistantMonitorBridge.PushTranscript(Form: TProjectAssistantForm);
+Procedure TAssistantMonitorBridge.PublishSamplingLists(Form: TProjectAssistantForm);
 Var
-  Turn: TAssistantMonitorTurn;
-  Session: TMonitorSession;
-  View: TAssistantMonitorView;
-  Transcript: TMonitorTranscript;
-  Frames: TStringArray;
-  ErrorText: String;
+  PublishModels, PublishReasoning, PublishPermissions: Boolean;
 Begin
   If Not Assigned(Form) Then
     Exit;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  If Not Assigned(Session) Then
+  If Not Form.TakeSamplingListPublish(PublishModels, PublishReasoning, PublishPermissions) Then
     Exit;
-  If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
-    Exit;
-  Form.FillMonitorView(View);
-  Transcript := Default(TMonitorTranscript);
-  Transcript.TurnIndex := Turn.TurnIndex;
-  Transcript.Revision := Session.NextTranscriptRevision(Turn.TurnIndex);
-  Transcript.Phase := View.Phase;
-  Transcript.StatusText := View.StatusText;
-  Transcript.DurationMs := View.ElapsedMs;
-  If Transcript.DurationMs <= 0 Then
-    Transcript.DurationMs := Turn.DurationMs;
-  Transcript.Blocks := Turn.Blocks;
-  Transcript.Part := 1;
-  Transcript.PartCount := 1;
-  Frames := PackMonitorTranscript(HostId, Transcript);
-  If Length(Frames) = 0 Then
-    Exit;
-  Session.QueueTranscriptParts(Turn.TurnIndex, Frames);
+  If PublishModels Then
+    PushModels(Form);
+  If PublishReasoning Then
+    PushReasoning(Form);
+  If PublishPermissions Then
+    PushPermissions(Form);
 End;
 
 Procedure TAssistantMonitorBridge.FinishStatusPush;
@@ -584,7 +562,6 @@ Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
 Var
   View: TAssistantMonitorView;
   Payload: TJSONObject;
-  PublishModels, PublishReasoning, PublishPermissions: Boolean;
 Begin
   Try
     If Not Assigned(Form) Then
@@ -600,81 +577,10 @@ Begin
       Payload.Free;
     End;
     { A connection reload sets the flags. The requested lists follow this status frame. }
-    If Form.TakeSamplingListPublish(PublishModels, PublishReasoning, PublishPermissions) Then
-      Begin
-        If PublishModels Then
-          PushModels(Form);
-        If PublishReasoning Then
-          PushReasoning(Form);
-        If PublishPermissions Then
-          PushPermissions(Form);
-      End;
+    PublishSamplingLists(Form);
   Finally
     FinishStatusPush;
   End;
-End;
-
-{ EncodeMonitorEnvelope returns an empty string when the frame is over the cap.
-  A length check on that result never sees the overflow, so the snapshot was dropped. }
-Function SnapshotJson(Const Id: String; Snapshot: TMonitorSnapshot): String;
-
-  Procedure KeepTextFromBlocks(Var Turn: TAssistantMonitorTurn);
-  Var
-    I: Integer;
-  Begin
-    For I := 0 To High(Turn.Blocks) Do
-      Begin
-        If (Turn.Prompt = '') And (Turn.Blocks[I].Kind = 'user') Then
-          Turn.Prompt := Turn.Blocks[I].Body;
-        If (Turn.Thinking = '') And (Turn.Blocks[I].Kind = 'thinking') Then
-          Turn.Thinking := Turn.Blocks[I].Body;
-        If (Turn.Response = '') And (Turn.Blocks[I].Kind = 'answer') Then
-          Turn.Response := Turn.Blocks[I].Body;
-      End;
-    If Turn.PromptPreview = '' Then
-      Turn.PromptPreview := Copy(Turn.Prompt, 1, 160);
-  End;
-
-  Procedure CompactLiveBlocks(Var Turn: TAssistantMonitorTurn);
-  Var
-    I: Integer;
-  Begin
-    For I := 0 To High(Turn.Blocks) Do
-      Begin
-        If Turn.Blocks[I].Kind = 'tool' Then
-          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 240)
-        Else If Turn.Blocks[I].Kind = 'thinking' Then
-          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 240)
-        Else If Length(Turn.Blocks[I].Body) > 800 Then
-          Turn.Blocks[I].Body := Copy(Turn.Blocks[I].Body, 1, 800);
-      End;
-  End;
-
-  Procedure TruncateLiveText(Var Turn: TAssistantMonitorTurn);
-  Begin
-    Turn.Prompt := Copy(Turn.Prompt, 1, 4000);
-    Turn.Thinking := Copy(Turn.Thinking, 1, 4000);
-    Turn.Response := Copy(Turn.Response, 1, 8000);
-    SetLength(Turn.Blocks, 0);
-    SetLength(Turn.Images, 0);
-  End;
-
-Begin
-  Result := EncodeMonitorSnapshot(Id, Snapshot);
-  If Result <> '' Then
-    Exit;
-  KeepTextFromBlocks(Snapshot.Live);
-  CompactLiveBlocks(Snapshot.Live);
-  Result := EncodeMonitorSnapshot(Id, Snapshot);
-  If Result <> '' Then
-    Exit;
-  SetLength(Snapshot.Live.Blocks, 0);
-  SetLength(Snapshot.Live.Images, 0);
-  Result := EncodeMonitorSnapshot(Id, Snapshot);
-  If Result <> '' Then
-    Exit;
-  TruncateLiveText(Snapshot.Live);
-  Result := EncodeMonitorSnapshot(Id, Snapshot);
 End;
 
 Procedure TAssistantMonitorBridge.FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
@@ -707,43 +613,37 @@ Begin
   Snapshot.HasLive := Form.FillMonitorTurn(MonitorLiveTurnIndex, Snapshot.Live, ErrorText);
 End;
 
-Function CatchupBodyStamp(Const Snapshot: TMonitorSnapshot; Level: Integer): String;
-Begin
-  Result := EncodeMonitorSnapshot('stamp', Snapshot);
-  If Result <> '' Then
-    Exit;
-  Result := 'snapshot-level-' + IntToStr(Level) + #1 + IntToStr(Length(Snapshot.StoredTurns)) + #1 +
-    IntToStr(Length(Snapshot.Live.Prompt)) + #1 + Copy(Snapshot.Live.Prompt, 1, 120) + #1 +
-    Copy(Snapshot.Live.Response, 1, 120) + #1 + Snapshot.PlanPath;
-End;
-
 Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
 Var
   Snapshot: TMonitorSnapshot;
-  Id, Json: String;
+  Session: TMonitorSession;
+  Id: String;
 Begin
   If Not Assigned(Form) Then
     Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Not Assigned(Session) Then
+    Exit;
   FillSnapshot(Form, Snapshot);
+  Session.ObserveSnapshot(Snapshot);
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  Json := SnapshotJson(Id, Snapshot);
-  If Json <> '' Then
-    SendJson(Json);
-  { The phone clears these lists on the snapshot. The following frames fill them. }
-  PushPlan(Form);
-  PushMenuLists(Form);
+  If Session.MirrorEpoch = '' Then
+    PublishEpoch;
+  Session.SendMirrorPages(Id);
 End;
 
 Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
 Var
-  Catchup: TMonitorCatchup;
+  Snapshot: TMonitorSnapshot;
   Session: TMonitorSession;
-  Pages: TMonitorSnapshotPageArray;
-  Id, Json, Stamp: String;
-  Cursor: Int64;
-  Level: Integer;
+  Id: String;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -755,46 +655,18 @@ Begin
   End;
   If (Not Assigned(Session)) Or (Session.MirrorEpoch = '') Then
     Exit;
-  Catchup := Default(TMonitorCatchup);
-  Catchup.Mode := mcmSnapshot;
-  Session.CopyMirrorIdentity(Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title, Cursor);
-  If Catchup.Epoch = '' Then
-    Exit;
-  FillSnapshot(Form, Catchup.Snapshot);
-  Session.ObserveSnapshot(Catchup.Snapshot);
-  Catchup.HasSnapshot := True;
+  FillSnapshot(Form, Snapshot);
+  Session.ObserveSnapshot(Snapshot);
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  Stamp := CatchupBodyStamp(Catchup.Snapshot, 0);
-  If Not Session.CommitSnapshotCursor(Stamp, Cursor) Then
-    Exit;
-  Catchup.Cursor := Cursor;
-  Json := EncodeResumeSnapshot(Id, Cursor, Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title,
-    Catchup.Snapshot);
-  If Json = '' Then
+  If Not Session.SendMirrorPages(Id) Then
     Begin
-      { Nothing is truncated. Pages carry the turns the single frame could not. }
-      If Not Session.BuildMirrorPages(Pages) Then
-        Begin
-          WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
-          Exit;
-        End;
-      For Level := 0 To High(Pages) Do
-        SendJson('{"v":3,"id":"' + Id + '","type":"snapshot_page","payload":' + Pages[Level].Json + '}');
-      Session.NoteMirrorHanded(Cursor);
-      FSentEpoch := '';
-      SetLength(FSentBlocks, 0);
-      FSentFlagsValid := False;
-      PumpMirror(AssistantMirrorCounter);
+      WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
       Exit;
     End;
-  SendJson(Json);
-  Session.NoteMirrorHanded(Cursor);
-  { A patch sent while the phone was still on the previous epoch is dropped.
-    The snapshot cursor is already past it, so that patch is not replayed.
-    Forget the sent blocks and pump once more so the next cursor carries the
-    trace the phone has not seen, including thinking and tool cards. }
+  { Pages replace the snapshot frame. Forget the sent blocks and pump once more
+    so the next cursor carries the trace the phone has not seen. }
   FSentEpoch := '';
   SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
@@ -1224,7 +1096,7 @@ Begin
   Form := OpenForm;
   Case Job.Kind Of
     asnTranscript, asnPhase:
-      PushTranscript(Form);
+      ;
     asnMode:
       If Assigned(Form) Then
         Begin
@@ -1240,7 +1112,7 @@ Begin
           PushTargets(Form);
         End;
     asnPlan:
-      PushPlan(Form);
+      ;
     asnTasks:
       If Assigned(Form) Then
         Begin
@@ -1248,7 +1120,15 @@ Begin
           SendJson(EncodeMonitorTasks(HostId, Tasks));
         End;
     asnStatus, asnError, asnSession:
-      PushStatus(Form);
+      Begin
+        If Assigned(Form) Then
+          Begin
+            Form.FillMonitorView(View);
+            ApplyHostFlags(View);
+            PublishSamplingLists(Form);
+          End;
+        FinishStatusPush;
+      End;
     asnSnapshot:
       PushSnapshot(Form, '');
     asnIdentity:
@@ -1499,13 +1379,13 @@ Begin
         End;
         If Assigned(Session) And Session.FetchMirrorTurn(Index, Turn) Then
           Begin
-            SendJson(EncodeMonitorTurnData(Id, Turn));
+            Session.SendTurnPage(Id, Turn);
             Result := True;
             Exit;
           End;
         Result := Form.RemoteTurn(Index, Turn, ErrorText);
-        If Result Then
-          SendJson(EncodeMonitorTurnData(Id, Turn));
+        If Result And Assigned(Session) Then
+          Session.SendTurnPage(Id, Turn);
       End;
     Ord(mmkImageGet):
       Begin
@@ -1525,11 +1405,17 @@ Begin
             Result := True;
             ErrorText := '';
           End
-        Else If TryEncodeMonitorImageData(Id, Image.ImageId, Mime, ImageWidth, ImageHeight, 1, Data, False, False,
+        Else If TryPackMonitorImage(Id, Image.ImageId, Mime, ImageWidth, ImageHeight, 1, Data, False, False,
           Messages, Unavailable) Then
           Begin
-            For Index := 0 To High(Messages) Do
-              SendJson(Messages[Index]);
+            LockBridge;
+            Try
+              Session := FSession;
+            Finally
+              UnlockBridge;
+            End;
+            If Assigned(Session) Then
+              Session.SendPackedFrames(Messages);
           End
         Else
           Begin

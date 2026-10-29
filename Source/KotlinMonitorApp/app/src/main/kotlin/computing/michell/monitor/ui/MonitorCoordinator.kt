@@ -26,7 +26,7 @@ import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
-import computing.michell.monitor.protocol.decodeTurnData
+import computing.michell.monitor.protocol.snapshotPageTurnIndex
 import computing.michell.monitor.protocol.encodeClosedScreen
 import computing.michell.monitor.protocol.AckPace
 import computing.michell.monitor.protocol.encodeBlockGet
@@ -288,9 +288,8 @@ class MonitorCoordinator(
     if (message.kind == MessageKind.Patch || message.kind == MessageKind.Catchup || message.kind == MessageKind.Plan) {
       noteMirrorProgress()
     }
-    if (transcriptBroken && (message.kind == MessageKind.Snapshot || message.kind == MessageKind.Transcript)) {
+    if (transcriptBroken && message.kind == MessageKind.SnapshotPage) {
       transcriptBroken = false
-      applied = applied.copy(liveRevision = -1, transcriptParts = emptyMap(), transcriptTurnId = "")
     }
     val immediate = message.kind in ImmediateKinds
     val resumeBefore = applied.resumeOnce
@@ -667,9 +666,9 @@ class MonitorCoordinator(
 
   private fun noteFetchArrival(message: MonitorMessage) {
     when (message.kind) {
-      MessageKind.TurnData -> {
-        val turn = (message.inbound as? InboundPayload.Turn)?.value ?: decodeTurnData(message.payloadJson) ?: return
-        completeTurn(turn.turnIndex)
+      MessageKind.SnapshotPage -> {
+        val index = snapshotPageTurnIndex(message.payloadJson)
+        if (index != null) completeTurn(index)
       }
       MessageKind.ImageUnavailable -> {
         val image = (message.inbound as? InboundPayload.ImageMissing)?.value ?: decodeImageUnavailable(message.payloadJson) ?: return

@@ -533,7 +533,6 @@ Begin
   Notice.DecisionsAccepted := False;
   Notice.Reason := '';
   Snapshot.Approval := Notice;
-  AddSample('snapshot', mmkSnapshot, EncodeMonitorSnapshot('snapshot', Snapshot));
   AddSample('resume', mmkResume, EncodeMonitorResume('resume', 'abc123', 4));
   Patch.Epoch := 'abc123';
   Patch.Cursor := 4;
@@ -583,11 +582,9 @@ Begin
   SetLength(Transcript.BlockPartCount, 1);
   Transcript.BlockPart[0] := 1;
   Transcript.BlockPartCount[0] := 1;
-  Json := '';
-  Check('transcript encodes', TryEncodeMonitorTranscript('transcript', Transcript, Json));
-  AddSample('transcript', mmkTranscript, Json);
   AddSample('turn', mmkTurn, EncodeMonitorTurnRequest('turn', 3));
-  AddSample('turn-data', mmkTurnData, EncodeMonitorTurnData('turn-data', SampleTurn));
+  AddSample('snapshot-page', mmkSnapshotPage, '{"v":2,"id":"snapshot-page","type":"snapshot_page","payload":{"conversation_id":"c1","stream_id":"abc","seq":1,"turn":{"turn_id":"t1","turn_index":0,"blocks":[]}}}');
+  AddSample('chunk', mmkChunk, '{"v":2,"id":"chunk-1","type":"chunk","payload":{"item_id":"img-1","part":1,"part_count":1,"item_type":"image_data","data":"{}"}}');
   AddSample('mode', mmkMode, EncodeMonitorMode('mode', 'build', True));
   AddSample('set-mode', mmkSetMode, EncodeMonitorSetMode('set-mode', 'plan'));
   Json := '';
@@ -740,6 +737,11 @@ Begin
       Check('turn index', DecodeMonitorTurnRequest(Message.PayloadJson, Index) And (Index = 3));
     mmkTurnData:
       Check('turn data', DecodeMonitorTurnData(Message.PayloadJson, Turn) And (Turn.Prompt = 'Show the frame.') And Turn.Live);
+    mmkSnapshotPage, mmkChunk:
+      Begin
+        Check(Sample.Name + ' payload', PayloadObject(Sample.Json, Data, Payload));
+        Data.Free;
+      End;
     mmkMode:
       Check('mode fields', DecodeMonitorMode(Message.PayloadJson, ModeMessage) And (ModeMessage.Mode = 'build') And ModeMessage.Locked);
     mmkSetMode:
@@ -908,7 +910,12 @@ Begin
       Seen[Samples[I].Kind] := True;
     End;
   For Kind := Succ(mmkUnknown) To High(TMonitorMessageKind) Do
-    Check(MonitorMessageKindName(Kind) + ' round-trip', Seen[Kind]);
+    Begin
+      { Retired content types are no longer sent. Their fixtures are gone. }
+      If Kind In [mmkSnapshot, mmkTranscript, mmkTurnData] Then
+        Continue;
+      Check(MonitorMessageKindName(Kind) + ' round-trip', Seen[Kind]);
+    End;
 End;
 
 Procedure TestPatchOverCap;

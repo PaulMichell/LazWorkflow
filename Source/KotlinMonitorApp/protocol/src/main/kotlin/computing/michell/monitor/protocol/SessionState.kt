@@ -27,14 +27,12 @@ private val BeforeLive = setOf(
 )
 
 private val LiveEvidence = setOf(
-  MessageKind.Snapshot,
-  MessageKind.Transcript,
+  MessageKind.SnapshotPage,
   MessageKind.Status,
   MessageKind.Mode,
   MessageKind.Target,
   MessageKind.Plan,
   MessageKind.Tasks,
-  MessageKind.TurnData,
   MessageKind.InsertResult,
   MessageKind.ApprovalRequested,
   MessageKind.ApprovalClosed,
@@ -184,16 +182,6 @@ class SessionState {
       phase = SessionPhase.Live
     }
     updateBusy(message)
-    if (message.kind == MessageKind.Transcript) noteTranscript(message)
-  }
-
-  private fun noteTranscript(message: MonitorMessage) {
-    val revision = when (val body = message.inbound) {
-      is InboundPayload.TranscriptPart -> body.value.revision
-      else -> decodeTranscript(message.payloadJson)?.revision ?: return
-    }
-    if (revision <= liveRevision && liveRevision >= 0) return
-    liveRevision = revision
   }
 
   private fun updateBusy(message: MonitorMessage) {

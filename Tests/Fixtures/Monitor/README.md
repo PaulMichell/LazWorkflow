@@ -30,4 +30,5 @@ Rules the tests enforce:
 To change the protocol, change `Documents/MonitorProtocolV3.md`, `catalogue.json` and the affected fixtures in the
 same commit. Then run both tests.
 
-The catalogue 2 frame fixtures stay in `Tests/Fixtures/monitor-frames/` until item 5.6 retires catalogue 2.
+Catalogue 2 frame fixtures that item 5.6 retired (`snapshot`, `transcript`, `turn_data`) are gone.
+The other catalogue 2 frames stay in `Tests/Fixtures/monitor-frames/` until the wire version moves to 3.

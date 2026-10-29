@@ -13,6 +13,7 @@ package computing.michell.monitor.connection
    The unsent prompt draft is kept across disconnect. A catalogue command
    is written only on the socket that accepted it. */
 
+import computing.michell.monitor.protocol.ChunkAssembly
 import computing.michell.monitor.protocol.FrameAssembler
 import computing.michell.monitor.protocol.FrameStatus
 import computing.michell.monitor.protocol.InboundPayload
@@ -453,6 +454,7 @@ class LanSession(
   private val commandResultsChannel = Channel<CatalogueResult>(Channel.BUFFERED)
   private val policy = ReconnectPolicy()
   private val session = computing.michell.monitor.protocol.SessionState()
+  private val chunks = ChunkAssembly()
   private val statusState = MutableStateFlow(LinkStatus())
   internal val inbound = InboundDelivery(clock)
   private var loop: Job? = null
@@ -750,7 +752,7 @@ class LanSession(
     if (epochCounter.get() != epoch) return
     val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
-    val message = envelope.message
+    val message = chunks.accept(envelope.message) ?: return
     session.apply(message)
     if (inbound.publish(message) == DeliveryResult.Failed) {
       closeLink()

@@ -7,8 +7,9 @@ Unit AssistantMonitorMirror;
   turn from the model. It does not read the form. Older events are dropped once
   the log passes its byte budget; the model already holds their effect.
 
-  Catalogue 2 patch tails live in the same log so resume can replay them until
-  item 5.6 retires that wire. A patch larger than the budget is not stored.
+  Catalogue 2 patch tails live in the same log so resume can replay them.
+  Item 5.6 stopped sending snapshot, transcript, and turn_data; pages replace
+  those frames. A patch larger than the budget is not stored.
   Resume behind a dropped record needs a snapshot. }
 
 {$IFDEF FPC}
@@ -31,6 +32,8 @@ Const
 
 { True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
 Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
+{ One snapshot_page payload for a turn fetch. Nothing in the body is truncated. }
+Function MonitorTurnPageJson(Const ConversationId, StreamId: String; Seq: Int64; Const Turn: TAssistantMonitorTurn): String;
 
 Type
   TMonitorMirrorEvent = Record
@@ -237,6 +240,26 @@ Begin
     JsonEscape(Block.Kind) + '","title":"' + JsonEscape(Block.Title) + '","state":"' +
     JsonEscape(BlockStateName(Block)) + '","body":"' + Body + '","deferred":' + YesNo(Not BlockFitsInline(Block)) +
     ',"bytes":' + IntToStr(Utf8Bytes(Block.Body)) + '}';
+End;
+
+Function TurnPageBody(Const Turn: TAssistantMonitorTurn): String;
+Var
+  BlockIndex: Integer;
+Begin
+  Result := '"turn":{"turn_id":"' + JsonEscape(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[';
+  For BlockIndex := 0 To High(Turn.Blocks) Do
+    Begin
+      If BlockIndex > 0 Then
+        Result := Result + ',';
+      Result := Result + BlockJson(Turn.Blocks[BlockIndex], Turn.Id);
+    End;
+  Result := Result + ']}';
+End;
+
+Function MonitorTurnPageJson(Const ConversationId, StreamId: String; Seq: Int64; Const Turn: TAssistantMonitorTurn): String;
+Begin
+  Result := '{"conversation_id":"' + JsonEscape(ConversationId) + '","stream_id":"' + JsonEscape(StreamId) +
+    '","seq":' + IntToStr(Seq) + ',' + TurnPageBody(Turn) + '}';
 End;
 
 Constructor TMonitorMirror.Create;
@@ -771,7 +794,7 @@ End;
 
 Function TMonitorMirror.BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
 Var
-  Outline, PageBody, TurnBody: String;
+  Outline, PageBody: String;
   Index, BlockIndex, PageNo: Integer;
   Turn: TAssistantMonitorTurn;
 Begin
@@ -806,17 +829,7 @@ Begin
           Turn := FTurns[Index]
         Else
           Turn := FLive;
-        TurnBody := '"turn":{"turn_id":"' + JsonEscape(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) +
-          ',"blocks":[';
-        For BlockIndex := 0 To High(Turn.Blocks) Do
-          Begin
-            If BlockIndex > 0 Then
-              TurnBody := TurnBody + ',';
-            TurnBody := TurnBody + BlockJson(Turn.Blocks[BlockIndex], Turn.Id);
-          End;
-        TurnBody := TurnBody + ']}';
-        PageBody := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
-          '","seq":' + IntToStr(HeadSeq) + ',' + TurnBody + '}';
+        PageBody := MonitorTurnPageJson(FConversationId, FStreamId, HeadSeq, Turn);
         If Utf8Bytes(PageBody) > MonitorSnapshotPageBytes Then
           Begin
             { One block per page when the turn does not fit. Nothing is truncated. }

@@ -82,16 +82,15 @@ import computing.michell.monitor.protocol.decodeMode
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeRejected
 import computing.michell.monitor.protocol.WireSnapshot
-import computing.michell.monitor.protocol.WireTranscript
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
 import computing.michell.monitor.protocol.decodeTargets
 
 import computing.michell.monitor.protocol.decodeText
-import computing.michell.monitor.protocol.assembleTranscriptBlocks
-import computing.michell.monitor.protocol.decodeTranscript
-import computing.michell.monitor.protocol.decodeTurnData
+import computing.michell.monitor.protocol.applySnapshotPageJson
+import computing.michell.monitor.protocol.snapshotPageTurn
+
 import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodePlanChoices
@@ -498,10 +497,8 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val history = retainLoaded(current.history + next.history, next.turns)
   // An empty draft is explicit. Do not refill it from an older insert still sitting on next.
   val draft = if (useReducedDraft) next.draft else current.draft
-  val sameGeneration = current.hostGeneration == next.hostGeneration &&
-    current.conversationGeneration == next.conversationGeneration &&
-    current.connectionGeneration == next.connectionGeneration
-  val mergedLive = mergeLiveTurn(current.live, next.live, sameGeneration)
+  // Snapshot and transcript no longer race the screen. The reduced turn is the turn.
+  val mergedLive = next.live
   val baseline = current.promptBaseline
   val merged = next.copy(live = mergedLive, history = history, promptBaseline = baseline)
   val dropStatus = (next.banner.isEmpty() && bannerIsStatus(current.banner)) ||
@@ -542,9 +539,8 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
   if (!message.changesState && message.kind != MessageKind.Error) return state
   if (message.inbound !is InboundPayload.None) return reduceInbound(state, message.inbound)
   return when (message.kind) {
-    MessageKind.Snapshot -> applySnapshot(state, message.payloadJson)
-    MessageKind.Transcript -> applyTranscript(state, message.payloadJson)
-    MessageKind.TurnData -> applyTurnData(state, message.payloadJson)
+    MessageKind.Snapshot, MessageKind.Transcript, MessageKind.TurnData -> state
+    MessageKind.SnapshotPage -> applySnapshotPage(state, message.payloadJson)
     MessageKind.Status -> applyStatus(state, message.payloadJson)
     MessageKind.Mode -> applyMode(state, message.payloadJson)
     MessageKind.Target -> applyTarget(state, message.payloadJson)
@@ -713,9 +709,7 @@ private fun applyCatchup(state: MonitorUi, catchup: WireCatchup): MonitorUi {
 
 private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
   return when (inbound) {
-    is InboundPayload.Snapshot -> if (state.catchingUp) state else applySnapshot(state, inbound.value)
-    is InboundPayload.TranscriptPart -> applyTranscript(state, inbound.value)
-    is InboundPayload.Turn -> state.copy(history = state.history + (inbound.value.turnIndex to inbound.value))
+    is InboundPayload.Snapshot, is InboundPayload.TranscriptPart, is InboundPayload.Turn -> state
     is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
     is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
     is InboundPayload.Target -> applyTargetFrame(state, inbound.value.kind, inbound.value.display, inbound.value.root)
@@ -840,16 +834,18 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
   ).clearedMenuLists()
 }
 
-private fun transcriptInScope(state: MonitorUi, turnId: String): Boolean {
-  if (state.liveRevision < 0) return false
-  if (state.transcriptConnection != state.connectionGeneration) return false
-  if (turnId.isNotEmpty() && state.transcriptTurnId.isNotEmpty() && turnId != state.transcriptTurnId) return false
-  return true
-}
-
-private fun applyTranscript(state: MonitorUi, payloadJson: String): MonitorUi {
-  val transcript = decodeTranscript(payloadJson) ?: return state
-  return applyTranscript(state, transcript)
+private fun applySnapshotPage(state: MonitorUi, payloadJson: String): MonitorUi {
+  val applied = applySnapshotPageJson(state.turns, state.live, payloadJson) ?: return state
+  val fetched = snapshotPageTurn(payloadJson)
+  val history = if (fetched == null || applied.second?.id == fetched.id) state.history
+    else state.history + (fetched.turnIndex to fetched)
+  return state.copy(
+    turns = applied.first,
+    live = applied.second,
+    history = history,
+    reachedLive = true,
+    generation = state.generation + 1
+  )
 }
 
 /** A finished host turn. The status frame can be missed; this must not leave the label on busy. */
@@ -858,76 +854,6 @@ fun hostTranscriptIdle(phase: String, statusText: String): Boolean {
   if (named.isNotEmpty() && named != "Ready" && named != "Offline" && named != "Not signed in") return false
   val text = statusText.trim()
   return text == "Ready" || text == "Offline" || text == "Not signed in"
-}
-
-private fun applyTranscript(state: MonitorUi, transcript: WireTranscript): MonitorUi {
-  // Epoch and cursor own continuity once a mirror generation is known.
-  if (state.hostEpoch.isNotEmpty()) return state
-  val turnId = state.live?.id ?: ""
-  val inScope = transcriptInScope(state, turnId)
-  // TCP does not reorder. A lower revision is the host starting again, not a late frame.
-  if (inScope && transcript.revision < state.liveRevision) {
-    return applyTranscript(
-      state.copy(liveRevision = -1, transcriptParts = emptyMap(), transcriptTurnId = ""),
-      transcript
-    )
-  }
-  if (inScope && transcript.revision == state.liveRevision && state.transcriptParts.containsKey(transcript.part)) return state
-  val parts = if (!inScope || transcript.revision > state.liveRevision) {
-    mapOf(transcript.part to transcript.blocks)
-  } else {
-    state.transcriptParts + (transcript.part to transcript.blocks)
-  }
-  // Part order, not arrival order, so a late frame cannot move an earlier block.
-  val assembled = assembleTranscriptBlocks(parts.toSortedMap().values.toList())
-  val previous = state.live
-  val complete = transcript.partCount <= 1 || (1..transcript.partCount).all { part -> parts.containsKey(part) }
-  // An incomplete reconnect stream must not wipe the conversation already on screen.
-  val blocks = if (previous != null && previous.blocks.isNotEmpty() && !complete && assembled.size < previous.blocks.size) {
-    previous.blocks
-  } else assembled
-  val duration = if (transcript.durationMs > 0) transcript.durationMs else previous?.durationMs ?: 0
-  val live = if (previous != null && previous.blocks == blocks && previous.turnIndex == transcript.turnIndex) {
-    if (previous.durationMs == duration) previous else previous.copy(durationMs = duration)
-  } else WireTurn(
-    transcript.turnIndex,
-    previous?.id ?: "",
-    previous?.mode ?: state.view.mode,
-    previous?.createdAt ?: "",
-    previous?.promptPreview ?: "",
-    previous?.errorText ?: "",
-    previous?.prompt ?: "",
-    previous?.thinking ?: "",
-    previous?.response ?: "",
-    duration,
-    true,
-    blocks,
-    previous?.images ?: emptyList()
-  )
-  val idle = hostTranscriptIdle(transcript.phase, transcript.statusText) && !state.view.planRunning && !state.planRunning
-  val view = state.view.copy(
-    phase = transcript.phase.ifEmpty { if (idle) "" else state.view.phase },
-    statusText = transcript.statusText.ifEmpty { state.view.statusText },
-    busy = if (idle) false else state.view.busy,
-    sending = if (idle) false else state.view.sending,
-    canStop = if (idle) false else state.view.canStop,
-    canSteer = if (idle) false else state.view.canSteer,
-    canSend = if (idle) true else state.view.canSend
-  )
-  return state.copy(
-    live = live,
-    liveRevision = transcript.revision,
-    transcriptParts = parts,
-    transcriptConnection = state.connectionGeneration,
-    transcriptTurnId = turnId,
-    view = view,
-    reachedLive = true
-  )
-}
-
-private fun applyTurnData(state: MonitorUi, payloadJson: String): MonitorUi {
-  val turn = decodeTurnData(payloadJson) ?: return state
-  return state.copy(history = state.history + (turn.turnIndex to turn))
 }
 
 private fun applyStatus(state: MonitorUi, payloadJson: String): MonitorUi {
