@@ -97,6 +97,30 @@ class MonitorCoordinator(
   val loadedImageKeys: Set<String> get() = emptySet()
   val bitmapKeyEntries: Set<String> get() = emptySet()
 
+  /** Shows a Room conversation. A live open is Syncing until the host snapshot arrives. */
+  fun showStored(cached: MonitorUi, liveSync: Boolean) = synchronized(gate) {
+    local = cached.copy(
+      disconnected = !liveSync,
+      reachedLive = false,
+      catchingUp = liveSync,
+      reviewingOffline = !liveSync,
+      banner = if (liveSync) "" else OfflineReviewBanner,
+      pairHold = false,
+      settingsOpen = false,
+      approvalOpen = false,
+      approval = null,
+      planRunning = false,
+      statusBusy = false,
+      turns = emptyList(),
+      live = null,
+      history = emptyMap(),
+      view = if (liveSync) cached.view else clearRemoteActions(cached.view),
+      showThinking = display.showThinking,
+      showTools = display.showTools
+    )
+    content.replace(contentHost, cached.conversationId, cached.turns, cached.live)
+  }
+
   fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
     local = cached.copy(
       disconnected = true,
@@ -228,6 +252,7 @@ class MonitorCoordinator(
     content.replace(contentHost, local.conversationId, snapshot.storedTurns, live)
     local = local.copy(
       catchingUp = false,
+      reviewingOffline = false,
       view = snapshot.view,
       planPath = snapshot.planPath,
       planTitle = snapshot.planTitle,

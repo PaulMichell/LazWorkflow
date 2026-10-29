@@ -14,13 +14,15 @@ import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.conversationIdIsIdentity
 
 const val OfflineBanner = "Offline"
+const val OfflineReviewBanner = "Offline review. Send, Stop, and New need a live connection."
 const val NoAddressBanner = "Set the desktop address in Settings."
 const val CacheSaveDebounceMs = 1_000L
 const val ImagePlaceholder = "Image"
 const val LoadingImageLabel = "Loading image"
 
 fun bannerIsStatus(banner: String): Boolean {
-  return banner == OfflineBanner || banner == NoAddressBanner || banner == ConnectingBanner || banner == ReconnectingBanner
+  return banner == OfflineBanner || banner == OfflineReviewBanner || banner == NoAddressBanner || banner == ConnectingBanner ||
+    banner == ReconnectingBanner
 }
 
 fun offlineDocument(ui: MonitorUi): OfflineCacheDocument {
@@ -126,11 +128,12 @@ fun cacheRowTitle(row: ConversationRecord): String {
 fun conversationsForHost(rows: List<ConversationRecord>, host: String): List<ConversationRecord> {
   val key = hostKey(host)
   return rows.filter { row -> hostKey(row.host) == key }
-    .sortedWith(compareByDescending<ConversationRecord> { it.updatedAt }.thenBy { it.id })
+    .sortedWith(compareByDescending<ConversationRecord> { it.pinned }.thenByDescending { it.updatedAt }.thenBy { it.id })
 }
 
+/** The stored list is available offline and while the link is live. */
 fun cachedButtonVisible(disconnected: Boolean, phase: LinkPhase): Boolean {
-  return !ideLinkLive(disconnected, phase)
+  return true
 }
 
 /** The page copy of a stored conversation. Remote actions stay off. Does not open a socket. */
@@ -140,7 +143,21 @@ fun reviewedCacheState(state: MonitorUi, document: OfflineCacheDocument, row: Co
     projectRoot = row.projectRoot,
     conversationTitle = row.title,
     hostEpoch = row.streamId,
-    hostCursor = row.seq
+    hostCursor = row.seq,
+    reviewingOffline = true,
+    banner = OfflineReviewBanner,
+    lastSyncMs = row.updatedAt
+  )
+}
+
+/** A stored conversation opened on a live link. Syncing until the host snapshot arrives. */
+fun syncingCacheState(state: MonitorUi, document: OfflineCacheDocument, row: ConversationRecord): MonitorUi {
+  return reviewedCacheState(state, document, row, true).copy(
+    disconnected = false,
+    reviewingOffline = false,
+    catchingUp = true,
+    banner = "",
+    reachedLive = false
   )
 }
 

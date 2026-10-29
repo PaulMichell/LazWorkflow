@@ -138,6 +138,9 @@ fun ConversationScreen(
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
     }
+    if (ui.reviewingOffline) {
+      Text(OfflineReviewBanner)
+    }
     if (ui.undeliveredPrompt.isNotEmpty()) {
       TextButton(onClick = onRetry) { Text(NotDeliveredRetry) }
     }

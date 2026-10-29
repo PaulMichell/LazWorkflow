@@ -48,7 +48,9 @@ class ConversationRepository(
   }
 
   suspend fun deleteConversation(host: String, id: String) {
+    val images = database.sync().loadImages(host, id)
     database.conversations().delete(host, id)
+    for (image in images) deleteStoredFile(image.filePath)
   }
 
   suspend fun replaceContent(host: String, conversationId: String, turns: List<TurnRecord>, blocks: List<BlockRecord>) {

@@ -240,7 +240,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   }
   val notice = ui.approval
   if (!showSettings && tab == AppTab.Conversation && cacheListOpen) {
-    CachedListDialog(cacheRows, model::openCachedRow, model::closeCachedList)
+    CachedListDialog(cacheRows, model::openCachedRow, model::pinCached, model::deleteCached, model::closeCachedList)
   }
   if (!showSettings && ui.approvalOpen && notice != null) {
     ApprovalSheet(notice, model::allowApproval, model::denyApproval, model::dismissApproval)

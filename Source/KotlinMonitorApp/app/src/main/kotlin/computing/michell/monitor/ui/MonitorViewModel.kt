@@ -224,6 +224,7 @@ data class MonitorUi(
   val closedQueued: Boolean = false,
   val blockFetchIds: List<String> = emptyList(),
   val undeliveredPrompt: String = "",
+  val reviewingOffline: Boolean = false,
   val statusBusy: Boolean = false,
   val pairedElsewhere: Boolean = false,
   val lastSyncMs: Long = 0,
@@ -291,7 +292,7 @@ const val StallGapMs = 5_000L
 
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
-    banner == HostClosedBanner || banner == OfflineBanner || banner == NoAddressBanner ||
+    banner == HostClosedBanner || banner == OfflineBanner || banner == OfflineReviewBanner || banner == NoAddressBanner ||
     banner == BackgroundBanner || banner == WaitingForWifiBanner
 }
 
@@ -1419,7 +1420,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun showCachedList() {
-    if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
     cacheBackToListState.value = false
     viewModelScope.launch(Dispatchers.IO) {
       val record = store.load()
@@ -1430,7 +1430,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         emptyList()
       }
       withContext(Dispatchers.Main) {
-        if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return@withContext
         cacheRowsState.value = rows
         cacheListOpenState.value = true
       }
@@ -1441,9 +1440,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheListOpenState.value = false
   }
 
-  /** Loads one stored conversation onto the page. Does not open a socket. */
+  /** Offline opens Room only. A live link selects the conversation and waits for the host. */
   fun openCachedRow(row: ConversationRecord) {
-    if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
+    val live = ideLinkLive(uiState.value.disconnected, link.value.phase)
     viewModelScope.launch(Dispatchers.IO) {
       val document = try {
         conversations.loadDocument(row.host, row.id)
@@ -1451,15 +1450,47 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         null
       } ?: return@launch
       withContext(Dispatchers.Main) {
-        if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return@withContext
-        val seeded = reviewedCacheState(uiState.value, document, row, store.load().address.isNotEmpty())
-        coordinator.restoreOffline(seeded)
+        val seeded = if (live) syncingCacheState(uiState.value, document, row)
+          else reviewedCacheState(uiState.value, document, row, store.load().address.isNotEmpty())
+        coordinator.showStored(seeded, live)
         uiState.value = coordinator.state
         cacheListOpenState.value = false
-        cacheBackToListState.value = true
+        cacheBackToListState.value = !live
         restoreCachedImages(row.host, row.id, document, uiState.value.hostGeneration)
+        if (live) session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), row.id))
       }
     }
+  }
+
+  fun pinCached(row: ConversationRecord) {
+    viewModelScope.launch(Dispatchers.IO) {
+      conversations.setPinned(row.host, row.id, !row.pinned, row.updatedAt)
+      refreshCachedRows()
+    }
+  }
+
+  fun deleteCached(row: ConversationRecord) {
+    viewModelScope.launch(Dispatchers.IO) {
+      conversations.deleteConversation(row.host, row.id)
+      withContext(Dispatchers.Main) {
+        if (uiState.value.conversationId == row.id) {
+          coordinator.showStored(uiState.value.copy(turns = emptyList(), live = null, conversationId = ""), false)
+          uiState.value = coordinator.state
+        }
+        refreshCachedRows()
+      }
+    }
+  }
+
+  private suspend fun refreshCachedRows() {
+    val record = store.load()
+    val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
+    val rows = try {
+      conversationsForHost(conversations.listForHost(key), key)
+    } catch (error: Exception) {
+      emptyList()
+    }
+    withContext(Dispatchers.Main) { cacheRowsState.value = rows }
   }
 
   fun showSettings() {
