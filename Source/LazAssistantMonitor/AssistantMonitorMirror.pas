@@ -26,6 +26,8 @@ Const
   MonitorSnapshotPageBytes = 32 * 1024;
   MonitorInlineBodyBytes = 256 * 1024;
   MonitorBlockDataBytes = 24 * 1024;
+  MonitorCreditWindowBytes = 524288;
+  MonitorAckIntervalMs = 250;
 
 { True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
 Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
@@ -53,6 +55,7 @@ Type
     ProjectRoot: String;
     Title: String;
     Head: Int64;
+    AckedSeq: Int64;
     DroppedThrough: Int64;
     Bytes: Int64;
     Events: TMonitorMirrorEventArray;
@@ -74,6 +77,7 @@ Type
     FProjectRoot: String;
     FTitle: String;
     FHead: Int64;
+    FAckedSeq: Int64;
     FDroppedThrough: Int64;
     FBytes: Int64;
     FEvents: TMonitorMirrorEventArray;
@@ -85,7 +89,7 @@ Type
     FPlanRunning: Boolean;
     FPlanRows: Array Of TAssistantMonitorPlanRow;
     FParked: Array Of TMonitorMirrorPark;
-    Procedure DropOldestLocked;
+    Function DropOldestLocked: Boolean;
     Procedure NoteDropLocked(Seq: Int64);
     Procedure ParkCurrentLocked;
     Function UnparkLocked(Const ConversationId, StreamId: String): Boolean;
@@ -115,6 +119,28 @@ Type
     Function DroppedThrough: Int64;
     Function Head: Int64;
     Function ByteCount: Int64;
+    Procedure NoteAck(Const StreamId: String; Seq: Int64);
+    Function AckedSeq: Int64;
+  End;
+
+  { Send window for log frames. The caller holds the session lock. }
+  TMonitorLogCredit = Class
+  Private
+    FUnacked: Int64;
+    FSentSeq: Array Of Int64;
+    FSentBytes: Array Of Integer;
+    FHeldSeq: Array Of Int64;
+    FHeldJson: Array Of String;
+    FHeldBytes: Int64;
+  Public
+    Constructor Create;
+    Function CanSend(Bytes: Integer): Boolean;
+    Procedure NoteSent(Seq: Int64; Bytes: Integer);
+    Procedure NoteAck(Seq: Int64);
+    Procedure Hold(Seq: Int64; Const Json: String);
+    Function TakeHeld(Out Seq: Int64; Out Json: String): Boolean;
+    Function UnackedBytes: Int64;
+    Function HeldBytes: Int64;
   End;
 
 Implementation
@@ -231,6 +257,7 @@ Begin
   FProjectRoot := '';
   FTitle := '';
   FHead := 0;
+  FAckedSeq := 0;
   FDroppedThrough := 0;
   FBytes := 0;
   SetLength(FEvents, 0);
@@ -256,13 +283,18 @@ Begin
     FDroppedThrough := Seq;
 End;
 
-Procedure TMonitorMirror.DropOldestLocked;
+Function TMonitorMirror.DropOldestLocked: Boolean;
 Var
   Index, Size: Integer;
   Dropped: Int64;
 Begin
+  Result := False;
   If Length(FEvents) = 0 Then
     Exit;
+  { An event the phone has not acknowledged stays, so a slow phone cannot lose the tail. }
+  If FEvents[0].Seq > FAckedSeq Then
+    Exit;
+  Result := True;
   Dropped := FEvents[0].Seq;
   Size := Utf8Bytes(FEvents[0].Data) + Length(FEvents[0].Kind);
   NoteDropLocked(Dropped);
@@ -286,8 +318,10 @@ Begin
         FHead := Seq;
       Exit;
     End;
-  While (Length(FEvents) > 0) And (FBytes + Size > FBudget) Do
-    DropOldestLocked;
+  While (Length(FEvents) > 0) And (FBytes + Size > FBudget) And DropOldestLocked Do
+    ;
+  If FBytes + Size > FBudget Then
+    Exit;
   Index := Length(FEvents);
   SetLength(FEvents, Index + 1);
   FEvents[Index].Seq := Seq;
@@ -330,6 +364,7 @@ Begin
   Park.ProjectRoot := FProjectRoot;
   Park.Title := FTitle;
   Park.Head := FHead;
+  Park.AckedSeq := FAckedSeq;
   Park.DroppedThrough := FDroppedThrough;
   Park.Bytes := FBytes;
   Park.Events := Copy(FEvents);
@@ -373,6 +408,7 @@ Begin
         FProjectRoot := FParked[Index].ProjectRoot;
         FTitle := FParked[Index].Title;
         FHead := FParked[Index].Head;
+        FAckedSeq := FParked[Index].AckedSeq;
         FDroppedThrough := FParked[Index].DroppedThrough;
         FBytes := FParked[Index].Bytes;
         FEvents := Copy(FParked[Index].Events);
@@ -410,6 +446,7 @@ Begin
     FProjectRoot := ProjectRoot;
     FTitle := Title;
     FHead := 0;
+    FAckedSeq := 0;
     FDroppedThrough := 0;
     FBytes := 0;
     SetLength(FEvents, 0);
@@ -839,6 +876,132 @@ Begin
   Finally
     LeaveCriticalSection(FLock);
   End;
+End;
+
+Procedure TMonitorMirror.NoteAck(Const StreamId: String; Seq: Int64);
+Begin
+  If Seq < 0 Then
+    Exit;
+  EnterCriticalSection(FLock);
+  Try
+    If LowerCase(StreamId) <> FStreamId Then
+      Exit;
+    If Seq > FAckedSeq Then
+      FAckedSeq := Seq;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.AckedSeq: Int64;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FAckedSeq;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Constructor TMonitorLogCredit.Create;
+Begin
+  Inherited Create;
+  FUnacked := 0;
+  SetLength(FSentSeq, 0);
+  SetLength(FSentBytes, 0);
+  SetLength(FHeldSeq, 0);
+  SetLength(FHeldJson, 0);
+  FHeldBytes := 0;
+End;
+
+Function TMonitorLogCredit.CanSend(Bytes: Integer): Boolean;
+Begin
+  Result := (Bytes >= 0) And (FUnacked + Bytes <= MonitorCreditWindowBytes);
+End;
+
+Procedure TMonitorLogCredit.NoteSent(Seq: Int64; Bytes: Integer);
+Var
+  Index: Integer;
+Begin
+  If Bytes < 1 Then
+    Exit;
+  Index := Length(FSentSeq);
+  SetLength(FSentSeq, Index + 1);
+  SetLength(FSentBytes, Index + 1);
+  FSentSeq[Index] := Seq;
+  FSentBytes[Index] := Bytes;
+  FUnacked := FUnacked + Bytes;
+End;
+
+Procedure TMonitorLogCredit.NoteAck(Seq: Int64);
+Var
+  Index, Kept: Integer;
+Begin
+  Kept := 0;
+  FUnacked := 0;
+  For Index := 0 To High(FSentSeq) Do
+    If FSentSeq[Index] > Seq Then
+      Begin
+        FSentSeq[Kept] := FSentSeq[Index];
+        FSentBytes[Kept] := FSentBytes[Index];
+        FUnacked := FUnacked + FSentBytes[Kept];
+        Inc(Kept);
+      End;
+  SetLength(FSentSeq, Kept);
+  SetLength(FSentBytes, Kept);
+End;
+
+Procedure TMonitorLogCredit.Hold(Seq: Int64; Const Json: String);
+Var
+  Index: Integer;
+Begin
+  For Index := 0 To High(FHeldSeq) Do
+    If FHeldSeq[Index] = Seq Then
+      Begin
+        FHeldBytes := FHeldBytes - Length(FHeldJson[Index]) + Length(Json);
+        FHeldJson[Index] := Json;
+        Exit;
+      End;
+  Index := Length(FHeldSeq);
+  SetLength(FHeldSeq, Index + 1);
+  SetLength(FHeldJson, Index + 1);
+  FHeldSeq[Index] := Seq;
+  FHeldJson[Index] := Json;
+  FHeldBytes := FHeldBytes + Length(Json);
+End;
+
+Function TMonitorLogCredit.TakeHeld(Out Seq: Int64; Out Json: String): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  Seq := 0;
+  Json := '';
+  If Length(FHeldSeq) = 0 Then
+    Exit;
+  Seq := FHeldSeq[0];
+  Json := FHeldJson[0];
+  FHeldBytes := FHeldBytes - Length(Json);
+  If FHeldBytes < 0 Then
+    FHeldBytes := 0;
+  For Index := 0 To High(FHeldSeq) - 1 Do
+    Begin
+      FHeldSeq[Index] := FHeldSeq[Index + 1];
+      FHeldJson[Index] := FHeldJson[Index + 1];
+    End;
+  SetLength(FHeldSeq, Length(FHeldSeq) - 1);
+  SetLength(FHeldJson, Length(FHeldJson) - 1);
+  Result := True;
+End;
+
+Function TMonitorLogCredit.UnackedBytes: Int64;
+Begin
+  Result := FUnacked;
+End;
+
+Function TMonitorLogCredit.HeldBytes: Int64;
+Begin
+  Result := FHeldBytes;
 End;
 
 End.

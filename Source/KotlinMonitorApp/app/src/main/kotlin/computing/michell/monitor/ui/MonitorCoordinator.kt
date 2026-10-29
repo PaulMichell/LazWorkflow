@@ -28,7 +28,9 @@ import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.encodeClosedScreen
+import computing.michell.monitor.protocol.AckPace
 import computing.michell.monitor.protocol.encodeBlockGet
+import computing.michell.monitor.protocol.paceAck
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeImageGet
 import computing.michell.monitor.protocol.encodeResume
@@ -64,6 +66,7 @@ sealed class MonitorEvent {
 
 sealed class MonitorEffect {
   data class Send(val json: String) : MonitorEffect()
+  data class Ack(val json: String, val seq: Long, val delayMs: Long) : MonitorEffect()
   data class RememberDraft(val text: String) : MonitorEffect()
   data object LeaveDictation : MonitorEffect()
   data object Prefetch : MonitorEffect()
@@ -86,6 +89,7 @@ class MonitorCoordinator(
 ) {
   private val gate = Any()
   private var applied = MonitorUi()
+  private var ackPace = AckPace()
   private var appliedDirty = false
   private var postedGeneration = 0
   private val inFlightTurns = mutableMapOf<Int, String>()
@@ -304,7 +308,8 @@ class MonitorCoordinator(
     val fetches = applied.blockFetchIds
     if (fetches.isNotEmpty()) applied = applied.copy(blockFetchIds = emptyList())
     val side = mirrorSideEffects(resumeBefore, closedBefore) + helloResume(message) +
-      fetches.map { blockId -> MonitorEffect.Send(encodeBlockGet(session.nextCommandId(), applied.conversationId, blockId)) }
+      fetches.map { blockId -> MonitorEffect.Send(encodeBlockGet(session.nextCommandId(), applied.conversationId, blockId)) } +
+      ackEffects()
     if (!immediate) {
       appliedDirty = true
       return if (side.isEmpty()) null else side
@@ -336,6 +341,22 @@ class MonitorCoordinator(
     }
     if (posted == null && effects.isEmpty()) return null
     return effects
+  }
+
+  fun noteAckSent(nowMs: Long, seq: Long) {
+    synchronized(gate) {
+      ackPace = ackPace.copy(lastSentMs = nowMs, sentSeq = seq, pendingSeq = -1)
+    }
+  }
+
+  private fun ackEffects(): List<MonitorEffect> {
+    if (applied.hostEpoch.isEmpty() || applied.hostCursor < 0) return emptyList()
+    val decision = paceAck(ackPace, clock.nowMs(), session.nextCommandId(), applied.conversationId, applied.hostEpoch,
+      applied.hostCursor)
+    ackPace = decision.pace
+    if (decision.sendNow.isNotEmpty()) return listOf(MonitorEffect.Ack(decision.sendNow, decision.seq, 0))
+    if (decision.sendLater.isNotEmpty()) return listOf(MonitorEffect.Ack(decision.sendLater, decision.seq, decision.laterMs))
+    return emptyList()
   }
 
   private fun mirrorSideEffects(resumeBefore: Boolean, closedBefore: Boolean): List<MonitorEffect> {

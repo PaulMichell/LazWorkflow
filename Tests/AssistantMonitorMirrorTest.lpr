@@ -55,16 +55,23 @@ Var
   Stored: Array Of TAssistantMonitorTurn;
   Live: TAssistantMonitorTurn;
   HasLive: Boolean;
-  Suffix: String;
+  Suffix, HeldJson: String;
   Offset: Integer;
+  HeldSeq: Int64;
+  Credit: TMonitorLogCredit;
+  Keep: TMonitorMirror;
 Begin
   Log := TMonitorMirror.Create(64);
   Try
     Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
     Log.RememberPatch(1, StringOfChar('a', 40));
     Log.RememberPatch(2, StringOfChar('b', 40));
-    Check('small budget drops the older patch', Log.DroppedThrough >= 1);
-    Check('resume behind the fold is not a tail', Not Log.TryReplayPatches('ab12cd34', 0, 2, Events, Head));
+    Check('an unacked patch is not dropped to make room', Log.DroppedThrough = 0);
+    Check('resume still has the unacked patch', Log.TryReplayPatches('ab12cd34', 0, 1, Events, Head) And
+      (Length(Events) = 1) And (Events[0].Seq = 1));
+    Log.NoteAck('ab12cd34', 1);
+    Log.RememberPatch(2, StringOfChar('b', 40));
+    Check('an ack lets the older patch be folded', Log.DroppedThrough >= 1);
     Check('resume at the kept patch is a tail', Log.TryReplayPatches('ab12cd34', 1, 2, Events, Head) And
       (Length(Events) = 1) And (Events[0].Seq = 2));
     Log.ObserveTurn(SampleTurn('turn-a', StringOfChar('x', MonitorInlineBodyBytes + 1), 0));
@@ -83,6 +90,32 @@ Begin
     Check('a grown body is an append at the UTF-8 length', MonitorAppendSuffix('Größe → ', 'Größe → 10 s.', Suffix, Offset) And
       (Offset = 12) And (Suffix = '10 s.'));
     Check('a changed prefix is not an append', Not MonitorAppendSuffix('old text', 'new text', Suffix, Offset));
+    Credit := TMonitorLogCredit.Create;
+    Try
+      Credit.NoteSent(1, 400000);
+      Check('credit accepts a frame inside the window', Credit.CanSend(100000));
+      Credit.NoteSent(2, 200000);
+      Check('credit window holds the next frame', Not Credit.CanSend(1));
+      Credit.Hold(3, 'held');
+      Credit.NoteAck(2);
+      Check('an ack releases the unacked bytes', Credit.UnackedBytes = 0);
+      Check('the held frame can leave after the ack', Credit.TakeHeld(HeldSeq, HeldJson) And (HeldSeq = 3) And (HeldJson = 'held'));
+    Finally
+      Credit.Free;
+    End;
+    Keep := TMonitorMirror.Create(20);
+    Try
+      Keep.BeginStream('ab12cd34', 'conversation-a', '/work', 'One');
+      Keep.RememberPatch(1, 'aaaa');
+      Check('the first event is stored', Keep.ByteCount = 9);
+      Keep.RememberPatch(2, 'bbbbbbbb');
+      Check('an unacked event is not folded away', Keep.ByteCount = 9);
+      Keep.NoteAck('ab12cd34', 1);
+      Keep.RememberPatch(3, 'cccccccc');
+      Check('an acknowledged event can be folded', (Keep.AckedSeq = 1) And (Keep.ByteCount = 13));
+    Finally
+      Keep.Free;
+    End;
   Finally
     Log.Free;
   End;

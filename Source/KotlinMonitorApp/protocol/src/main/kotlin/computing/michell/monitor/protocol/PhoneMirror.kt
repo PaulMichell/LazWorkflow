@@ -25,6 +25,41 @@ data class PhoneScreen(
 
 data class MergedBlocks(val blocks: List<WireBlock>, val fetchIds: List<String>)
 
+const val AckIntervalMs = 250L
+
+data class AckPace(
+  val lastSentMs: Long = 0,
+  val sentSeq: Long = -1,
+  val pendingSeq: Long = -1
+)
+
+data class AckDecision(
+  val pace: AckPace,
+  val sendNow: String = "",
+  val laterMs: Long = 0,
+  val sendLater: String = "",
+  val seq: Long = -1
+)
+
+/** At most one ack every 250 ms. The later frame carries the newest seq. */
+fun paceAck(
+  pace: AckPace,
+  nowMs: Long,
+  id: String,
+  conversationId: String,
+  streamId: String,
+  seq: Long
+): AckDecision {
+  if (conversationId.isEmpty() || streamId.isEmpty() || seq < 0) return AckDecision(pace)
+  if (seq <= pace.sentSeq) return AckDecision(pace)
+  val json = encodeAck(id, conversationId, streamId, seq)
+  val elapsed = if (pace.lastSentMs == 0L) AckIntervalMs else nowMs - pace.lastSentMs
+  if (elapsed >= AckIntervalMs) {
+    return AckDecision(pace.copy(lastSentMs = nowMs, sentSeq = seq, pendingSeq = -1), json, 0, "", seq)
+  }
+  return AckDecision(pace.copy(pendingSeq = seq), "", AckIntervalMs - elapsed, json, seq)
+}
+
 /** True when offset is the stored UTF-8 length. A mismatch does not change the body. */
 fun applyBlockAppend(stored: String, offset: Int, text: String): Pair<String, Boolean> {
   if (offset < 0 || utf8Length(stored) != offset) return stored to false

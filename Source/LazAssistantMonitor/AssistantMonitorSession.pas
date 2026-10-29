@@ -150,6 +150,7 @@ Type
     FLiveCursor: Int64;
     FHasLivePatch: Boolean;
     FMirror: TMonitorMirror;
+    FCredit: TMonitorLogCredit;
     FObserved: TMonitorSnapshot;
     FHasObserved: Boolean;
     FPendingCommand: Boolean;
@@ -199,6 +200,10 @@ Type
     Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
+    Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
+    Procedure EnqueueAccepted(Const Json: String);
+    Procedure NoteLogAck(Const PayloadJson: String);
+    Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: String);
     Function MirrorDroppedThrough: Int64;
     Function ApprovalRejectReason(Const ToolId: String): String;
@@ -477,6 +482,7 @@ Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FMirror := TMonitorMirror.Create;
+  FCredit := TMonitorLogCredit.Create;
   FObserved := Default(TMonitorSnapshot);
   FHasObserved := False;
   FState := mssStopped;
@@ -555,6 +561,7 @@ End;
 Destructor TMonitorSession.Destroy;
 Begin
   AttachCarrier(Nil);
+  FreeAndNil(FCredit);
   FreeAndNil(FMirror);
   DoneCriticalSection(FLock);
   Inherited Destroy;
@@ -606,14 +613,151 @@ Begin
   End;
 End;
 
-Function TMonitorSession.QueueSend(Const Json: String): Boolean;
+Function TMonitorSession.LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
+Var
+  Data: TJSONData;
+  Root, Payload: TJSONObject;
+  TypeName: String;
+Begin
+  Result := False;
+  Seq := 0;
+  Data := Nil;
+  Try
+    Data := GetJSON(Json);
+  Except
+    Data := Nil;
+  End;
+  If Not (Data Is TJSONObject) Then
+    Begin
+      Data.Free;
+      Exit;
+    End;
+  Root := TJSONObject(Data);
+  Try
+    TypeName := Root.Get('type', '');
+    If (TypeName <> 'patch') And (TypeName <> 'event') Then
+      Exit;
+    If Not (Root.Find('payload') Is TJSONObject) Then
+      Exit;
+    Payload := TJSONObject(Root.Find('payload'));
+    If TypeName = 'patch' Then
+      Seq := Payload.Get('cursor', Int64(0))
+    Else
+      Seq := Payload.Get('seq', Int64(0));
+    Result := Seq > 0;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure TMonitorSession.EnqueueAccepted(Const Json: String);
 Var
   Index: Integer;
   Lane: TOutboundLane;
 Begin
+  If Json = '' Then
+    Exit;
+  Lane := OutboundLane(Json);
+  If Lane = olLive Then
+    Begin
+      SetLength(FLiveFrames, 1);
+      FLiveFrames[0] := Json;
+      FHasLivePatch := True;
+      Exit;
+    End;
+  If Lane = olBulk Then
+    Begin
+      If Length(FBulkSends) >= MonitorOutboundQueueLimit Then
+        Begin
+          QueueSend(EncodeMonitorBye(NewHostId, 'protocol'));
+          Exit;
+        End;
+      Index := Length(FBulkSends);
+      SetLength(FBulkSends, Index + 1);
+      FBulkSends[Index] := Json;
+      Exit;
+    End;
+  Index := Length(FControlSends);
+  SetLength(FControlSends, Index + 1);
+  FControlSends[Index] := Json;
+End;
+
+Procedure TMonitorSession.ReleaseHeldLog;
+Var
+  Seq: Int64;
+  Json: String;
+Begin
+  If Not Assigned(FCredit) Then
+    Exit;
+  While FCredit.TakeHeld(Seq, Json) Do
+    Begin
+      If Not FCredit.CanSend(Length(Json)) Then
+        Begin
+          FCredit.Hold(Seq, Json);
+          Exit;
+        End;
+      FCredit.NoteSent(Seq, Length(Json));
+      EnqueueAccepted(Json);
+    End;
+End;
+
+Procedure TMonitorSession.NoteLogAck(Const PayloadJson: String);
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  StreamId: String;
+  Seq: Int64;
+Begin
+  Data := Nil;
+  Try
+    Data := GetJSON(PayloadJson);
+  Except
+    Data := Nil;
+  End;
+  If Not (Data Is TJSONObject) Then
+    Begin
+      Data.Free;
+      Exit;
+    End;
+  Obj := TJSONObject(Data);
+  Try
+    StreamId := Obj.Get('stream_id', '');
+    Seq := 0;
+    If Assigned(Obj.Find('seq')) And (Obj.Find('seq').JSONType = jtNumber) Then
+      Seq := Obj.Find('seq').AsInt64;
+  Finally
+    Data.Free;
+  End;
+  If (StreamId = '') Or (Seq < 0) Then
+    Exit;
+  If Assigned(FMirror) Then
+    FMirror.NoteAck(StreamId, Seq);
+  If Assigned(FCredit) Then
+    FCredit.NoteAck(Seq);
+  ReleaseHeldLog;
+End;
+
+Function TMonitorSession.QueueSend(Const Json: String): Boolean;
+Var
+  Index: Integer;
+  Lane: TOutboundLane;
+  Seq: Int64;
+Begin
   Result := False;
   If Json = '' Then
     Exit;
+  If LogFrameSeq(Json, Seq) And Assigned(FCredit) Then
+    Begin
+      If Not FCredit.CanSend(Length(Json)) Then
+        Begin
+          FCredit.Hold(Seq, Json);
+          If FCredit.HeldBytes > MonitorLogBudgetBytes Then
+            EnqueueAccepted(EncodeMonitorBye(NewHostId, 'protocol'));
+          Result := True;
+          Exit;
+        End;
+      FCredit.NoteSent(Seq, Length(Json));
+    End;
   Lane := OutboundLane(Json);
   If Lane = olLive Then
     Begin
@@ -1416,6 +1560,12 @@ Begin
       LogLine(2, 'version mismatch bytes=' + IntToStr(Length(Frame.Json)) + ' bind=' + FBindAddress +
         ' port=' + IntToStr(FPort));
       RejectLocked('protocol', True);
+      Exit;
+    End;
+  If Message.TypeName = 'ack' Then
+    Begin
+      If (FState = mssLive) Or (FState = mssBusy) Then
+        NoteLogAck(Message.PayloadJson);
       Exit;
     End;
   If Message.TypeName = 'block_get' Then

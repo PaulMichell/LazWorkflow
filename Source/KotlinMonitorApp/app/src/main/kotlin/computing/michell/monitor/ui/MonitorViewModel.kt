@@ -1768,6 +1768,23 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
+  private var ackJob: kotlinx.coroutines.Job? = null
+
+  private fun scheduleAck(effect: MonitorEffect.Ack) {
+    ackJob?.cancel()
+    ackJob = null
+    if (effect.delayMs <= 0L) {
+      session.sendCatalogue(effect.json)
+      coordinator.noteAckSent(System.currentTimeMillis(), effect.seq)
+      return
+    }
+    ackJob = viewModelScope.launch {
+      kotlinx.coroutines.delay(effect.delayMs)
+      session.sendCatalogue(effect.json)
+      coordinator.noteAckSent(System.currentTimeMillis(), effect.seq)
+    }
+  }
+
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     val before = uiState.value
     uiState.value = coordinator.state
@@ -1779,6 +1796,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         MonitorEffect.LeaveDictation -> leaveDictation()
         is MonitorEffect.RememberDraft -> session.updateDraft(effect.text)
         is MonitorEffect.Send -> session.sendCatalogue(effect.json)
+        is MonitorEffect.Ack -> scheduleAck(effect)
         MonitorEffect.Prefetch -> applyUiEffects(coordinator.collectMissing(uiState.value))
         MonitorEffect.ClearCaches -> {
           images.reset()

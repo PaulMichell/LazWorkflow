@@ -82,7 +82,8 @@ enum class MessageKind(val wireName: String) {
   Permissions("permissions"),
   SetPermissions("set_permissions"),
   BlockGet("block_get"),
-  BlockData("block_data");
+  BlockData("block_data"),
+  Ack("ack");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -1780,6 +1781,14 @@ fun encodeImageGet(id: String, turnIndex: Int, imageId: String): String {
   payload.add("turn_index", turnIndex)
   payload.add("image_id", imageId)
   return encodeEnvelope(MessageKind.ImageGet, id, payload.build())
+}
+
+fun encodeAck(id: String, conversationId: String, streamId: String, seq: Long): String {
+  val payload = JsonObjectBuilder()
+  payload.add("conversation_id", conversationId)
+  payload.add("stream_id", streamId)
+  payload.add("seq", seq)
+  return encodeEnvelope(MessageKind.Ack, id, payload.build())
 }
 
 fun encodeBlockGet(id: String, conversationId: String, blockId: String): String {
