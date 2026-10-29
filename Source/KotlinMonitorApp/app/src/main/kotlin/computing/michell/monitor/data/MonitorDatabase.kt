@@ -29,6 +29,7 @@ abstract class MonitorDatabase : RoomDatabase() {
   abstract fun content(): ContentDao
   abstract fun images(): ImageDao
   abstract fun outbox(): OutboxDao
+  abstract fun sync(): SyncDao
 }
 
 fun openMonitorDatabase(context: Context): MonitorDatabase {

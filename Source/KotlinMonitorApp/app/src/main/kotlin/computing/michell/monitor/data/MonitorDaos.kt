@@ -87,6 +87,39 @@ interface ImageDao {
 }
 
 @Dao
+abstract class SyncDao {
+  @Query("SELECT id FROM host WHERE id = :id")
+  abstract suspend fun findHost(id: String): String?
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  abstract suspend fun insertHost(row: HostRecord)
+
+  @Query("SELECT * FROM conversation WHERE host = :host AND id = :id")
+  abstract suspend fun loadConversation(host: String, id: String): ConversationRecord?
+
+  @Query("SELECT * FROM turn WHERE host = :host AND conversationId = :conversationId")
+  abstract suspend fun loadTurns(host: String, conversationId: String): List<TurnRecord>
+
+  @Query("SELECT * FROM block WHERE host = :host AND conversation = :conversation")
+  abstract suspend fun loadBlocks(host: String, conversation: String): List<BlockRecord>
+
+  @Query("SELECT * FROM image WHERE host = :host AND conversation = :conversation")
+  abstract suspend fun loadImages(host: String, conversation: String): List<ImageRecord>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertConversation(row: ConversationRecord)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertTurns(rows: List<TurnRecord>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertBlocks(rows: List<BlockRecord>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertImages(rows: List<ImageRecord>)
+}
+
+@Dao
 interface OutboxDao {
   @Query("SELECT * FROM outbox ORDER BY createdAt")
   fun observeAll(): Flow<List<OutboxRecord>>

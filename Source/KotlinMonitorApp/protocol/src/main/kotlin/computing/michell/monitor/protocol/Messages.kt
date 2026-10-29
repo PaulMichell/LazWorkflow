@@ -2185,3 +2185,170 @@ fun decodeConversationClosed(obj: JsonValue.Obj): WireConversationClosed? {
   if (!epoch.ok || !cursor.ok || !conversationId.ok || !title.ok) return null
   return WireConversationClosed(epoch.value, cursor.value, conversationId.value, title.value)
 }
+
+/** One catalogue-3 log event. `seq` is per `streamId` and increases by 1. */
+sealed class MonitorEvent {
+  abstract val conversationId: String
+  abstract val streamId: String
+  abstract val seq: Long
+
+  data class TurnOpen(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val turnId: String,
+    val turnIndex: Int,
+    val mode: String,
+    val prompt: String,
+    val createdAt: String
+  ) : MonitorEvent()
+
+  data class BlockOpen(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val turnId: String,
+    val blockId: String,
+    val ordinal: Int,
+    val kind: String,
+    val title: String
+  ) : MonitorEvent()
+
+  data class BlockAppend(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val blockId: String,
+    val offset: Int,
+    val text: String
+  ) : MonitorEvent()
+
+  data class BlockReplace(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val blockId: String,
+    val body: String
+  ) : MonitorEvent()
+
+  data class BlockClose(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val blockId: String,
+    val state: String,
+    val durationMs: Int
+  ) : MonitorEvent()
+
+  data class ImageAdded(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val turnId: String,
+    val imageId: String,
+    val name: String,
+    val mime: String,
+    val width: Int,
+    val height: Int,
+    val bytes: Long,
+    val blockId: String
+  ) : MonitorEvent()
+
+  data class TurnClose(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val turnId: String,
+    val outcome: String,
+    val durationMs: Int,
+    val errorText: String
+  ) : MonitorEvent()
+
+  data class TitleChanged(
+    override val conversationId: String,
+    override val streamId: String,
+    override val seq: Long,
+    val title: String
+  ) : MonitorEvent()
+}
+
+/** Null when the payload is not a known event. The caller does not apply it. */
+fun decodeMonitorEvent(payloadJson: String): MonitorEvent? {
+  val obj = parseObject(payloadJson) ?: return null
+  val conversationId = obj.readString("conversation_id", true)
+  val streamId = obj.readString("stream_id", true)
+  val seq = obj.readLong("seq", true)
+  val kind = obj.readString("event", true)
+  val data = obj.field("data") as? JsonValue.Obj
+  if (!conversationId.ok || !streamId.ok || !seq.ok || seq.value < 0 || !kind.ok || data == null) return null
+  val id = conversationId.value
+  val stream = streamId.value
+  val number = seq.value
+  return when (kind.value) {
+    "turn_open" -> {
+      val turnId = data.readString("turn_id", true)
+      val turnIndex = data.readInt("turn_index", true)
+      val mode = data.readString("mode", true)
+      val prompt = data.readString("prompt", true)
+      val createdAt = data.readString("created_at", true)
+      if (!turnId.ok || !turnIndex.ok || !mode.ok || !prompt.ok || !createdAt.ok) null
+      else MonitorEvent.TurnOpen(id, stream, number, turnId.value, turnIndex.value, mode.value, prompt.value, createdAt.value)
+    }
+    "block_open" -> {
+      val turnId = data.readString("turn_id", true)
+      val blockId = data.readString("block_id", true)
+      val ordinal = data.readInt("ordinal", true)
+      val blockKind = data.readString("kind", true)
+      val title = data.readString("title", true)
+      if (!turnId.ok || !blockId.ok || !ordinal.ok || !blockKind.ok || !title.ok) null
+      else MonitorEvent.BlockOpen(id, stream, number, turnId.value, blockId.value, ordinal.value, blockKind.value, title.value)
+    }
+    "block_append" -> {
+      val blockId = data.readString("block_id", true)
+      val offset = data.readInt("offset", true)
+      val text = data.readString("text", true)
+      if (!blockId.ok || !offset.ok || offset.value < 0 || !text.ok) null
+      else MonitorEvent.BlockAppend(id, stream, number, blockId.value, offset.value, text.value)
+    }
+    "block_replace" -> {
+      val blockId = data.readString("block_id", true)
+      val body = data.readString("body", true)
+      if (!blockId.ok || !body.ok) null
+      else MonitorEvent.BlockReplace(id, stream, number, blockId.value, body.value)
+    }
+    "block_close" -> {
+      val blockId = data.readString("block_id", true)
+      val state = data.readString("state", true)
+      val duration = data.readInt("duration_ms", true)
+      if (!blockId.ok || !state.ok || !duration.ok) null
+      else MonitorEvent.BlockClose(id, stream, number, blockId.value, state.value, duration.value)
+    }
+    "image_added" -> {
+      val turnId = data.readString("turn_id", true)
+      val imageId = data.readString("image_id", true)
+      val name = data.readString("name", true)
+      val mime = data.readString("mime", true)
+      val width = data.readInt("width", true)
+      val height = data.readInt("height", true)
+      val bytes = data.readLong("bytes", true)
+      val blockId = data.readString("block_id", false)
+      if (!turnId.ok || !imageId.ok || !name.ok || !mime.ok || !width.ok || !height.ok || !bytes.ok || !blockId.ok) null
+      else MonitorEvent.ImageAdded(
+        id, stream, number, turnId.value, imageId.value, name.value, mime.value, width.value, height.value, bytes.value, blockId.value
+      )
+    }
+    "turn_close" -> {
+      val turnId = data.readString("turn_id", true)
+      val outcome = data.readString("outcome", true)
+      val duration = data.readInt("duration_ms", true)
+      val errorText = data.readString("error_text", true)
+      if (!turnId.ok || !outcome.ok || !duration.ok || !errorText.ok) null
+      else MonitorEvent.TurnClose(id, stream, number, turnId.value, outcome.value, duration.value, errorText.value)
+    }
+    "title_changed" -> {
+      val title = data.readString("title", true)
+      if (!title.ok) null else MonitorEvent.TitleChanged(id, stream, number, title.value)
+    }
+    else -> null
+  }
+}
