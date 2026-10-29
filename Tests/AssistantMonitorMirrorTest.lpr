@@ -55,6 +55,8 @@ Var
   Stored: Array Of TAssistantMonitorTurn;
   Live: TAssistantMonitorTurn;
   HasLive: Boolean;
+  Suffix: String;
+  Offset: Integer;
 Begin
   Log := TMonitorMirror.Create(64);
   Try
@@ -78,6 +80,9 @@ Begin
     Check('the second conversation is not this stream', Not Log.TryReplayPatches('eeff0011', 0, 1, Events, Head));
     Log.CopyTurns(Stored, Live, HasLive);
     Check('copy does not need a form', Length(Stored) = 1);
+    Check('a grown body is an append at the UTF-8 length', MonitorAppendSuffix('Größe → ', 'Größe → 10 s.', Suffix, Offset) And
+      (Offset = 12) And (Suffix = '10 s.'));
+    Check('a changed prefix is not an append', Not MonitorAppendSuffix('old text', 'new text', Suffix, Offset));
   Finally
     Log.Free;
   End;

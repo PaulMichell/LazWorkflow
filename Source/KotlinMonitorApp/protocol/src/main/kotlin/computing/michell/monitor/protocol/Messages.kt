@@ -80,7 +80,9 @@ enum class MessageKind(val wireName: String) {
   Reasoning("reasoning"),
   SetReasoning("set_reasoning"),
   Permissions("permissions"),
-  SetPermissions("set_permissions");
+  SetPermissions("set_permissions"),
+  BlockGet("block_get"),
+  BlockData("block_data");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -169,7 +171,8 @@ data class WireBlock(
   val truncated: Boolean = false,
   val part: Int = 1,
   val partCount: Int = 1,
-  val revision: Int = 0
+  val revision: Int = 0,
+  val appendOffset: Int? = null
 )
 
 data class WireView(
@@ -1156,6 +1159,7 @@ fun blockToJson(block: WireBlock): JsonValue.Obj {
     obj.add("part_count", block.partCount)
     obj.add("revision", block.revision)
   }
+  if (block.appendOffset != null) obj.add("offset", block.appendOffset)
   return obj.build()
 }
 
@@ -1184,12 +1188,15 @@ fun blockFromJson(obj: JsonValue.Obj): WireBlock? {
   val partCount = obj.readInt("part_count", false)
   val revision = obj.readInt("revision", false)
   if (!part.ok || !partCount.ok || !revision.ok) return null
+  val offset = obj.readInt("offset", false)
+  if (!offset.ok || (obj.field("offset") != null && offset.value < 0)) return null
   return WireBlock(
     kind.value, blockId.value, title.value, toolName.value, toolId.value, body.value,
     running.value, ok.value, duration.value, images, truncated,
     if (part.value < 1) 1 else part.value,
     if (partCount.value < 1) 1 else partCount.value,
-    revision.value
+    revision.value,
+    if (obj.field("offset") == null) null else offset.value
   )
 }
 
@@ -1773,6 +1780,14 @@ fun encodeImageGet(id: String, turnIndex: Int, imageId: String): String {
   payload.add("turn_index", turnIndex)
   payload.add("image_id", imageId)
   return encodeEnvelope(MessageKind.ImageGet, id, payload.build())
+}
+
+fun encodeBlockGet(id: String, conversationId: String, blockId: String): String {
+  val payload = JsonObjectBuilder()
+  payload.add("conversation_id", conversationId)
+  payload.add("block_id", blockId)
+  payload.add("offset", 0)
+  return encodeEnvelope(MessageKind.BlockGet, id, payload.build())
 }
 
 fun decodeImageGet(payloadJson: String): ImageGet? {

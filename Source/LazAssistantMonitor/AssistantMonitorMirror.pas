@@ -25,6 +25,10 @@ Const
   MonitorLogBudgetBytes = 8 * 1024 * 1024;
   MonitorSnapshotPageBytes = 32 * 1024;
   MonitorInlineBodyBytes = 256 * 1024;
+  MonitorBlockDataBytes = 24 * 1024;
+
+{ True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
+Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
 
 Type
   TMonitorMirrorEvent = Record
@@ -107,6 +111,7 @@ Type
     Function CopyPlan(Out PlanPath, PlanTitle: String; Out PlanRunning: Boolean; Out Rows: TMonitorMirrorPlanArray): Boolean;
     Function BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
     Function FetchTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
+    Function FetchBlock(Const BlockId: String; Out Body: String): Boolean;
     Function DroppedThrough: Int64;
     Function Head: Int64;
     Function ByteCount: Int64;
@@ -120,6 +125,25 @@ Uses
 Function Utf8Bytes(Const Text: RawByteString): Integer;
 Begin
   Result := Length(Text);
+End;
+
+{ True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
+Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
+Var
+  OldBytes, NewBytes: UTF8String;
+Begin
+  Result := False;
+  Suffix := '';
+  Offset := 0;
+  OldBytes := UTF8String(Previous);
+  NewBytes := UTF8String(Current);
+  If (Length(OldBytes) = 0) Or (Length(NewBytes) <= Length(OldBytes)) Then
+    Exit;
+  If Copy(NewBytes, 1, Length(OldBytes)) <> OldBytes Then
+    Exit;
+  Offset := Length(OldBytes);
+  Suffix := String(Copy(NewBytes, Offset + 1, MaxInt));
+  Result := Suffix <> '';
 End;
 
 Function YesNo(Condition: Boolean): String;
@@ -529,8 +553,14 @@ Begin
             '","turn_id":"' + JsonEscape(Turn.Id) + '","kind":"' + JsonEscape(Turn.Blocks[BlockIndex].Kind) +
             '","ordinal":' + IntToStr(BlockIndex) + '}')
         Else If Stored.Blocks[BlockIndex].Body <> Turn.Blocks[BlockIndex].Body Then
-          AppendLocked(FHead + 1, 'block_replace', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-            '","text":"' + JsonEscape(Turn.Blocks[BlockIndex].Body) + '"}');
+          Begin
+            If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Turn.Blocks[BlockIndex].Body, EventJson, Index) Then
+              AppendLocked(FHead + 1, 'block_append', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
+                '","offset":' + IntToStr(Index) + ',"text":"' + JsonEscape(EventJson) + '"}')
+            Else
+              AppendLocked(FHead + 1, 'block_replace', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
+                '","body":"' + JsonEscape(Turn.Blocks[BlockIndex].Body) + '"}');
+          End;
         If Not Turn.Blocks[BlockIndex].Running Then
           Begin
             If (Not Found) Or Stored.Blocks[BlockIndex].Running Then
@@ -668,6 +698,35 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Result := FindTurnLocked(TurnIndex, Turn);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.FetchBlock(Const BlockId: String; Out Body: String): Boolean;
+Var
+  Index, BlockIndex: Integer;
+Begin
+  Result := False;
+  Body := '';
+  If BlockId = '' Then
+    Exit;
+  EnterCriticalSection(FLock);
+  Try
+    If FHasLive Then
+      For BlockIndex := 0 To High(FLive.Blocks) Do
+        If FLive.Blocks[BlockIndex].BlockId = BlockId Then
+          Begin
+            Body := FLive.Blocks[BlockIndex].Body;
+            Exit(True);
+          End;
+    For Index := 0 To High(FTurns) Do
+      For BlockIndex := 0 To High(FTurns[Index].Blocks) Do
+        If FTurns[Index].Blocks[BlockIndex].BlockId = BlockId Then
+          Begin
+            Body := FTurns[Index].Blocks[BlockIndex].Body;
+            Exit(True);
+          End;
   Finally
     LeaveCriticalSection(FLock);
   End;

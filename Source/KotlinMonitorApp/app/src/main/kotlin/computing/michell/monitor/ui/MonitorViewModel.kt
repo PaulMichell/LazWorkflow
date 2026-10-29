@@ -59,6 +59,7 @@ import computing.michell.monitor.protocol.MirrorPlace
 import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.applyPhoneCatchup
+import computing.michell.monitor.protocol.applyBlockDataJson
 import computing.michell.monitor.protocol.applyPhonePatch
 import computing.michell.monitor.protocol.noteHelloIdentity
 import computing.michell.monitor.protocol.notePhoneClosed
@@ -203,7 +204,8 @@ data class MonitorUi(
   val patchOpenCursor: Long = 0,
   val resumeOnce: Boolean = false,
   val closedPending: Boolean = false,
-  val closedQueued: Boolean = false
+  val closedQueued: Boolean = false,
+  val blockFetchIds: List<String> = emptyList()
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -558,6 +560,7 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
     MessageKind.Rejected -> applyRejected(state, message)
     MessageKind.Error -> applyError(state, message.payloadJson)
     MessageKind.ImageUnavailable -> applyImageUnavailable(state, message.payloadJson)
+    MessageKind.BlockData -> applyBlockDataMessage(state, message.payloadJson)
     // A host frame this build cannot apply stays on screen. It must not close the socket.
     else -> state
   }
@@ -617,7 +620,8 @@ private fun MonitorUi.withPhone(phone: PhoneScreen): MonitorUi {
     closedQueued = closedQueued || file,
     conversationId = phone.conversationId,
     projectRoot = phone.projectRoot,
-    conversationTitle = phone.title
+    conversationTitle = phone.title,
+    blockFetchIds = phone.blockFetchIds
   )
 }
 
@@ -633,6 +637,10 @@ private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): Monitor
   }
   if (next.catchingUp || hello.epoch != next.hostEpoch || hello.title.isEmpty() || hello.title == next.conversationTitle) return next
   return next.copy(conversationTitle = hello.title)
+}
+
+private fun applyBlockDataMessage(state: MonitorUi, payloadJson: String): MonitorUi {
+  return state.withPhone(applyBlockDataJson(phoneOf(state), payloadJson))
 }
 
 private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {

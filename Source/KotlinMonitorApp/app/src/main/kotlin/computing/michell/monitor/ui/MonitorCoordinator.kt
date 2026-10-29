@@ -28,6 +28,7 @@ import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeTurnData
 import computing.michell.monitor.protocol.encodeClosedScreen
+import computing.michell.monitor.protocol.encodeBlockGet
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeImageGet
 import computing.michell.monitor.protocol.encodeResume
@@ -300,7 +301,10 @@ class MonitorCoordinator(
       }
     }
     noteFetchArrival(message)
-    val side = mirrorSideEffects(resumeBefore, closedBefore) + helloResume(message)
+    val fetches = applied.blockFetchIds
+    if (fetches.isNotEmpty()) applied = applied.copy(blockFetchIds = emptyList())
+    val side = mirrorSideEffects(resumeBefore, closedBefore) + helloResume(message) +
+      fetches.map { blockId -> MonitorEffect.Send(encodeBlockGet(session.nextCommandId(), applied.conversationId, blockId)) }
     if (!immediate) {
       appliedDirty = true
       return if (side.isEmpty()) null else side

@@ -22,6 +22,20 @@ class PhoneMirrorTest {
   }
 
   @Test
+  fun anAppendOffsetMustMatchTheStoredUtf8Length() {
+    val start = PhoneScreen(epoch = "aa", live = turn("Shown", listOf(block("answer", "answer-1", "Größe → "))))
+    val grown = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "10 s.").copy(appendOffset = 12)), 1, 1))
+    assertEquals("Größe → 10 s.", grown.live?.blocks?.single()?.body)
+    assertEquals(emptyList<String>(), grown.blockFetchIds)
+    val mismatch = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "guess").copy(appendOffset = 3)), 1, 1))
+    assertEquals("Größe → ", mismatch.live?.blocks?.single()?.body)
+    assertEquals(listOf("answer-1"), mismatch.blockFetchIds)
+    val repaired = applyBlockData(mismatch, "answer-1", 0, "Größe → 10 s.")
+    assertEquals("Größe → 10 s.", repaired.live?.blocks?.single()?.body)
+    assertEquals(emptyList<String>(), repaired.blockFetchIds)
+  }
+
+  @Test
   fun anIncompletePartSetDoesNotAdvanceTheCursor() {
     val start = PhoneScreen(epoch = "aa", live = turn("Shown", listOf(block("answer", "answer-1", "old"))))
     val partial = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "one")), 1, 2))

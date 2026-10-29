@@ -19,8 +19,17 @@ data class PhoneScreen(
   val fileClosedId: String = "",
   val conversationId: String = "",
   val projectRoot: String = "",
-  val title: String = ""
+  val title: String = "",
+  val blockFetchIds: List<String> = emptyList()
 )
+
+data class MergedBlocks(val blocks: List<WireBlock>, val fetchIds: List<String>)
+
+/** True when offset is the stored UTF-8 length. A mismatch does not change the body. */
+fun applyBlockAppend(stored: String, offset: Int, text: String): Pair<String, Boolean> {
+  if (offset < 0 || utf8Length(stored) != offset) return stored to false
+  return stored + text to true
+}
 
 /** A stub that has not been opened. Load must not call open. */
 class DisconnectedSocket {
@@ -67,17 +76,30 @@ fun indexWithoutFingerprint(
   return entries.filter { entry -> keyOf(entry.fingerprint) != fingerprintKey }
 }
 
-/** Replace a block with the same id. Every other block stays. */
-fun mergePatchBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): List<WireBlock> {
-  if (incoming.isEmpty()) return existing
+/** Replace a block with the same id. An append offset must match the stored UTF-8 length. */
+fun mergePatchBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): MergedBlocks {
+  if (incoming.isEmpty()) return MergedBlocks(existing, emptyList())
   val result = existing.toMutableList()
+  val fetches = mutableListOf<String>()
   for (block in incoming) {
     val index = if (block.blockId.isEmpty()) -1 else result.indexOfFirst { item ->
       item.blockId == block.blockId && item.kind == block.kind
     }
-    if (index >= 0) result[index] = block else result += block
+    val offset = block.appendOffset
+    if (offset == null) {
+      if (index >= 0) result[index] = block else result += block
+    } else {
+      val stored = if (index >= 0) result[index].body else ""
+      val applied = applyBlockAppend(stored, offset, block.body)
+      if (!applied.second) {
+        if (block.blockId.isNotEmpty()) fetches += block.blockId
+      } else {
+        val updated = block.copy(body = applied.first, appendOffset = null)
+        if (index >= 0) result[index] = updated else result += updated
+      }
+    }
   }
-  return result
+  return MergedBlocks(result, fetches)
 }
 
 fun notePhoneClosed(screen: PhoneScreen, id: String, title: String): PhoneScreen {
@@ -159,7 +181,7 @@ private fun storePart(screen: PhoneScreen, patch: WirePatch): PhoneScreen {
     thinking = previous?.thinking ?: "",
     response = previous?.response ?: "",
     live = true,
-    blocks = merged,
+    blocks = merged.blocks,
     images = previous?.images ?: emptyList()
   )
   return screen.copy(
@@ -170,7 +192,41 @@ private fun storePart(screen: PhoneScreen, patch: WirePatch): PhoneScreen {
     patchPartCount = if (complete) 0 else patch.partCount,
     patchParts = if (complete) emptyMap() else stored,
     resumeOnce = if (complete) false else screen.resumeOnce,
-    fileClosedId = ""
+    fileClosedId = "",
+    blockFetchIds = merged.fetchIds
+  )
+}
+
+/** A block_data frame replaces from offset 0, or appends when offset is the stored length. */
+fun applyBlockDataJson(screen: PhoneScreen, payloadJson: String): PhoneScreen {
+  val obj = parseObject(payloadJson) ?: return screen
+  val blockId = obj.readString("block_id", true)
+  val offset = obj.readInt("offset", true)
+  val text = obj.readString("text", true)
+  if (!blockId.ok || !offset.ok || !text.ok) return screen
+  return applyBlockData(screen, blockId.value, offset.value, text.value)
+}
+
+fun applyBlockData(screen: PhoneScreen, blockId: String, offset: Int, text: String): PhoneScreen {
+  if (blockId.isEmpty() || offset < 0) return screen
+  fun splice(stored: String): String? {
+    if (offset == 0) return text
+    if (utf8Length(stored) != offset) return null
+    return stored + text
+  }
+  fun rewrite(blocks: List<WireBlock>): List<WireBlock> {
+    return blocks.map { block ->
+      if (block.blockId != blockId) block
+      else {
+        val body = splice(block.body) ?: return@map block
+        block.copy(body = body)
+      }
+    }
+  }
+  return screen.copy(
+    live = screen.live?.copy(blocks = rewrite(screen.live.blocks)),
+    turns = screen.turns.map { turn -> turn.copy(blocks = rewrite(turn.blocks)) },
+    blockFetchIds = emptyList()
   )
 }
 

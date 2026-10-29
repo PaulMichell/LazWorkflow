@@ -198,6 +198,7 @@ Type
     Procedure HandleResume(Const Id, PayloadJson: String);
     Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
+    Procedure ServeBlockGet(Const Id, PayloadJson: String);
     Procedure HandleApproval(Const PayloadJson: String);
     Function MirrorDroppedThrough: Int64;
     Function ApprovalRejectReason(Const ToolId: String): String;
@@ -1417,6 +1418,14 @@ Begin
       RejectLocked('protocol', True);
       Exit;
     End;
+  If Message.TypeName = 'block_get' Then
+    Begin
+      If (FState <> mssLive) And (FState <> mssBusy) Then
+        RejectLocked('auth', True)
+      Else
+        ServeBlockGet(Message.Id, Message.PayloadJson);
+      Exit;
+    End;
   If (FState <> mssLive) And (FState <> mssBusy) Then
     Begin
       If Not KindAllowedBeforeAuth(Ord(Message.Kind)) Then
@@ -2157,6 +2166,74 @@ Begin
   Finally
     UnlockSession;
   End;
+End;
+
+Procedure TMonitorSession.ServeBlockGet(Const Id, PayloadJson: String);
+Var
+  Data: TJSONData;
+  Obj, Payload: TJSONObject;
+  BlockId, Body, Piece: String;
+  Bytes: UTF8String;
+  Offset, Total, Taken: Integer;
+  Last: Boolean;
+Begin
+  Data := Nil;
+  BlockId := '';
+  Offset := 0;
+  Try
+    Data := GetJSON(PayloadJson);
+  Except
+    Data := Nil;
+  End;
+  If Not (Data Is TJSONObject) Then
+    Begin
+      Data.Free;
+      QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Block fetch payload is not valid.', Id));
+      Exit;
+    End;
+  Obj := TJSONObject(Data);
+  Try
+    BlockId := Obj.Get('block_id', '');
+    If Assigned(Obj.Find('offset')) And (Obj.Find('offset').JSONType = jtNumber) Then
+      Offset := Obj.Find('offset').AsInteger;
+  Finally
+    Data.Free;
+  End;
+  If (BlockId = '') Or (Offset < 0) Or (Not Assigned(FMirror)) Or (Not FMirror.FetchBlock(BlockId, Body)) Then
+    Begin
+      QueueSend(EncodeMonitorError(NewHostId, 'not_found', 'Block was not found.', Id));
+      Exit;
+    End;
+  Bytes := UTF8String(Body);
+  Total := Length(Bytes);
+  If Offset > Total Then
+    Offset := Total;
+  Bytes := Copy(Bytes, Offset + 1, MaxInt);
+  Repeat
+    Taken := Length(Bytes);
+    If Taken > MonitorBlockDataBytes Then
+      Taken := MonitorBlockDataBytes;
+    While (Taken > 0) And (Taken < Length(Bytes)) And ((Ord(Bytes[Taken]) And $C0) = $80) Do
+      Dec(Taken);
+    If (Taken < 1) And (Length(Bytes) > 0) Then
+      Taken := 1;
+    Piece := String(Copy(Bytes, 1, Taken));
+    Delete(Bytes, 1, Taken);
+    Last := Length(Bytes) = 0;
+    Payload := TJSONObject.Create;
+    Try
+      Payload.Add('conversation_id', FConversationId);
+      Payload.Add('block_id', BlockId);
+      Payload.Add('offset', Offset);
+      Payload.Add('text', Piece);
+      Payload.Add('total_bytes', Total);
+      Payload.Add('last', Last);
+      QueueSend('{"v":2,"id":"' + NewHostId + '","type":"block_data","payload":' + Payload.AsJSON + '}');
+    Finally
+      Payload.Free;
+    End;
+    Offset := Offset + Taken;
+  Until Last;
 End;
 
 Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;

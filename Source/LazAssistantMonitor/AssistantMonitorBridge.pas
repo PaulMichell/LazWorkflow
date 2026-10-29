@@ -945,9 +945,9 @@ Var
   Patch: TMonitorPatch;
   Rows: TAssistantMonitorPlanRows;
   Frames: TStringArray;
-  ErrorText, Stamp, PlanStamp: String;
+  ErrorText, Stamp, PlanStamp, Suffix: String;
   Cursor: Int64;
-  I: Integer;
+  I, J, Offset: Integer;
   FirstPatch, NeedPatch: Boolean;
 Begin
   If FPumping Then
@@ -986,6 +986,23 @@ Begin
   Patch.TurnIndex := Turn.TurnIndex;
   Patch.TurnId := Turn.Id;
   Patch.Blocks := SelectDirtyMonitorBlocks(FSentBlocks, Turn.Blocks, FirstPatch);
+  SetLength(Patch.AppendOffsets, Length(Patch.Blocks));
+  For I := 0 To High(Patch.Blocks) Do
+    Begin
+      Patch.AppendOffsets[I] := -1;
+      If FirstPatch Then
+        Continue;
+      For J := 0 To High(FSentBlocks) Do
+        If FSentBlocks[J].BlockId = Patch.Blocks[I].BlockId Then
+          Begin
+            If MonitorAppendSuffix(FSentBlocks[J].Body, Patch.Blocks[I].Body, Suffix, Offset) Then
+              Begin
+                Patch.Blocks[I].Body := Suffix;
+                Patch.AppendOffsets[I] := Offset;
+              End;
+            Break;
+          End;
+    End;
   Patch.Busy := View.Busy;
   Patch.Sending := View.Sending;
   Patch.PlanRunning := View.PlanRunning;

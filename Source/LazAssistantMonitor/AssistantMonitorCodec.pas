@@ -333,6 +333,8 @@ Type
     TurnIndex: Integer;
     TurnId: String;
     Blocks: Array Of TAssistantMonitorBlock;
+    { Parallel to Blocks. -1 means the body replaces. Zero or more means the body is a suffix at that UTF-8 offset. }
+    AppendOffsets: Array Of Integer;
     Busy: Boolean;
     Sending: Boolean;
     PlanRunning: Boolean;
@@ -3270,6 +3272,7 @@ Begin
   Patch.TurnIndex := 0;
   Patch.TurnId := '';
   SetLength(Patch.Blocks, 0);
+  SetLength(Patch.AppendOffsets, 0);
   Patch.Busy := False;
   Patch.Sending := False;
   Patch.PlanRunning := False;
@@ -3289,6 +3292,7 @@ End;
 Function PatchPayload(Const Patch: TMonitorPatch): TJSONObject;
 Var
   Blocks: TJSONArray;
+  Node: TJSONObject;
   I: Integer;
 Begin
   Result := TJSONObject.Create;
@@ -3311,7 +3315,12 @@ Begin
   Result.Add('status_text', Patch.StatusText);
   Blocks := TJSONArray.Create;
   For I := 0 To High(Patch.Blocks) Do
-    Blocks.Add(MonitorBlockToJson(Patch.Blocks[I], 1, 1, 0));
+    Begin
+      Node := MonitorBlockToJson(Patch.Blocks[I], 1, 1, 0);
+      If (I <= High(Patch.AppendOffsets)) And (Patch.AppendOffsets[I] >= 0) Then
+        Node.Add('offset', Patch.AppendOffsets[I]);
+      Blocks.Add(Node);
+    End;
   Result.Add('blocks', Blocks);
 End;
 
@@ -3400,6 +3409,11 @@ Begin
           Exit;
         If Not TryMonitorBlockFromJson(TJSONObject(Blocks[I]), Patch.Blocks[I], Truncated) Then
           Exit;
+        SetLength(Patch.AppendOffsets, I + 1);
+        If Assigned(TJSONObject(Blocks[I]).Find('offset')) And (TJSONObject(Blocks[I]).Find('offset').JSONType = jtNumber) Then
+          Patch.AppendOffsets[I] := TJSONObject(Blocks[I]).Find('offset').AsInteger
+        Else
+          Patch.AppendOffsets[I] := -1;
       End;
     Result := True;
   Finally
@@ -3481,6 +3495,8 @@ Type
     Trial := Patch;
     Trial.Part := Part;
     Trial.PartCount := PartCount;
+    { A split piece is a body fragment, not an append suffix. }
+    SetLength(Trial.AppendOffsets, 0);
     SetLength(Trial.Blocks, Length(Blocks));
     For I := 0 To High(Blocks) Do
       Trial.Blocks[I] := Blocks[I];
