@@ -48,4 +48,41 @@ at most one frame. The expected results are:
 
 | Date | Commit | Throughput (frames/s) | First frame (ms) | Pong (ms) | Bulk frames before pong | Resume catchup (ms) | Resume complete (ms) | Notes |
 |---|---|---|---|---|---|---|---|---|
-| 2026-10-29 | baseline | not yet measured | | | | | | The harness was written in a session that could not compile or run it. Run the command above and fill in this row. |
+| 2026-10-29 | bbd3789 | 4.0 | 251 | 8261 | 32 | not a number | not a number | `instantfpc Tests/RunAssistantTests.pas --only AssistantMonitorLinkTest`. 32 frames, `total_ms=8013`. Resume delivered 1 of 8 frames, then timed out. The metric line then hit an arithmetic overflow because the answer clock was never set. |
+
+Metric lines:
+
+```text
+metric throughput frames=32 title_bytes=2000 first_ms=251 total_ms=8013 frames_per_second=4.0
+metric ping queued_bulk=32 bulk_before_pong=32 pong_ms=8261
+metric resume frames=1 heard_ms=FAIL exception Arithmetic overflow
+```
+
+## Success criteria (item 9.2)
+
+These are the budgets in the plan. A miss is a defect, not a note.
+
+| Criterion | Budget | Measured | Result |
+|---|---|---|---|
+| IDE change to phone screen while a turn streams | p95 < 150 ms | not measured on a phone. Host first frame is already 251 ms. | Defect |
+| Pong while a 2 MiB snapshot is in flight | < 100 ms | not measured on a phone. Host pong behind 32 bulk frames is 8261 ms. | Defect |
+| Resume after a 60 s drop, backlog up to 2 MiB | phone shows current state within 1 s | not measured on a phone. Host resume of 8 frames delivered 1 frame and timed out. | Defect |
+
+## Device acceptance (item 9.3)
+
+Not run. `adb devices -l` listed no device on 2026-10-29, and `emulator` is not installed. A host socket test is not a phone and IDE test. Each row stays unchecked until someone runs it on a real phone paired with this IDE.
+
+| Check | Result |
+|---|---|
+| Pair | Not run |
+| Stream a long turn | Not run |
+| Airplane mode in the middle of a turn | Not run |
+| Kill the app in the middle of a turn | Not run |
+| Restart the IDE | Not run |
+| Switch History conversations | Not run |
+| Approve a tool from the phone during a bulk transfer | Not run |
+| Review three conversations offline | Not run |
+
+## On-device trace
+
+Not run. `adb devices -l` listed no device, and `emulator` is not installed. The three traces still required are a 50 000-character streamed answer, a 2 MiB snapshot, and a 60 s Wi-Fi drop. Do not treat the host harness as that trace.
