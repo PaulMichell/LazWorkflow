@@ -28,7 +28,8 @@ Unit AssistantMonitorSession;
 Interface
 
 Uses
-  SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec;
+  SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
+  AssistantSessionObserve;
 
 Const
   MonitorPairCodeLength = 10;
@@ -47,7 +48,7 @@ Const
   MonitorOutboundQueueLimit = 32;
   { Idle sweep. Resume is not a user command and is never answered host_busy here. }
   MonitorCommandWaitMs = 5000;
-  { Committed patches a resume can replay. Fewer when the JSON would pass 2 MiB. }
+  { Kept so older tests compile. The log budget is MonitorLogBudgetBytes. }
   MonitorRingCapacity = 256;
   MonitorRingJsonCap = 2 * 1024 * 1024;
   MonitorCrockfordAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -148,11 +149,9 @@ Type
     FLiveFrames: Array Of String;
     FLiveCursor: Int64;
     FHasLivePatch: Boolean;
-    FRingCursor: Array Of Int64;
-    FRingJson: Array Of RawByteString;
-    FRingBytes: Int64;
-    { Highest cursor removed from the ring. A later resume must not treat that gap as complete. }
-    FRingDroppedCursor: Int64;
+    FMirror: TMonitorMirror;
+    FObserved: TMonitorSnapshot;
+    FHasObserved: Boolean;
     FPendingCommand: Boolean;
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
@@ -197,12 +196,10 @@ Type
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure HandleResume(Const Id, PayloadJson: String);
+    Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
+    Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure HandleApproval(Const PayloadJson: String);
-    Procedure ClearRingLocked;
-    Procedure NoteRingDropLocked(Cursor: Int64);
-    Procedure DropOldestRingLocked;
-    Procedure AppendRingLocked(Cursor: Int64; Const PatchJson: RawByteString);
-    Function RingIndexLocked(Cursor: Int64): Integer;
+    Function MirrorDroppedThrough: Int64;
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
@@ -245,8 +242,18 @@ Type
     Procedure NoteMirrorHanded(Cursor: Int64);
     /// Stores a handed patch. A record that does not fit is dropped and stated.
     Procedure RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
-    /// True when every cursor after the client is still a patch in the ring. Does not read a form.
+    /// True when every cursor after the client is still a patch in the log. Does not read a form.
     Function TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
+    { IDE thread. Copies one turn into the model and appends the events that describe the change. }
+    Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
+    Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
+    Function HasMirrorModel: Boolean;
+    Function CopyMirrorTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
+    Function FetchMirrorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
+    Function BuildMirrorPages(Out Pages: TMonitorSnapshotPageArray): Boolean;
+    { IDE thread. The connection thread copies this instead of reading the form. }
+    Procedure ObserveSnapshot(Const Snapshot: TMonitorSnapshot);
+    Function CopyObservedSnapshot(Out Snapshot: TMonitorSnapshot): Boolean;
     /// Copies the open epoch. False when none has been minted. Does not mint the next one.
     Function CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
     Procedure CopyMirrorIdentity(Out Epoch, ConversationId, ProjectRoot, Title: String; Out Cursor: Int64);
@@ -323,8 +330,7 @@ Function MonitorCommandSweepSendsBusy(Kind: Integer; Claimed, Finished: Boolean;
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings,
-  AssistantSessionObserve;
+  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -469,6 +475,9 @@ Constructor TMonitorSession.Create;
 Begin
   Inherited Create;
   InitCriticalSection(FLock);
+  FMirror := TMonitorMirror.Create;
+  FObserved := Default(TMonitorSnapshot);
+  FHasObserved := False;
   FState := mssStopped;
   FCarrier := Nil;
   FOnCommand := Nil;
@@ -532,10 +541,6 @@ Begin
   FHasLivePatch := False;
   FLiveCursor := 0;
   SetLength(FLiveFrames, 0);
-  SetLength(FRingCursor, 0);
-  SetLength(FRingJson, 0);
-  FRingBytes := 0;
-  FRingDroppedCursor := 0;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -549,6 +554,7 @@ End;
 Destructor TMonitorSession.Destroy;
 Begin
   AttachCarrier(Nil);
+  FreeAndNil(FMirror);
   DoneCriticalSection(FLock);
   Inherited Destroy;
 End;
@@ -1310,6 +1316,11 @@ Begin
       QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
       Exit;
     End;
+  If Kind = Ord(mmkTurn) Then
+    Begin
+      If ServeTurnFromMirror(Id, PayloadJson) Then
+        Exit;
+    End;
   If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Then
     EnterBusy(Kind, Id, PayloadJson)
   Else
@@ -1330,7 +1341,9 @@ Begin
       QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
       Exit;
     End;
-  { Not a user command. Stay queued for the IDE thread. Do not answer host_busy. }
+  { The log or the materialised model answers on this thread. An empty model still waits for the IDE thread. }
+  If ServeResumeFromMirror(Id, ResumeMsg) Then
+    Exit;
   QueueCommand(Ord(mmkResume), Id, PayloadJson);
 End;
 
@@ -1822,7 +1835,7 @@ Begin
     FReservedCursor := 0;
     FReservedPayload := '';
     FReservedHanded := False;
-    ClearRingLocked;
+    FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
   Finally
     UnlockSession;
   End;
@@ -1849,8 +1862,7 @@ Begin
     FHasLivePatch := False;
     FLiveCursor := 0;
     SetLength(FLiveFrames, 0);
-    ClearRingLocked;
-    FRingDroppedCursor := Cursor;
+    FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
   Finally
     UnlockSession;
   End;
@@ -1999,100 +2011,41 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.ClearRingLocked;
+Function TMonitorSession.MirrorDroppedThrough: Int64;
 Begin
-  SetLength(FRingCursor, 0);
-  SetLength(FRingJson, 0);
-  FRingBytes := 0;
-  FRingDroppedCursor := 0;
-End;
-
-Procedure TMonitorSession.NoteRingDropLocked(Cursor: Int64);
-Begin
-  If Cursor > FRingDroppedCursor Then
-    FRingDroppedCursor := Cursor;
-End;
-
-Procedure TMonitorSession.DropOldestRingLocked;
-Var
-  Index, Size: Integer;
-  Dropped: Int64;
-Begin
-  If Length(FRingCursor) = 0 Then
-    Exit;
-  Dropped := FRingCursor[0];
-  Size := Length(FRingJson[0]);
-  NoteRingDropLocked(Dropped);
-  FRingBytes := FRingBytes - Size;
-  If FRingBytes < 0 Then
-    FRingBytes := 0;
-  For Index := 0 To High(FRingCursor) - 1 Do
-    Begin
-      FRingCursor[Index] := FRingCursor[Index + 1];
-      FRingJson[Index] := FRingJson[Index + 1];
-    End;
-  SetLength(FRingCursor, Length(FRingCursor) - 1);
-  SetLength(FRingJson, Length(FRingJson) - 1);
-  LogLine(1, 'ring drop cursor=' + IntToStr(Dropped) + ' bytes=' + IntToStr(Size));
-End;
-
-Procedure TMonitorSession.AppendRingLocked(Cursor: Int64; Const PatchJson: RawByteString);
-Var
-  Size, Index: Integer;
-Begin
-  Size := Length(PatchJson);
-  If Size > MonitorRingJsonCap Then
-    Begin
-      NoteRingDropLocked(Cursor);
-      LogLine(1, 'ring drop cursor=' + IntToStr(Cursor) + ' bytes=' + IntToStr(Size));
-      Exit;
-    End;
-  While (Length(FRingCursor) > 0) And ((Length(FRingCursor) >= MonitorRingCapacity) Or
-    (FRingBytes + Size > MonitorRingJsonCap)) Do
-    DropOldestRingLocked;
-  Index := Length(FRingCursor);
-  SetLength(FRingCursor, Index + 1);
-  SetLength(FRingJson, Index + 1);
-  FRingCursor[Index] := Cursor;
-  FRingJson[Index] := PatchJson;
-  FRingBytes := FRingBytes + Size;
-End;
-
-Function TMonitorSession.RingIndexLocked(Cursor: Int64): Integer;
-Var
-  Index: Integer;
-Begin
-  Result := -1;
-  For Index := 0 To High(FRingCursor) Do
-    If FRingCursor[Index] = Cursor Then
-      Exit(Index);
+  If Assigned(FMirror) Then
+    Result := FMirror.DroppedThrough
+  Else
+    Result := 0;
 End;
 
 Procedure TMonitorSession.RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
 Begin
+  If Not Assigned(FMirror) Then
+    Exit;
   LockSession;
   Try
-    If (Cursor <= 0) Or (PatchJson = '') Or (Cursor > FCommittedCursor) Or (Cursor <= FRingDroppedCursor) Then
+    If (Cursor <= 0) Or (PatchJson = '') Or (Cursor > FCommittedCursor) Or (Cursor <= FMirror.DroppedThrough) Then
       Exit;
-    If RingIndexLocked(Cursor) >= 0 Then
-      Exit;
-    If (Length(FRingCursor) > 0) And (Cursor < FRingCursor[High(FRingCursor)]) Then
-      Exit;
-    AppendRingLocked(Cursor, PatchJson);
   Finally
     UnlockSession;
   End;
+  FMirror.RememberPatch(Cursor, PatchJson);
 End;
 
 Function TMonitorSession.TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
 Var
-  Need: Int64;
-  Index, Count: Integer;
+  Events: TMonitorMirrorEventArray;
+  Head: Int64;
+  Index: Integer;
   Patch: TMonitorPatch;
 Begin
   Result := False;
   Catchup := Default(TMonitorCatchup);
   SetLength(Catchup.Patches, 0);
+  SetLength(Events, 0);
+  If Not Assigned(FMirror) Then
+    Exit;
   LockSession;
   Try
     Catchup.Mode := mcmEvents;
@@ -2104,36 +2057,170 @@ Begin
     Catchup.HasSnapshot := False;
     If FEpoch = '' Then
       Exit;
-    { A client with nothing committed sends an empty epoch. That is not this generation. }
     If LowerCase(Epoch) <> FEpoch Then
       Exit;
-    If (Cursor < 0) Or (Cursor > FCommittedCursor) Or (Cursor < FRingDroppedCursor) Then
+    If (Cursor < 0) Or (Cursor > FCommittedCursor) Then
       Exit;
-    If Cursor = FCommittedCursor Then
-      Begin
-        Result := True;
-        Exit;
-      End;
-    Need := Cursor + 1;
-    Count := 0;
-    While Need <= FCommittedCursor Do
-      Begin
-        Index := RingIndexLocked(Need);
-        If Index < 0 Then
-          Exit;
-        If Not DecodeMonitorPatch(String(FRingJson[Index]), Patch) Then
-          Exit;
-        SetLength(Catchup.Patches, Count + 1);
-        Catchup.Patches[Count] := Patch;
-        Inc(Count);
-        If Need = FCommittedCursor Then
-          Break;
-        Inc(Need);
-      End;
-    Result := True;
   Finally
     UnlockSession;
   End;
+  If Not FMirror.TryReplayPatches(Epoch, Cursor, Catchup.Cursor, Events, Head) Then
+    Exit;
+  For Index := 0 To High(Events) Do
+    Begin
+      If Not DecodeMonitorPatch(String(Events[Index].Data), Patch) Then
+        Exit;
+      SetLength(Catchup.Patches, Length(Catchup.Patches) + 1);
+      Catchup.Patches[High(Catchup.Patches)] := Patch;
+    End;
+  Result := True;
+End;
+
+Procedure TMonitorSession.ObserveTurn(Const Turn: TAssistantMonitorTurn);
+Begin
+  If Assigned(FMirror) Then
+    FMirror.ObserveTurn(Turn);
+End;
+
+Procedure TMonitorSession.ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow);
+Begin
+  If Assigned(FMirror) Then
+    FMirror.ObservePlan(PlanPath, PlanTitle, PlanRunning, Rows);
+End;
+
+Function TMonitorSession.HasMirrorModel: Boolean;
+Begin
+  Result := Assigned(FMirror) And FMirror.HasModel;
+End;
+
+Function TMonitorSession.CopyMirrorTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn;
+  Out HasLive: Boolean): Boolean;
+Begin
+  Result := False;
+  SetLength(Stored, 0);
+  Live := Default(TAssistantMonitorTurn);
+  HasLive := False;
+  If Not Assigned(FMirror) Then
+    Exit;
+  Result := FMirror.CopyTurns(Stored, Live, HasLive);
+End;
+
+Function TMonitorSession.FetchMirrorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
+Begin
+  Result := False;
+  Turn := Default(TAssistantMonitorTurn);
+  If Assigned(FMirror) Then
+    Result := FMirror.FetchTurn(TurnIndex, Turn);
+End;
+
+Function TMonitorSession.BuildMirrorPages(Out Pages: TMonitorSnapshotPageArray): Boolean;
+Begin
+  Result := False;
+  SetLength(Pages, 0);
+  If Not Assigned(FMirror) Then
+    Exit;
+  LockSession;
+  Try
+    Result := FMirror.BuildSnapshotPages(FEpoch, FCommittedCursor, Pages);
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.ObserveSnapshot(Const Snapshot: TMonitorSnapshot);
+Var
+  Index: Integer;
+Begin
+  LockSession;
+  Try
+    FObserved := Snapshot;
+    FHasObserved := True;
+  Finally
+    UnlockSession;
+  End;
+  If Not Assigned(FMirror) Then
+    Exit;
+  For Index := 0 To High(Snapshot.StoredTurns) Do
+    FMirror.ObserveTurn(Snapshot.StoredTurns[Index]);
+  If Snapshot.HasLive Then
+    FMirror.ObserveTurn(Snapshot.Live);
+  FMirror.ObservePlan(Snapshot.PlanPath, Snapshot.PlanTitle, Snapshot.PlanRunning, Snapshot.PlanRows);
+End;
+
+Function TMonitorSession.CopyObservedSnapshot(Out Snapshot: TMonitorSnapshot): Boolean;
+Begin
+  LockSession;
+  Try
+    Snapshot := FObserved;
+    Result := FHasObserved;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
+Var
+  TurnIndex: Integer;
+  Turn: TAssistantMonitorTurn;
+Begin
+  Result := False;
+  TurnIndex := 0;
+  If Not DecodeMonitorTurnRequest(PayloadJson, TurnIndex) Then
+    Exit;
+  If Not FetchMirrorTurn(TurnIndex, Turn) Then
+    Exit;
+  QueueSend(EncodeMonitorTurnData(Id, Turn));
+  Result := True;
+End;
+
+Function TMonitorSession.ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
+Var
+  Catchup: TMonitorCatchup;
+  Snapshot: TMonitorSnapshot;
+  Pages: TMonitorSnapshotPageArray;
+  Json: String;
+  Index: Integer;
+Begin
+  Result := False;
+  If TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
+    Begin
+      Json := EncodeMonitorCatchup(Id, Catchup);
+      If Json <> '' Then
+        Begin
+          QueueSend(Json);
+          Result := True;
+        End;
+      Exit;
+    End;
+  If Not CopyObservedSnapshot(Snapshot) Then
+    Exit;
+  Catchup := Default(TMonitorCatchup);
+  Catchup.Mode := mcmSnapshot;
+  Catchup.HasSnapshot := True;
+  Catchup.Snapshot := Snapshot;
+  LockSession;
+  Try
+    Catchup.Epoch := FEpoch;
+    Catchup.Cursor := FCommittedCursor;
+    Catchup.ConversationId := FConversationId;
+    Catchup.ProjectRoot := FProjectRoot;
+    Catchup.Title := FTitle;
+  Finally
+    UnlockSession;
+  End;
+  Json := EncodeMonitorCatchup(Id, Catchup);
+  If Json <> '' Then
+    Begin
+      QueueSend(Json);
+      Result := True;
+      Exit;
+    End;
+  If Not BuildMirrorPages(Pages) Then
+    Exit;
+  For Index := 0 To High(Pages) Do
+    QueueSend('{"v":3,"id":"' + Id + '","type":"snapshot_page","payload":' + Pages[Index].Json + '}');
+  Result := Length(Pages) > 0;
 End;
 
 Function TMonitorSession.CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;

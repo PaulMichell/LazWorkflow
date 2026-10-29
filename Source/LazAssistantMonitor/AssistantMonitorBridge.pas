@@ -42,7 +42,8 @@ Implementation
 
 Uses
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
-  AssistantMonitorFrames, AssistantMonitorApproval, AssistantTools, AssistantConversation, ProjectAssistantForm;
+  AssistantMonitorFrames, AssistantMonitorMirror, AssistantMonitorApproval, AssistantTools, AssistantConversation,
+  ProjectAssistantForm;
 
 Type
   TMonitorQueuedCommand = Class
@@ -441,11 +442,11 @@ End;
 Procedure TAssistantMonitorBridge.PushTranscript(Form: TProjectAssistantForm);
 Var
   Turn: TAssistantMonitorTurn;
+  Session: TMonitorSession;
   View: TAssistantMonitorView;
   Transcript: TMonitorTranscript;
   Frames: TStringArray;
   ErrorText: String;
-  Session: TMonitorSession;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -706,61 +707,6 @@ Begin
   Snapshot.HasLive := Form.FillMonitorTurn(MonitorLiveTurnIndex, Snapshot.Live, ErrorText);
 End;
 
-Procedure CompactCatchupSnapshot(Var Snapshot: TMonitorSnapshot; Level: Integer);
-Var
-  Index: Integer;
-Begin
-  Case Level Of
-    1:
-      Begin
-        For Index := 0 To High(Snapshot.Live.Blocks) Do
-          Begin
-            If (Snapshot.Live.Prompt = '') And (Snapshot.Live.Blocks[Index].Kind = 'user') Then
-              Snapshot.Live.Prompt := Snapshot.Live.Blocks[Index].Body;
-            If (Snapshot.Live.Thinking = '') And (Snapshot.Live.Blocks[Index].Kind = 'thinking') Then
-              Snapshot.Live.Thinking := Snapshot.Live.Blocks[Index].Body;
-            If (Snapshot.Live.Response = '') And (Snapshot.Live.Blocks[Index].Kind = 'answer') Then
-              Snapshot.Live.Response := Snapshot.Live.Blocks[Index].Body;
-            If Snapshot.Live.Blocks[Index].Kind = 'tool' Then
-              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 240)
-            Else If Snapshot.Live.Blocks[Index].Kind = 'thinking' Then
-              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 240)
-            Else If Length(Snapshot.Live.Blocks[Index].Body) > 800 Then
-              Snapshot.Live.Blocks[Index].Body := Copy(Snapshot.Live.Blocks[Index].Body, 1, 800);
-          End;
-        If Snapshot.Live.PromptPreview = '' Then
-          Snapshot.Live.PromptPreview := Copy(Snapshot.Live.Prompt, 1, 160);
-      End;
-    2:
-      Begin
-        SetLength(Snapshot.Live.Blocks, 0);
-        SetLength(Snapshot.Live.Images, 0);
-      End;
-    3:
-      Begin
-        Snapshot.Live.Prompt := Copy(Snapshot.Live.Prompt, 1, 4000);
-        Snapshot.Live.Thinking := Copy(Snapshot.Live.Thinking, 1, 4000);
-        Snapshot.Live.Response := Copy(Snapshot.Live.Response, 1, 8000);
-        SetLength(Snapshot.Live.Blocks, 0);
-        SetLength(Snapshot.Live.Images, 0);
-      End;
-    4: SetLength(Snapshot.StoredTurns, 0);
-    5:
-      Begin
-        SetLength(Snapshot.PlanRows, 0);
-        SetLength(Snapshot.TaskRows, 0);
-      End;
-    6:
-      Begin
-        Snapshot.Live.Prompt := Copy(Snapshot.Live.Prompt, 1, 400);
-        Snapshot.Live.Thinking := '';
-        Snapshot.Live.Response := Copy(Snapshot.Live.Response, 1, 400);
-      End;
-  Else
-    ;
-  End;
-End;
-
 Function CatchupBodyStamp(Const Snapshot: TMonitorSnapshot; Level: Integer): String;
 Begin
   Result := EncodeMonitorSnapshot('stamp', Snapshot);
@@ -794,6 +740,7 @@ Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantFor
 Var
   Catchup: TMonitorCatchup;
   Session: TMonitorSession;
+  Pages: TMonitorSnapshotPageArray;
   Id, Json, Stamp: String;
   Cursor: Int64;
   Level: Integer;
@@ -814,27 +761,32 @@ Begin
   If Catchup.Epoch = '' Then
     Exit;
   FillSnapshot(Form, Catchup.Snapshot);
+  Session.ObserveSnapshot(Catchup.Snapshot);
   Catchup.HasSnapshot := True;
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  Json := '';
-  For Level := 0 To 6 Do
-    Begin
-      If Level > 0 Then
-        CompactCatchupSnapshot(Catchup.Snapshot, Level);
-      Stamp := CatchupBodyStamp(Catchup.Snapshot, Level);
-      If Not Session.CommitSnapshotCursor(Stamp, Cursor) Then
-        Exit;
-      Catchup.Cursor := Cursor;
-      Json := EncodeResumeSnapshot(Id, Cursor, Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title,
-        Catchup.Snapshot);
-      If Json <> '' Then
-        Break;
-    End;
+  Stamp := CatchupBodyStamp(Catchup.Snapshot, 0);
+  If Not Session.CommitSnapshotCursor(Stamp, Cursor) Then
+    Exit;
+  Catchup.Cursor := Cursor;
+  Json := EncodeResumeSnapshot(Id, Cursor, Catchup.Epoch, Catchup.ConversationId, Catchup.ProjectRoot, Catchup.Title,
+    Catchup.Snapshot);
   If Json = '' Then
     Begin
-      WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
+      { Nothing is truncated. Pages carry the turns the single frame could not. }
+      If Not Session.BuildMirrorPages(Pages) Then
+        Begin
+          WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
+          Exit;
+        End;
+      For Level := 0 To High(Pages) Do
+        SendJson('{"v":3,"id":"' + Id + '","type":"snapshot_page","payload":' + Pages[Level].Json + '}');
+      Session.NoteMirrorHanded(Cursor);
+      FSentEpoch := '';
+      SetLength(FSentBlocks, 0);
+      FSentFlagsValid := False;
+      PumpMirror(AssistantMirrorCounter);
       Exit;
     End;
   SendJson(Json);
@@ -1019,6 +971,8 @@ Begin
   Turn := Default(TAssistantMonitorTurn);
   If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
+  If Turn.Id <> '' Then
+    Session.ObserveTurn(Turn);
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
   FirstPatch := Session.MirrorEpoch <> FSentEpoch;
@@ -1079,6 +1033,7 @@ Begin
         End;
     End;
   Form.FillMonitorPlan(Rows);
+  Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
   PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
   If PlanStamp <> FPlanStamp Then
     Begin
@@ -1379,6 +1334,7 @@ Var
   Task: TMonitorTaskCommand;
   Image: TMonitorImageGet;
   Turn: TAssistantMonitorTurn;
+  Session: TMonitorSession;
   Data: TBytes;
   Mime: String;
   ImageWidth, ImageHeight, Index: Integer;
@@ -1516,6 +1472,18 @@ Begin
         If Not DecodeMonitorTurnRequest(PayloadJson, Index) Then
           Begin
             ErrorText := 'missing';
+            Exit;
+          End;
+        LockBridge;
+        Try
+          Session := FSession;
+        Finally
+          UnlockBridge;
+        End;
+        If Assigned(Session) And Session.FetchMirrorTurn(Index, Turn) Then
+          Begin
+            SendJson(EncodeMonitorTurnData(Id, Turn));
+            Result := True;
             Exit;
           End;
         Result := Form.RemoteTurn(Index, Turn, ErrorText);

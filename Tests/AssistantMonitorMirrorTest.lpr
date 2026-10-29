@@ -1,0 +1,96 @@
+Program AssistantMonitorMirrorTest;
+
+{ The monitor log keeps each conversation, folds old events into the model, and pages a snapshot.
+  (c) 2026 Michell Computing. }
+
+{$IFDEF FPC}
+  {$MODE OBJFPC}
+  {$LONGSTRINGS ON}
+{$ENDIF}
+
+Uses
+  SysUtils, AssistantSessionObserve, AssistantMonitorMirror;
+
+Var
+  FailCount: Integer;
+
+Procedure Check(Const Title: String; Condition: Boolean);
+Begin
+  If Condition Then
+    WriteLn('ok   ', Title)
+  Else
+    Begin
+      WriteLn('FAIL ', Title);
+      Inc(FailCount);
+    End;
+End;
+
+Function SampleTurn(Const TurnId, Body: String; TurnIndex: Integer): TAssistantMonitorTurn;
+Begin
+  Result := Default(TAssistantMonitorTurn);
+  Result.TurnIndex := TurnIndex;
+  Result.Id := TurnId;
+  Result.Mode := 'build';
+  Result.Prompt := 'prompt';
+  Result.PromptPreview := 'prompt';
+  Result.CreatedAt := '2026-01-01T00:00:00Z';
+  SetLength(Result.Blocks, 1);
+  Result.Blocks[0].Kind := 'answer';
+  Result.Blocks[0].BlockId := TurnId + '-block';
+  Result.Blocks[0].Body := Body;
+  Result.Blocks[0].Ok := True;
+  SetLength(Result.Images, 1);
+  Result.Images[0].Id := TurnId + '-image';
+  Result.Images[0].Name := 'shot.png';
+  Result.Images[0].Mime := 'image/png';
+End;
+
+Procedure TestFoldAndReplay;
+Var
+  Log: TMonitorMirror;
+  Events: TMonitorMirrorEventArray;
+  Head: Int64;
+  Turn: TAssistantMonitorTurn;
+  Pages: TMonitorSnapshotPageArray;
+  Stored: Array Of TAssistantMonitorTurn;
+  Live: TAssistantMonitorTurn;
+  HasLive: Boolean;
+Begin
+  Log := TMonitorMirror.Create(64);
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Log.RememberPatch(1, StringOfChar('a', 40));
+    Log.RememberPatch(2, StringOfChar('b', 40));
+    Check('small budget drops the older patch', Log.DroppedThrough >= 1);
+    Check('resume behind the fold is not a tail', Not Log.TryReplayPatches('ab12cd34', 0, 2, Events, Head));
+    Check('resume at the kept patch is a tail', Log.TryReplayPatches('ab12cd34', 1, 2, Events, Head) And
+      (Length(Events) = 1) And (Events[0].Seq = 2));
+    Log.ObserveTurn(SampleTurn('turn-a', StringOfChar('x', MonitorInlineBodyBytes + 1), 0));
+    Check('folded events still materialise the turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a') And
+      (Length(Turn.Blocks[0].Body) = MonitorInlineBodyBytes + 1) And (Turn.Images[0].Id = 'turn-a-image'));
+    Check('snapshot pages start with the turn list', Log.BuildSnapshotPages('ab12cd34', Log.Head, Pages) And
+      (Length(Pages) >= 2) And (Pos('"turns":', Pages[0].Json) > 0) And (Pages[1].Page = 1));
+    Check('a large body is marked deferred, not cut', Pos('"deferred":true', Pages[1].Json) > 0);
+    Log.BeginStream('eeff0011', 'conversation-b', '/work/Two', 'Two');
+    Log.RememberPatch(1, 'second');
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Check('the first conversation still has its turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a'));
+    Check('the second conversation is not this stream', Not Log.TryReplayPatches('eeff0011', 0, 1, Events, Head));
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('copy does not need a form', Length(Stored) = 1);
+  Finally
+    Log.Free;
+  End;
+End;
+
+Begin
+  FailCount := 0;
+  TestFoldAndReplay;
+  If FailCount = 0 Then
+    WriteLn('AssistantMonitorMirrorTest passed')
+  Else
+    Begin
+      WriteLn(FailCount, ' failure(s)');
+      Halt(1);
+    End;
+End.

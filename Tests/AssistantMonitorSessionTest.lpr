@@ -572,16 +572,14 @@ Begin
   Check('oversized commit', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
   Session.NoteMirrorHanded(2);
   Session.RememberHandedPatch(2, Big);
-  Check('discarded cursor is not events', Not Session.TryResumeEvents('eeff0011', 1, Catchup));
-  Check('resume at the discarded cursor has nothing after it', Session.TryResumeEvents('eeff0011', 2, Catchup) And
-    (Length(Catchup.Patches) = 0) And (Catchup.Cursor = 2));
+  Check('a patch under the log budget stays events', Session.TryResumeEvents('eeff0011', 1, Catchup) And
+    (Length(Catchup.Patches) = 1) And (Catchup.Patches[0].Cursor = 2));
   Session.BeginMirrorEpoch('11223344', 'current', '/work/LazWorkflow', 'Cap');
   For Index := 1 To MonitorRingCapacity + 1 Do
     HandPatch('11223344', 'n' + IntToStr(Index), Cursor);
-  Check('capacity dropped the oldest', Not Session.TryResumeEvents('11223344', 0, Catchup));
-  Check('resume of the oldest discarded cursor still has the rest', Session.TryResumeEvents('11223344', 1, Catchup) And
-    (Catchup.Mode = mcmEvents) And (Catchup.Patches[0].Cursor = 2) And
-    (Catchup.Patches[High(Catchup.Patches)].Cursor = MonitorRingCapacity + 1));
+  Check('log budget keeps the small patches', Session.TryResumeEvents('11223344', 0, Catchup) And
+    (Catchup.Mode = mcmEvents) And (Length(Catchup.Patches) = MonitorRingCapacity + 1) And
+    (Catchup.Patches[0].Cursor = 1) And (Catchup.Patches[High(Catchup.Patches)].Cursor = MonitorRingCapacity + 1));
   Session.BeginMirrorEpoch('55667788', 'current', '/work/LazWorkflow', 'Bytes');
   HandPatch('55667788', 'small', Cursor);
   Big := '{"epoch":"55667788","cursor":2,"turn_index":1,"turn_id":"turn-1","part":1,"part_count":1,' +
@@ -599,9 +597,9 @@ Begin
   Check('second large commit', Session.CommitMirrorCursor('large-b', Cursor) And (Cursor = 3));
   Session.NoteMirrorHanded(3);
   Session.RememberHandedPatch(3, Big);
-  Check('byte cap drops the older record', Not Session.TryResumeEvents('55667788', 1, Catchup));
-  Check('byte cap keeps the newer record', Session.TryResumeEvents('55667788', 2, Catchup) And (Length(Catchup.Patches) = 1) And
-    (Catchup.Patches[0].Cursor = 3) And (Length(Catchup.Patches[0].Blocks[0].Body) = 1200000));
+  Check('log budget keeps both large patches', Session.TryResumeEvents('55667788', 1, Catchup) And
+    (Length(Catchup.Patches) = 2) And (Catchup.Patches[1].Cursor = 3) And
+    (Length(Catchup.Patches[1].Blocks[0].Body) = 1200000));
   Check('snapshot cursor follows the committed tip', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 4));
   Session.NoteMirrorHanded(4);
   Check('snapshot cursor is committed', Session.MirrorCursor = 4);
@@ -627,9 +625,13 @@ Begin
   Check('oversized handed patch', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
   Session.NoteMirrorHanded(2);
   Session.RememberHandedPatch(2, StringOfChar('z', MonitorRingJsonCap + 1));
-  Check('resume of a discarded cursor is not events', Not Session.TryResumeEvents('ab12cd34', 0, Catchup));
-  Check('resume of a discarded cursor needs one form snapshot', ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
-  Check('resume snapshot cursor', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 3));
+  Check('a patch under the log budget does not need a form snapshot',
+    Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
+  Check('a hole still needs one form snapshot', Session.CommitMirrorCursor('hole', Cursor) And (Cursor = 3));
+  Session.NoteMirrorHanded(3);
+  Check('resume behind the hole is not events', Not Session.TryResumeEvents('ab12cd34', 2, Catchup));
+  Check('resume behind the hole needs one form snapshot', ResumeNeedsFormSnapshot(Session, 'ab12cd34', 2));
+  Check('resume snapshot cursor', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 4));
   Snapshot := Default(TMonitorSnapshot);
   Snapshot.PlanTitle := 'Monitor plan';
   Json := EncodeResumeSnapshot('resume-snap', Cursor, 'ab12cd34', 'current', '/work/LazWorkflow', 'Current', Snapshot);
