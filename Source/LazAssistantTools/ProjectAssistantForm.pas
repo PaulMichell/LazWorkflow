@@ -239,6 +239,8 @@ Type
     FClaudeEffort: String;
     FClaudeLaunchReady: Boolean;
     FClaudeRetries: Integer;
+    { Tool calls of the running Claude turn already placed in the trace. }
+    FClaudeToolsShown: Integer;
     { Claude Code's session for this conversation. The key is connection, project and first turn. }
     FClaudeSessionId, FClaudeSessionKey, FClaudeSubmitText: String;
     FClaudeResume, FClaudeFreshRetried: Boolean;
@@ -261,6 +263,7 @@ Type
     Procedure PollCodex;
     Procedure PollClaude;
     Procedure ApplyClaudeRateLimit(Const RateLimitJson: String);
+    Procedure ApplyClaudeToolSteps(Const Snapshot: TClaudeRunSnapshot);
     Function ClaudeSessionKey: String;
     Function ClaudeRecapPrompt(Const SubmitText: String): String;
     Procedure NoteClaudeKeySource(Const KeySource: String);
@@ -4739,6 +4742,7 @@ Begin
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
   TurnSettings.SessionId := FClaudeSessionId;
   TurnSettings.Resume := FClaudeResume;
+  FClaudeToolsShown := 0;
   Try
     FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, FClaudeLaunchPrompt);
     SetStreamPhase(AssistantPhaseWaiting);
@@ -5163,6 +5167,67 @@ Begin
       ' instead of the Claude subscription.');
 End;
 
+{ True for a successful Claude Code file edit whose path ends with the active plan's relative path. }
+Function ClaudeStepWritesPlan(Const Step: TClaudeToolStep): Boolean;
+Var
+  PlanRel, Input: String;
+Begin
+  Result := False;
+  If (Not Step.Done) Or Step.IsError Or
+    Not (SameText(Step.Name, 'Edit') Or SameText(Step.Name, 'Write') Or SameText(Step.Name, 'MultiEdit')) Then
+    Exit;
+  PlanRel := StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll]);
+  If PlanRel = '' Then
+    Exit;
+  { The input is JSON, so a slash in the path may be escaped. }
+  Input := StringReplace(StringReplace(Step.Input, '\/', '/', [rfReplaceAll]), '\\', '/', [rfReplaceAll]);
+  Result := Pos(PlanRel + '"', Input) > 0;
+End;
+
+Procedure TProjectAssistantForm.ApplyClaudeToolSteps(Const Snapshot: TClaudeRunSnapshot);
+Var
+  I: Integer;
+  Step: TClaudeToolStep;
+  Block: TTraceBlock;
+Begin
+  If (Not FSending) Or (Not Assigned(FTrace)) Then
+    Exit;
+  { Same shape as a Codex tool: the text and thinking written before the call, then the call, then new slices. }
+  For I := FClaudeToolsShown To High(Snapshot.Tools) Do
+    Begin
+      Step := Snapshot.Tools[I];
+      ApplyAssistantSnapshots(Copy(Snapshot.Content, 1, Step.TextBefore), Copy(Snapshot.Thinking, 1, Step.ThinkingBefore));
+      ApplyLiveThinkingAndAnswer;
+      Block := FTrace.AddTool(Step.Id, Step.Name, Step.Input);
+      Block.Running := True;
+      FAnswerSliceStart := Step.TextBefore + 1;
+      FThinkingSliceStart := Step.ThinkingBefore + 1;
+      FTrace.StartThinking(0);
+      SetStreamPhase(AssistantPhaseRunning);
+    End;
+  FClaudeToolsShown := Length(Snapshot.Tools);
+  For I := 0 To High(Snapshot.Tools) Do
+    Begin
+      Step := Snapshot.Tools[I];
+      If Not Step.Done Then
+        Continue;
+      Block := FTrace.FindTool(Step.Id);
+      If (Not Assigned(Block)) Or (Not Block.Running) Then
+        Continue;
+      Block.Running := False;
+      Block.Ok := Not Step.IsError;
+      Block.Body := Step.Output;
+      If Step.IsError Then
+        Begin
+          Block.Collapsed := False;
+          If Pos('failed', LowerCase(Block.Title)) < 1 Then
+            Block.Title := Block.Title + '  failed';
+        End;
+      If ClaudeStepWritesPlan(Step) Then
+        FPlanWriteThisTurn := True;
+    End;
+End;
+
 Procedure TProjectAssistantForm.PollClaude;
 Var
   Snapshot: TClaudeRunSnapshot;
@@ -5185,8 +5250,12 @@ Begin
       End;
     Snapshot := Run.Snapshot;
     If FClaudeRun <> Run Then Exit;
-    If Snapshot.Content <> '' Then
-      ApplyAssistantSnapshots(Snapshot.Content, '');
+    ApplyClaudeToolSteps(Snapshot);
+    If (Snapshot.Content <> '') Or (Snapshot.Thinking <> '') Then
+      ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
+    { A call still waiting for its result keeps the footer on Running, as a pending Codex tool does. }
+    If FSending And (Length(Snapshot.Tools) > 0) And (Not Snapshot.Tools[High(Snapshot.Tools)].Done) Then
+      SetStreamPhase(AssistantPhaseRunning);
     If (Snapshot.ContextTokens > 0) And (Snapshot.ContextTokens < High(Integer)) Then
       FContextUsed := Snapshot.ContextTokens;
     ApplyClaudeRateLimit(Snapshot.RateLimitJson);

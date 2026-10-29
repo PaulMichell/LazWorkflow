@@ -24,6 +24,22 @@ Type
     OutputTokens: Int64;
   End;
 
+  { One tool call, in the order Claude made it. }
+  TClaudeToolStep = Record
+    Id: String;
+    Name: String;
+    { The input as JSON, bounded for display. }
+    Input: String;
+    { The result text, bounded for display. Empty until Done. }
+    Output: String;
+    IsError: Boolean;
+    Done: Boolean;
+    { Lengths of Text and Thinking when the call was made, so the IDE can place the call between them. }
+    TextBefore: Integer;
+    ThinkingBefore: Integer;
+  End;
+  TClaudeToolSteps = Array Of TClaudeToolStep;
+
   { One turn's stream-json events, folded. }
   TClaudeStreamState = Record
     SessionId: String;
@@ -33,6 +49,12 @@ Type
     { Every assistant text block so far, in order. }
     Text: String;
     ToolCalls: Integer;
+    Tools: TClaudeToolSteps;
+    { What can be shown of Claude's thinking: Claude Code sends no reasoning text in print mode, only that a
+      model call is thinking and an estimate of its size. Finished notes stay; the live note is rewritten. }
+    Thinking: String;
+    ThinkingDone: String;
+    ThinkingTokens: Int64;
     Denials: Integer;
     { The latest rate_limit_info object, as JSON, and its status. }
     RateLimitJson: String;
@@ -162,12 +184,59 @@ Begin
     JsonNumber(Usage.Find('cache_creation_input_tokens'));
 End;
 
+Const
+  { Display bounds for a tool's input and result in the trace. }
+  ToolInputLimit = 2000;
+  ToolOutputLimit = 4000;
+
+Function BoundedText(Const Value: String; Limit: Integer): String;
+Begin
+  Result := Value;
+  If Length(Result) > Limit Then
+    Result := Copy(Result, 1, Limit) + ' …';
+End;
+
+{ The live note is rewritten as the estimate grows; a finished note is kept. }
+Procedure UpdateThinking(Var State: TClaudeStreamState);
+Begin
+  State.Thinking := State.ThinkingDone;
+  If State.ThinkingTokens > 0 Then
+    State.Thinking := State.Thinking + Format('Thinking… about %d tokens.', [State.ThinkingTokens]);
+End;
+
+Procedure FinishThinking(Var State: TClaudeStreamState);
+Begin
+  If State.ThinkingTokens > 0 Then
+    State.ThinkingDone := State.ThinkingDone + Format('Thought for about %d tokens.', [State.ThinkingTokens]) +
+      LineEnding
+  Else
+    State.ThinkingDone := State.ThinkingDone + 'Thought.' + LineEnding;
+  State.ThinkingTokens := 0;
+  UpdateThinking(State);
+End;
+
+Procedure AddToolStep(Block: TJSONObject; Var State: TClaudeStreamState);
+Var
+  Step: TClaudeToolStep;
+Begin
+  Inc(State.ToolCalls);
+  Step := Default(TClaudeToolStep);
+  Step.Id := Block.Get('id', '');
+  Step.Name := Block.Get('name', '');
+  If Block.Find('input') <> Nil Then
+    Step.Input := BoundedText(Block.Find('input').AsJSON, ToolInputLimit);
+  Step.TextBefore := Length(State.Text);
+  Step.ThinkingBefore := Length(State.Thinking);
+  SetLength(State.Tools, Length(State.Tools) + 1);
+  State.Tools[High(State.Tools)] := Step;
+End;
+
 Procedure ReadAssistantMessage(Event: TJSONObject; Var State: TClaudeStreamState);
 Var
   MessageNode, Block: TJSONObject;
   Content: TJSONArray;
   I: Integer;
-  Piece: String;
+  BlockType, Piece: String;
 Begin
   If Not (Event.Find('message') Is TJSONObject) Then
     Exit;
@@ -177,21 +246,74 @@ Begin
   If Not (MessageNode.Find('content') Is TJSONArray) Then
     Exit;
   Content := TJSONArray(MessageNode.Find('content'));
-  Piece := '';
+  { In block order, so a tool call is placed after the text written before it. }
   For I := 0 To Content.Count - 1 Do
     If Content.Items[I] Is TJSONObject Then
       Begin
         Block := TJSONObject(Content.Items[I]);
-        If (Block.Get('type', '') = 'text') And (Block.Find('text') Is TJSONString) Then
-          Piece := Piece + Block.Get('text', '')
-        Else If Block.Get('type', '') = 'tool_use' Then
-          Inc(State.ToolCalls);
+        BlockType := Block.Get('type', '');
+        If (BlockType = 'text') And (Block.Find('text') Is TJSONString) Then
+          Begin
+            Piece := Block.Get('text', '');
+            If Piece = '' Then
+              Continue;
+            If State.Text <> '' Then
+              State.Text := State.Text + LineEnding + LineEnding;
+            State.Text := State.Text + Piece;
+          End
+        Else If BlockType = 'thinking' Then
+          FinishThinking(State)
+        Else If BlockType = 'tool_use' Then
+          AddToolStep(Block, State);
       End;
-  If Piece = '' Then
+End;
+
+{ Text of a tool_result: a plain string, or a list of text blocks. }
+Function ToolResultText(Block: TJSONObject): String;
+Var
+  Parts: TJSONArray;
+  I: Integer;
+Begin
+  Result := '';
+  If Block.Find('content') Is TJSONString Then
+    Exit(Block.Get('content', ''));
+  If Not (Block.Find('content') Is TJSONArray) Then
     Exit;
-  If State.Text <> '' Then
-    State.Text := State.Text + LineEnding + LineEnding;
-  State.Text := State.Text + Piece;
+  Parts := TJSONArray(Block.Find('content'));
+  For I := 0 To Parts.Count - 1 Do
+    If (Parts.Items[I] Is TJSONObject) And (TJSONObject(Parts.Items[I]).Find('text') Is TJSONString) Then
+      Begin
+        If Result <> '' Then
+          Result := Result + LineEnding;
+        Result := Result + TJSONObject(Parts.Items[I]).Get('text', '');
+      End;
+End;
+
+Procedure ReadToolResults(Event: TJSONObject; Var State: TClaudeStreamState);
+Var
+  Content: TJSONArray;
+  Block: TJSONObject;
+  I, J: Integer;
+  Id: String;
+Begin
+  If Not (Event.Find('message') Is TJSONObject) Or
+    Not (TJSONObject(Event.Find('message')).Find('content') Is TJSONArray) Then
+    Exit;
+  Content := TJSONArray(TJSONObject(Event.Find('message')).Find('content'));
+  For I := 0 To Content.Count - 1 Do
+    If (Content.Items[I] Is TJSONObject) And (TJSONObject(Content.Items[I]).Get('type', '') = 'tool_result') Then
+      Begin
+        Block := TJSONObject(Content.Items[I]);
+        Id := Block.Get('tool_use_id', '');
+        For J := High(State.Tools) DownTo 0 Do
+          If State.Tools[J].Id = Id Then
+            Begin
+              State.Tools[J].Output := BoundedText(ToolResultText(Block), ToolOutputLimit);
+              State.Tools[J].IsError := (Block.Find('is_error') Is TJSONBoolean) And Block.Get('is_error', False);
+              State.Tools[J].Done := True;
+              Break;
+            End;
+      End;
 End;
 
 Procedure ReadResult(Event: TJSONObject; Var State: TClaudeStreamState);
@@ -262,8 +384,15 @@ Begin
       End
     Else If (EventType = 'system') And (Subtype = 'permission_denied') Then
       Inc(State.Denials)
+    Else If (EventType = 'system') And (Subtype = 'thinking_tokens') Then
+      Begin
+        State.ThinkingTokens := JsonNumber(Event.Find('estimated_tokens'));
+        UpdateThinking(State);
+      End
     Else If EventType = 'assistant' Then
       ReadAssistantMessage(Event, State)
+    Else If EventType = 'user' Then
+      ReadToolResults(Event, State)
     Else If (EventType = 'rate_limit_event') And (Event.Find('rate_limit_info') Is TJSONObject) Then
       Begin
         RateLimit := TJSONObject(Event.Find('rate_limit_info'));

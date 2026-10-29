@@ -236,6 +236,41 @@ Begin
   Check('tool stream answer', Stream.Text = 'Lazarus');
   Check('tool stream outcome is an answer', ClaudeTurnOutcome(Stream, 0, '', ErrorText));
 
+  Check('tool stream records the call', (Length(Stream.Tools) = 1) And (Stream.Tools[0].Name = 'Read') And
+    (Pos('notes.txt', Stream.Tools[0].Input) > 0));
+  Check('tool stream records the result', Stream.Tools[0].Done And (Not Stream.Tools[0].IsError) And
+    (Pos('Lazarus fixture notes', Stream.Tools[0].Output) > 0));
+  Check('tool call comes before the answer text', Stream.Tools[0].TextBefore = 0);
+
+  Stream := FoldFixture('plain.jsonl');
+  Check('a turn without tools records none', (Length(Stream.Tools) = 0) And (Stream.Thinking = ''));
+
+  Stream := FoldFixture('maxturns.jsonl');
+  Check('thinking is shown as a size, not as text', Pos('Thought for about', Stream.Thinking) = 1);
+
+  ClearClaudeStream(Stream);
+  ApplyClaudeStreamLine('{"type":"system","subtype":"thinking_tokens","estimated_tokens":50}', Stream);
+  Check('live thinking note', Stream.Thinking = 'Thinking… about 50 tokens.');
+  ApplyClaudeStreamLine('{"type":"system","subtype":"thinking_tokens","estimated_tokens":200}', Stream);
+  Check('live thinking note grows in place', Stream.Thinking = 'Thinking… about 200 tokens.');
+  ApplyClaudeStreamLine('{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""}]}}', Stream);
+  Check('finished thinking note stays', Stream.Thinking = 'Thought for about 200 tokens.' + LineEnding);
+  ApplyClaudeStreamLine('{"type":"assistant","message":{"content":[{"type":"text","text":"Reading now."},' +
+    '{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}', Stream);
+  Check('a call is placed after the text before it', (Length(Stream.Tools) = 1) And
+    (Stream.Tools[0].TextBefore = Length('Reading now.')) And (Stream.Tools[0].ThinkingBefore = Length(Stream.Thinking)));
+  Check('a pending call is not done', Not Stream.Tools[0].Done);
+  ApplyClaudeStreamLine('{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1",' +
+    '"content":[{"type":"text","text":"a.pas"}],"is_error":true}]}}', Stream);
+  Check('a block-list result is read and its error kept', Stream.Tools[0].Done And Stream.Tools[0].IsError And
+    (Stream.Tools[0].Output = 'a.pas'));
+  ApplyClaudeStreamLine('{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}', Stream);
+  Check('text after a call follows it', Stream.Text = 'Reading now.' + LineEnding + LineEnding + 'Done.');
+
+  Stream := FoldFixture('denied.jsonl');
+  Check('a refused call is an error result', (Length(Stream.Tools) = 1) And Stream.Tools[0].Done And
+    Stream.Tools[0].IsError);
+
   Stream := FoldFixture('resume.jsonl');
   Check('resumed stream answer', Stream.Text = 'notes.txt');
 

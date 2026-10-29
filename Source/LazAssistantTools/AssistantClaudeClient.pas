@@ -53,6 +53,10 @@ Type
     { The claude process was started. A failure after that may follow edits or commands. }
     Started: Boolean;
     ToolCalls: Integer;
+    { Each tool call so far. A copy: the worker never changes an array it has published. }
+    Tools: TClaudeToolSteps;
+    { The thinking notes the stream allows (see TClaudeStreamState.Thinking). }
+    Thinking: String;
     Denials: Integer;
     SessionId: String;
     KeySource: String;
@@ -780,6 +784,9 @@ Begin
   Try
     Latest.Content := Stream.Text;
     Latest.ToolCalls := Stream.ToolCalls;
+    { Dynamic arrays are shared on assignment, not copied on write. The form reads this one without the lock. }
+    Latest.Tools := Copy(Stream.Tools);
+    Latest.Thinking := Stream.Thinking;
     Latest.Denials := Stream.Denials;
     Latest.SessionId := Stream.SessionId;
     Latest.KeySource := Stream.KeySource;
@@ -904,6 +911,8 @@ Begin
     Latest.UsageState := Stream.Turn.UsageState;
     Latest.InputTokens := Stream.Turn.InputTokens;
     Latest.OutputTokens := Stream.Turn.OutputTokens;
+    Latest.Tools := Copy(Stream.Tools);
+    Latest.Thinking := Stream.Thinking;
     Latest.Done := True;
   Finally
     LeaveCriticalSection(Lock);
