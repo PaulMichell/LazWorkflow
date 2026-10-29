@@ -4591,6 +4591,19 @@ Begin
     End;
 End;
 
+{ Claude Code's own tools for each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
+  Build works on the project. }
+Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
+Begin
+  Case Mode Of
+    amChat: Result := ctsNone;
+    amDocument, amPlan: Result := ctsMarkdown;
+    amBuild: Result := ctsProject;
+  Else
+    Result := ctsRead;
+  End;
+End;
+
 Function ClaudeWorkDirectory: String;
 Begin
   Result := ExcludeTrailingPathDelimiter(ProjectRootPath);
@@ -4720,7 +4733,7 @@ Begin
   TurnSettings.Executable := FClaudeRuntime;
   TurnSettings.Model := FClaudeModel;
   TurnSettings.ApprovalMode := FClaudeApproval;
-  TurnSettings.Mode := ActiveMode;
+  TurnSettings.ToolScope := ClaudeToolScopeForMode(ActiveMode);
   TurnSettings.Effort := FClaudeEffort;
   TurnSettings.WorkingDirectory := FClaudeDirectory;
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;

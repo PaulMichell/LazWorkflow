@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, AssistantConversation, AssistantClaudeClient, AssistantClaudeStream;
+  Classes, SysUtils, AssistantClaudeClient, AssistantClaudeStream;
 
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
@@ -338,29 +338,28 @@ Begin
     Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
 
     Args.Clear;
-    AppendClaudeModeArguments(amChat, Args);
+    AppendClaudeModeArguments(ctsNone, Args);
     Check('chat turns get no tools', (Args.Count = 2) And (Args[0] = '--tools=') And
       (Args[1] = '--strict-mcp-config'));
     Args.Clear;
-    AppendClaudeModeArguments(amInspect, Args);
+    AppendClaudeModeArguments(ctsRead, Args);
     Check('inspect turns only read', (Args.Count = 2) And (Args[0] = '--tools=Read,Grep,Glob') And
       (Args[1] = '--strict-mcp-config'));
     Args.Clear;
-    AppendClaudeModeArguments(amDocument, Args);
+    AppendClaudeModeArguments(ctsMarkdown, Args);
     Check('document turns may edit Markdown only', (Args.Count = 3) And
       (Args[0] = '--tools=Read,Grep,Glob,Edit,Write') And
       (Args[1] = '--allowedTools=Edit(**/*.md),Edit(**/*.markdown),Edit(**/*.mdown)') And
       (Args[2] = '--strict-mcp-config'));
     Args.Clear;
-    AppendClaudeModeArguments(amPlan, Args);
-    Check('plan turns match document turns', (Args.Count = 3) And (Args[0] = '--tools=Read,Grep,Glob,Edit,Write'));
     Args.Clear;
-    AppendClaudeModeArguments(amBuild, Args);
+    AppendClaudeModeArguments(ctsProject, Args);
     Check('build turns keep the Claude Code tools', Args.Count = 0);
-    Check('build applies the approval setting', ClaudeTurnPermissionMode(amBuild, 'always') = 'bypassPermissions');
-    Check('chat ignores the approval setting', ClaudeTurnPermissionMode(amChat, 'always') = '');
-    Check('document ignores the approval setting', ClaudeTurnPermissionMode(amDocument, 'auto') = '');
-    Check('inspect ignores the approval setting', ClaudeTurnPermissionMode(amInspect, 'always') = '');
+    Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = ctsRead);
+    Check('build applies the approval setting', ClaudeTurnPermissionMode(ctsProject, 'always') = 'bypassPermissions');
+    Check('chat ignores the approval setting', ClaudeTurnPermissionMode(ctsNone, 'always') = '');
+    Check('document ignores the approval setting', ClaudeTurnPermissionMode(ctsMarkdown, 'auto') = '');
+    Check('inspect ignores the approval setting', ClaudeTurnPermissionMode(ctsRead, 'always') = '');
   Finally
     Args.Free;
   End;
