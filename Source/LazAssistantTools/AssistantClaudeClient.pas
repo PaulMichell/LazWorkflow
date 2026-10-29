@@ -92,6 +92,9 @@ Type
 Const
   { Status text for a Claude connection row. }
   ClaudeKeepsSessionText = 'Claude Code keeps the session.';
+  { How long Claude Code waits for one MCP tool call, as MCP_TOOL_TIMEOUT. Its own limit is about 60 s, and an
+    approval dialog may stay open longer while the user decides. Shorter than the form's one-hour turn limit. }
+  ClaudeMCPToolTimeoutMs = 1800000;
 
 /// The claude program on PATH, or empty.
 Function DetectClaudeExecutable: String;
@@ -120,7 +123,9 @@ Function ClaudeSessionMissing(Const ErrorText: String): Boolean;
 Function StartClaudeSignIn(Const Executable: String; Out ErrorText: String): Boolean;
 /// Copies NAME=VALUE lines from Source without the variables that move Claude Code onto metered billing.
 Procedure FilterClaudeEnvironment(Source, Environment: TStrings);
-/// FilterClaudeEnvironment applied to this process environment.
+/// Sets MCP_TOOL_TIMEOUT to ClaudeMCPToolTimeoutMs, replacing any value already in Environment.
+Procedure SetClaudeToolTimeout(Environment: TStrings);
+/// FilterClaudeEnvironment applied to this process environment, with SetClaudeToolTimeout.
 Procedure BuildClaudeEnvironment(Environment: TStrings);
 /// Reads the billing fields from claude auth status --json output. False when the text is not that report.
 Function ParseClaudeAccount(Const JsonText: String; Out Account: TClaudeAccount): Boolean;
@@ -557,6 +562,18 @@ Begin
     End;
 End;
 
+Procedure SetClaudeToolTimeout(Environment: TStrings);
+Var
+  I: Integer;
+Begin
+  If Not Assigned(Environment) Then
+    Exit;
+  For I := Environment.Count - 1 DownTo 0 Do
+    If CompareText(Copy(Environment[I], 1, Pos('=', Environment[I]) - 1), 'MCP_TOOL_TIMEOUT') = 0 Then
+      Environment.Delete(I);
+  Environment.Add('MCP_TOOL_TIMEOUT=' + IntToStr(ClaudeMCPToolTimeoutMs));
+End;
+
 Procedure BuildClaudeEnvironment(Environment: TStrings);
 Var
   Source: TStringList;
@@ -569,6 +586,7 @@ Begin
     For I := 1 To GetEnvironmentVariableCount Do
       Source.Add(GetEnvironmentString(I));
     FilterClaudeEnvironment(Source, Environment);
+    SetClaudeToolTimeout(Environment);
   Finally
     Source.Free;
   End;

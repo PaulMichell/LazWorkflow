@@ -447,6 +447,15 @@ Begin
     BuildClaudeEnvironment(Filtered);
     Check('this process environment is copied', Filtered.Count > 0);
     Check('this process environment has no API key', Filtered.IndexOfName('ANTHROPIC_API_KEY') < 0);
+    Check('the environment lets an MCP tool call wait for approval',
+      Filtered.Values['MCP_TOOL_TIMEOUT'] = IntToStr(ClaudeMCPToolTimeoutMs));
+    Check('the tool timeout outlasts Claude Code''s own 60 s', ClaudeMCPToolTimeoutMs > 60000);
+    Filtered.Clear;
+    Filtered.Add('PATH=/usr/bin');
+    Filtered.Add('MCP_TOOL_TIMEOUT=5000');
+    SetClaudeToolTimeout(Filtered);
+    Check('an inherited tool timeout is replaced, not doubled',
+      (Filtered.Count = 2) And (Filtered.Values['MCP_TOOL_TIMEOUT'] = IntToStr(ClaudeMCPToolTimeoutMs)));
   Finally
     Filtered.Free;
     ParentVariables.Free;
