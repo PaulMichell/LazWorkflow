@@ -98,6 +98,25 @@ class PhoneMirrorTest {
     assertEquals(setOf("bb"), library.fingerprints())
     assertFalse(socket.opened)
   }
+
+  /** Plan item 2.2 pins today's behaviour. Item 3.1 changes it, and this case is then rewritten. */
+  @Test
+  fun aCursorGapIgnoresEveryLaterPatchUntilACatchup() {
+    var screen = applyPhonePatch(PhoneScreen(), patch("aa", 1, listOf(block("answer", "answer-1", "first")), 1, 1))
+    assertEquals(1L, screen.cursor)
+    screen = applyPhonePatch(screen, patch("aa", 3, listOf(block("answer", "answer-1", "after the gap")), 1, 1))
+    assertTrue(screen.resumeOnce)
+    var raised = 0
+    for (cursor in 4L..41L) {
+      val before = screen.resumeOnce
+      screen = applyPhonePatch(screen, patch("aa", cursor, listOf(block("answer", "answer-1", "streamed $cursor")), 1, 1))
+      if (!before && screen.resumeOnce) raised += 1
+    }
+    assertEquals(0, raised)
+    assertTrue(screen.resumeOnce)
+    assertEquals(1L, screen.cursor)
+    assertEquals("first", screen.live?.blocks?.single()?.body)
+  }
 }
 
 private fun block(kind: String, id: String, body: String): WireBlock {
