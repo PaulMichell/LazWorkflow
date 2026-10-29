@@ -17,6 +17,9 @@ kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
   }
+  // Backup copies sit beside the live sources and redeclare the same types.
+  sourceSets.getByName("main").kotlin.exclude("**/Backup/**")
+  sourceSets.getByName("test").kotlin.exclude("**/Backup/**")
 }
 
 java {
