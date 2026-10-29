@@ -22,7 +22,11 @@ import androidx.lifecycle.viewModelScope
 import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
+import computing.michell.monitor.data.DefaultConversationCap
+import computing.michell.monitor.data.DefaultImageBudgetBytes
+import computing.michell.monitor.data.DefaultImageBudgetMiB
 import computing.michell.monitor.data.MonitorImageDirectoryName
+import computing.michell.monitor.data.RetentionLimits
 import computing.michell.monitor.data.importLegacyCache
 import computing.michell.monitor.data.openMonitorDatabase
 import computing.michell.monitor.connection.HostClosedBanner
@@ -1086,14 +1090,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val store = HostStore(application)
   private val database = openMonitorDatabase(application)
   private val imageRoot = File(application.filesDir, MonitorImageDirectoryName)
-  private val conversations = ConversationRepository(database, imageRoot)
+  private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
+  private val conversations = ConversationRepository(database, imageRoot, ::retentionLimits)
+  val conversationCapText = MutableStateFlow(displayPrefs.getInt(ConversationCapKey, DefaultConversationCap).toString())
+  val imageBudgetText = MutableStateFlow(displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB).toString())
   private val session = LanSession(store)
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
   private var cacheSaveJob: Job? = null
   private var suppressCache = false
   private val images = ImageAssembly()
-  private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
   private val display = object : DisplayPreferences {
     override val showThinking: Boolean get() = displayPrefs.getBoolean(DisplayThinkingKey, true)
     override val showTools: Boolean get() = displayPrefs.getBoolean(DisplayToolsKey, true)
@@ -1172,6 +1178,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val restored = try {
       runBlocking(Dispatchers.IO) {
         importLegacyCache(application.filesDir, conversations, imageRoot)
+        conversations.retain()
         val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
         val open = newestConversation(conversations.listForHost(key), key) ?: return@runBlocking null
         val document = conversations.loadDocument(open.host, open.id) ?: return@runBlocking null
@@ -1470,6 +1477,31 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     uiState.value = coordinator.noteDisplay(uiState.value)
   }
 
+  fun setConversationCapText(text: String) {
+    val digits = text.filter { character -> character.isDigit() }.take(4)
+    conversationCapText.value = digits
+    val value = digits.toIntOrNull() ?: return
+    if (value < 1) return
+    displayPrefs.edit().putInt(ConversationCapKey, value).apply()
+    viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
+  }
+
+  fun setImageBudgetText(text: String) {
+    val digits = text.filter { character -> character.isDigit() }.take(4)
+    imageBudgetText.value = digits
+    val value = digits.toIntOrNull() ?: return
+    if (value < 1) return
+    displayPrefs.edit().putInt(ImageBudgetKey, value).apply()
+    viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
+  }
+
+  private fun retentionLimits(): RetentionLimits {
+    val cap = displayPrefs.getInt(ConversationCapKey, DefaultConversationCap)
+    val mebibytes = displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB)
+    val budget = if (mebibytes < 1) DefaultImageBudgetBytes else mebibytes.toLong() * 1024L * 1024L
+    return RetentionLimits(if (cap < 1) DefaultConversationCap else cap, budget)
+  }
+
   fun noteVisibleTurns(indices: Set<Int>) {
     val effects = coordinator.noteVisibleTurns(uiState.value, indices)
     if (effects.isEmpty()) return
@@ -1654,7 +1686,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         } catch (error: Exception) {
           null
         } ?: continue
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
+        val bitmap = decodeBounded(bytes) ?: continue
         decoded[imageCacheText(ImageCacheKey(generation, id, 0))] = bitmap
       }
       if (decoded.isEmpty()) return@launch
@@ -1891,17 +1923,21 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun decodeBitmap(message: MonitorMessage): DecodedImage? {
     val part = message.inbound as? InboundPayload.ImagePart ?: return null
     val joined = images.accept(part.image, part.bytes) ?: return null
+    val bitmap = decodeBounded(joined) ?: return null
+    val turnIndex = coordinator.turnForImage(part.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
+    return DecodedImage(uiState.value.hostGeneration, part.image.imageId, part.image.revision, turnIndex, bitmap)
+  }
+
+  private fun decodeBounded(bytes: ByteArray): Bitmap? {
     val bounds = BitmapFactory.Options()
     bounds.inJustDecodeBounds = true
-    BitmapFactory.decodeByteArray(joined, 0, joined.size, bounds)
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     val plan = bitmapBoundsPlan(bounds.outWidth, bounds.outHeight, viewWidthPx)
     if (!plan.allocate) return null
     val pixels = BitmapFactory.Options()
     pixels.inSampleSize = plan.sampleSize
     pixels.inPreferredConfig = Bitmap.Config.ARGB_8888
-    val bitmap = BitmapFactory.decodeByteArray(joined, 0, joined.size, pixels) ?: return null
-    val turnIndex = coordinator.turnForImage(part.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
-    return DecodedImage(uiState.value.hostGeneration, part.image.imageId, part.image.revision, turnIndex, bitmap)
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, pixels)
   }
 
   private fun storeDecoded(image: DecodedImage) {
@@ -1978,4 +2014,6 @@ private const val ScreenRefreshMs = 250L
 private const val DisplayPreferenceFile = "monitor-display"
 private const val DisplayThinkingKey = "thinking"
 private const val DisplayToolsKey = "tools"
+private const val ConversationCapKey = "conversation-cap"
+private const val ImageBudgetKey = "image-budget-mib"
 private const val DictationPermissionAskedKey = "dictation-asked"

@@ -57,12 +57,16 @@ fun SettingsScreen(
   disconnected: Boolean,
   showThinking: Boolean,
   showTools: Boolean,
+  conversationCap: String,
+  imageBudgetMiB: String,
   canLeave: Boolean,
   onAddress: (String) -> Unit,
   onPort: (String) -> Unit,
   onConnect: () -> Unit,
   onThinking: (Boolean) -> Unit,
   onTools: (Boolean) -> Unit,
+  onConversationCap: (String) -> Unit,
+  onImageBudget: (String) -> Unit,
   onBack: () -> Unit
 ) {
   val shownError = settingsErrorText(errorText)
@@ -106,6 +110,33 @@ fun SettingsScreen(
       Text("View", style = MaterialTheme.typography.titleMedium)
       SwitchRow("Show thinking", showThinking, onThinking)
       SwitchRow("Show tool calls", showTools, onTools)
+      HorizontalDivider()
+      Text("Storage", style = MaterialTheme.typography.titleMedium)
+      Text(
+        "Pinned conversations are kept. Other conversations keep the newest entries per desktop. Images over the budget are removed oldest first.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedTextField(
+          conversationCap,
+          onConversationCap,
+          modifier = Modifier.weight(1f),
+          label = { Text("Conversations") },
+          placeholder = { Text("50") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
+        OutlinedTextField(
+          imageBudgetMiB,
+          onImageBudget,
+          modifier = Modifier.weight(1f),
+          label = { Text("Images, MiB") },
+          placeholder = { Text("128") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
+      }
       HorizontalDivider()
       HelpRow(helpOpen) { helpOpen = !helpOpen }
       if (helpOpen) {

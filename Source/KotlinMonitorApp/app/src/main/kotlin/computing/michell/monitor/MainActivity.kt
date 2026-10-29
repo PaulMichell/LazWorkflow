@@ -108,6 +108,8 @@ private fun MonitorShell(model: MonitorViewModel) {
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
   val port by model.pairPort.collectAsState()
+  val conversationCap by model.conversationCapText.collectAsState()
+  val imageBudget by model.imageBudgetText.collectAsState()
   val showSettings = ui.settingsOpen
   val cacheListOpen by model.cacheListOpen.collectAsState()
   val cacheRows by model.cacheRows.collectAsState()
@@ -151,12 +153,15 @@ private fun MonitorShell(model: MonitorViewModel) {
     if (showSettings) {
       Box(modifier) {
         SettingsScreen(
-          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools, true,
+          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools,
+          conversationCap, imageBudget, true,
           { model.pairAddress.value = it },
           { model.pairPort.value = it },
           model::connectFromPair,
           model::setShowThinking,
           model::setShowTools,
+          model::setConversationCapText,
+          model::setImageBudgetText,
           model::closeSettings
         )
       }

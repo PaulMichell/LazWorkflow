@@ -91,6 +91,9 @@ interface ImageDao {
   @Query("SELECT * FROM image WHERE host = :host AND conversation = :conversation ORDER BY id")
   fun observe(host: String, conversation: String): Flow<List<ImageRecord>>
 
+  @Query("SELECT * FROM image")
+  suspend fun listAll(): List<ImageRecord>
+
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsert(row: ImageRecord)
 

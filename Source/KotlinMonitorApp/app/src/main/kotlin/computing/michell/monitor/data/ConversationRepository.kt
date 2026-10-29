@@ -16,7 +16,11 @@ const val OutboxAccepted = "accepted"
 const val OutboxDone = "done"
 const val OutboxRejected = "rejected"
 
-class ConversationRepository(private val database: MonitorDatabase, private val imageRoot: File? = null) {
+class ConversationRepository(
+  private val database: MonitorDatabase,
+  private val imageRoot: File? = null,
+  private val limits: () -> RetentionLimits = { RetentionLimits(DefaultConversationCap, DefaultImageBudgetBytes) }
+) {
   fun hosts(): Flow<List<HostRecord>> = database.hosts().observeAll()
 
   fun conversations(host: String): Flow<List<ConversationRecord>> = database.conversations().observeByHost(host)
@@ -91,6 +95,7 @@ class ConversationRepository(private val database: MonitorDatabase, private val 
       images += ImageRecord(id, row.hostKey, row.conversationId, target.absolutePath, source.length(), "application/octet-stream", source.length())
     }
     commit(row.hostKey, stored, images)
+    retain()
   }
 
   suspend fun saveScreen(host: String, conversationId: String, projectRoot: String, title: String, document: OfflineCacheDocument, images: List<Pair<String, ByteArray>>, nowMs: Long) {
@@ -106,6 +111,32 @@ class ConversationRepository(private val database: MonitorDatabase, private val 
       written += ImageRecord(id, host, conversationId, target.absolutePath, bytes.size.toLong(), "image/png", bytes.size.toLong())
     }
     commit(host, stored.copy(conversation = kept), written)
+    retain()
+  }
+
+  suspend fun retain() {
+    val settings = limits()
+    val conversations = database.conversations().listAll()
+    for ((host, rows) in conversations.groupBy { row -> row.host }) {
+      for (row in conversationsToDrop(rows, settings.conversationCap)) {
+        val images = database.sync().loadImages(host, row.id)
+        database.conversations().delete(host, row.id)
+        for (image in images) deleteStoredFile(image.filePath)
+      }
+    }
+    val present = ArrayList<AgedImage>()
+    for (image in database.images().listAll()) {
+      val file = File(image.filePath)
+      if (!file.isFile) {
+        database.images().delete(image.host, image.conversation, image.id)
+        continue
+      }
+      present += AgedImage(image.host, image.conversation, image.id, image.filePath, file.lastModified(), file.length())
+    }
+    for (image in imagesToDrop(present, settings.imageBudgetBytes)) {
+      deleteStoredFile(image.filePath)
+      database.images().delete(image.host, image.conversationId, image.imageId)
+    }
   }
 
   suspend fun forgetHost(key: String) {
@@ -133,6 +164,11 @@ class ConversationRepository(private val database: MonitorDatabase, private val 
       for (image in images) database.images().upsert(image)
     }
   }
+}
+
+private fun deleteStoredFile(path: String) {
+  if (path.isEmpty()) return
+  File(path).delete()
 }
 
 private fun copyBytes(bytes: ByteArray, target: File) {
