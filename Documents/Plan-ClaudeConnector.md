@@ -135,7 +135,7 @@ When a Claude turn whose scope is not `ctsNone` starts, the form starts the list
 - Every other scope: `--tools=Read,Grep,Glob`, `--mcp-config=<file>`, `--strict-mcp-config`, and one `--allowedTools=` list naming the Lazarus tools. Emit a single list: it is not yet verified whether a second `--allowedTools=` adds to the first or replaces it.
 - `ctsMarkdown` drops Claude Code's own `Edit` and `Write` and the `Edit(**/*.md)` rule, and `ctsProject` drops Claude Code's full tool set: the broker's write scope now enforces Markdown-only or project writes, on editor buffers, with its approvals. One write path, not two.
 
-The temporary config file and the listener are cleaned up on finish, cancel, and failure. Update the 2.10 tests for the new arguments.
+The temporary config file and the listener are cleaned up on finish, cancel, and failure. Update the 2.10 tests for the new arguments. Lazarus calls then reach the trace (item 4.3) as `mcp__<server>__<tool>`; show them under a readable name, for example by dropping the `mcp__<server>__` prefix in the tool block title.
 
 Done when a real turn lists the Lazarus tools in its `init` event and can read a file through them, and an attempt to write without a Lazarus tool is reported by Claude as impossible rather than performed.
 
@@ -147,7 +147,8 @@ Ask, Auto, and Always set the broker's approval behaviour the way they do for Co
 Done when Ask produces a dialog for an edit and applies the edit to the editor buffer only after approval, and Auto applies project edits without asking.
 
 ### 4.3 Show Claude's tool calls and thinking in the trace
-Status: in progress
+Status: blocked
+User action: With Show tool use and Show thinking on, run a Claude turn that reads and edits, and check the trace shows narration, each call with its result, and a thinking note, in order; then turn both off and check only the answer remains. Mark this item complete if it does.
 
 Widened from the Lazarus tools only to every tool call, because Build mode uses Claude Code's own tools today. Found in the IDE: with Show tool use and Show thinking on, everything Claude reported still appeared in Assistant reply blocks.
 
@@ -160,7 +161,7 @@ Implemented, the same way Codex tools are shown:
 - `ApplyClaudeToolSteps` puts the text and thinking written before each call into the trace, adds a tool block, and starts new answer and thinking slices, as `PollCodex` does for a serviced tool. A block is finished with its result, opened and marked failed on an error. The footer stays on Running while a call waits.
 - A successful `Edit`, `Write` or `MultiEdit` of the active plan file counts as a plan write, so the progress list refreshes when the turn ends in any mode (part of item 4.4).
 
-Remaining: after item 4.1 the calls arrive as `mcp__…` Lazarus tools; check that their names read well in the trace. Then mark this complete after it has been seen in the IDE.
+The code is done and was checked against the real program outside the IDE. What remains is the look in the IDE above, which only a person can do. The run order matters: an item marked in progress is always taken first, so this item is blocked rather than in progress.
 
 Done when, with Show tool use and Show thinking on, a Claude turn that reads and edits shows its narration, each call with its result, and a thinking note, in order, while the turn runs; and with both options off, only the answer text.
 
