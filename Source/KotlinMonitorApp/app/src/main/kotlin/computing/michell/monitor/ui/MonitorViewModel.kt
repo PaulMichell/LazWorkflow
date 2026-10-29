@@ -7,7 +7,8 @@ package computing.michell.monitor.ui
    The final-result deadline lives in DictationFinalWatch. Image request
    and cache policy live in ImageCache. What remains is speech,
    preferences, bitmap decode, and effect execution.
-   Offline copies are written by OfflineStore. Reviewed 2026-10-26. */
+   Offline copies are Room rows. The retired file cache is imported once.
+   Reviewed 2026-10-29. */
 
 import android.Manifest
 import android.app.Application
@@ -19,6 +20,11 @@ import android.speech.SpeechRecognizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import computing.michell.monitor.connection.ConnectionRefusedBanner
+import computing.michell.monitor.data.ConversationRecord
+import computing.michell.monitor.data.ConversationRepository
+import computing.michell.monitor.data.MonitorImageDirectoryName
+import computing.michell.monitor.data.importLegacyCache
+import computing.michell.monitor.data.openMonitorDatabase
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.dictation.acceptSpeechCallback
 import computing.michell.monitor.dictation.DictationAudioMessage
@@ -127,7 +133,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.io.File
 
 enum class AppTab {
   Conversation,
@@ -1076,7 +1084,9 @@ internal fun permissionsSelectionCommand(state: MonitorUi, id: String, commandId
 
 class MonitorViewModel(application: Application) : AndroidViewModel(application) {
   private val store = HostStore(application)
-  private val offlineStore = OfflineStore(application.filesDir)
+  private val database = openMonitorDatabase(application)
+  private val imageRoot = File(application.filesDir, MonitorImageDirectoryName)
+  private val conversations = ConversationRepository(database, imageRoot)
   private val session = LanSession(store)
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
@@ -1098,8 +1108,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val link: StateFlow<computing.michell.monitor.connection.LinkStatus> = session.status
   private val cacheListOpenState = MutableStateFlow(false)
   val cacheListOpen: StateFlow<Boolean> = cacheListOpenState.asStateFlow()
-  private val cacheRowsState = MutableStateFlow<List<computing.michell.monitor.protocol.CacheIndexEntry>>(emptyList())
-  val cacheRows: StateFlow<List<computing.michell.monitor.protocol.CacheIndexEntry>> = cacheRowsState.asStateFlow()
+  private val cacheRowsState = MutableStateFlow<List<ConversationRecord>>(emptyList())
+  val cacheRows: StateFlow<List<ConversationRecord>> = cacheRowsState.asStateFlow()
   private val cacheBackToListState = MutableStateFlow(false)
   val cacheBackToList: StateFlow<Boolean> = cacheBackToListState.asStateFlow()
   private val screenState = MutableStateFlow(AppTab.Conversation)
@@ -1159,17 +1169,19 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
-    val open = try {
-      val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
-      newestCacheEntry(offlineStore.loadIndex(), key)
+    val restored = try {
+      runBlocking(Dispatchers.IO) {
+        importLegacyCache(application.filesDir, conversations, imageRoot)
+        val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
+        val open = newestConversation(conversations.listForHost(key), key) ?: return@runBlocking null
+        val document = conversations.loadDocument(open.host, open.id) ?: return@runBlocking null
+        open to document
+      }
     } catch (error: Exception) {
       null
     }
-    val cached = if (open == null) null else try {
-      offlineStore.loadConversation(open.fileName)
-    } catch (error: Exception) {
-      null
-    }
+    val open = restored?.first
+    val cached = restored?.second
     if (cached != null || record.address.isEmpty()) {
       val seeded = if (cached != null) applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty())
       else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
@@ -1177,7 +1189,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
-    if (open != null && cached != null) restoreCachedImages(open.fileName, cached, uiState.value.hostGeneration)
+    if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
     viewModelScope.launch(Dispatchers.Default) {
       session.messages.collect { message -> applyIncoming(message) }
     }
@@ -1355,7 +1367,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       val record = store.load()
       val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
       val rows = try {
-        cacheRowsForFingerprint(offlineStore.loadIndex(), key)
+        conversationsForHost(conversations.listForHost(key), key)
       } catch (error: Exception) {
         emptyList()
       }
@@ -1371,23 +1383,23 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheListOpenState.value = false
   }
 
-  /** Loads one cached file onto the conversation page. Does not open a socket. */
-  fun openCachedRow(entry: computing.michell.monitor.protocol.CacheIndexEntry) {
+  /** Loads one stored conversation onto the page. Does not open a socket. */
+  fun openCachedRow(row: ConversationRecord) {
     if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return
     viewModelScope.launch(Dispatchers.IO) {
       val document = try {
-        offlineStore.loadConversation(entry.fileName)
+        conversations.loadDocument(row.host, row.id)
       } catch (error: Exception) {
         null
       } ?: return@launch
       withContext(Dispatchers.Main) {
         if (ideLinkLive(uiState.value.disconnected, link.value.phase)) return@withContext
-        val seeded = reviewedCacheState(uiState.value, document, entry, store.load().address.isNotEmpty())
+        val seeded = reviewedCacheState(uiState.value, document, row, store.load().address.isNotEmpty())
         coordinator.restoreOffline(seeded)
         uiState.value = coordinator.state
         cacheListOpenState.value = false
         cacheBackToListState.value = true
-        restoreCachedImages(entry.fileName, document, uiState.value.hostGeneration)
+        restoreCachedImages(row.host, row.id, document, uiState.value.hostGeneration)
       }
     }
   }
@@ -1417,8 +1429,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.disconnect()
     store.clear()
     try {
-      offlineStore.forgetFingerprint(fingerprint)
-      if (hostIdIsValid(hostId)) offlineStore.forgetFingerprint(hostId)
+      runBlocking(Dispatchers.IO) {
+        conversations.forgetHost(fingerprint)
+        if (hostIdIsValid(hostId)) conversations.forgetHost(hostId)
+      }
     } catch (error: Exception) {
       // Forgetting the local copy must not drop the reset session.
     }
@@ -1548,6 +1562,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     finalWatch.cancel()
     engine.destroy()
     session.close()
+    database.close()
   }
 
   private fun scheduleCacheSave() {
@@ -1577,8 +1592,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         try {
           val hostId = store.load().hostId
           if (!hostIdIsValid(hostId)) return@Runnable
-          offlineStore.save(hostId, target.projectRoot, target.conversationId, target.title, document, images,
-            epoch = ui.hostEpoch, cursor = ui.hostCursor)
+          runBlocking {
+            conversations.saveScreen(hostId, target.conversationId, target.projectRoot, target.title, document, images, System.currentTimeMillis())
+          }
         } catch (error: Exception) {
           // A failed local copy must not drop the live session.
         }
@@ -1597,7 +1613,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       synchronized(cacheGate) {
         if (suppressCache) return@synchronized
         try {
-          offlineStore.saveClosed(hostId, projectRoot, id, title, document, images, epoch, cursor)
+          val decoded = computing.michell.monitor.protocol.decodeClosedScreen(document) ?: return@synchronized
+          runBlocking {
+            conversations.saveScreen(hostId, id, projectRoot, title, decoded, images, System.currentTimeMillis())
+          }
         } catch (error: Exception) {
           // A failed local copy must not drop the live session.
         }
@@ -1605,8 +1624,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  private fun cachedImageBytes(ui: MonitorUi): List<CacheImageBytes> {
-    val images = ArrayList<CacheImageBytes>()
+  private fun cachedImageBytes(ui: MonitorUi): List<Pair<String, ByteArray>> {
+    val images = ArrayList<Pair<String, ByteArray>>()
     val bitmaps = bitmapsState.value
     for (id in documentImageIds(offlineDocument(ui))) {
       val bitmap = findCachedBitmap(bitmaps, ui.hostGeneration, id) ?: continue
@@ -1618,19 +1637,20 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       }
       val bytes = stream.toByteArray()
       if (bytes.isEmpty()) continue
-      images += CacheImageBytes(id, bytes)
+      images += id to bytes
     }
     return images
   }
 
-  private fun restoreCachedImages(fileName: String, document: OfflineCacheDocument, generation: Int) {
+  private fun restoreCachedImages(host: String, conversationId: String, document: OfflineCacheDocument, generation: Int) {
     val ids = documentImageIds(document)
     if (ids.isEmpty()) return
     viewModelScope.launch(Dispatchers.IO) {
       val decoded = LinkedHashMap<String, Bitmap>()
       for (id in ids) {
+        val file = computing.michell.monitor.data.monitorImageFile(imageRoot, host, conversationId, id)
         val bytes = try {
-          offlineStore.readImage(fileName, id)
+          if (file == null || !file.isFile) null else file.readBytes()
         } catch (error: Exception) {
           null
         } ?: continue

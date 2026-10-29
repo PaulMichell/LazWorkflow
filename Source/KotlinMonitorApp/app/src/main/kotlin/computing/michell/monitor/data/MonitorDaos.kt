@@ -19,6 +19,15 @@ interface HostDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsert(row: HostRecord)
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  suspend fun insertIfAbsent(row: HostRecord)
+
+  @Query("SELECT * FROM host")
+  suspend fun listAll(): List<HostRecord>
+
+  @Query("DELETE FROM host WHERE id = :id")
+  suspend fun delete(id: String)
 }
 
 @Dao
@@ -28,6 +37,9 @@ interface ConversationDao {
 
   @Query("SELECT * FROM conversation WHERE host = :host AND id = :id")
   fun observeOne(host: String, id: String): Flow<ConversationRecord?>
+
+  @Query("SELECT * FROM conversation ORDER BY updatedAt DESC")
+  suspend fun listAll(): List<ConversationRecord>
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsert(row: ConversationRecord)

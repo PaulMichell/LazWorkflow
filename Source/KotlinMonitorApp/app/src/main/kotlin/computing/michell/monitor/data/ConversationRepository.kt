@@ -3,16 +3,20 @@ package computing.michell.monitor.data
 /* Read model the phone UI observes (c) 2026 Michell Computing.
 
    Flows come from Room. A collector sees the same rows offline and live.
-   Sync writes the cursor in the same transaction as the content it applied. */
+   Sync writes the cursor in the same transaction as the content it applied.
+   A screen save keeps that cursor. An import forces seq 0. */
 
+import androidx.room3.withWriteTransaction
+import computing.michell.monitor.protocol.OfflineCacheDocument
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 
 const val OutboxQueued = "queued"
 const val OutboxAccepted = "accepted"
 const val OutboxDone = "done"
 const val OutboxRejected = "rejected"
 
-class ConversationRepository(private val database: MonitorDatabase) {
+class ConversationRepository(private val database: MonitorDatabase, private val imageRoot: File? = null) {
   fun hosts(): Flow<List<HostRecord>> = database.hosts().observeAll()
 
   fun conversations(host: String): Flow<List<ConversationRecord>> = database.conversations().observeByHost(host)
@@ -66,4 +70,83 @@ class ConversationRepository(private val database: MonitorDatabase) {
   suspend fun removeOutbox(commandId: String) {
     database.outbox().delete(commandId)
   }
+
+  suspend fun listForHost(key: String): List<ConversationRecord> {
+    val wanted = hostKey(key)
+    return database.conversations().listAll().filter { row -> hostKey(row.host) == wanted }
+  }
+
+  suspend fun loadDocument(host: String, id: String): OfflineCacheDocument? {
+    if (database.sync().loadConversation(host, id) == null) return null
+    return documentFromRows(database.sync().loadTurns(host, id), database.sync().loadBlocks(host, id))
+  }
+
+  suspend fun saveImported(row: LegacyReady, imageRoot: File) {
+    val stored = storedScreen(row.hostKey, row.conversationId, row.projectRoot, row.title, row.updatedMs, row.document, 0L, "")
+    val images = ArrayList<ImageRecord>()
+    for ((id, source) in row.images) {
+      if (!source.isFile) continue
+      val target = monitorImageFile(imageRoot, row.hostKey, row.conversationId, id) ?: continue
+      copyBytes(source.readBytes(), target)
+      images += ImageRecord(id, row.hostKey, row.conversationId, target.absolutePath, source.length(), "application/octet-stream", source.length())
+    }
+    commit(row.hostKey, stored, images)
+  }
+
+  suspend fun saveScreen(host: String, conversationId: String, projectRoot: String, title: String, document: OfflineCacheDocument, images: List<Pair<String, ByteArray>>, nowMs: Long) {
+    val existing = database.sync().loadConversation(host, conversationId)
+    val stored = storedScreen(host, conversationId, projectRoot, title, nowMs, document, existing?.seq ?: 0L, existing?.streamId ?: "")
+    val kept = stored.conversation.copy(pinned = existing?.pinned ?: false)
+    val written = ArrayList<ImageRecord>()
+    val root = imageRoot
+    for ((id, bytes) in images) {
+      if (root == null || bytes.isEmpty()) continue
+      val target = monitorImageFile(root, host, conversationId, id) ?: continue
+      copyBytes(bytes, target)
+      written += ImageRecord(id, host, conversationId, target.absolutePath, bytes.size.toLong(), "image/png", bytes.size.toLong())
+    }
+    commit(host, stored.copy(conversation = kept), written)
+  }
+
+  suspend fun forgetHost(key: String) {
+    val wanted = hostKey(key)
+    val hosts = database.hosts().listAll().filter { row -> hostKey(row.id) == wanted || hostKey(row.fingerprint) == wanted }
+    for (host in hosts) {
+      database.hosts().delete(host.id)
+      val folder = imageRoot?.let { root -> safeImageDir(root, host.id) }
+      if (folder != null && folder.isDirectory) folder.deleteRecursively()
+    }
+  }
+
+  private suspend fun commit(host: String, stored: StoredScreen, images: List<ImageRecord>) {
+    database.withWriteTransaction {
+      database.hosts().insertIfAbsent(HostRecord(host, host, ""))
+      database.sync().upsertConversation(stored.conversation)
+      database.content().replace(host, stored.conversation.id, stored.turns, stored.blocks)
+      val previous = database.sync().loadImages(host, stored.conversation.id)
+      val kept = images.map { image -> image.id }.toSet()
+      for (old in previous) {
+        if (old.id in kept) continue
+        if (old.filePath.isNotEmpty()) File(old.filePath).delete()
+        database.images().delete(host, stored.conversation.id, old.id)
+      }
+      for (image in images) database.images().upsert(image)
+    }
+  }
+}
+
+private fun copyBytes(bytes: ByteArray, target: File) {
+  val parent = target.parentFile ?: return
+  if (!parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) return
+  val temporary = File(parent, target.name + ".tmp")
+  temporary.writeBytes(bytes)
+  if (!temporary.renameTo(target)) {
+    target.writeBytes(bytes)
+    temporary.delete()
+  }
+}
+
+private fun safeImageDir(root: File, host: String): File? {
+  if (host.isEmpty() || host.contains('/') || host.contains('\\')) return null
+  return File(root, host)
 }

@@ -67,50 +67,6 @@ fun applyBlockAppend(stored: String, offset: Int, text: String): Pair<String, Bo
 }
 
 /** A stub that has not been opened. Load must not call open. */
-class DisconnectedSocket {
-  var opened: Boolean = false
-    private set
-
-  fun open() {
-    opened = true
-  }
-}
-
-class MemoryConversationLibrary {
-  private val rows = LinkedHashMap<String, Pair<CacheIndexEntry, OfflineCacheDocument>>()
-
-  fun save(entry: CacheIndexEntry, document: OfflineCacheDocument) {
-    rows[entry.fileName] = entry to document
-  }
-
-  fun load(hostFingerprint: String, conversationId: String, socket: DisconnectedSocket): OfflineCacheDocument? {
-    if (socket.opened) return null
-    val row = rows.values.firstOrNull { pair ->
-      pair.first.fingerprint == hostFingerprint && pair.first.conversationId == conversationId
-    }
-    return row?.second
-  }
-
-  fun forgetFingerprint(fingerprint: String, keyOf: (String) -> String = { it }) {
-    val kept = indexWithoutFingerprint(rows.values.map { it.first }, fingerprint, keyOf)
-    val names = kept.map { it.fileName }.toSet()
-    val drop = rows.keys.filter { name -> name !in names }
-    for (name in drop) rows.remove(name)
-  }
-
-  fun fingerprints(keyOf: (String) -> String = { it }): Set<String> {
-    return rows.values.map { keyOf(it.first.fingerprint) }.toSet()
-  }
-}
-
-fun indexWithoutFingerprint(
-  entries: List<CacheIndexEntry>,
-  fingerprintKey: String,
-  keyOf: (String) -> String = { it }
-): List<CacheIndexEntry> {
-  return entries.filter { entry -> keyOf(entry.fingerprint) != fingerprintKey }
-}
-
 /** Replace a block with the same id. An append offset must match the stored UTF-8 length. */
 fun mergePatchBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): MergedBlocks {
   if (incoming.isEmpty()) return MergedBlocks(existing, emptyList())

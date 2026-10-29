@@ -17,12 +17,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import computing.michell.monitor.protocol.CacheIndexEntry
+import computing.michell.monitor.data.ConversationRecord
 
 @Composable
 fun CachedListDialog(
-  rows: List<CacheIndexEntry>,
-  onChoose: (CacheIndexEntry) -> Unit,
+  rows: List<ConversationRecord>,
+  onChoose: (ConversationRecord) -> Unit,
   onBack: () -> Unit
 ) {
   Dialog(onDismissRequest = onBack) {
@@ -43,7 +43,7 @@ fun CachedListDialog(
               Text(cacheRowTitle(row))
               val project = projectDisplay(row.projectRoot)
               if (project.isNotEmpty()) Text(project)
-              val updated = cacheUpdatedText(row.updatedMs)
+              val updated = cacheUpdatedText(row.updatedAt)
               if (updated.isNotEmpty()) Text(updated)
             }
           }

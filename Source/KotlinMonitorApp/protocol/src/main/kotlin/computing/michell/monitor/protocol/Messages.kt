@@ -2177,6 +2177,62 @@ fun decodeConversationClosed(payloadJson: String): WireConversationClosed? {
   return decodeConversationClosed(obj)
 }
 
+/** One row of the retired monitor-cache index. Import only. `seq` is not kept. */
+data class LegacyCacheEntry(
+  val hostKey: String,
+  val projectRoot: String,
+  val conversationId: String,
+  val title: String,
+  val updatedMs: Long,
+  val fileName: String,
+  val imageIds: List<String>
+)
+
+/** Null when the retired index cannot be trusted. The caller leaves the files in place. */
+fun decodeLegacyCacheIndex(text: String): List<LegacyCacheEntry>? {
+  val obj = parseObject(text) ?: return null
+  val array = obj.field("entries") as? JsonValue.Arr ?: return null
+  val entries = ArrayList<LegacyCacheEntry>(array.items.size)
+  for (item in array.items) {
+    val row = item as? JsonValue.Obj ?: return null
+    val hostKey = row.readString("fingerprint", true)
+    val projectRoot = row.readString("project_root", true)
+    val conversationId = row.readString("conversation_id", true)
+    val title = row.readString("title", true)
+    val updated = row.readLong("updated_ms", true)
+    val fileName = row.readString("file", true)
+    if (!hostKey.ok || !projectRoot.ok || !conversationId.ok || !title.ok || !updated.ok || !fileName.ok) return null
+    if (!legacyCacheFileNameIsSafe(fileName.value)) return null
+    val images = legacyImageIds(row.field("images")) ?: return null
+    entries += LegacyCacheEntry(hostKey.value, projectRoot.value, conversationId.value, title.value, updated.value, fileName.value, images)
+  }
+  return entries
+}
+
+private fun legacyCacheFileNameIsSafe(name: String): Boolean {
+  if (!name.endsWith(".json")) return false
+  val stem = name.removeSuffix(".json")
+  if (!stem.startsWith("c-") || stem.length < 4 || stem.length > 70) return false
+  for (ch in stem) {
+    val ok = ch.isLetterOrDigit() || ch == '-' || ch == '_'
+    if (!ok) return false
+  }
+  return true
+}
+
+private fun legacyImageIds(node: JsonValue?): List<String>? {
+  if (node == null) return emptyList()
+  val array = node as? JsonValue.Arr ?: return null
+  val ids = ArrayList<String>(array.items.size)
+  for (item in array.items) {
+    val row = item as? JsonValue.Obj ?: return null
+    val id = row.readString("id", true)
+    if (!id.ok || id.value.isEmpty()) return null
+    ids += id.value
+  }
+  return ids
+}
+
 fun decodeConversationClosed(obj: JsonValue.Obj): WireConversationClosed? {
   val epoch = obj.readString("epoch", true)
   val cursor = obj.readLong("cursor", true)

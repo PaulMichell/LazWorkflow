@@ -104,28 +104,6 @@ class PhoneMirrorTest {
     assertEquals("", empty.fileClosedId)
   }
 
-  @Test
-  fun twoSavedConversationsLoadWhileTheSocketStubIsDisconnected() {
-    val library = MemoryConversationLibrary()
-    val one = document("First")
-    val two = document("Second")
-    val other = document("Other host")
-    library.save(entry("aa", "/work/One", "conversation-1", "c-one.json"), one)
-    library.save(entry("aa", "/work/Two", "conversation-2", "c-two.json"), two)
-    library.save(entry("bb", "/work/One", "conversation-1", "c-other.json"), other)
-    val socket = DisconnectedSocket()
-    assertFalse(socket.opened)
-    assertEquals("First", library.load("aa", "conversation-1", socket)?.draft)
-    assertEquals("Second", library.load("aa", "conversation-2", socket)?.draft)
-    assertFalse(socket.opened)
-    library.forgetFingerprint("aa")
-    assertNull(library.load("aa", "conversation-1", socket))
-    assertNull(library.load("aa", "conversation-2", socket))
-    assertEquals("Other host", library.load("bb", "conversation-1", socket)?.draft)
-    assertEquals(setOf("bb"), library.fingerprints())
-    assertFalse(socket.opened)
-  }
-
   /** Plan item 2.2 pins today's behaviour. Item 3.1 changes it, and this case is then rewritten. */
   @Test
   fun aCursorGapIgnoresEveryLaterPatchUntilACatchup() {
@@ -158,10 +136,4 @@ private fun patch(epoch: String, cursor: Long, blocks: List<WireBlock>, part: In
   return WirePatch(epoch, cursor, 1, "turn-1", blocks, false, false, false, "idle", true, false, false, 0, part, partCount)
 }
 
-private fun document(draft: String): OfflineCacheDocument {
-  return OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, draft)
-}
 
-private fun entry(fingerprint: String, projectRoot: String, conversationId: String, fileName: String): CacheIndexEntry {
-  return CacheIndexEntry(fingerprint, projectRoot, conversationId, conversationId, 1L, 1, fileName)
-}

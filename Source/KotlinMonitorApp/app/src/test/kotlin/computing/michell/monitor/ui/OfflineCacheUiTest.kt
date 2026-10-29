@@ -3,13 +3,14 @@ package computing.michell.monitor.ui
 /* Offline restore keeps browseable rows and disables remote actions (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.protocol.CacheIndexEntry
+import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,8 +71,6 @@ class OfflineCacheUiTest {
     assertEquals("/work", newTarget.projectRoot)
     assertEquals("Renamed", newTarget.title)
     assertTrue(cacheRowChanged(oldRoot, newRoot))
-    assertEquals(cacheConversationFileName("aa".repeat(32), oldTarget.conversationId),
-      cacheConversationFileName("aa".repeat(32), newTarget.conversationId))
     assertNull(cacheSaveTarget(oldRoot.copy(conversationId = "current")))
     assertNull(cacheSaveTarget(oldRoot.copy(conversationId = "")))
   }
@@ -101,7 +100,7 @@ class OfflineCacheUiTest {
       -1,
       ""
     )
-    val entry = CacheIndexEntry("aa", "/work/LazWorkflow", "current", "Shown", 1L, 2, "c-aa.json")
+    val entry = ConversationRecord("current", "aa", "/work/LazWorkflow", "Shown", "", 0L, 1L, false)
     val reviewed = reviewedCacheState(MonitorUi(reachedLive = true, view = emptyView().copy(canSend = true)), document, entry, true)
     assertEquals("Still writing", reviewed.live?.prompt)
     assertEquals("Shown", reviewed.turns[0].promptPreview)
@@ -115,11 +114,11 @@ class OfflineCacheUiTest {
   @Test
   fun theCachedListIsTheLastFingerprintAndHidesWhileLive() {
     val hex = "ab".repeat(32)
-    val older = CacheIndexEntry(hex, "/work/LazWorkflow", "conversation-1", "Old", 1L, 1, "c-old.json")
-    val newer = CacheIndexEntry(hex.chunked(2).joinToString(":"), "/other/Phone", "current", "", 9L, 1, "c-new.json")
-    val other = CacheIndexEntry("cd".repeat(32), "/x", "current", "Other", 8L, 1, "c-other.json")
-    val rows = cacheRowsForFingerprint(listOf(older, other, newer), hex)
-    assertEquals(listOf("current", "conversation-1"), rows.map { it.conversationId })
+    val older = ConversationRecord("conversation-1", hex, "/work/LazWorkflow", "Old", "", 0L, 1L, false)
+    val newer = ConversationRecord("current", hex.chunked(2).joinToString(":"), "/other/Phone", "", "", 0L, 9L, false)
+    val other = ConversationRecord("current", "cd".repeat(32), "/x", "Other", "", 0L, 8L, false)
+    val rows = conversationsForHost(listOf(older, other, newer), hex)
+    assertEquals(listOf("current", "conversation-1"), rows.map { it.id })
     assertEquals("Phone", projectDisplay(rows[0].projectRoot))
     assertEquals("LazWorkflow", projectDisplay("/work/LazWorkflow"))
     assertEquals("LazWorkflow", projectDisplay("C:\\work\\LazWorkflow"))
