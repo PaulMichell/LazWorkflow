@@ -32,6 +32,10 @@ android {
   buildFeatures {
     compose = true
   }
+
+  sourceSets.getByName("test") {
+    kotlin.srcDir("${rootProject.projectDir}/protocol/src/test/kotlin/computing/michell/monitor/protocol/chaos")
+  }
 }
 
 kotlin {

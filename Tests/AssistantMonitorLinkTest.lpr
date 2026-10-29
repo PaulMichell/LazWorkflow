@@ -11,7 +11,9 @@ Program AssistantMonitorLinkTest;
 
   Each measurement prints one "metric" line. The checks require delivery, not
   speed, so the harness passes on the slow baseline and on every later fix. The
-  numbers are recorded in Documents/MonitorLinkBaseline.md.
+  numbers are recorded in Documents/MonitorLinkBaseline.md. The chaos fixture is
+  AssistantMonitorChaosTest, which drives TMonitorLinkThread and the mirror log
+  through Tests/Fixtures/Monitor/chaos-script.json.
 
   No Interfaces unit. The runner writes this binary with a temporary -FU and -FE,
   never under Source/. Certificate and settings files are created under a temp
