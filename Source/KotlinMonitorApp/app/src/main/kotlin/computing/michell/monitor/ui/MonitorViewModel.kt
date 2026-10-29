@@ -23,6 +23,8 @@ import computing.michell.monitor.connection.BackgroundBanner
 import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
+import computing.michell.monitor.data.documentFromRows
+import computing.michell.monitor.ui.BoardContent
 import computing.michell.monitor.data.RoomCommandLedger
 import computing.michell.monitor.data.DefaultConversationCap
 import computing.michell.monitor.data.DefaultImageBudgetBytes
@@ -280,7 +282,7 @@ fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
 }
 
 const val ConnectingBanner = "Connecting…"
-const val LinkGraceMs = 4_000L
+
 const val StallGapMs = 5_000L
 
 fun linkBanner(banner: String): Boolean {
@@ -413,8 +415,7 @@ fun ideLinkLive(disconnected: Boolean, phase: LinkPhase): Boolean {
 }
 
 fun displayInterrupted(ui: MonitorUi, phase: LinkPhase): Boolean {
-  val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
-  val running = ui.view.sending || ui.view.busy || ui.view.planRunning || pending
+  val running = ui.view.sending || ui.view.busy || ui.view.planRunning
   if (!running) return false
   return ui.disconnected || phase != LinkPhase.Live
 }
@@ -522,8 +523,7 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
   val dropStatus = (next.banner.isEmpty() && bannerIsStatus(current.banner)) ||
     (current.banner.isEmpty() && bannerIsStatus(next.banner))
   val nextBanner = if (dropStatus) "" else next.banner
-  val shown = promptShown(merged, current.pendingPrompt)
-  val pendingLeft = !shown && current.pendingPrompt.isNotEmpty()
+  val pendingLeft = current.pendingPrompt.isNotEmpty()
   val blocks = displayBlocks(mergedLive)
   val running = turnStillRunning(next.view, pendingLeft, blocks, mergedLive)
   val observed = observedElapsedMs(next.view, mergedLive, blocks)
@@ -544,10 +544,10 @@ fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, 
     live = mergedLive,
     showThinking = current.showThinking,
     showTools = current.showTools,
-    pendingPrompt = if (shown) "" else current.pendingPrompt,
-    pendingKind = if (shown) "" else current.pendingKind,
+    pendingPrompt = current.pendingPrompt,
+    pendingKind = current.pendingKind,
     pendingEpoch = maxOf(current.pendingEpoch, next.pendingEpoch),
-    promptBaseline = if (shown) emptySet() else baseline,
+    promptBaseline = baseline,
     activityStartedMs = start,
     activityObservedMs = if (running && observed > 0) observed else if (running) current.activityObservedMs else 0
   )
@@ -1112,7 +1112,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     override val showThinking: Boolean get() = displayPrefs.getBoolean(DisplayThinkingKey, true)
     override val showTools: Boolean get() = displayPrefs.getBoolean(DisplayToolsKey, true)
   }
-  private val coordinator = MonitorCoordinator(session, SystemMonitorClock, display)
+  private val content = MemoryConversationStore()
+  private val coordinator = MonitorCoordinator(session, SystemMonitorClock, display, content)
   private val imageCache = ImagePixelCache()
   private var viewWidthPx = 0
   private val bitmapsState = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
@@ -1140,7 +1141,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var supportGeneration = 0
   private var recognitionSupported = true
   private var supportPending = false
-  private var linkGrace: Job? = null
+  private var contentWatch: Job? = null
+  private var savedBoardRevision = 0L
+  private var watchedHost = ""
+  private var watchedConversation = ""
   // Callbacks splice the prompt only. They must not call sendOrSteer.
   private val engineListener = object : SpeechEngineListener {
     override fun onReady(generation: Int) {
@@ -1218,6 +1222,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     viewModelScope.launch {
       session.status.collect { status -> onLink(status) }
+    }
+    viewModelScope.launch {
+      content.updates.collect { board ->
+        uiState.value = coordinator.state
+        val hostId = store.load().hostId
+        val conversationId = board.conversationId.ifEmpty { coordinator.state.conversationId }
+        watchRepository(hostId, conversationId)
+        if (board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
+          savedBoardRevision = board.revision
+          persistBoard(hostId, conversationId, board)
+        }
+      }
     }
     viewModelScope.launch {
       conversations.outbox().collect { commandLedger.replace(it) }
@@ -1531,6 +1547,41 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
   }
 
+  private fun persistBoard(hostId: String, conversationId: String, board: BoardContent) {
+    val chrome = coordinator.state
+    val document = computing.michell.monitor.protocol.OfflineCacheDocument(
+      board.turns,
+      board.turns,
+      board.live,
+      chrome.planPath,
+      chrome.planTitle,
+      chrome.planRows,
+      chrome.selectedPlan,
+      ""
+    )
+    viewModelScope.launch(Dispatchers.IO) {
+      conversations.saveScreen(hostId, conversationId, chrome.projectRoot, chrome.conversationTitle, document, emptyList(), System.currentTimeMillis())
+    }
+  }
+
+  private fun watchRepository(hostId: String, conversationId: String) {
+    if (!hostIdIsValid(hostId) || conversationId.isEmpty()) return
+    if (hostId == watchedHost && conversationId == watchedConversation) return
+    watchedHost = hostId
+    watchedConversation = conversationId
+    contentWatch?.cancel()
+    contentWatch = viewModelScope.launch {
+      kotlinx.coroutines.flow.combine(
+        conversations.turns(hostId, conversationId),
+        conversations.blocks(hostId, conversationId)
+      ) { turns, blocks -> documentFromRows(turns, blocks) }
+        .collect { document ->
+          content.adopt(hostId, conversationId, document.turns, document.live)
+          uiState.value = coordinator.state
+        }
+    }
+  }
+
   private fun attachApplier(hostId: String) {
     if (!hostIdIsValid(hostId)) return
     val current = syncApplier
@@ -1639,7 +1690,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     lanWatch.stop()
     saveCacheNow(uiState.value, true)
     supportPending = false
-    linkGrace?.cancel()
+    contentWatch?.cancel()
     finalWatch.cancel()
     engine.destroy()
     session.close()
@@ -1763,15 +1814,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (ideLinkLive(uiState.value.disconnected, status.phase)) {
       cacheListOpenState.value = false
       cacheBackToListState.value = false
-    }
-    if (effects == null) return
-    linkGrace?.cancel()
-    if (!coordinator.holdingLink) return
-    linkGrace = viewModelScope.launch {
-      delay(LinkGraceMs)
-      if (!coordinator.holdingLink) return@launch
-      val effects = coordinator.revealHeldLink(uiState.value, session.status.value) ?: return@launch
-      applyUiEffects(effects)
     }
   }
 

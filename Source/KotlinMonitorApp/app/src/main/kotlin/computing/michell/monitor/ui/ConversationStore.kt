@@ -1,0 +1,70 @@
+package computing.michell.monitor.ui
+
+/* Conversation the screen reads. The coordinator does not keep a second copy.
+   (c) 2026 Michell Computing. */
+
+import computing.michell.monitor.protocol.WireTurn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+data class BoardContent(
+  val host: String = "",
+  val conversationId: String = "",
+  val turns: List<WireTurn> = emptyList(),
+  val live: WireTurn? = null,
+  val revision: Long = 0
+)
+
+interface ConversationStore {
+  val updates: StateFlow<BoardContent>
+  fun current(): BoardContent
+  fun replace(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?)
+  fun adopt(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?)
+  fun clear()
+}
+
+class MemoryConversationStore : ConversationStore {
+  private val gate = Any()
+  private var board = BoardContent()
+  private var revision = 0L
+  private val updatesState = MutableStateFlow(board)
+  override val updates: StateFlow<BoardContent> = updatesState.asStateFlow()
+
+  override fun current(): BoardContent = synchronized(gate) { board }
+
+  override fun replace(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?) {
+    revision += 1
+    publish(host, conversationId, turns, live, revision)
+  }
+
+  override fun adopt(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?) {
+    val current = current()
+    if (turns.isEmpty() && live == null && current.turns.isNotEmpty() && current.conversationId == conversationId) return
+    publish(host, conversationId, turns, live, current.revision)
+  }
+
+  override fun clear() {
+    synchronized(gate) {
+      board = BoardContent()
+      updatesState.value = board
+    }
+  }
+
+  private fun publish(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?, revision: Long) {
+    synchronized(gate) {
+      val next = BoardContent(host, conversationId, turns, live, revision)
+      if (next == board) return
+      board = next
+      updatesState.value = board
+    }
+  }
+}
+
+fun MonitorUi.withBoard(board: BoardContent): MonitorUi {
+  return copy(
+    turns = board.turns,
+    live = board.live,
+    history = board.turns.associateBy { turn -> turn.turnIndex }
+  )
+}

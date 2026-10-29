@@ -1,42 +1,28 @@
 package computing.michell.monitor.ui
 
-/* Coordinator seam without AndroidViewModel (c) 2026 Michell Computing. */
+/* Coordinator boundaries after the screen reads the store (c) 2026 Michell Computing.
 
-import computing.michell.monitor.connection.AcceptedCatalogue
+   Draft and sheets stay local. Conversation bodies are read back from the
+   store. A disconnect is shown at once. A prompt is not matched to an older
+   block. */
+
 import computing.michell.monitor.connection.CatalogueResult
-import computing.michell.monitor.connection.CatalogueStep
 import computing.michell.monitor.connection.CatalogueWrite
-import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
+import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
-import computing.michell.monitor.connection.beginCatalogue
-import computing.michell.monitor.connection.catalogueFromWrite
-import computing.michell.monitor.connection.stepCatalogue
+import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.MonitorMessage
+import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.protocol.WirePatch
+import computing.michell.monitor.protocol.WireSnapshot
+import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.encodePatch
+import computing.michell.monitor.protocol.encodeSnapshot
+import computing.michell.monitor.protocol.tryDecodeEnvelope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
-import computing.michell.monitor.protocol.ApprovalNotice
-import computing.michell.monitor.protocol.ImageAssembly
-import computing.michell.monitor.protocol.ImageData
-import computing.michell.monitor.protocol.MessageKind
-import computing.michell.monitor.protocol.MonitorLimits
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireSnapshot
-import computing.michell.monitor.protocol.WireTranscript
-import computing.michell.monitor.protocol.WireImage
-import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.tryEncodeTranscript
-import computing.michell.monitor.protocol.decodeImageGet
-import computing.michell.monitor.protocol.decodeText
-import computing.michell.monitor.protocol.decodeTurnRequest
-import computing.michell.monitor.protocol.encodeEnvelope
-import computing.michell.monitor.protocol.encodeError
-import computing.michell.monitor.protocol.encodeInsertResult
-import computing.michell.monitor.protocol.encodeRejected
-import computing.michell.monitor.protocol.encodeSnapshot
-import computing.michell.monitor.protocol.encodeTurnData
-import computing.michell.monitor.protocol.statusToJson
-import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -45,976 +31,133 @@ import org.junit.Test
 
 class MonitorCoordinatorTest {
   @Test
-  fun draftEditIsVisibleAndTheSnapshotIsApplied() {
-    val coordinator = MonitorCoordinator(FakeSession(), FixedClock(1_000L), FixedDisplay(true, false))
+  fun draftStaysLocalWhenTheStoreReplacesTheConversation() {
+    val coordinator = open()
     coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("old answer"))))))
     assertEquals("keep this", coordinator.state.draft)
-    val snapshot = WireSnapshot(
-      emptyView().copy(model = "grok-test", canSend = true),
-      emptyList(),
-      WireTurn(3, "turn-3", "build", "", "live", ""),
-      "Documents/Plan.md",
-      "Monitor",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot))))
-    assertEquals("grok-test", coordinator.state.view.model)
-    assertEquals("Documents/Plan.md", coordinator.state.planPath)
-    assertEquals(3, coordinator.state.live?.turnIndex)
-    // Today's merge keeps a typed draft. This is not the empty-draft fix.
+    assertEquals("old answer", coordinator.state.live?.blocks?.first()?.body)
+  }
+
+  @Test
+  fun submitClearsTheDraftAndDoesNotRestoreItFromALaterBlock() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
+      view = emptyView().copy(canSend = true)
+    )))))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
+    val effects = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals("", coordinator.state.draft)
+    assertTrue(effects.any { effect -> effect is MonitorEffect.Send })
+    val echoed = live("hello world")
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("next", snapshot(echoed)))))
+    assertEquals("", coordinator.state.draft)
+  }
+
+  @Test
+  fun aFailedWritePutsTheDraftBack() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
+      view = emptyView().copy(canSend = true)
+    )))))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    coordinator.onEvent(MonitorEvent.CommandResult(coordinator.state, CatalogueResult("c1", 1, CatalogueWrite.Failed)))
     assertEquals("keep this", coordinator.state.draft)
-    assertTrue(coordinator.state.showThinking)
-    assertEquals(false, coordinator.state.showTools)
-  }
-
-  @Test
-  fun insertThenSendThenStatusLeavesTheDraftEmpty() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeInsertResult("ins", "pasted"))))
-    assertEquals("pasted", coordinator.state.draft)
-    val sent = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("", coordinator.state.draft)
-    assertEquals("pasted", coordinator.state.pendingPrompt)
-    assertEquals("user", coordinator.state.pendingKind)
-    assertEquals("c1", coordinator.state.pendingCommandId)
-    assertEquals(1, coordinator.state.pendingEpoch)
-    assertEquals(listOf("pasted"), sendTexts(sent))
-    val written = coordinator.onEvent(MonitorEvent.CommandResult(
-      coordinator.state,
-      CatalogueResult(coordinator.state.pendingCommandId, 1, CatalogueWrite.Written)
-    ))
-    assertEquals("", coordinator.state.draft)
-    assertEquals("pasted", coordinator.state.pendingPrompt)
-    assertEquals(emptyList<String>(), sendTexts(written.orEmpty()))
-    val status = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
-      MessageKind.Status, "st", statusToJson(emptyView().copy(canSend = true, signedIn = true))
-    ))))
-    assertEquals("", coordinator.state.draft)
-    assertEquals(emptyList<String>(), sendTexts(status.orEmpty()))
-  }
-
-  @Test
-  fun steerErrorFallsBackToSendOfTheSameText() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = false, canSteer = true)
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "finish the form"))
-    val steered = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("finish the form", coordinator.state.pendingPrompt)
-    assertEquals("steer", coordinator.state.pendingKind)
-    assertEquals("c1", coordinator.state.pendingCommandId)
-    assertEquals(1, coordinator.state.pendingEpoch)
-    assertEquals(MessageKind.Steer, envelope(sentJson(steered)).kind)
-    val recovered = coordinator.onEvent(MonitorEvent.Incoming(
-      coordinator.state,
-      envelope(encodeError("err", "command", NothingRunningToSteer, "c1"))
-    )).orEmpty()
-    val send = envelope(sentJson(recovered))
-    assertEquals(MessageKind.Send, send.kind)
-    assertEquals("finish the form", decodeText(send.payloadJson))
-  }
-
-  @Test
-  fun nullLiveSnapshotClearsThePreviousAnswer() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "unsent"))
-    assertEquals("old answer", coordinator.state.live?.response)
-    openLive(coordinator, canSend = true, canSteer = false, live = null)
-    assertEquals(null, coordinator.state.live)
-    assertEquals("unsent", coordinator.state.draft)
-    assertEquals(1, coordinator.state.conversationGeneration)
-    val submitted = coordinator()
-    openLive(submitted, canSend = true, canSteer = false)
-    submitted.onEvent(MonitorEvent.Incoming(submitted.state, envelope(encodeInsertResult("ins", "pasted"))))
-    submitted.onEvent(MonitorEvent.Submit(submitted.state))
-    openLive(submitted, canSend = true, canSteer = false, live = null)
-    assertEquals("", submitted.state.draft)
-  }
-
-  @Test
-  fun newTurnIdAtLiveIndexDoesNotKeepThePreviousBody() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("old-id", "old body"))
-    openLive(coordinator, canSend = true, canSteer = false, live = WireTurn(-2, "new-id", "build", "", "", ""))
-    assertEquals("new-id", coordinator.state.live?.id)
-    assertEquals("", coordinator.state.live?.response)
-    assertTrue(coordinator.state.live?.blocks?.none { it.body == "old body" } ?: true)
-  }
-
-  @Test
-  fun hostGenerationsDoNotShareHistoryOrImages() {
-    val session = FakeSession()
-    val coordinator = MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, false))
-    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.1", 8765, "client-a"))
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "unsent"))
-    val first = WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      listOf(WireTurn(1, "turn-a", "build", "", "secret", "")),
-      answeredTurn("old-id", "old answer"),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("first", first))))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
-      "td",
-      WireTurn(1, "turn-a", "build", "", "secret", "", prompt = "secret")
-    ))))
-    coordinator.flush(coordinator.state)
-    assertEquals("secret", coordinator.state.history[1]?.prompt)
-    coordinator.noteBitmap("1:img")
-    assertTrue(coordinator.noteTurnRequest(1))
-    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.1", 8765, "client-a"))
-    assertEquals("unsent", coordinator.state.draft)
-    assertEquals(0, coordinator.state.hostGeneration)
-    val changed = coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.2", 8765, ""))
-    assertEquals(1, coordinator.state.hostGeneration)
-    assertEquals("", coordinator.state.draft)
-    assertEquals(null, coordinator.state.live)
-    assertTrue(coordinator.bitmapKeyEntries.isEmpty())
-    assertTrue(coordinator.requestedTurnEntries.isEmpty())
-    assertEquals(false, coordinator.state.showTools)
-    assertTrue(session.imagesReset > 0)
-    assertTrue(changed.orEmpty().any { it == MonitorEffect.ClearCaches })
-    val next = WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      listOf(WireTurn(1, "turn-b", "build", "", "other", "")),
-      WireTurn(-2, "new-id", "build", "", "", ""),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("next", next))))
-    assertEquals("new-id", coordinator.state.live?.id)
-    assertEquals("", coordinator.state.live?.response ?: "")
-    assertEquals("turn-b", coordinator.state.turns.firstOrNull()?.id)
-    assertFalse(coordinator.state.history.values.any { it.prompt == "secret" })
-    assertTrue(coordinator.bitmapKeyEntries.isEmpty())
-  }
-
-  @Test
-  fun forgetPairingDropsAPendingReducerUpdate() {
-    val coordinator = MonitorCoordinator(FakeSession(), FixedClock(1_000L), FixedDisplay(true, false))
-    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
-    coordinator.noteBitmap("-2:old")
-    assertTrue(coordinator.noteTurnRequest(4))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
-      "td",
-      WireTurn(4, "stored", "build", "", "old", "", prompt = "pending body")
-    ))))
-    coordinator.onEvent(MonitorEvent.ForgetPairing(coordinator.state))
-    assertEquals(null, coordinator.state.live)
-    assertFalse(coordinator.state.history.containsKey(4))
-    assertTrue(coordinator.bitmapKeyEntries.isEmpty())
-    assertTrue(coordinator.requestedTurnEntries.isEmpty())
-    assertEquals(true, coordinator.state.showThinking)
-    assertEquals(false, coordinator.state.showTools)
-    coordinator.flush(coordinator.state)
-    assertEquals(null, coordinator.state.live)
-    assertFalse(coordinator.state.history.values.any { it.prompt == "pending body" })
-  }
-
-  @Test
-  fun lowerRevisionAfterDisconnectReplacesTheDisplayedBody() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false, live = WireTurn(-2, "live-1", "build", "", "", ""))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(transcript(100, "old text", -2))))
-    coordinator.flush(coordinator.state)
-    assertEquals("old text", displayedBody(coordinator.state))
-    coordinator.onEvent(MonitorEvent.LinkChanged(
-      coordinator.state,
-      LinkStatus(LinkPhase.Disconnected, HostClosedBanner)
-    ))
-    openLive(coordinator, canSend = true, canSteer = false, live = WireTurn(-2, "live-1", "build", "", "", ""))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(transcript(1, "new text", -2))))
-    coordinator.flush(coordinator.state)
-    assertEquals("new text", displayedBody(coordinator.state))
-  }
-
-  @Test
-  fun failedSendBeforeWriteKeepsTheText() {
-    val session = FakeSession()
-    session.dropSocket()
-    val coordinator = sendingCoordinator(session)
-    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals("", coordinator.state.draft)
-    assertEquals("keep me", coordinator.state.pendingPrompt)
-    assertTrue(coordinator.state.view.busy)
-    drive(session, submitted)
-    val settled = settleWrites(coordinator, session)
-    assertEquals(0, session.writeAttempts)
-    assertTrue(session.writes.isEmpty())
-    assertEquals(CatalogueWrite.Failed, session.outcomes.single())
-    assertEquals("keep me", coordinator.state.draft)
-    assertEquals("", coordinator.state.pendingPrompt)
-    assertFalse(coordinator.state.view.busy)
-    assertFalse(coordinator.state.view.sending)
-    assertTrue(coordinator.state.view.canSend)
     assertEquals(CouldNotSendBanner, coordinator.state.banner)
-    assertEquals(emptyList<String>(), sendTexts(settled))
   }
 
   @Test
-  fun failedWriteJsonKeepsTheText() {
-    val session = FakeSession()
-    session.failWriteJson()
-    val coordinator = sendingCoordinator(session)
-    drive(session, coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
-    val settled = settleWrites(coordinator, session)
-    assertEquals(1, session.writeAttempts)
-    assertTrue(session.writes.isEmpty())
-    assertEquals(CatalogueWrite.Failed, session.outcomes.single())
-    assertEquals("keep me", coordinator.state.draft)
-    assertEquals("", coordinator.state.pendingPrompt)
-    assertFalse(coordinator.state.view.busy)
-    assertTrue(coordinator.state.view.canSend)
-    assertEquals(CouldNotSendBanner, coordinator.state.banner)
-    assertEquals(emptyList<String>(), sendTexts(settled))
-  }
-
-  @Test
-  fun writtenSendWithoutAckDoesNotSendAgain() {
-    val session = FakeSession()
-    val coordinator = sendingCoordinator(session)
-    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    assertEquals(listOf("keep me"), sendTexts(submitted))
-    drive(session, submitted)
-    val settled = settleWrites(coordinator, session)
-    assertEquals(1, session.writes.size)
-    assertEquals(CatalogueWrite.Written, session.outcomes.single())
-    assertEquals("", coordinator.state.draft)
-    assertEquals("keep me", coordinator.state.pendingPrompt)
-    assertEquals("user", coordinator.state.pendingKind)
-    assertTrue(coordinator.state.view.busy)
-    assertEquals(emptyList<String>(), sendTexts(settled))
-    val status = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
-      MessageKind.Status, "st", statusToJson(emptyView().copy(canSend = true, signedIn = true))
-    ))))
-    assertEquals("", coordinator.state.draft)
-    assertEquals("keep me", coordinator.state.pendingPrompt)
-    assertEquals(emptyList<String>(), sendTexts(status.orEmpty()))
-    val dropped = coordinator.onEvent(MonitorEvent.LinkChanged(
-      coordinator.state,
-      LinkStatus(LinkPhase.Disconnected, HostClosedBanner)
-    ))
-    assertEquals("keep me", coordinator.state.draft)
-    assertEquals("", coordinator.state.pendingPrompt)
-    assertEquals(HostClosedBanner, coordinator.state.banner)
-    assertEquals(emptyList<String>(), sendTexts(dropped.orEmpty()))
-    drive(session, dropped)
-    session.completeWrites()
-    assertEquals(1, session.writes.size)
-    assertEquals(1, session.outcomes.size)
-  }
-
-  @Test
-  fun commandAcceptedOnGenerationOneIsNotWrittenOnGenerationTwo() {
-    val session = FakeSession()
-    val coordinator = sendingCoordinator(session)
-    val submitted = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
-    drive(session, submitted)
-    assertEquals(1, session.linkEpoch)
-    assertEquals(listOf(1), session.acceptedEpochs)
-    val commandId = coordinator.state.pendingCommandId
-    session.moveGeneration()
-    assertEquals(2, session.linkEpoch)
-    val settled = settleWrites(coordinator, session)
-    assertTrue(session.writes.isEmpty())
-    assertEquals(0, session.writeAttempts)
-    assertEquals(CatalogueWrite.Stale, session.outcomes.single())
-    assertEquals(commandId, session.settledIds.single())
-    assertEquals("keep me", coordinator.state.draft)
-    assertEquals("", coordinator.state.pendingPrompt)
-    assertFalse(coordinator.state.view.busy)
-    assertEquals(CouldNotSendBanner, coordinator.state.banner)
-    assertEquals(emptyList<String>(), sendTexts(settled))
-  }
-
-  @Test
-  fun disconnectBetweenFetchAndResponseRequestsTheTurnAgain() {
-    val coordinator = coordinator()
-    val first = snapshotWithStoredTurn(coordinator, 4, "turn-4")
-    assertEquals(listOf(4), turnRequests(first))
-    assertTrue(coordinator.requestedTurnEntries.contains(4))
-    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
-    assertFalse(coordinator.requestedTurnEntries.contains(4))
-    val again = snapshotWithStoredTurn(coordinator, 4, "turn-4")
-    assertEquals(listOf(4), turnRequests(again))
-  }
-
-  @Test
-  fun failedFetchWriteDoesNotStickTheKey() {
-    val coordinator = coordinator()
-    val first = snapshotWithStoredTurn(coordinator, 4, "turn-4")
-    val commandId = envelope(turnSend(first).json).id
-    coordinator.onEvent(MonitorEvent.CommandResult(
-      coordinator.state,
-      CatalogueResult(commandId, 1, CatalogueWrite.Failed)
-    ))
-    assertFalse(coordinator.requestedTurnEntries.contains(4))
-    val again = snapshotWithStoredTurn(coordinator, 4, "turn-4")
-    assertEquals(listOf(4), turnRequests(again))
-  }
-
-  @Test
-  fun completedTurnIsNotRequestedAgainOnTheSameGeneration() {
-    val coordinator = coordinator()
-    assertEquals(listOf(4), turnRequests(snapshotWithStoredTurn(coordinator, 4, "turn-4")))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
-      "td",
-      WireTurn(4, "turn-4", "build", "", "preview", "", prompt = "loaded body")
-    ))))
-    coordinator.flush(coordinator.state)
-    assertFalse(coordinator.requestedTurnEntries.contains(4))
-    assertEquals(emptyList<Int>(), turnRequests(snapshotWithStoredTurn(coordinator, 4, "turn-4")))
-  }
-
-  @Test
-  fun aDisconnectedScreenDoesNotFetchImages() {
-    val coordinator = coordinator()
-    val image = WireImage("img-1", "shot", "image/png", 8, 8, "", false)
-    coordinator.restoreOffline(MonitorUi(
-      disconnected = true,
-      live = WireTurn(-2, "live-image", "build", "", "preview", "", images = listOf(image))
-    ))
-    val effects = coordinator.noteVisibleTurns(coordinator.state, setOf(-2))
-    assertEquals(emptyList<String>(), imageRequests(effects))
-  }
-
-  @Test
-  fun visibleTurnsDoNotRequestDistantHistoryImages() {
-    val coordinator = coordinator()
-    val stored = (0..4).map { index -> WireTurn(index, "turn-$index", "build", "", "preview", "") }
-    val snapshot = WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      stored,
-      WireTurn(-2, "live", "build", "", "", ""),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("many", snapshot))))
-    for (index in listOf(0, 2, 3, 4)) {
-      val image = WireImage("img-$index", "shot", "image/png", 8, 8, "", false)
-      coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData(
-        "td-$index",
-        WireTurn(index, "turn-$index", "build", "", "preview", "", images = listOf(image))
-      ))))
-    }
-    val flushed = coordinator.flush(coordinator.state).orEmpty()
-    assertEquals(emptyList<String>(), imageRequests(flushed))
-    val requested = imageRequests(coordinator.noteVisibleTurns(coordinator.state, setOf(3)))
-    assertEquals(setOf("img-2", "img-3", "img-4"), requested.toSet())
-    assertFalse(requested.contains("img-0"))
-  }
-
-  @Test
-  fun expiredImageClearsTheInFlightKeyAndANewHostDoesNotShareIt() {
-    val coordinator = coordinator()
-    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.1", 8765, "client-a"))
-    val first = snapshotWithImage(coordinator, "img-1")
-    assertEquals(listOf("img-1"), imageRequests(first))
-    assertEquals(listOf("0:-2:img-1"), coordinator.inFlightImageKeys.toList())
-    assertFalse(coordinator.loadedImageKeys.contains("0:img-1"))
-    assertEquals(emptyList<String>(), imageRequests(snapshotWithImage(coordinator, "img-1")))
-    val assembly = ImageAssembly()
-    val partial = ImageData("img-1", "image/png", 1, 1, 1, 2, 1, "")
-    assertNull(assembly.accept(partial, byteArrayOf(1), 0L))
-    assembly.accept(ImageData("other", "image/png", 1, 1, 1, 2, 1, ""), byteArrayOf(2), MonitorLimits.ImageAssemblyTtlMs)
-    assertTrue(assembly.takeExpired().contains("img-1"))
-    coordinator.noteImagesExpired(listOf("img-1"))
-    assertTrue(coordinator.inFlightImageKeys.isEmpty())
-    assertFalse(coordinator.loadedImageKeys.contains("0:img-1"))
-    assertEquals(listOf("img-1"), imageRequests(snapshotWithImage(coordinator, "img-1")))
-    coordinator.noteImageFetched("img-1")
-    assertEquals(setOf("0:img-1"), coordinator.loadedImageKeys)
-    assertEquals(emptyList<String>(), imageRequests(snapshotWithImage(coordinator, "img-1")))
-    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.2", 8765, "client-b"))
-    assertTrue(coordinator.loadedImageKeys.isEmpty())
-    assertEquals(listOf("img-1"), imageRequests(snapshotWithImage(coordinator, "img-1")))
-    assertTrue(coordinator.inFlightImageKeys.any { it.startsWith("1:") })
-  }
-
-  @Test
-  fun historyPrefixDoesNotAcknowledgeAPendingPrompt() {
-    val coordinator = coordinator()
-    val older = promptTurn(1, "hist", "hello world", "old-user")
-    val live = WireTurn(-2, "live", "build", "", "", "")
-    rememberTurn(coordinator, older, live)
-    assertEquals("hello world", coordinator.state.history[1]?.blocks?.single()?.body)
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
-    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-    postSnapshot(coordinator, catalogueSnapshot(listOf(older), live))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-    val prefix = WireTurn(
-      -2, "live", "build", "", "hello world", "",
-      prompt = "hello world",
-      blocks = listOf(userBlock("new-prefix", "hello world"))
-    )
-    postSnapshot(coordinator, catalogueSnapshot(listOf(older), prefix))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-  }
-
-  @Test
-  fun repeatedPromptWaitsForANewLiveBlock() {
-    val coordinator = coordinator()
-    val older = promptTurn(1, "hist", "hello", "old-user")
-    val live = WireTurn(
-      -2, "shown", "build", "", "hello", "",
-      prompt = "hello",
-      blocks = listOf(userBlock("old-user", "hello"))
-    )
-    rememberTurn(coordinator, older, live)
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
-    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
-    postSnapshot(coordinator, catalogueSnapshot(listOf(older), live))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-    val echoed = WireTurn(
-      -2, "live", "build", "", "hello", "",
-      prompt = "hello",
-      blocks = listOf(userBlock("echo-user", " hello "))
-    )
-    postSnapshot(coordinator, catalogueSnapshot(listOf(older), echoed))
-    assertEquals("", coordinator.state.pendingPrompt)
-  }
-
-  @Test
-  fun errorAndRejectionDoNotCountAsThePromptShown() {
-    val coordinator = coordinator()
-    val older = promptTurn(1, "hist", "hello world", "old-user")
-    val live = WireTurn(-2, "live", "build", "", "", "")
-    rememberTurn(coordinator, older, live)
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
-    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
-    val commandId = coordinator.state.pendingCommandId
-    coordinator.onEvent(MonitorEvent.Incoming(
-      coordinator.state,
-      envelope(encodeError("err", "command", "hello", commandId))
-    ))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-    coordinator.onEvent(MonitorEvent.Incoming(
-      coordinator.state,
-      envelope(encodeRejected("rej", "busy", 1, 1))
-    ))
-    assertEquals("hello", coordinator.state.pendingPrompt)
-  }
-
-  @Test
-  fun aBriefDropDoesNotDisableSend() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false)
-    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
-    assertFalse(coordinator.state.disconnected)
-    assertTrue(coordinator.state.view.canSend)
-    assertTrue(coordinator.holdingLink)
-    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
-    assertFalse(coordinator.state.disconnected)
-    assertFalse(coordinator.holdingLink)
-  }
-
-  @Test
-  fun aLiveLinkDoesNotAskForASnapshot() {
-    val coordinator = coordinator()
-    val first = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
-    assertFalse(first.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
-    val again = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
-    assertFalse(again.any { effect -> effect is MonitorEffect.Send && effect.json.contains("\"refresh\"") })
-  }
-
-  @Test
-  fun sendClearsThePromptAndKeepsTheUserBlockWhenStatusIsStale() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false)
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello"))
-    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
-    assertEquals("", coordinator.state.draft)
-    assertEquals("hello", coordinator.state.pendingPrompt)
-    assertEquals("user", coordinator.state.pendingKind)
-    val stale = coordinator.state.copy(draft = "hello", pendingPrompt = "", pendingCommandId = "", pendingEpoch = 0)
-    coordinator.onEvent(MonitorEvent.Incoming(stale, envelope(encodeEnvelope(
-      MessageKind.Status, "st", statusToJson(emptyView().copy(sending = true, busy = true, signedIn = true))
-    ))))
-    assertEquals("", coordinator.state.draft)
-    assertEquals("hello", coordinator.state.pendingPrompt)
-  }
-
-  @Test
-  fun newConversationClearsTheTranscriptAndAsksTheDesktop() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
-    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "unsent"))
-    val effects = coordinator.onEvent(MonitorEvent.NewConversation(coordinator.state)).orEmpty()
-    assertEquals(null, coordinator.state.live)
+  fun hostChangeDropsThePreviousConversation() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("one"))))))
+    assertEquals("one", coordinator.state.live?.blocks?.first()?.body)
+    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.9", 56122, "other"))
+    assertNull(coordinator.state.live)
     assertTrue(coordinator.state.turns.isEmpty())
-    assertEquals("unsent", coordinator.state.draft)
-    assertEquals(1, coordinator.state.conversationGeneration)
-    assertTrue(effects.any { effect ->
-      effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.NewConversation
-    })
   }
 
   @Test
-  fun aReadyTranscriptClearsAStuckBusyLabel() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
-      MessageKind.Status, "st", statusToJson(emptyView().copy(busy = true, sending = true, signedIn = true, canSend = false))
-    ))))
-    assertTrue(coordinator.state.view.busy)
-    val block = WireBlock("answer", "b1", "", "", "", "done", false, true, 0, emptyList())
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      tryEncodeTranscript("tr", WireTranscript(-2, 1, "", "Ready", listOf(block)))
-    )))
-    coordinator.flush(coordinator.state)
-    assertEquals("done", displayedBody(coordinator.state))
-    assertFalse(coordinator.state.view.busy)
-    assertFalse(coordinator.state.view.sending)
-    assertTrue(coordinator.state.view.canSend)
+  fun aLaterPatchReplacesTheBodyWithoutARevisionGate() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("first"))))))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p2", patch("second", 8)))))
+    assertEquals("second", coordinator.state.live?.blocks?.first()?.body)
+    assertEquals(8, coordinator.state.hostCursor)
   }
 
   @Test
-  fun aQuietBusyTurnSendsOneResume() {
-    val clock = MutableClock(1_000L)
-    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
-    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
-    openLive(coordinator, canSend = true, canSteer = false)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeEnvelope(
-      MessageKind.Status, "st", statusToJson(emptyView().copy(busy = true, sending = true, signedIn = true))
-    ))))
-    clock.millis = 1_000L + StallGapMs
-    val effects = coordinator.flush(coordinator.state).orEmpty()
-    val resume = effects.filterIsInstance<MonitorEffect.Send>().map { envelope(it.json) }
-      .single { it.kind == MessageKind.Resume }
-    val body = computing.michell.monitor.protocol.decodeResume(resume.payloadJson)
-    assertEquals("", body!!.epoch)
-    assertEquals(0L, body.cursor)
-    assertFalse(effects.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh })
-    val again = coordinator.flush(coordinator.state).orEmpty()
-    assertFalse(again.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Resume })
+  fun disconnectIsShownAtOnce() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("live"))))))
+    assertFalse(coordinator.holdingLink)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    assertTrue(coordinator.state.disconnected)
+    assertFalse(coordinator.holdingLink)
+    assertNull(coordinator.revealHeldLink(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
   }
 
   @Test
-  fun aPatchReplacesTheActivityClockBase() {
-    val clock = MutableClock(10_000L)
-    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
-    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "")))
-    openLive(coordinator, canSend = true, canSteer = false)
-    val block = WireBlock("answer", "b1", "", "", "", "working", false, true, 0, emptyList())
-    val patch = computing.michell.monitor.protocol.WirePatch(
-      "aa", 1, 1, "turn-1", listOf(block), true, false, false, "Thinking…", true, false, true, 4_000, 1, 1
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
-    )))
-    assertEquals(6_000L, coordinator.state.activityStartedMs)
-    assertEquals("Thinking… 0:07", activityCaption(
-      coordinator.state.view, false, "", coordinator.state.activityStartedMs, 13_000L,
-      coordinator.state.live?.blocks.orEmpty(), coordinator.state.live
-    ))
-    clock.millis = 20_000L
-    val next = patch.copy(cursor = 2, elapsedMs = 1_000, busy = false, phase = "", canStop = false)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodePatch("patch-2", next)
-    )))
-    assertEquals(0L, coordinator.state.activityStartedMs)
-    assertEquals("Ready", activityCaption(
-      coordinator.state.view, false, "", coordinator.state.activityStartedMs, 30_000L,
-      coordinator.state.live?.blocks.orEmpty(), coordinator.state.live
-    ))
-  }
-
-  @Test
-  fun conversationClosedFilesTheScreenBeforeTheNewEpoch() {
-    val coordinator = coordinator()
-    val hello = computing.michell.monitor.protocol.HelloOkMessage(
-      "abc", "LazAssistantMonitor", "aa", 0, "current", "/old", "Host title"
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodeHelloOk("hello-ok", hello)
-    )))
-    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
-    val snapshot = WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      listOf(shown),
-      shown,
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot))))
-    val closed = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodeConversationClosed("closed", "aa", 4, "conversation-1", "")
-    ))).orEmpty()
-    val filed = closed.filterIsInstance<MonitorEffect.FileClosed>().single()
-    assertEquals("conversation-1", filed.id)
-    assertEquals("/old", filed.projectRoot)
-    assertEquals("Shown", filed.title)
-    val document = computing.michell.monitor.protocol.decodeClosedScreen(filed.document)
-    assertEquals("Shown", document?.turns?.single()?.promptPreview)
-    val nextShot = WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      listOf(WireTurn(2, "turn-2", "build", "", "Next", "")),
-      WireTurn(3, "turn-3", "build", "", "Next live", "", live = true),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val catchup = computing.michell.monitor.protocol.WireCatchup(
-      "snapshot", "bb", 0, "conversation-2", "/work", "New", nextShot, emptyList()
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodeCatchup("catch", catchup)
-    )))
-    assertEquals("conversation-2", coordinator.state.conversationId)
-    assertEquals("/work", coordinator.state.projectRoot)
-    assertEquals("Next", coordinator.state.turns.single().promptPreview)
-    assertEquals("Shown", computing.michell.monitor.protocol.decodeClosedScreen(filed.document)?.turns?.single()?.promptPreview)
-  }
-
-  @Test
-  fun helloOkSendsResumeWithTheCommittedCursor() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false)
-    val block = WireBlock("answer", "b1", "", "", "", "kept", false, true, 0, emptyList())
-    val patch = computing.michell.monitor.protocol.WirePatch(
-      "aa", 1, 1, "turn-1", listOf(block), false, false, false, "idle", true, false, false, 0, 1, 1
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
-    )))
-    assertEquals(1L, coordinator.state.hostCursor)
-    val hello = computing.michell.monitor.protocol.HelloOkMessage("abc", "LazAssistantMonitor", "bb", 0, "conversation-2", "/work", "New")
+  fun steerErrorFallsBackToSendOfTheLocalDraft() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
     val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
-      computing.michell.monitor.protocol.encodeHelloOk("hello-ok", hello)
+      computing.michell.monitor.protocol.encodeError("e1", "command", NothingRunningToSteer, "steer-1")
     ))).orEmpty()
-    val resume = effects.filterIsInstance<MonitorEffect.Send>().map { envelope(it.json) }
-      .single { it.kind == MessageKind.Resume }
-    val body = computing.michell.monitor.protocol.decodeResume(resume.payloadJson)
-    assertEquals("aa", body!!.epoch)
-    assertEquals(1L, body.cursor)
-    assertEquals("kept", coordinator.state.live?.blocks?.single()?.body)
-    assertFalse(effects.any { effect -> effect is MonitorEffect.Send && envelope(effect.json).kind == MessageKind.Refresh })
-  }
-
-  @Test
-  fun socketCloseKeepsTheScreenAndCursor() {
-    val clock = MutableClock(10_000L)
-    val held = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
-    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Live, "")))
-    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
-    val live = answeredTurn("live-1", "still here")
-    postSnapshot(held, WireSnapshot(
-      emptyView().copy(canSend = true, signedIn = true),
-      listOf(shown),
-      live,
-      "Documents/Plan.md",
-      "Plan",
-      false,
-      listOf(computing.michell.monitor.protocol.PlanRow(1, 1, "Row", "", "pending", true)),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
+    val send = effects.filterIsInstance<MonitorEffect.Send>().single()
+    assertEquals("keep this", computing.michell.monitor.protocol.decodeText(
+      tryDecodeEnvelope(send.json).message.payloadJson
     ))
-    val block = WireBlock("answer", "b1", "", "", "", "still here", false, true, 0, emptyList())
-    val patch = computing.michell.monitor.protocol.WirePatch(
-      "aa", 1, 1, "turn-1", listOf(block), false, false, false, "idle", true, false, false, 0, 1, 1
-    )
-    held.onEvent(MonitorEvent.Incoming(held.state, envelope(
-      computing.michell.monitor.protocol.encodePatch("patch-1", patch)
-    )))
-    held.onEvent(MonitorEvent.DraftEdited(held.state, "unsent"))
-    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
-    clock.millis = 20_000L
-    held.onEvent(MonitorEvent.LinkChanged(held.state, LinkStatus(LinkPhase.Disconnected, HostClosedBanner)))
-    assertEquals("still here", held.state.live?.blocks?.single()?.body)
-    assertEquals("unsent", held.state.draft)
-    assertEquals("aa", held.state.hostEpoch)
-    assertEquals(1L, held.state.hostCursor)
-    assertEquals("Row", held.state.planRows.single().title)
-    assertEquals("Shown", held.state.turns.single().promptPreview)
-    assertEquals(HostClosedBanner, held.state.banner)
   }
 
-  @Test
-  fun newConversationKeepsTheSelectedMode() {
-    val coordinator = coordinator()
-    openLive(coordinator, canSend = true, canSteer = false, live = answeredTurn("live-1", "old answer"))
-    val build = coordinator.state.copy(
-      view = coordinator.state.view.copy(mode = "build", modeLocked = false, canChangeMode = true)
-    )
-    coordinator.onEvent(MonitorEvent.NewConversation(build))
-    assertEquals("build", coordinator.state.view.mode)
-    assertTrue(coordinator.state.view.canChangeMode)
-    assertFalse(coordinator.state.view.modeLocked)
-    assertEquals(null, coordinator.state.live)
+  private fun open(session: FakeSession = FakeSession()): MonitorCoordinator {
+    return MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, true))
   }
 }
 
-private fun coordinator(): MonitorCoordinator {
-  return MonitorCoordinator(FakeSession(), FixedClock(1_000L), FixedDisplay(true, true))
+private fun snapshot(live: WireTurn?): WireSnapshot {
+  return WireSnapshot(emptyView().copy(canSend = true), emptyList(), live, "", "", false, emptyList(), emptyList(),
+    computing.michell.monitor.protocol.ApprovalNotice(false, "", "", "", "", false))
 }
 
-private fun userBlock(id: String, body: String, kind: String = "user"): WireBlock {
-  return WireBlock(kind, id, "", "", "", body, false, true, 0, emptyList())
+private fun live(body: String): WireTurn {
+  return WireTurn(1, "turn-1", "build", "", body, "", live = true, blocks = listOf(WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())))
 }
 
-private fun promptTurn(index: Int, id: String, body: String, blockId: String): WireTurn {
-  return WireTurn(index, id, "build", "", body, "", prompt = body, blocks = listOf(userBlock(blockId, body)))
+private fun patch(body: String, cursor: Long): WirePatch {
+  return WirePatch("epoch", cursor, 1, "turn-1", listOf(WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())),
+    false, false, false, "", true, false, false, 0)
 }
 
-private fun catalogueSnapshot(stored: List<WireTurn>, live: WireTurn?): WireSnapshot {
-  return WireSnapshot(
-    emptyView().copy(canSend = true, signedIn = true),
-    stored,
-    live,
-    "",
-    "",
-    false,
-    emptyList(),
-    emptyList(),
-    ApprovalNotice(false, "", "", "", "", false)
-  )
-}
-
-private fun postSnapshot(coordinator: MonitorCoordinator, snapshot: WireSnapshot) {
-  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot))))
-}
-
-private fun rememberTurn(coordinator: MonitorCoordinator, turn: WireTurn, live: WireTurn) {
-  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeTurnData("td", turn))))
-  postSnapshot(coordinator, catalogueSnapshot(listOf(turn), live))
-}
-
-private fun openLive(
-  coordinator: MonitorCoordinator,
-  canSend: Boolean,
-  canSteer: Boolean,
-  live: WireTurn? = WireTurn(-2, "live", "build", "", "", "")
-) {
-  val snapshot = WireSnapshot(
-    emptyView().copy(canSend = canSend, canSteer = canSteer, signedIn = true),
-    emptyList(),
-    live,
-    "",
-    "",
-    false,
-    emptyList(),
-    emptyList(),
-    ApprovalNotice(false, "", "", "", "", false)
-  )
-  coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("live", snapshot))))
-}
-
-private fun transcript(revision: Int, body: String, turnIndex: Int): String {
-  val block = WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
-  return tryEncodeTranscript("transcript", WireTranscript(turnIndex, revision, "thinking", "working", listOf(block)))
-}
-
-private fun displayedBody(state: MonitorUi): String {
-  return state.live?.blocks?.joinToString("") { it.body } ?: ""
-}
-
-private fun answeredTurn(id: String, body: String): WireTurn {
-  val block = WireBlock("answer", "a", "", "", "", body, false, true, 0, emptyList())
-  return WireTurn(-2, id, "build", "", "prompt", "", response = body, blocks = listOf(block))
-}
-
-private fun snapshotWithStoredTurn(coordinator: MonitorCoordinator, index: Int, id: String): List<MonitorEffect> {
-  val snapshot = WireSnapshot(
-    emptyView().copy(canSend = true, signedIn = true),
-    listOf(WireTurn(index, id, "build", "", "preview", "")),
-    WireTurn(-2, "live", "build", "", "", ""),
-    "",
-    "",
-    false,
-    emptyList(),
-    emptyList(),
-    ApprovalNotice(false, "", "", "", "", false)
-  )
-  return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot)))).orEmpty()
-}
-
-private fun snapshotWithImage(coordinator: MonitorCoordinator, imageId: String): List<MonitorEffect> {
-  val image = WireImage(imageId, "shot", "image/png", 8, 8, "", false)
-  val live = WireTurn(-2, "live-image", "build", "", "preview", "", images = listOf(image))
-  val snapshot = WireSnapshot(
-    emptyView().copy(canSend = true, signedIn = true),
-    emptyList(),
-    live,
-    "",
-    "",
-    false,
-    emptyList(),
-    emptyList(),
-    ApprovalNotice(false, "", "", "", "", false)
-  )
-  return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("img", snapshot)))).orEmpty()
-}
-
-private fun turnRequests(effects: List<MonitorEffect>): List<Int> {
-  return effects.filterIsInstance<MonitorEffect.Send>().mapNotNull { effect ->
-    val message = envelope(effect.json)
-    if (message.kind != MessageKind.Turn) null else decodeTurnRequest(message.payloadJson)
-  }
-}
-
-private fun turnSend(effects: List<MonitorEffect>): MonitorEffect.Send {
-  val sends = effects.filterIsInstance<MonitorEffect.Send>().filter { envelope(it.json).kind == MessageKind.Turn }
-  assertEquals(1, sends.size)
-  return sends[0]
-}
-
-private fun imageRequests(effects: List<MonitorEffect>): List<String> {
-  return effects.filterIsInstance<MonitorEffect.Send>().mapNotNull { effect ->
-    val message = envelope(effect.json)
-    if (message.kind != MessageKind.ImageGet) null else decodeImageGet(message.payloadJson)?.imageId
-  }
-}
-
-private fun sendTexts(effects: List<MonitorEffect>): List<String> {
-  return effects.filterIsInstance<MonitorEffect.Send>().map { decodeText(envelope(it.json).payloadJson) ?: "" }
-}
-
-private fun sentJson(effects: List<MonitorEffect>): String {
-  val sends = effects.filterIsInstance<MonitorEffect.Send>()
-  assertEquals(1, sends.size)
-  return sends[0].json
+private fun envelope(json: String): MonitorMessage {
+  val decoded = tryDecodeEnvelope(json)
+  assertTrue(decoded.errorText, decoded.ok)
+  return decoded.message
 }
 
 private class FixedClock(private val millis: Long) : MonitorClock {
   override fun nowMs(): Long = millis
 }
 
-private class MutableClock(var millis: Long) : MonitorClock {
-  override fun nowMs(): Long = millis
-}
-
-private class FixedDisplay(
-  override val showThinking: Boolean,
-  override val showTools: Boolean
-) : DisplayPreferences
-
-private fun sendingCoordinator(session: FakeSession): MonitorCoordinator {
-  val coordinator = MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, true))
-  openLive(coordinator, canSend = true, canSteer = false)
-  coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep me"))
-  return coordinator
-}
-
-private fun drive(session: FakeSession, effects: List<MonitorEffect>?) {
-  for (effect in effects.orEmpty()) {
-    if (effect is MonitorEffect.Send) session.sendCatalogue(effect.json)
-    if (effect is MonitorEffect.RememberDraft) session.updateDraft(effect.text)
-  }
-}
-
-private fun settleWrites(coordinator: MonitorCoordinator, session: FakeSession): List<MonitorEffect> {
-  session.completeWrites()
-  val effects = mutableListOf<MonitorEffect>()
-  for (result in session.takeResults()) {
-    effects += coordinator.onEvent(MonitorEvent.CommandResult(coordinator.state, result)).orEmpty()
-  }
-  return effects
+private class FixedDisplay(private val thinking: Boolean, private val tools: Boolean) : DisplayPreferences {
+  override val showThinking: Boolean get() = thinking
+  override val showTools: Boolean get() = tools
 }
 
 private class FakeSession : SessionPort {
-  private var stored = ""
-  private var generation = 1
-  private var openSocket: Any? = Any()
+  private var draft = ""
   private var ids = 1
-  private val queued = mutableListOf<AcceptedCatalogue>()
-  var imagesReset = 0
-  var writeJsonFails = false
-  var writeAttempts = 0
-  val writes = mutableListOf<String>()
-  val outcomes = mutableListOf<CatalogueWrite>()
-  val acceptedEpochs = mutableListOf<Int>()
-  val settledIds = mutableListOf<String>()
-  private val results = mutableListOf<CatalogueResult>()
-
-  override val promptDraft: String get() = stored
+  override val promptDraft: String get() = draft
   override val hostAddress: String = ""
   override val hostPort: Int = 0
   override val hostClientId: String = ""
-  override val linkEpoch: Int get() = generation
+  override val linkEpoch: Int = 1
   override val commandResults: Flow<CatalogueResult> = emptyFlow()
-  override fun nextCommandId(): String {
-    val id = "c" + ids.toString()
-    ids += 1
-    return id
-  }
-  override fun updateDraft(text: String) { stored = text }
-  override fun sendCatalogue(json: String) {
-    val accepted = beginCatalogue(json, generation, openSocket)
-    acceptedEpochs += accepted.linkEpoch
-    queued += accepted
-  }
-  override fun resetImages() { imagesReset += 1 }
-
-  fun dropSocket() {
-    openSocket = null
-  }
-
-  fun failWriteJson() {
-    writeJsonFails = true
-  }
-
-  fun moveGeneration() {
-    generation += 1
-    openSocket = Any()
-  }
-
-  fun completeWrites() {
-    val batch = queued.toList()
-    queued.clear()
-    for (accepted in batch) {
-      val result = when (val step = stepCatalogue(accepted, generation, openSocket)) {
-        is CatalogueStep.Done -> step.result
-        is CatalogueStep.Write -> {
-          writeAttempts += 1
-          val wrote = if (writeJsonFails) {
-            false
-          } else {
-            writes += accepted.json
-            true
-          }
-          catalogueFromWrite(accepted, wrote)
-        }
-      }
-      results += result
-      outcomes += result.outcome
-      settledIds += result.commandId
-    }
-  }
-
-  fun takeResults(): List<CatalogueResult> {
-    val copy = results.toList()
-    results.clear()
-    return copy
-  }
-}
-
-private fun envelope(json: String): computing.michell.monitor.protocol.MonitorMessage {
-  val decoded = tryDecodeEnvelope(json)
-  assertTrue(decoded.errorText, decoded.ok)
-  return decoded.message
+  override fun nextCommandId(): String = "c" + ids++
+  override fun updateDraft(text: String) { draft = text }
+  override fun sendCatalogue(json: String) {}
+  override fun resetImages() {}
 }

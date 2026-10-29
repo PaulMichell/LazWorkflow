@@ -1,13 +1,9 @@
 package computing.michell.monitor.ui
 
-/* Phone lock-up reproduction for plan item 2.2 (c) 2026 Michell Computing.
+/* A skipped cursor no longer freezes the body the screen reads (c) 2026 Michell Computing.
 
-   Pins today's behaviour. After a cursor gap the phone ignores every later patch
-   until a catchup arrives. It sends one resume only, and the busy flags it last
-   applied stay on screen. Each patch that arrives, even one that is ignored, resets
-   the stall timer, so no second resume goes out while the host keeps streaming.
-   Item 3.1 changes this. These assertions then fail and are rewritten to assert
-   the recovery. */
+   The store takes the latest patch. There is no revision gate and no grace
+   period that keeps the previous answer on screen. */
 
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.LinkPhase
@@ -20,7 +16,6 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.encodePatch
 import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.tryDecodeEnvelope
@@ -33,55 +28,30 @@ import org.junit.Test
 
 class MonitorCoordinatorLockupTest {
   @Test
-  fun aCursorGapLeavesThePhoneBusyAfterOneResume() {
-    val startMs = 10_000L
-    val clock = LockupClock(startMs)
-    val coordinator = MonitorCoordinator(LockupSession(), clock, LockupDisplay)
-    val effects = mutableListOf<MonitorEffect>()
-    effects += coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, ""))).orEmpty()
-    effects += deliver(coordinator, encodeSnapshot("live", liveSnapshot()))
-    effects += deliver(coordinator, encodePatch("patch-1", patch(1, busy = true, body = "first")))
-    assertEquals(1L, coordinator.state.hostCursor)
-    assertTrue(coordinator.state.view.busy)
+  fun aSkippedCursorReplacesTheStoredBody() {
+    val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot("first")))))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("late", patch("second", 9)))))
+    assertEquals("second", coordinator.state.live?.blocks?.first()?.body)
+    assertEquals(9, coordinator.state.hostCursor)
+    assertFalse(coordinator.holdingLink)
+  }
 
-    // Patch 2 never arrives. Patch 3 opens the gap, then the host streams on, idle, every pump.
-    effects += deliver(coordinator, encodePatch("patch-3", patch(3, busy = false, body = "after the gap")))
-    for (cursor in 4L..41L) {
-      clock.millis += PumpIntervalMs
-      effects += deliver(coordinator, encodePatch("patch-$cursor", patch(cursor, busy = false, body = "streamed $cursor")))
-      effects += coordinator.flush(coordinator.state).orEmpty()
-    }
-    assertTrue(clock.millis - startMs > StallGapMs)
-
-    val resumes = effects.filterIsInstance<MonitorEffect.Send>().map { envelope(it.json) }
-      .filter { it.kind == MessageKind.Resume }
-    assertEquals(1, resumes.size)
-    val body = decodeResume(resumes.single().payloadJson)
-    assertEquals("aa", body!!.epoch)
-    assertEquals(1L, body.cursor)
-
-    assertTrue(coordinator.state.view.busy)
-    assertTrue(coordinator.state.view.sending)
+  @Test
+  fun disconnectDoesNotKeepTheLinkLookingLive() {
+    val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot("first")))))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
+    assertTrue(coordinator.state.disconnected)
     assertFalse(coordinator.state.view.canSend)
-    assertEquals(1L, coordinator.state.hostCursor)
-    assertEquals("first", coordinator.state.live?.blocks?.single()?.body)
   }
 }
 
-/** The bridge pumps the mirror every 150 ms. */
-private const val PumpIntervalMs = 150L
-
-private fun patch(cursor: Long, busy: Boolean, body: String): WirePatch {
-  val block = WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
-  val phase = if (busy) "Thinking…" else ""
-  return WirePatch("aa", cursor, 1, "turn-1", listOf(block), busy, busy, false, phase, !busy, false, busy, 0)
-}
-
-private fun liveSnapshot(): WireSnapshot {
+private fun snapshot(body: String): WireSnapshot {
   return WireSnapshot(
-    emptyView().copy(canSend = true, signedIn = true),
+    emptyView().copy(canSend = true, busy = true),
     emptyList(),
-    WireTurn(-2, "live", "build", "", "", ""),
+    WireTurn(1, "turn-1", "build", "", body, "", live = true, blocks = listOf(block(body))),
     "",
     "",
     false,
@@ -91,8 +61,12 @@ private fun liveSnapshot(): WireSnapshot {
   )
 }
 
-private fun deliver(coordinator: MonitorCoordinator, json: String): List<MonitorEffect> {
-  return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(json))).orEmpty()
+private fun patch(body: String, cursor: Long): WirePatch {
+  return WirePatch("epoch", cursor, 1, "turn-1", listOf(block(body)), false, false, false, "", true, false, false, 0)
+}
+
+private fun block(body: String): WireBlock {
+  return WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
 }
 
 private fun envelope(json: String): MonitorMessage {
@@ -111,21 +85,14 @@ private object LockupDisplay : DisplayPreferences {
 }
 
 private class LockupSession : SessionPort {
-  private var draft = ""
-  private var ids = 1
-
-  override val promptDraft: String get() = draft
+  override val promptDraft: String = ""
   override val hostAddress: String = ""
   override val hostPort: Int = 0
   override val hostClientId: String = ""
   override val linkEpoch: Int = 1
   override val commandResults: Flow<CatalogueResult> = emptyFlow()
-  override fun nextCommandId(): String {
-    val id = "c$ids"
-    ids += 1
-    return id
-  }
-  override fun updateDraft(text: String) { draft = text }
+  override fun nextCommandId(): String = "c1"
+  override fun updateDraft(text: String) {}
   override fun sendCatalogue(json: String) {}
   override fun resetImages() {}
 }

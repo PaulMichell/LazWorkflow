@@ -549,7 +549,7 @@ class MonitorReducerTest {
       WireBlock("user", "u", "", "", "", "fix the form", false, true, 0, emptyList())
     )))
     val merged = mergeApplied(next, echoed, false, false)
-    assertEquals("", merged.pendingPrompt)
+    assertEquals("fix the form", merged.pendingPrompt)
     assertEquals("grok-4", runtimeCaption(next.view))
     assertEquals("Waiting… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
     assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
