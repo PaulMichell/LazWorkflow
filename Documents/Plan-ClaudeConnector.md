@@ -87,7 +87,10 @@ Claude Code reaches the IDE's `TAssistantToolBroker` through an MCP server insid
 Verified with a stub server against the real Claude Code (review §12.1): `--tools "Read,Grep,Glob"` combines with MCP tools, `--allowedTools "mcp__lazarus__*"` runs them without a prompt, a bearer token in the `--mcp-config` headers reaches every request, the default tool-call timeout is about 60 s and `MCP_TOOL_TIMEOUT` extends it, and a server that blocks while a call is pending stops the next session from connecting.
 
 ### 3.1 MCP message layer
-Status: not started
+Status: blocked
+User action: Capture Claude Code's MCP request bodies with a logging stub server (steps in `Tests/Fixtures/Claude/README.md`, "MCP requests"), replace `Tests/Fixtures/Claude/mcp-requests.jsonl` with them, and rerun `AssistantMCPProtocolTest`. The code is committed (`4b0287f`); only the fixture is still written by hand.
+
+Implemented in `AssistantMCPProtocol`: `MCPHandleMessage(RequestText, ToolsJSON, Executor, ResponseText)` answers one message and returns False when no body is due (HTTP 202). Beyond the list below it answers `ping` with `{}`, gives a client response (no method, with a result or error) no body, rejects a batch with -32600, and turns an executor that raises into -32603. Chosen naming: the server is `lazarus` and the `lazarus_` prefix is dropped from the listing, so 4.1 allows `mcp__lazarus__*` and Claude sees `mcp__lazarus__read_buffer`. A `tools/call` is matched back to a tool in the catalogue it was given; any other name gets -32602 and never reaches the executor. `AssistantMCPProtocolTest` has 86 checks, all passing, and the package builds. The request fixture is written by hand in the MCP TypeScript SDK's shape (the method order is the one seen in review §12.1), not captured, which is why this item is blocked.
 
 New pure unit (no sockets, no IDE units), for example `AssistantMcpProtocol`. It parses one JSON-RPC request and builds its response:
 
@@ -100,7 +103,11 @@ New pure unit (no sockets, no IDE units), for example `AssistantMcpProtocol`. It
 Done when unit tests cover each method from recorded request text, and a malformed request gets a JSON-RPC parse error rather than an exception.
 
 ### 3.2 Loopback HTTP listener with a per-run token
-Status: not started
+Status: complete
+
+Commit `b27d96d`. Implemented in `AssistantMCPListener`: `TMCPListener.Create(ToolsJSON, Executor)`, then `Start(ErrorText)` and `Stop`, with `Port`, `Token`, `URL` (`http://127.0.0.1:<port>/mcp`) and `ConfigFileName`. Built on `ssockets.TInetServer` with port 0; the kernel's port is read from the socket. `Start` makes a 32-byte token from the system random source (it fails rather than fall back to a weaker one) and writes `MCPConfigJSON` to `lazarus-mcp-<random>.json` in the temporary directory, created mode 0600 with `O_EXCL`. The token is checked first and compared in constant time, so a caller without it gets 401 whatever the path. With it: POST `/mcp` gets 200 JSON or 202 for a notification, GET and DELETE get 405, other paths 404, a body without `Content-Length` 411, and one over 32 MB 413. Each connection has its own thread and is closed after one response; no session id is issued. `Stop` shuts down open sockets to end waiting reads, waits for running calls (serving `Synchronize` when on the main thread), deletes the file, and clears the token. A call the executor has not returned blocks `Stop`, so 3.3 and 3.4 must make the executor return on cancel. Starting and stopping with the Claude run, and passing `ConfigFileName` as `--mcp-config`, is left to 4.1, which launches Claude with the server.
+
+`AssistantMCPListenerTest` has 46 checks, all passing, using `TFPHTTPClient`. It covers the config file's mode, contents and deletion; initialize, the initialized notification, tools/list and tools/call; no, wrong and partial tokens; 404 and 405; a slow call held open while a second client initializes, lists and calls in under 3 s; `Stop` with an idle connection open; and a restart that gets a new token and refuses the old one. The package builds.
 
 An HTTP endpoint for MCP's streamable HTTP transport (plain JSON responses are enough), bound to `127.0.0.1` on a free port. A new random bearer token for each run; requests without it get 401. Each request is served on its own thread so a pending tool call never blocks `initialize` or `tools/list` from the same or a later session. The listener starts with a Claude run and stops when the run ends or is cancelled.
 
@@ -109,7 +116,11 @@ Write the `--mcp-config` JSON (`{"mcpServers":{"lazarus":{"type":"http","url":�
 Done when a scripted HTTP client in a test can initialize, list, and call through the listener, a wrong token is refused, and a deliberately slow call does not block a second client.
 
 ### 3.3 Run tool calls on the IDE thread through the broker
-Status: not started
+Status: complete
+
+Commit `d542293`. Implemented in `AssistantMCPBridge`: `TMCPBrokerBridge.Create(Broker)` borrows the broker. `BeginRun(Scope)` cancels any open run and starts a broker run with `ClaudeBrokerWriteScope(Scope)`, the mapping above. `ToolsJSON` is the catalogue to give `TMCPListener`, so 4.1 creates the listener after `BeginRun`. `Execute` is the listener's executor: from another thread it queues the call with `TThread.Queue` and waits; on the main thread it runs at once. `Cancel` releases every waiting call with `MCPRunCancelledText` (an `isError` tool result) without waiting for the IDE thread, refuses later calls until the next `BeginRun`, and cancels the broker run if it is still the bridge's own. A queued call that Cancel released is skipped when the main thread reaches it, so it never runs. Each call is shared by the waiter and the queued callback and freed by the last to let go, the pattern of `TIdeToolDispatch`. At the end of a run, 4.1 calls `Bridge.Cancel` and then `Listener.Stop`. A call already inside `Broker.Execute`, for example waiting at an approval dialog, still runs to its end; holding it open while the user decides is 3.4.
+
+`AssistantMCPBridgeTest` has 31 checks, all passing. It uses a memory workspace adapter and the real `TAssistantToolBroker`, with calls sent over HTTP through the listener. The checks cover: the four scope mappings and the tools each scope lists; a call answered once the main thread serves its queue, with the adapter run on the main thread; a call held while the main thread is busy and released by `Cancel` with the cancel error, then skipped in the queue; calls refused after `Cancel`; and a following run working again. The package builds.
 
 A `tools/call` arriving on a listener thread is queued to the IDE thread, runs `Broker.Execute`, and its result is handed back to the waiting request. Cancel (Stop, or the run ending) releases any waiting request with an error.
 
