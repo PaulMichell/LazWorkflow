@@ -658,8 +658,9 @@ Const
   FooterTagModel = 6;
   FooterTagEffort = 7;
   FooterTagApproval = 8;
-  { Same turn budget as a Codex run. A short capture timeout would retry a live answer. }
-  ClaudeRunTimeoutMs = 600000;
+  { One Claude Code turn may build and run the test suite several times. A turn that reaches this limit is
+    stopped and, having run tools, is not replayed, so the limit sits well above a full build-and-test cycle. }
+  ClaudeRunTimeoutMs = 3600000;
 
 Var
   TasksActionVisibleKnown: Boolean = False;
