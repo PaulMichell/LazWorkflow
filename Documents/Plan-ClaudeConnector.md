@@ -146,19 +146,30 @@ Ask, Auto, and Always set the broker's approval behaviour the way they do for Co
 
 Done when Ask produces a dialog for an edit and applies the edit to the editor buffer only after approval, and Auto applies project edits without asking.
 
-### 4.3 Show Lazarus tool activity in the trace
-Status: not started
+### 4.3 Show Claude's tool calls and thinking in the trace
+Status: in progress
 
-`tool_use` and `tool_result` events for `mcp__lazarus__*` tools appear in the live trace view with the tool name and outcome, as Codex dynamic tools do. The stream state already counts tool calls; extend it to carry names and results for the trace.
+Widened from the Lazarus tools only to every tool call, because Build mode uses Claude Code's own tools today. Found in the IDE: with Show tool use and Show thinking on, everything Claude reported still appeared in Assistant reply blocks.
 
-Done when a turn that reads and edits through Lazarus tools shows each call in the trace while the turn runs.
+What Claude Code sends, checked against the real program: every tool call (`tool_use` with id, name and input) and its result (`tool_result` with content and an error flag), and the text Claude writes between calls. It does not send its reasoning. In print mode a thinking block always has empty text, with or without partial messages or the `showThinkingSummaries` setting. Only `thinking_tokens` events give an estimated size while a model call thinks.
+
+Implemented, the same way Codex tools are shown:
+
+- `AssistantClaudeStream` records each call in order (`TClaudeToolStep`: id, name, bounded input, bounded output, error, done, and the text and thinking lengths when it was made), and builds a thinking channel of notes: `Thinking… about N tokens.` while live, `Thought for about N tokens.` once the thinking block arrives.
+- The worker publishes a copy of the calls and the thinking notes with each snapshot.
+- `ApplyClaudeToolSteps` puts the text and thinking written before each call into the trace, adds a tool block, and starts new answer and thinking slices, as `PollCodex` does for a serviced tool. A block is finished with its result, opened and marked failed on an error. The footer stays on Running while a call waits.
+- A successful `Edit`, `Write` or `MultiEdit` of the active plan file counts as a plan write, so the progress list refreshes when the turn ends in any mode (part of item 4.4).
+
+Remaining: after item 4.1 the calls arrive as `mcp__…` Lazarus tools; check that their names read well in the trace. Then mark this complete after it has been seen in the IDE.
+
+Done when, with Show tool use and Show thinking on, a Claude turn that reads and edits shows its narration, each call with its result, and a thinking note, in order, while the turn runs; and with both options off, only the answer text.
 
 ### 4.4 Plan status changes from Claude follow the completion rule
 Status: not started
 
 The completion rule (commit the finished work, then set Status complete, then commit the plan) is enforced in `WriteMarkdownFile` and `ReplaceInMarkdownFile` through `PlanCompletionBlocked` and `NotePlanCompletionWrite`, and the turn-end commit is `RevertUncommittedPlanCompletion`. A Claude turn that edits the plan file with Claude Code's own `Edit` bypasses all of it, so an item can become complete with nothing committed. The progress list is also rescanned at turn end only in Build mode or after the assistant's own plan write, so a Plan- or Document-mode Claude edit does not show until something else refreshes it.
 
-Until 4.1, Claude edits plans with its own tools in every mode except Chat and Inspect. After 4.1 the edits arrive through the broker's buffer writes, which do not call those plan functions either. Route a broker write to a registered plan file through the same completion check and note, or have the form compare the plan before and after a Claude turn and apply the same rule. Refresh the progress list after any Claude turn that changed the active plan.
+Item 4.3 already refreshes the progress list at turn end when a Claude Code edit touched the active plan. Until 4.1, Claude edits plans with its own tools in every mode except Chat and Inspect. After 4.1 the edits arrive through the broker's buffer writes, which do not call those plan functions either. Route a broker write to a registered plan file through the same completion check and note, or have the form compare the plan before and after a Claude turn and apply the same rule. Refresh the progress list after any Claude turn that changed the active plan.
 
 Done when a Claude turn that sets an item complete without a commit is refused or reverted exactly as an assistant turn is, and the progress list shows a Claude plan edit without switching modes.
 
