@@ -194,8 +194,10 @@ class SslSocketConnector : TlsConnector {
     val plain = Socket(Proxy.NO_PROXY)
     var wrapped: SSLSocket? = null
     try {
+      plain.keepAlive = true
       plain.connect(InetSocketAddress(address, port), ConnectTimeoutMs)
       val socket = context.socketFactory.createSocket(plain, address, port, true) as SSLSocket
+      socket.keepAlive = true
       wrapped = socket
       val protocols = socket.supportedProtocols.filter { it == "TLSv1.3" || it == "TLSv1.2" }
       if (protocols.isNotEmpty()) socket.enabledProtocols = protocols.toTypedArray()
@@ -287,53 +289,37 @@ enum class DeliveryResult {
 
 class InboundDelivery(
   private val clock: MonotonicClock = SystemMonotonicClock,
-  private val deadlineMs: Long = MonitorLimits.DeadSessionMs
+  private val byteBudget: Long = InboundCreditBytes.toLong()
 ) {
   private val pending = ArrayDeque<MonitorMessage>()
   private val gate = Any()
   private val available = Channel<Unit>(Channel.CONFLATED)
-  private val space = Channel<Unit>(Channel.CONFLATED)
-  private val waiting = AtomicInteger(0)
+  private var queuedBytes = 0L
 
   val messages: Flow<MonitorMessage> = flow {
     while (coroutineContext[Job]?.isActive != false) emit(take())
   }
 
-  init {
-    clock.addListener { space.trySend(Unit) }
-  }
-
-  internal fun isWaiting(): Boolean = waiting.get() > 0
+  internal fun isWaiting(): Boolean = false
 
   suspend fun publish(message: MonitorMessage): DeliveryResult {
-    val started = clock.nanoTime()
-    while (true) {
-      if (offer(message)) return DeliveryResult.Queued
-      if (elapsedMs(started) >= deadlineMs) return DeliveryResult.Failed
-      waiting.incrementAndGet()
-      try {
-        val remaining = deadlineMs - elapsedMs(started)
-        if (remaining <= 0L) return DeliveryResult.Failed
-        // The wait itself checks the clock. An unbounded receive would hide the deadline.
-        withTimeoutOrNull(remaining.coerceAtMost(DeliveryWaitSliceMs)) { space.receive() }
-      } finally {
-        waiting.decrementAndGet()
-      }
-      if (elapsedMs(started) >= deadlineMs) return DeliveryResult.Failed
-    }
+    return if (offer(message)) DeliveryResult.Queued else DeliveryResult.Failed
   }
 
   private fun offer(message: MonitorMessage): Boolean {
     val stored = synchronized(gate) {
+      val incoming = messageBytes(message)
       if (message.kind in CoalescedKinds) {
         val index = pending.indexOfFirst { it.kind == message.kind }
         if (index >= 0) {
+          queuedBytes = queuedBytes - messageBytes(pending[index]) + incoming
           pending[index] = message
           return@synchronized true
         }
       }
-      if (pending.size >= InboundCapacity) return@synchronized false
+      if (queuedBytes + incoming > byteBudget) return@synchronized false
       pending.addLast(message)
+      queuedBytes += incoming
       true
     }
     if (stored) available.trySend(Unit)
@@ -343,25 +329,23 @@ class InboundDelivery(
   private suspend fun take(): MonitorMessage {
     while (true) {
       val next = synchronized(gate) {
-        if (pending.isEmpty()) null else pending.removeFirst()
+        if (pending.isEmpty()) null else {
+          val message = pending.removeFirst()
+          queuedBytes -= messageBytes(message)
+          message
+        }
       }
-      if (next != null) {
-        space.trySend(Unit)
-        return next
-      }
+      if (next != null) return next
       available.receive()
     }
   }
 
-  private fun elapsedMs(started: Long): Long {
-    val delta = clock.nanoTime() - started
-    if (delta <= 0L) return 0L
-    return delta / 1_000_000L
-  }
+private fun messageBytes(message: MonitorMessage): Int {
+  val counted = message.wireJson.length
+  return if (counted > 0) counted else message.payloadJson.length
+}
 
   companion object {
-    internal const val InboundCapacity = 32
-    private const val DeliveryWaitSliceMs = 50L
     // Transcript, TurnData, ImageData, ImageUnavailable, ApprovalRequested,
     // ApprovalClosed, InsertResult, Error, Rejected, Bye, PairOk, HelloOk, and Ping are never coalesced.
     private val CoalescedKinds = setOf(
@@ -448,6 +432,7 @@ class LanSession(
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO)
   private val writeLock = Mutex()
+  private val socketLock = Any()
   private val resumes = Channel<Unit>(Channel.CONFLATED)
   private val ids = AtomicInteger(1)
   private val epochCounter = AtomicInteger(0)
@@ -459,6 +444,13 @@ class LanSession(
   internal val inbound = InboundDelivery(clock)
   private var loop: Job? = null
   private var link: TlsLink? = null
+  private var writer: ConnectionWriter? = null
+  internal val events = AccountedEvents()
+  private var applier: computing.michell.monitor.data.SyncApplier? = null
+  @Volatile
+  private var lastSentMs = 0L
+  @Volatile
+  private var lastReceivedMs = 0L
   private var pairCode = ""
   private var stopped = false
 
@@ -483,7 +475,7 @@ class LanSession(
         is CatalogueStep.Done -> step.result
         is CatalogueStep.Write -> {
           val socket = step.accepted.socket as? TlsLink
-          val wrote = if (socket == null) false else writeJson(step.accepted.json, socket)
+          val wrote = if (socket == null) false else offerCommand(step.accepted.json, socket)
           catalogueFromWrite(step.accepted, wrote)
         }
       }
@@ -677,20 +669,79 @@ class LanSession(
     return AttemptResult.Opened
   }
 
+  fun attachApplier(next: computing.michell.monitor.data.SyncApplier) {
+    applier = next
+  }
+
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
     val current = link ?: return ReadEnd.PeerClosed
     if (epochCounter.get() != epoch) return ReadEnd.PeerClosed
     synchronized(readEndLock) { readEnd = ReadEnd.Continue }
+    val openedAt = clockMs()
     lastInboundNanos = clock.nanoTime()
-    val listener = {
-      if (inboundIsDead()) noteReadEnd(epoch, ReadEnd.Dead, current)
-    }
+    lastReceivedMs = openedAt
+    lastSentMs = openedAt
+    val outbound = ConnectionWriter { bytes -> writeBytes(bytes, current) }
+    writer = outbound
+    val supervisor = SupervisorJob(coroutineContext[Job])
+    val actor = CoroutineScope(supervisor + Dispatchers.IO)
+    val listener = { noteHeartbeat(epoch, current, outbound) }
     clock.addListener(listener)
     try {
-      return withContext(Dispatchers.IO) {
+      val reading = actor.launch { readFrames(epoch, current, outbound) }
+      val writing = actor.launch {
+        if (!outbound.run()) noteReadEnd(epoch, ReadEnd.WriteFailed, current)
+      }
+      val beating = actor.launch {
+        while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
+          delay(1_000L)
+          noteHeartbeat(epoch, current, outbound)
+        }
+      }
+      val applying = actor.launch {
+        while (coroutineContext[Job]?.isActive != false) {
+          val event = events.receive()
+          applier?.offer(event)
+        }
+      }
+      reading.join()
+      supervisor.cancel()
+      for (child in listOf(writing, beating, applying)) {
+        try {
+          child.join()
+        } catch (error: CancellationException) {
+          // The reader finished. The other lanes are stopped with it.
+        }
+      }
+      return readEnd
+    } finally {
+      clock.removeListener(listener)
+      outbound.close()
+      writer = null
+      supervisor.cancel()
+    }
+  }
+
+  private fun noteHeartbeat(epoch: Int, current: TlsLink, outbound: ConnectionWriter) {
+    if (epochCounter.get() != epoch) return
+    val now = clockMs()
+    when (heartbeatStep(lastSentMs, lastReceivedMs, now)) {
+      HeartbeatStep.Close -> noteReadEnd(epoch, ReadEnd.Dead, current)
+      HeartbeatStep.Ping -> {
+        val ping = encodeTicks(MessageKind.Ping, newId(), now)
+        val frame = tryEncodeFrame(ping)
+        if (frame.ok && outbound.offerControl(frame.bytes)) lastSentMs = now
+      }
+      HeartbeatStep.None -> {}
+    }
+  }
+
+  private fun clockMs(): Long = clock.nanoTime() / 1_000_000L
+
+  private suspend fun readFrames(epoch: Int, current: TlsLink, outbound: ConnectionWriter) {
+    withContext(Dispatchers.IO) {
         val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
         val reader = FrameAssembler()
-        var lastSent = System.currentTimeMillis()
         while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
           val count = try {
@@ -716,7 +767,7 @@ class LanSession(
             val batch = reader.offer(buffer, 0, count, arrived)
             for (frame in batch.frames) {
               noteInbound()
-              onFrame(frame, epoch, current)
+              onFrame(frame, epoch, current, outbound)
               if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
             }
             if (batch.status != FrameStatus.Ok) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
@@ -726,19 +777,10 @@ class LanSession(
           val now = System.currentTimeMillis()
           if (reader.partialExpired(now)) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
-          if (now - lastSent >= MonitorLimits.HeartbeatSilenceMs) {
-            val ping = encodeTicks(MessageKind.Ping, newId(), now)
-            // A timed-out write is not the host closing. The next read reports a real close.
-            writeJson(ping, current)
-            lastSent = now
-          }
           if (epochCounter.get() != epoch) return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
           if (readEnd != ReadEnd.Continue) return@withContext finishRead(epoch, current, readEnd)
         }
         finishRead(epoch, current, ReadEnd.PeerClosed)
-      }
-    } finally {
-      clock.removeListener(listener)
     }
   }
 
@@ -748,12 +790,21 @@ class LanSession(
   @Volatile
   private var lastInboundNanos = 0L
 
-  private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink) {
+  private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink, outbound: ConnectionWriter) {
     if (epochCounter.get() != epoch) return
     val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
     val message = chunks.accept(envelope.message) ?: return
     session.apply(message)
+    if (message.typeName == "event") {
+      val event = computing.michell.monitor.protocol.decodeMonitorEvent(message.payloadJson)
+      if (event != null && !events.offer(event, message.wireJson.length)) {
+        closeLink()
+        publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
+        noteReadEnd(epoch, ReadEnd.PeerClosed, owned)
+        return
+      }
+    }
     if (inbound.publish(message) == DeliveryResult.Failed) {
       closeLink()
       publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
@@ -766,7 +817,7 @@ class LanSession(
         if (paired != null) {
           store.savePairing(paired.clientId, paired.sessionToken)
           pairCode = ""
-          writeJson(encodeResume(newId(), "", 0), owned)
+          offerControl(encodeResume(newId(), "", 0), owned, outbound)
         }
       }
       MessageKind.HelloOk -> {
@@ -775,12 +826,12 @@ class LanSession(
         if (hello != null && record.paired) {
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
-          if (mac.isNotEmpty()) writeJson(encodeAuth(newId(), record.clientId, mac), owned)
+          if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
         }
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L
-        if (!writeJson(encodeTicks(MessageKind.Pong, newId(), ticks), owned)) noteReadEnd(epoch, ReadEnd.WriteFailed, owned)
+        if (!offerControl(encodeTicks(MessageKind.Pong, newId(), ticks), owned, outbound)) noteReadEnd(epoch, ReadEnd.WriteFailed, owned)
       }
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
@@ -810,19 +861,37 @@ class LanSession(
     }
   }
 
-  private suspend fun writeJson(json: String, owned: TlsLink? = link): Boolean {
+  private fun offerControl(json: String, owned: TlsLink, outbound: ConnectionWriter): Boolean {
+    if (owned !== link) return false
+    val frame = tryEncodeFrame(json)
+    if (!frame.ok) return false
+    return outbound.offerControl(frame.bytes)
+  }
+
+  private fun offerCommand(json: String, owned: TlsLink): Boolean {
+    val outbound = writer
+    if (outbound == null || owned !== link) return writeJson(json, owned)
+    val frame = tryEncodeFrame(json)
+    if (!frame.ok) return false
+    return outbound.offerCommand(frame.bytes)
+  }
+
+  private fun writeJson(json: String, owned: TlsLink? = link): Boolean {
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
     val target = owned ?: return false
-    return writeLock.withLock {
-      withContext(Dispatchers.IO) {
-        try {
-          target.output.write(frame.bytes)
-          target.output.flush()
-          true
-        } catch (error: Exception) {
-          false
-        }
+    return writeBytes(frame.bytes, target)
+  }
+
+  private fun writeBytes(bytes: ByteArray, owned: TlsLink): Boolean {
+    synchronized(socketLock) {
+      return try {
+        owned.output.write(bytes)
+        owned.output.flush()
+        lastSentMs = clockMs()
+        true
+      } catch (error: Exception) {
+        false
       }
     }
   }
@@ -848,6 +917,7 @@ class LanSession(
 
   private fun noteInbound() {
     lastInboundNanos = clock.nanoTime()
+    lastReceivedMs = clockMs()
   }
 
   private fun inboundIsDead(): Boolean {

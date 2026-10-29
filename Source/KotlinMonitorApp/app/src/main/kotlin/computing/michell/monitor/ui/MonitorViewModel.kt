@@ -1495,6 +1495,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
   }
 
+  private fun attachApplier(hostId: String) {
+    if (!hostIdIsValid(hostId)) return
+    val current = syncApplier
+    if (current != null) return
+    val created = computing.michell.monitor.data.SyncApplier(hostId, computing.michell.monitor.data.RoomSyncStore(database), { System.currentTimeMillis() })
+    syncApplier = created
+    session.attachApplier(created)
+    created.start(viewModelScope)
+  }
+
+  private var syncApplier: computing.michell.monitor.data.SyncApplier? = null
+
   private fun retentionLimits(): RetentionLimits {
     val cap = displayPrefs.getInt(ConversationCapKey, DefaultConversationCap)
     val mebibytes = displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB)
@@ -1699,7 +1711,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private suspend fun applyIncoming(message: MonitorMessage) {
     val hello = (message.inbound as? InboundPayload.HelloOk)?.value
-    if (hello != null && hostIdIsValid(hello.hostId)) store.saveHostId(hello.hostId)
+    if (hello != null && hostIdIsValid(hello.hostId)) {
+      store.saveHostId(hello.hostId)
+      attachApplier(hello.hostId)
+    }
     val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return
     execute(effects)
   }

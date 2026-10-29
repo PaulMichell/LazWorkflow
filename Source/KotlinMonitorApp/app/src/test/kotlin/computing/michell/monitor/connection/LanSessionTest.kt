@@ -383,16 +383,11 @@ class LanSessionTest {
     try {
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "m0")))
       started.await()
-      val publisher = launch {
-        for (index in 1..64) {
-          assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "m$index")))
-        }
+      for (index in 1..64) {
+        assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "m$index")))
       }
-      withTimeout(5_000) {
-        while (!delivery.isWaiting()) yield()
-      }
+      assertFalse(delivery.isWaiting())
       hold.complete(Unit)
-      publisher.join()
       withTimeout(5_000) {
         while (received.size < 65) yield()
       }
@@ -439,37 +434,15 @@ class LanSessionTest {
   }
 
   @Test
-  fun stalledNonCoalescedPublishFailsWithoutSleeping() = runBlocking {
-    val clock = SteppableClock()
-    val delivery = InboundDelivery(clock)
-    val hold = CompletableDeferred<Unit>()
-    val started = CompletableDeferred<Unit>()
-    val collector = launch {
-      delivery.messages.collect {
-        if (!started.isCompleted) started.complete(Unit)
-        hold.await()
-      }
-    }
-    try {
-      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
-      started.await()
-      repeat(InboundDelivery.InboundCapacity) {
-        assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "q$it")))
-      }
-      val failing = async { delivery.publish(inboundMessage(MessageKind.Error, "overflow")) }
-      withTimeout(5_000) {
-        while (!delivery.isWaiting()) yield()
-      }
-      clock.advanceMs(MonitorLimits.DeadSessionMs)
-      assertEquals(DeliveryResult.Failed, failing.await())
-    } finally {
-      hold.complete(Unit)
-      collector.cancel()
-    }
+  fun aFullCreditWindowFailsWithoutWaiting() = runBlocking {
+    val delivery = InboundDelivery(SteppableClock(), byteBudget = 3)
+    assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
+    assertEquals(DeliveryResult.Failed, delivery.publish(inboundMessage(MessageKind.Error, "overflow")))
+    assertFalse(delivery.isWaiting())
   }
 
   @Test
-  fun stalledCollectorClosesTheLink() {
+  fun aHeldCollectorDoesNotCloseTheLink() {
     val clock = SteppableClock()
     val link = ScriptedLink()
     val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
@@ -486,12 +459,10 @@ class LanSessionTest {
       session.connect("10.0.0.8", 56122)
       link.push(frameOf(encodeError("e0", "x", "held", "e0")))
       waitUntil { got.isCompleted }
-      for (index in 1..33) link.push(frameOf(encodeError("e$index", "x", "queued", "e$index")))
-      waitUntil { session.inbound.isWaiting() }
-      clock.advanceMs(MonitorLimits.DeadSessionMs)
-      waitUntil { session.status.value.lastError == DeliveryFailedDetail }
-      assertTrue(link.closed)
-      assertEquals(DeliveryFailedDetail, session.status.value.lastError)
+      for (index in 1..8) link.push(frameOf(encodeError("e$index", "x", "queued", "e$index")))
+      clock.advanceMs(1_000L)
+      assertFalse(link.closed)
+      assertFalse(session.inbound.isWaiting())
     } finally {
       hold.complete(Unit)
       collector.cancel()
