@@ -29,7 +29,10 @@ passing run means the package compiles. Write output to a temporary directory, n
 
 Known failures that predate the Claude connector work: `AssistantSettingsTest` stops at the Codex check "missing
 saved executable recovered without changing connection identity", and also fails "a new profile does not inherit
-image output" once that first check is passed. `AssistantUsageTest` is not registered in the runner.
+image output" once that first check is passed. `AssistantUsageTest` is not registered in the runner. Among the
+GUI tests, `AssistantWorkspaceTest` and `AssistantWorkTargetTest` do not build (they call
+`ExecuteAssistantToolForMode` without its `ToolId` argument), and `AssistantEditorEditsTest` fails "Plan advertises
+Markdown edits and saves".
 
 A change to a package needs the IDE rebuilt (Tools → Build Lazarus) before it can be seen in the running IDE.
 

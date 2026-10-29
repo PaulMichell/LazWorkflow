@@ -129,7 +129,15 @@ The broker run's write scope comes from the turn's `TClaudeToolScope` (item 2.10
 Done when a test drives a call from a listener thread into a broker with a test workspace adapter and gets the result, and Cancel unblocks a waiting call.
 
 ### 3.4 Keep a call open while the user decides
-Status: not started
+Status: complete
+
+Committed as `b6a6866` (the timeout); `AssistantMCPApprovalTest` came with 4.1 and 4.2 in `a6623fc`, because it also checks their approval path. A real `claude` turn holding an approval past 60 s is still to be seen; that belongs with 4.1 and 4.5.
+
+Implemented: `BuildClaudeEnvironment` now ends with `SetClaudeToolTimeout`, which sets `MCP_TOOL_TIMEOUT` to `ClaudeMCPToolTimeoutMs` (30 minutes), replacing any inherited value. That is inside the form's one-hour Claude turn limit (`ClaudeRunTimeoutMs`), so a long approval does not end the turn first. Every `claude` launch gets it, including the status and model reads, where it has no effect. The approval and decline paths needed no new code. The bridge already runs the call on the IDE thread, where the broker raises `OnApproval`, and the listener has nothing that times out while a call is running. The broker's decline text, "User declined this tool operation.", reaches Claude as an `isError` tool result.
+
+While an approval dialog is open, its message loop also serves queued calls, so another tool call can run nested inside the approval. The broker is written for this: it checks the run again after approval, and the adapter compares the approved text when it writes. Nothing serialises the calls.
+
+`AssistantMCPApprovalTest` has 15 checks, all passing, and takes about 62 s. It uses the real broker in project scope and a memory workspace, with calls over HTTP through the listener. The approval handler stands in for the dialog: it holds a `replace_buffer` call for 61 s while serving the main thread's queue. During the hold, a `tools/list` and a `read_buffer` are both answered. The held call then completes with 200 and the edit lands. A decline comes back as 200 with an `isError` result naming the decline, and the buffer is unchanged. `AssistantClaudeClientTest` gained three checks for the environment variable.
 
 A broker tool that needs approval raises `OnApproval` on the IDE thread and the request waits for the answer. Claude Code is started with `MCP_TOOL_TIMEOUT` (for example 30 minutes) in its environment so it does not abandon the call. The listener keeps serving other requests while the dialog is open. Declining returns a tool error that tells Claude the user declined.
 
@@ -138,7 +146,14 @@ Done when an approval left open for longer than 60 s still completes the call, a
 ## 4. Claude runs with the Lazarus tools
 
 ### 4.1 Launch Claude Code with the Lazarus server
-Status: not started
+Status: blocked
+User action: The code is committed (`a6623fc`, with 4.2). Rebuild the IDE and, in Inspect mode, run a Claude turn that reads a unit through the Lazarus tools: check the trace shows `read_buffer` or `read_file`. With tool use shown, the `init` event's tool list should include `mcp__lazarus__…`. In Build mode, ask Claude to change a file without saying how: it should use `replace_buffer`, with Ask showing the confirmation, or say it cannot. It should not edit the file on disk. If all of that holds, mark this item complete.
+
+Implemented. `TClaudeTurnSettings.MCPConfigFile` is new, and `AppendClaudeModeArguments(Scope, MCPConfigFile, Args)` replaces the old builder. Chat is unchanged. Every other scope gets `--tools=Read,Grep,Glob`, `--mcp-config=<file>`, a single `--allowedTools=mcp__lazarus__*` and `--strict-mcp-config`, so no scope has Claude Code's own `Edit`, `Write` or `Bash`. With an empty config file a turn only reads.
+
+`LaunchStoredClaudeRun` calls `StartClaudeTools` for any scope but Chat. That reuses the form's broker and workspace, starts a `TMCPBrokerBridge` run in the turn's scope and a `TMCPListener`, and passes the listener's config file. If the tools cannot start, the turn fails with "The Lazarus tools could not start: …" rather than running with reading alone. `ReleaseClaudeProcess`, which finish, cancel, failure, retry and form destruction all go through, ends with `ReleaseClaudeTools`. That releases waiting calls, stops the listener and deletes the config file.
+
+The broker's `OnApproval` is set to `ApproveClaudeTool`, which applies the approval setting through `ApproveToolIfNeeded` (now public in `AssistantTools`). So Build-mode writes are not made unasked before 4.2. Trace blocks use `ClaudeToolDisplayName`, which shows `read_buffer` for `mcp__lazarus__read_buffer`. `MCP_TOOL_TIMEOUT` came with 3.4. The 2.10 argument checks in `AssistantClaudeClientTest` are rewritten for the new arguments, plus display-name checks. The test passes and the packages build. No real `claude` turn has been run.
 
 When a Claude turn whose scope is not `ctsNone` starts, the form starts the listener and broker run, and `MCP_TOOL_TIMEOUT` is added to the scrubbed environment. Extend `AppendClaudeModeArguments` (item 2.10) rather than adding a second argument builder, keeping the `--option=value` form:
 
@@ -151,7 +166,16 @@ The temporary config file and the listener are cleaned up on finish, cancel, and
 Done when a real turn lists the Lazarus tools in its `init` event and can read a file through them, and an attempt to write without a Lazarus tool is reported by Claude as impossible rather than performed.
 
 ### 4.2 Map the approval setting onto the broker
-Status: not started
+Status: blocked
+User action: The code is committed (`a6623fc`, with 4.1). In the rebuilt IDE with the Claude connection on Ask, have a Build-mode turn edit a unit. Check that the confirmation names the file and the changed lines, that the editor buffer is unchanged until you answer Yes, and that No leaves it unchanged with Claude told you declined. Also check the Claude settings page shows the new label and choices. If so, mark this item complete.
+
+Done in code. `ClaudePermissionMode`, `ClaudeTurnPermissionMode`, the `PermissionMode` parameter of `AppendClaudeTurnArguments`, `TClaudeTurnSettings.ApprovalMode` and the form's `FClaudeApproval` are gone, with their tests. No turn passes `--permission-mode`, so Claude Code keeps its default. `PermissionFlagRefused` in `AssistantClaudeStream` stays: it still classifies that stderr if it ever appears, and the large-prompt test uses it. The approval setting reaches Claude through `AssistantChatConfig`, which follows the active connection, and `ApproveToolIfNeeded`, the same as for Codex.
+
+Decided: Ask keeps the existing confirmation rather than a new diff dialog, but now shows what changes. `MCPApprovalSummary` (in `AssistantMCPBridge`) gives the path, the changed line range ("lines 3-3 of 4 replaced by 2", an insertion, new text, or no change) and the start of the new lines, within the confirmation's 240 characters. Calls without a path (git, build, change sets) show the start of their text, as before. A full diff in the dialog is possible later.
+
+The Claude settings choices now read: "Ask — confirm each edit, save, build and git command", "Auto — run them without asking", and "Always — run them without asking (the same as Auto for Claude)". The label reads "Lazarus tool edits, builds and git (Claude Code's own tools only read)".
+
+Tests: `AssistantClaudeClientTest` has turn-argument checks that no `--permission-mode` is passed. `AssistantMCPBridgeTest` has eight summary checks. `AssistantMCPApprovalTest` now also runs the form's approval path through `ApproveToolIfNeeded`: with Auto and with Always, a `replace_buffer` over HTTP is applied without asking. All pass, and the packages build. Ask cannot be checked in a console test, because it shows a modal dialog; the broker applying only after a Yes, and not after a No, is covered by the earlier checks in the same test. `AssistantSettingsTest` (GUI) was not run.
 
 Ask, Auto, and Always set the broker's approval behaviour the way they do for Codex, instead of choosing a Claude Code permission mode. Ask shows the broker's approval dialog for each write or build. Once 4.1 removes Claude Code's own write and shell tools, its `--permission-mode` has nothing left to approve: remove `ClaudeTurnPermissionMode` and the mapping in `ClaudePermissionMode` with their tests, and leave the program default. Update the settings label to say what each choice allows.
 
@@ -177,20 +201,73 @@ The code is done and was checked against the real program outside the IDE. What 
 Done when, with Show tool use and Show thinking on, a Claude turn that reads and edits shows its narration, each call with its result, and a thinking note, in order, while the turn runs; and with both options off, only the answer text.
 
 ### 4.4 Plan status changes from Claude follow the completion rule
-Status: not started
+Status: blocked
+User action: The code is committed (`9a47321`). In the rebuilt IDE on the Claude connection, check both points by hand:
+- **Refused without a commit:** in Plan mode, ask Claude to set an item complete. The tool call should fail with the commit message, and the plan should be unchanged.
+- **Progress list:** in Plan mode, ask Claude to edit an item's text. The progress list should show the change when the turn ends, without switching modes.
+
+If both hold, mark this item complete.
+
+Implemented by giving the broker Markdown writes, not by comparing the plan around the turn. `TAssistantWorkspaceAdapter` has a new optional capability, `CanWriteMarkdown` / `WriteMarkdown(Tool, Arguments)`, off by default. When the adapter offers it, the broker lists `lazarus_write_markdown` and `lazarus_update_markdown` in every scope that writes. Claude sees them as `write_markdown` and `update_markdown`, the names the refusal messages already use. They take the assistant's own arguments. The broker refuses them in Inspect, asks for approval with the old and new text, and passes them to the adapter.
+
+`TAssistantIDEWorkspace.WriteMarkdown` runs the assistant's own tool through `ExecuteAssistantToolForMode`, in the mode the form sets on the new `ToolMode` property. `StartClaudeTools` sets it to the turn's mode, and the broker has already asked, so the tool skips its own approval. The path defaults, the Document and Plan refusals, the `.md`-only check, the structure check, `PlanCompletionBlocked` and `NotePlanCompletionWrite` are therefore the assistant's own. `RevertUncommittedPlanCompletion` at turn end already ran for every backend. A commit through `lazarus_run_git` goes through `ToolRunGit` and sets `AssistantGitTurnCommitted`, as the assistant's `run_git` does.
+
+The form counts a successful `mcp__lazarus__write_markdown` or `update_markdown` as a plan write in `ClaudeStepWritesPlan`. The turn end then refreshes the progress list in any mode, as it does after the assistant's own Markdown write. Only the Claude bridge reads the broker's catalogue, so Codex turns are unchanged.
+
+`AssistantGitTest` now drives the real `TAssistantIDEWorkspace` through the broker in a temporary Git repository. All its checks pass. They cover:
+- no Markdown writes in Inspect;
+- both tools offered in Build and Plan;
+- a non-Markdown path refused;
+- a Lazarus completion before any commit in the turn refused with the assistant's message, leaving the plan unchanged with nothing to settle;
+- the work committed through `lazarus_run_git`, after which the same completion is allowed and the turn-end settlement commits the plan file;
+- a Plan-mode edit written, and Plan offering no git, so it cannot complete an item.
+
+Renaming a complete item's heading is refused without a commit, because completions are keyed by heading. An assistant turn behaves the same way. The form's plan-write detection and the progress refresh are not covered by an automated test.
+
+Noticed and left alone: `AssistantWorkspaceTest` and `AssistantWorkTargetTest` (GUI) no longer build, because they call `ExecuteAssistantToolForMode` without the `ToolId` argument, and `AssistantEditorEditsTest` fails "Plan advertises Markdown edits and saves". All three already failed at `3adc87b`, before 3.4. `AssistantToolBroker.pas` is now 1305 lines and has no size note; it was already over 1000.
 
 The completion rule (commit the finished work, then set Status complete, then commit the plan) is enforced in `WriteMarkdownFile` and `ReplaceInMarkdownFile` through `PlanCompletionBlocked` and `NotePlanCompletionWrite`, and the turn-end commit is `RevertUncommittedPlanCompletion`. A Claude turn that edits the plan file with Claude Code's own `Edit` bypasses all of it, so an item can become complete with nothing committed. The progress list is also rescanned at turn end only in Build mode or after the assistant's own plan write, so a Plan- or Document-mode Claude edit does not show until something else refreshes it.
 
 Item 4.3 already refreshes the progress list at turn end when a Claude Code edit touched the active plan. Until 4.1, Claude edits plans with its own tools in every mode except Chat and Inspect. After 4.1 the edits arrive through the broker's buffer writes, which do not call those plan functions either. Route a broker write to a registered plan file through the same completion check and note, or have the form compare the plan before and after a Claude turn and apply the same rule. Refresh the progress list after any Claude turn that changed the active plan.
 
+Found while doing 4.1: the broker refuses `lazarus_replace_buffer` and `lazarus_save_buffer` on any Markdown path ("A plan or document is written with write_markdown or update_markdown…"), and it offers no Markdown tool of its own. Only `lazarus_create_file` makes a new `.md`. With 4.1, Claude Code's own `Edit` is gone, so a Claude turn in Document, Plan or Build mode cannot change an existing plan or document at all, and a plan run on Claude cannot set an item's Status. This item therefore needs Markdown writes through the broker, for example `write_markdown` and `update_markdown` going through `WriteMarkdownFile` and `ReplaceInMarkdownFile`, which already apply the completion rule. Comparing the plan before and after the turn is not enough on its own.
+
 Done when a Claude turn that sets an item complete without a commit is refused or reverted exactly as an assistant turn is, and the progress list shows a Claude plan edit without switching modes.
 
 ### 4.5 Acceptance in the IDE
-Status: not started
+Status: blocked
+User action: Rebuild Lazarus from this branch (Tools → Build Lazarus), then run the checklist below with the Claude connection set to Ask. Fill in each result line. Mark this item complete when every point passes, or add a new item under section 4 for each failure and leave this one blocked.
 
 With the rebuilt IDE: an Ask-mode Claude turn edits a unit through the Lazarus tools, the approval dialog shows the change, the edit lands in the open editor buffer, a build runs through the broker, and the conversation resumes after an IDE restart. Record what was checked and what was not.
 
 Done when the person running it confirms each point, or the failures are written up as new items.
+
+State at hand-over: 3.4–4.4 are committed (`b6a6866`, `a6623fc`, `9a47321`); each commit's tree passes the Claude and MCP tests and builds all packages (`AssistantClaudeClientTest`, `AssistantMCPProtocolTest`, `AssistantMCPListenerTest`, `AssistantMCPBridgeTest`, `AssistantMCPApprovalTest` and `AssistantGitTest`). No real `claude` turn has yet run against the Lazarus tools: the agent session cannot run `claude` or use the IDE. Every point below is therefore unchecked.
+
+Checklist. Use Build mode, with Show tool use on and a project whose unit is open in the editor and has unsaved changes.
+
+1. **Tools are offered.** Ask Claude what Lazarus tools it has. It should name tools such as `read_buffer`, `replace_buffer`, `write_markdown`, `start_build` and `run_git`. It should not offer an Edit, Write or Bash tool of its own.
+   Result:
+2. **Edit through the broker.** Ask for a small change to the open unit, for example a comment on one routine. The trace should show `read_buffer`, then `replace_buffer` under those names.
+   Result:
+3. **The approval shows the change.** The Ask confirmation should name the tool, the file and the changed lines ("lines N-M of T replaced by K") with the start of the new text. While it is open, the editor buffer should be unchanged.
+   Result:
+4. **The edit lands in the buffer.** After Yes, the change should appear in the open editor tab and be undoable there. The file on disk should be unchanged until it is saved (the unsaved changes made earlier are kept).
+   Result:
+5. **A decline reaches Claude.** Ask for another edit and answer No. The buffer should stay unchanged, the trace should mark the call failed, and Claude's reply should say you declined.
+   Result:
+6. **A long approval survives.** Ask for an edit and leave the confirmation open for over a minute before answering Yes. The call should complete and the turn should carry on (`MCP_TOOL_TIMEOUT`, item 3.4).
+   Result:
+7. **A build runs through the broker.** Ask Claude to build the project. The trace should show `start_build`, the Ask confirmation, then `build_status`, and Claude should report the build's result. No `lazbuild` should run through a shell.
+   Result:
+8. **Plan status follows the completion rule** (item 4.4). In a Git project, ask Claude to set a plan item complete without committing. It should be refused with the commit message. After a commit through `run_git`, it should be allowed, and the progress list should update when the turn ends.
+   Result:
+9. **Stop cleans up.** Start a turn that reads several files and press Stop while it is working. The confirmation is modal, so Stop cannot be pressed while it is open. The turn should end. No `lazarus-mcp-*.json` file should be left in the temporary directory, and the next turn should start normally.
+   Result:
+10. **Resume after a restart.** Note something Claude said, close and reopen the IDE (or rebuild it), and ask Claude about it. It should answer from the same session (item 2.6).
+   Result:
+
+Not covered here and still open elsewhere: 2.8 (permission allowlist), 2.9 (first connection), 3.1 (captured MCP request fixture) and 4.3 (the trace's look). Running this checklist also covers most of 4.1, 4.2 and 4.4's own user actions.
 
 ## 5. Later, if wanted
 
