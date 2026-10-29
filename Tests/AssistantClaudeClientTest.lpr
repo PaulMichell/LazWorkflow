@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, AssistantClaudeClient, AssistantClaudeStream;
+  Classes, SysUtils, AssistantConversation, AssistantClaudeClient, AssistantClaudeStream;
 
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
@@ -336,6 +336,31 @@ Begin
     AppendClaudeTurnArguments('default', '', 'high', '', False, Args);
     Check('default model leaves the choice to Claude Code', Args.IndexOf('--model') < 0);
     Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
+
+    Args.Clear;
+    AppendClaudeModeArguments(amChat, Args);
+    Check('chat turns get no tools', (Args.Count = 2) And (Args[0] = '--tools=') And
+      (Args[1] = '--strict-mcp-config'));
+    Args.Clear;
+    AppendClaudeModeArguments(amInspect, Args);
+    Check('inspect turns only read', (Args.Count = 2) And (Args[0] = '--tools=Read,Grep,Glob') And
+      (Args[1] = '--strict-mcp-config'));
+    Args.Clear;
+    AppendClaudeModeArguments(amDocument, Args);
+    Check('document turns may edit Markdown only', (Args.Count = 3) And
+      (Args[0] = '--tools=Read,Grep,Glob,Edit,Write') And
+      (Args[1] = '--allowedTools=Edit(**/*.md),Edit(**/*.markdown),Edit(**/*.mdown)') And
+      (Args[2] = '--strict-mcp-config'));
+    Args.Clear;
+    AppendClaudeModeArguments(amPlan, Args);
+    Check('plan turns match document turns', (Args.Count = 3) And (Args[0] = '--tools=Read,Grep,Glob,Edit,Write'));
+    Args.Clear;
+    AppendClaudeModeArguments(amBuild, Args);
+    Check('build turns keep the Claude Code tools', Args.Count = 0);
+    Check('build applies the approval setting', ClaudeTurnPermissionMode(amBuild, 'always') = 'bypassPermissions');
+    Check('chat ignores the approval setting', ClaudeTurnPermissionMode(amChat, 'always') = '');
+    Check('document ignores the approval setting', ClaudeTurnPermissionMode(amDocument, 'auto') = '');
+    Check('inspect ignores the approval setting', ClaudeTurnPermissionMode(amInspect, 'always') = '');
   Finally
     Args.Free;
   End;

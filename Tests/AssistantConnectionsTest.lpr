@@ -4,6 +4,7 @@ Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConn
   AssistantXaiProvider,
   WorkflowSettings, AssistantConversation, AssistantTools, AssistantHarness{$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
+Const ClaudeModelList = '[{"value":"default","displayName":"Default","supportedEffortLevels":["low","high"]}]';
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
 Function Derived(Const ConfigRoot, ConnectionId: String): String;
@@ -115,6 +116,12 @@ Begin
     AssistantChatConfig.Save;
     Store.Load;
     Check('saving general preferences preserves the model cache', Store[0].CachedModelsJson = ModelList);
+    Item := Store.AddStored('claude-cache', 'Claude account', 'claude');
+    Item.CachedModelsJson := ClaudeModelList;
+    Store.Save; Store.Load;
+    Check('a Claude model list is kept until Refresh models replaces it',
+      (Store.Count = 3) And (Store[2].Backend = 'claude') And (Store[2].CachedModelsJson = ClaudeModelList));
+    Store.Remove(2); Store.Save; Store.Load;
     Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'auto') And (Store[0].ApprovalMode = 'ask'));
     Check('roundtrip preserves current connection', (Store.Active.Name = 'Second account') And (Store.Active.Model = 'model-two') And (Store.Active.Runtime = '/other/codex'));
     Store.ActiveId := 'grok'; Store.Save; Store.Load;

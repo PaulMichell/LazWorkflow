@@ -863,7 +863,8 @@ Begin
   Item.Runtime := Obj.Get('runtime', '');
   Item.CachedModelsJson := '';
   Cache := Obj.Find('models_json');
-  If (Item.Backend = 'codex') And Assigned(Cache) Then
+  { Kept until Refresh models replaces it, so opening Settings never asks the program again. }
+  If ((Item.Backend = 'codex') Or (Item.Backend = 'claude')) And Assigned(Cache) Then
     If Cache.JSONType = jtString Then
       Item.CachedModelsJson := Cache.AsString;
   If Obj.Find('search_mode') <> Nil Then

@@ -17,7 +17,7 @@ Unit AssistantClaudeClient;
 Interface
 
 Uses
-  Classes, AssistantClaudeStream;
+  Classes, AssistantConversation, AssistantClaudeStream;
 
 Type
   { The billing fields of claude auth status. Email and organisation are never read. }
@@ -33,6 +33,8 @@ Type
     Executable: String;
     Model: String;
     ApprovalMode: String;
+    { The conversation mode decides which Claude Code tools the turn may use. }
+    Mode: TAssistantMode;
     WorkingDirectory: String;
     TimeoutMs: Integer;
     { Empty uses the model's default effort. }
@@ -90,6 +92,12 @@ Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 /// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
 /// anything that needs approval in print mode.
 Function ClaudePermissionMode(Const ApprovalMode: String): String;
+/// The permission mode for a turn in Mode. Only Build applies the approval setting; the other modes keep the
+/// program default so nothing outside their tool list is approved.
+Function ClaudeTurnPermissionMode(Mode: TAssistantMode; Const ApprovalMode: String): String;
+/// Tool arguments that hold a turn to its conversation mode: Chat has no tools, Inspect reads, Document and Plan
+/// may also edit Markdown, and Build keeps Claude Code's own set. Outside Build no MCP server is loaded.
+Procedure AppendClaudeModeArguments(Mode: TAssistantMode; Args: TStrings);
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
 /// leave those choices to Claude Code.
 Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, Effort, SessionId: String; Resume: Boolean;
@@ -171,6 +179,38 @@ Begin
     Result := 'plan'
   Else
     Result := '';
+End;
+
+Function ClaudeTurnPermissionMode(Mode: TAssistantMode; Const ApprovalMode: String): String;
+Begin
+  { Accept-edits or bypass would approve every file edit, not just the Markdown that Document and Plan allow. }
+  If Mode = amBuild Then
+    Result := ClaudePermissionMode(ApprovalMode)
+  Else
+    Result := '';
+End;
+
+Procedure AppendClaudeModeArguments(Mode: TAssistantMode; Args: TStrings);
+Const
+  ReadTools = 'Read,Grep,Glob';
+  { The extensions the Markdown write scope accepts for Codex. Edit rules cover Write as well. }
+  MarkdownEdits = 'Edit(**/*.md),Edit(**/*.markdown),Edit(**/*.mdown)';
+Begin
+  If (Not Assigned(Args)) Or (Mode = amBuild) Then
+    Exit;
+  { One argument each, so an empty list cannot be lost or swallow the next option. }
+  Case Mode Of
+    amChat: Args.Add('--tools=');
+    amDocument, amPlan:
+      Begin
+        Args.Add('--tools=' + ReadTools + ',Edit,Write');
+        Args.Add('--allowedTools=' + MarkdownEdits);
+      End;
+  Else
+    Args.Add('--tools=' + ReadTools);
+  End;
+  { No --mcp-config is passed, so this loads no MCP servers. }
+  Args.Add('--strict-mcp-config');
 End;
 
 Function NewClaudeSessionId: String;
@@ -820,8 +860,9 @@ Begin
         ErrorText := 'Cancelled.'
       Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
         Begin
-          AppendClaudeTurnArguments(Settings.Model, ClaudePermissionMode(Settings.ApprovalMode), Settings.Effort,
-            Settings.SessionId, Settings.Resume, Args);
+          AppendClaudeTurnArguments(Settings.Model, ClaudeTurnPermissionMode(Settings.Mode, Settings.ApprovalMode),
+            Settings.Effort, Settings.SessionId, Settings.Resume, Args);
+          AppendClaudeModeArguments(Settings.Mode, Args);
           BuildClaudeEnvironment(Environment);
           If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
             StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then

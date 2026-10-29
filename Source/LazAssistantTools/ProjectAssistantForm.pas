@@ -4720,6 +4720,7 @@ Begin
   TurnSettings.Executable := FClaudeRuntime;
   TurnSettings.Model := FClaudeModel;
   TurnSettings.ApprovalMode := FClaudeApproval;
+  TurnSettings.Mode := ActiveMode;
   TurnSettings.Effort := FClaudeEffort;
   TurnSettings.WorkingDirectory := FClaudeDirectory;
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
