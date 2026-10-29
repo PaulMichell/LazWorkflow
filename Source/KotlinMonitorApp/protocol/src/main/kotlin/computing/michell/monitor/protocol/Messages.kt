@@ -85,7 +85,9 @@ enum class MessageKind(val wireName: String) {
   Chunk("chunk"),
   BlockGet("block_get"),
   BlockData("block_data"),
-  Ack("ack");
+  Ack("ack"),
+  CommandState("command_state"),
+  CommandStates("command_states");
 
   companion object {
     fun fromWire(name: String): MessageKind {
@@ -1941,11 +1943,53 @@ private fun patchPayload(patch: WirePatch): JsonValue.Obj {
   return payload.build()
 }
 
-fun encodeResume(id: String, epoch: String, cursor: Long): String {
+fun encodeResume(id: String, epoch: String, cursor: Long, commands: List<String> = emptyList()): String {
   val payload = JsonObjectBuilder()
   payload.add("epoch", epoch)
   payload.add("cursor", cursor)
+  if (commands.isNotEmpty()) {
+    payload.add("commands", JsonValue.Arr(commands.map { JsonValue.Str(it) }))
+  }
   return encodeEnvelope(MessageKind.Resume, id, payload.build())
+}
+
+data class CommandStateMessage(val ref: String, val state: String, val reason: String)
+
+fun encodeCommandStates(id: String, states: List<CommandStateMessage>): String {
+  val items = states.map { state ->
+    val item = JsonObjectBuilder()
+    item.add("ref", state.ref)
+    item.add("state", state.state)
+    if (state.reason.isNotEmpty()) item.add("reason", state.reason)
+    item.build()
+  }
+  val payload = JsonObjectBuilder()
+  payload.add("states", JsonValue.Arr(items))
+  return encodeEnvelope(MessageKind.CommandStates, id, payload.build())
+}
+
+fun decodeCommandStates(payloadJson: String): List<CommandStateMessage>? {
+  val obj = parseObject(payloadJson) ?: return null
+  val states = obj.field("states") as? JsonValue.Arr ?: return null
+  val decoded = ArrayList<CommandStateMessage>()
+  for (item in states.items) {
+    val row = item as? JsonValue.Obj ?: return null
+    val ref = row.readString("ref", true)
+    val state = row.readString("state", true)
+    val reason = row.readString("reason", false)
+    if (!ref.ok || !state.ok || !reason.ok) return null
+    decoded += CommandStateMessage(ref.value, state.value, reason.value)
+  }
+  return decoded
+}
+
+fun decodeCommandState(payloadJson: String): CommandStateMessage? {
+  val obj = parseObject(payloadJson) ?: return null
+  val ref = obj.readString("ref", true)
+  val state = obj.readString("state", true)
+  val reason = obj.readString("reason", false)
+  if (!ref.ok || !state.ok || !reason.ok) return null
+  return CommandStateMessage(ref.value, state.value, reason.value)
 }
 
 fun decodeResume(payloadJson: String): WireResume? {

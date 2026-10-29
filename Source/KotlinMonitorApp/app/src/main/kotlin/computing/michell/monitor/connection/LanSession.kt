@@ -31,6 +31,9 @@ import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeBye
+import computing.michell.monitor.protocol.decodeCommandState
+import computing.michell.monitor.protocol.decodeCommandStates
+import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePairOk
 import computing.michell.monitor.protocol.decodeTicks
@@ -464,7 +467,8 @@ interface SessionPort {
 class LanSession(
   private val store: HostStore,
   private val connector: TlsConnector = SslSocketConnector(),
-  private val clock: MonotonicClock = SystemMonotonicClock
+  private val clock: MonotonicClock = SystemMonotonicClock,
+  private val ledger: CommandLedger = NoCommandLedger
 ) : SessionPort {
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO)
@@ -505,6 +509,9 @@ class LanSession(
   private var leftForBackground = false
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
+  private val undeliveredState = MutableStateFlow("")
+  val undeliveredPrompt: StateFlow<String> = undeliveredState.asStateFlow()
+  private var retryJson = ""
   val messages: Flow<computing.michell.monitor.protocol.MonitorMessage> = inbound.messages
   override val commandResults: Flow<CatalogueResult> = commandResultsChannel.receiveAsFlow()
   override val linkEpoch: Int
@@ -520,7 +527,8 @@ class LanSession(
     if (json.isEmpty()) return
     val accepted = beginCatalogue(json, epochCounter.get(), if (stopped) null else link)
     scope.launch {
-      val step = stepCatalogue(accepted, epochCounter.get(), link)
+      val outboundJson = prepareOutbound(json)
+      val step = stepCatalogue(accepted.copy(json = outboundJson), epochCounter.get(), link)
       val result = when (step) {
         is CatalogueStep.Done -> step.result
         is CatalogueStep.Write -> {
@@ -534,6 +542,52 @@ class LanSession(
   }
 
   override fun nextCommandId(): String = newId()
+
+  /** User asked to send the prompt whose outcome could not be known. Same command id. */
+  fun retryUndelivered() {
+    val json = retryJson
+    if (json.isEmpty()) return
+    retryJson = ""
+    undeliveredState.value = ""
+    sendCatalogue(json)
+  }
+
+  fun clearUndelivered() {
+    retryJson = ""
+    undeliveredState.value = ""
+  }
+
+  private suspend fun prepareOutbound(json: String): String {
+    if (isUserCommand(json)) ledger.remember(json)
+    return resumeWithOpenCommands(json)
+  }
+
+  private fun resumeWithOpenCommands(json: String): String {
+    val decoded = tryDecodeEnvelope(json)
+    if (!decoded.ok || decoded.message.kind != MessageKind.Resume) return json
+    val ids = ledger.openIds()
+    if (ids.isEmpty()) return json
+    val resume = decodeResume(decoded.message.payloadJson) ?: return json
+    val next = encodeResume(decoded.message.id, resume.epoch, resume.cursor, ids)
+    return if (next.isEmpty()) json else next
+  }
+
+  private fun resumeNow(epoch: String, cursor: Long): String {
+    return encodeResume(newId(), epoch, cursor, ledger.openIds())
+  }
+
+  private suspend fun applyHostStates(states: List<HostCommandState>, owned: TlsLink) {
+    val plan = ledger.applyHost(states)
+    for (json in plan.resendJson) {
+      if (!offerCommand(json, owned)) break
+    }
+    if (plan.retryText.isNotEmpty()) {
+      retryJson = plan.retryJson
+      undeliveredState.value = plan.retryText
+    } else if (retryJson.isNotEmpty() && !ledger.openIds().contains(catalogueCommandId(retryJson))) {
+      clearUndelivered()
+    }
+  }
 
   override fun updateDraft(text: String) {
     promptDraft = text
@@ -987,7 +1041,7 @@ class LanSession(
         if (paired != null) {
           store.savePairing(paired.clientId, paired.sessionToken)
           pairCode = ""
-          offerControl(encodeResume(newId(), "", 0), owned, outbound)
+          offerControl(resumeNow("", 0), owned, outbound)
         }
       }
       MessageKind.HelloOk -> {
@@ -997,7 +1051,16 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
+          if (ledger.openIds().isNotEmpty()) offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
         }
+      }
+      MessageKind.CommandStates -> {
+        val states = decodeCommandStates(message.payloadJson) ?: return
+        applyHostStates(states.map { HostCommandState(it.ref, it.state, it.reason) }, owned)
+      }
+      MessageKind.CommandState -> {
+        val one = decodeCommandState(message.payloadJson) ?: return
+        applyHostStates(listOf(HostCommandState(one.ref, one.state, one.reason)), owned)
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L

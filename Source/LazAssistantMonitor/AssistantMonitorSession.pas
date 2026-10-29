@@ -29,7 +29,7 @@ Interface
 
 Uses
   SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
-  AssistantMonitorOutbox, AssistantSessionObserve;
+  AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantSessionObserve;
 
 Const
   MonitorPairCodeLength = 10;
@@ -133,6 +133,7 @@ Type
     FControlSends: Array Of String;
     FBulkSends: Array Of String;
     FOutbox: TMonitorOutbox;
+    FIntake: TMonitorCommandIntake;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -193,6 +194,8 @@ Type
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure HandleResume(Const Id, PayloadJson: String);
+    Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
+    Procedure PublishCommandState(Const Id, State, Reason: String);
     Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
@@ -274,6 +277,10 @@ Type
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
     Procedure SendHostJson(Const Json: String);
+    { Moves a recorded command and tells the phone. Unknown ids are ignored. }
+    Procedure NoteCommandAccepted(Const Id: String);
+    Procedure NoteCommandRejected(Const Id, Reason: String);
+    Procedure NoteCommandDone(Const Id: String);
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
     Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
@@ -486,6 +493,7 @@ Begin
   FMirror := TMonitorMirror.Create;
   FCredit := TMonitorLogCredit.Create;
   FOutbox := TMonitorOutbox.Create;
+  FIntake := TMonitorCommandIntake.Create;
   FObserved := Default(TMonitorSnapshot);
   FHasObserved := False;
   FState := mssStopped;
@@ -559,6 +567,7 @@ End;
 Destructor TMonitorSession.Destroy;
 Begin
   AttachCarrier(Nil);
+  FreeAndNil(FIntake);
   FreeAndNil(FOutbox);
   FreeAndNil(FCredit);
   FreeAndNil(FMirror);
@@ -1424,15 +1433,38 @@ Begin
     FState := mssLive;
 End;
 
+Function RecordedCommand(Kind: Integer): Boolean;
+Begin
+  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkSteer)) Or (Kind = Ord(mmkStop)) Or (Kind = Ord(mmkSetMode)) Or
+    (Kind = Ord(mmkNewConversation)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkStopPlan)) Or
+    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Or (Kind = Ord(mmkRemovePlan)) Or
+    (Kind = Ord(mmkInsertTask)) Or (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkSelectTarget)) Or
+    (Kind = Ord(mmkSelectConversation)) Or (Kind = Ord(mmkSetModel)) Or (Kind = Ord(mmkSetReasoning)) Or
+    (Kind = Ord(mmkSetPermissions)) Or (Kind = Ord(mmkNewPlan));
+End;
+
 Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
 Var
   Blocked: Boolean;
   MessageText: String;
+  Prior: TMonitorCommandRecord;
+  Admitted: TMonitorIntakeResult;
 Begin
   If (FState <> mssLive) And (FState <> mssBusy) Then
     Begin
       RejectLocked('auth', True);
       Exit;
+    End;
+  If RecordedCommand(Kind) Then
+    Begin
+      Admitted := FIntake.Admit(Id, Kind, Prior);
+      If Admitted = mirInvalid Then
+        Exit;
+      If Admitted = mirDuplicate Then
+        Begin
+          QueueSend(EncodeMonitorCommandState(NewHostId, Prior.Id, MonitorCommandStateName(Prior.State), Prior.Reason));
+          Exit;
+        End;
     End;
   If Kind = Ord(mmkStop) Then
     Begin
@@ -1485,6 +1517,8 @@ Begin
       QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
       Exit;
     End;
+  If Length(ResumeMsg.Commands) > 0 Then
+    QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
   { The log or the materialised model answers on this thread. An empty model still waits for the IDE thread. }
   If ServeResumeFromMirror(Id, ResumeMsg) Then
     Exit;
@@ -2728,6 +2762,55 @@ Begin
     Exit;
   TryQueueHostJson(Json);
   DrainOutbound;
+End;
+
+Function TMonitorSession.CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
+Var
+  Index: Integer;
+  Found: TMonitorCommandRecord;
+  Replies: Array Of TMonitorCommandStateReply;
+Begin
+  Replies := Nil;
+  SetLength(Replies, Length(Commands));
+  For Index := 0 To High(Commands) Do
+    Begin
+      Replies[Index].Ref := Commands[Index];
+      Replies[Index].Reason := '';
+      If FIntake.Lookup(Commands[Index], Found) Then
+        Begin
+          Replies[Index].State := MonitorCommandStateName(Found.State);
+          Replies[Index].Reason := Found.Reason;
+        End
+      Else
+        Replies[Index].State := 'unknown';
+    End;
+  Result := EncodeMonitorCommandStates(Id, Replies);
+End;
+
+Procedure TMonitorSession.PublishCommandState(Const Id, State, Reason: String);
+Begin
+  SendHostJson(EncodeMonitorCommandState(AllocateHostId, Id, State, Reason));
+End;
+
+Procedure TMonitorSession.NoteCommandAccepted(Const Id: String);
+Begin
+  If Not FIntake.NoteAccepted(Id) Then
+    Exit;
+  PublishCommandState(Id, 'accepted', '');
+End;
+
+Procedure TMonitorSession.NoteCommandRejected(Const Id, Reason: String);
+Begin
+  If Not FIntake.NoteRejected(Id, Reason) Then
+    Exit;
+  PublishCommandState(Id, 'rejected', Reason);
+End;
+
+Procedure TMonitorSession.NoteCommandDone(Const Id: String);
+Begin
+  If Not FIntake.NoteDone(Id) Then
+    Exit;
+  PublishCommandState(Id, 'done', '');
 End;
 
 Procedure TMonitorSession.SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);

@@ -13,6 +13,7 @@ import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.NotDeliveredRetry
 import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
@@ -235,6 +236,14 @@ class MonitorCoordinator(
   fun noteDisplay(current: MonitorUi): MonitorUi = synchronized(gate) {
     screen = show(current)
     screen
+  }
+
+  /** Puts the unsent prompt back and keeps the retry action across the next flush. */
+  fun noteUndelivered(current: MonitorUi, text: String): MonitorUi = synchronized(gate) {
+    val next = show(current).copy(draft = text, undeliveredPrompt = text, banner = NotDeliveredRetry)
+    screen = next
+    applied = applied.copy(draft = text, undeliveredPrompt = text, banner = NotDeliveredRetry)
+    next
   }
 
   private fun editDraft(current: MonitorUi, text: String): List<MonitorEffect> {

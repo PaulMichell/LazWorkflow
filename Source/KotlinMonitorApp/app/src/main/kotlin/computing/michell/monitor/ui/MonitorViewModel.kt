@@ -23,6 +23,7 @@ import computing.michell.monitor.connection.BackgroundBanner
 import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
+import computing.michell.monitor.data.RoomCommandLedger
 import computing.michell.monitor.data.DefaultConversationCap
 import computing.michell.monitor.data.DefaultImageBudgetBytes
 import computing.michell.monitor.data.DefaultImageBudgetMiB
@@ -219,7 +220,8 @@ data class MonitorUi(
   val resumeOnce: Boolean = false,
   val closedPending: Boolean = false,
   val closedQueued: Boolean = false,
-  val blockFetchIds: List<String> = emptyList()
+  val blockFetchIds: List<String> = emptyList(),
+  val undeliveredPrompt: String = ""
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -1096,9 +1098,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val imageRoot = File(application.filesDir, MonitorImageDirectoryName)
   private val displayPrefs = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
   private val conversations = ConversationRepository(database, imageRoot, ::retentionLimits)
+  private val commandLedger = RoomCommandLedger(conversations)
   val conversationCapText = MutableStateFlow(displayPrefs.getInt(ConversationCapKey, DefaultConversationCap).toString())
   val imageBudgetText = MutableStateFlow(displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB).toString())
-  private val session = LanSession(store)
+  private val session = LanSession(store, ledger = commandLedger)
   private val lanWatch = WifiLanWatch(application, session::onWifiAvailable, session::onWifiLost)
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
@@ -1216,6 +1219,19 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch {
       session.status.collect { status -> onLink(status) }
     }
+    viewModelScope.launch {
+      conversations.outbox().collect { commandLedger.replace(it) }
+    }
+    viewModelScope.launch {
+      session.undeliveredPrompt.collect { text ->
+        if (text.isEmpty()) {
+          uiState.update { it.copy(undeliveredPrompt = "") }
+          return@collect
+        }
+        val shown = coordinator.noteUndelivered(uiState.value, text)
+        withContext(Dispatchers.Main) { uiState.value = shown }
+      }
+    }
     viewModelScope.launch(Dispatchers.Default) {
       session.commandResults.collect { result ->
         val effects = coordinator.onEvent(MonitorEvent.CommandResult(uiState.value, result)) ?: return@collect
@@ -1228,6 +1244,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     if (record.address.isNotEmpty()) {
       coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
+      runBlocking(Dispatchers.IO) { commandLedger.refresh() }
       session.connect(record.address, record.port)
     }
   }
@@ -1460,8 +1477,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     synchronized(cacheGate) { suppressCache = false }
   }
 
+  fun retryUndelivered() {
+    session.retryUndelivered()
+  }
+
   fun sendOrSteer() {
     if (dictationState.value.sendMustWait) return
+    session.clearUndelivered()
     val effects = coordinator.onEvent(MonitorEvent.Submit(uiState.value)) ?: return
     applyUiEffects(effects)
   }

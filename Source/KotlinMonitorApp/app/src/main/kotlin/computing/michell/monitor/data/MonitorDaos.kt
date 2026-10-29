@@ -142,6 +142,12 @@ interface OutboxDao {
   @Insert(onConflict = OnConflictStrategy.ABORT)
   suspend fun insert(row: OutboxRecord)
 
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsert(row: OutboxRecord)
+
+  @Query("SELECT * FROM outbox ORDER BY createdAt")
+  suspend fun listAll(): List<OutboxRecord>
+
   @Query("UPDATE outbox SET state = :state WHERE commandId = :commandId")
   suspend fun setState(commandId: String, state: String)
 

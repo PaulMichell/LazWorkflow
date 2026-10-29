@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.R
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.NotDeliveredRetry
 import computing.michell.monitor.dictation.DictationListeningMessage
 import computing.michell.monitor.dictation.DictationPhase
 import computing.michell.monitor.dictation.DictationState
@@ -113,7 +114,8 @@ fun ConversationScreen(
   permissionRequest: Boolean,
   onPermissionResult: (Boolean) -> Unit,
   onPermissionConsumed: () -> Unit,
-  onCached: () -> Unit = {}
+  onCached: () -> Unit = {},
+  onRetry: () -> Unit = {}
 ) {
   val activity = LocalContext.current as? Activity
   val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -134,6 +136,9 @@ fun ConversationScreen(
     ConversationPane(ui, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
+    }
+    if (ui.undeliveredPrompt.isNotEmpty()) {
+      TextButton(onClick = onRetry) { Text(NotDeliveredRetry) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, { start, end ->

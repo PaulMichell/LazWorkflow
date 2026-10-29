@@ -11,11 +11,15 @@ import computing.michell.monitor.protocol.decodeBye
 import computing.michell.monitor.protocol.decodeHello
 import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
+import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeRejected
 import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.HelloOkMessage
+import computing.michell.monitor.protocol.encodeCommandStates
 import computing.michell.monitor.protocol.encodeHelloOk
+import computing.michell.monitor.protocol.tryEncodeSend
+import computing.michell.monitor.protocol.CommandStateMessage
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryDecodeFrame
 import computing.michell.monitor.protocol.tryEncodeFrame
@@ -276,6 +280,46 @@ class LanSessionTest {
       Thread.sleep(400)
       assertEquals(1, opens.get())
       assertTrue(session.reconnectPaused)
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun unknownCommandIsResentAndAHeldPromptIsOffered() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val ledger = MemoryCommandLedger()
+    val send = tryEncodeSend("send-1", "keep this")
+    val stop = encodeEmpty(MessageKind.Stop, "stop-1")
+    runBlocking {
+      ledger.remember(send.json)
+      ledger.remember(stop)
+      ledger.applyHost(listOf(HostCommandState("send-1", OutboxQueued, "")))
+    }
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, fingerprint ->
+      assertEquals(pin, fingerprint)
+      link
+    }, ledger = ledger)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      val resume = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }
+      assertTrue(resume.payloadJson.contains("send-1"))
+      assertTrue(resume.payloadJson.contains("stop-1"))
+      link.push(frameOf(encodeCommandStates("h1", listOf(
+        CommandStateMessage("send-1", "unknown", ""),
+        CommandStateMessage("stop-1", "unknown", "")
+      ))))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Stop } }
+      assertFalse(link.frames().any { frame -> envelope(frame).kind == MessageKind.Send })
+      waitUntil { session.undeliveredPrompt.value == "keep this" }
       assertEquals(pin, store.load().fingerprint)
     } finally {
       session.close()

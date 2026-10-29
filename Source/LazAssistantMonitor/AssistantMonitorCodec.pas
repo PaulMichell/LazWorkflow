@@ -110,7 +110,9 @@ Type
     mmkPermissions,
     mmkSetPermissions,
     mmkSnapshotPage,
-    mmkChunk
+    mmkChunk,
+    mmkCommandState,
+    mmkCommandStates
   );
 
   TMonitorMessage = Record
@@ -325,10 +327,18 @@ Type
     Approval: TAssistantApprovalNotice;
   End;
 
-  { Client resume. Not a user command. Cursor 0 means nothing has been applied. }
+  { Client resume. Not a user command. Cursor 0 means nothing has been applied.
+    Commands lists outbox ids whose outcome the phone does not know. }
   TMonitorResume = Record
     Epoch: String;
     Cursor: Int64;
+    Commands: TStringArray;
+  End;
+
+  TMonitorCommandStateReply = Record
+    Ref: String;
+    State: String;
+    Reason: String;
   End;
 
   { One committed live change. Part and PartCount are 1 until the body exceeds the frame cap. }
@@ -496,6 +506,8 @@ Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMon
 
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
 Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String): String;
+Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
 { Payload object only. The ring stores this, not the frame envelope. }
 Function MonitorPatchPayloadJson(Const Patch: TMonitorPatch): String;
@@ -611,6 +623,8 @@ Begin
     mmkSetPermissions: Result := 'set_permissions';
     mmkSnapshotPage: Result := 'snapshot_page';
     mmkChunk: Result := 'chunk';
+    mmkCommandState: Result := 'command_state';
+    mmkCommandStates: Result := 'command_states';
   Else
     Result := '';
   End;
@@ -3530,6 +3544,32 @@ Begin
   Result.Add('blocks', Blocks);
 End;
 
+Function ReadCommandIds(Obj: TJSONObject; Out Ids: TStringArray): Boolean;
+Var
+  Node: TJSONData;
+  Arr: TJSONArray;
+  Index: Integer;
+Begin
+  Result := True;
+  Ids := Nil;
+  SetLength(Ids, 0);
+  If Obj.IndexOfName('commands') < 0 Then
+    Exit;
+  Node := Obj.Find('commands');
+  If Not (Node Is TJSONArray) Then
+    Exit(False);
+  Arr := TJSONArray(Node);
+  SetLength(Ids, Arr.Count);
+  For Index := 0 To Arr.Count - 1 Do
+    Begin
+      If Arr.Items[Index].JSONType <> jtString Then
+        Exit(False);
+      Ids[Index] := Arr.Items[Index].AsString;
+      If Not MonitorMessageIdIsSafe(Ids[Index]) Then
+        Exit(False);
+    End;
+End;
+
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
 Var
   Payload: TJSONObject;
@@ -3548,13 +3588,48 @@ Begin
   Result := False;
   ResumeMsg.Epoch := '';
   ResumeMsg.Cursor := 0;
+  SetLength(ResumeMsg.Commands, 0);
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
-    Result := ReadString(Obj, 'epoch', True, ResumeMsg.Epoch) And ReadInt64(Obj, 'cursor', ResumeMsg.Cursor);
+    Result := ReadString(Obj, 'epoch', True, ResumeMsg.Epoch) And ReadInt64(Obj, 'cursor', ResumeMsg.Cursor) And
+      ReadCommandIds(Obj, ResumeMsg.Commands);
   Finally
     Data.Free;
   End;
+End;
+
+Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('ref', Ref);
+  Payload.Add('state', State);
+  If Reason <> '' Then
+    Payload.Add('reason', Reason);
+  Result := EncodeWith(mmkCommandState, Id, Payload);
+End;
+
+Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
+Var
+  Payload, Item: TJSONObject;
+  States: TJSONArray;
+  Index: Integer;
+Begin
+  Payload := TJSONObject.Create;
+  States := TJSONArray.Create;
+  For Index := 0 To High(Replies) Do
+    Begin
+      Item := TJSONObject.Create;
+      Item.Add('ref', Replies[Index].Ref);
+      Item.Add('state', Replies[Index].State);
+      If Replies[Index].Reason <> '' Then
+        Item.Add('reason', Replies[Index].Reason);
+      States.Add(Item);
+    End;
+  Payload.Add('states', States);
+  Result := EncodeWith(mmkCommandStates, Id, Payload);
 End;
 
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;

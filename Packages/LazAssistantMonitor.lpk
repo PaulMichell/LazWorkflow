@@ -52,6 +52,10 @@
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorOutbox.pas"/>
         <UnitName Value="AssistantMonitorOutbox"/>
       </Item15>
+      <Item16>
+        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCommandIntake.pas"/>
+        <UnitName Value="AssistantMonitorCommandIntake"/>
+      </Item16>
       <Item7>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSettings.pas"/>
         <UnitName Value="AssistantMonitorSettings"/>

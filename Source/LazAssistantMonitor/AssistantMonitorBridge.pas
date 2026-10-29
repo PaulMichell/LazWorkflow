@@ -399,8 +399,24 @@ Begin
 End;
 
 Procedure TAssistantMonitorBridge.SendError(Const RefId, Reason, MessageText: String);
+Var
+  Session: TMonitorSession;
 Begin
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Assigned(Session) Then
+    Session.NoteCommandRejected(RefId, Reason);
   SendJson(EncodeMonitorError(HostId, Reason, MessageText, RefId));
+End;
+
+Function LongRunningCommand(Kind: Integer): Boolean;
+Begin
+  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkSteer)) Or (Kind = Ord(mmkRunPlan)) Or
+    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask));
 End;
 
 Function TAssistantMonitorBridge.OpenForm: TProjectAssistantForm;
@@ -1479,6 +1495,13 @@ Begin
       AnswerResume(Command.ClientId, Command.Payload);
       Exit;
     End;
+  LockBridge;
+  Try
+    If Assigned(FSession) Then
+      FSession.NoteCommandAccepted(Command.ClientId);
+  Finally
+    UnlockBridge;
+  End;
   Form := OpenForm;
   If Not Assigned(Form) Then
     Begin
@@ -1491,6 +1514,16 @@ Begin
       If ErrorText = '' Then
         ErrorText := 'The desktop control is not available.';
       SendError(Command.ClientId, 'command', ErrorText);
+    End
+  Else If Not LongRunningCommand(Command.Kind) Then
+    Begin
+      LockBridge;
+      Try
+        If Assigned(FSession) Then
+          FSession.NoteCommandDone(Command.ClientId);
+      Finally
+        UnlockBridge;
+      End;
     End;
 End;
 

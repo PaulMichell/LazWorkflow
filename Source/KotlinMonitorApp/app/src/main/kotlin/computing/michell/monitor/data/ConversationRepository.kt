@@ -67,6 +67,12 @@ class ConversationRepository(
     database.outbox().insert(row)
   }
 
+  suspend fun saveOutbox(row: OutboxRecord) {
+    database.outbox().upsert(row)
+  }
+
+  suspend fun listOutbox(): List<OutboxRecord> = database.outbox().listAll()
+
   suspend fun setOutboxState(commandId: String, state: String) {
     database.outbox().setState(commandId, state)
   }
