@@ -21,9 +21,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -178,94 +179,57 @@ private fun ConversationPane(
   modifier: Modifier
 ) {
   val showLive = ui.view.sending || ui.view.busy || ui.view.planRunning || ui.planRunning
-  val slots = remember(ui.turns, ui.live, showLive) { virtualSlots(ui.turns, ui.live, showLive) }
-  val scrollState = rememberScrollState()
-  val scope = rememberCoroutineScope()
+  val rows = remember(ui.turns, ui.live, showLive, ui.showThinking, ui.showTools) {
+    conversationRows(ui.turns, ui.live, showLive, ui.showThinking, ui.showTools)
+  }
+  val listState = rememberLazyListState()
   var followHead by remember { mutableStateOf(true) }
-  var settling by remember { mutableStateOf(false) }
-  val measured = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
   val need = rememberUpdatedState(onNeed)
+  val reportVisible = rememberUpdatedState(onVisibleTurns)
   LaunchedEffect(ui.pendingEpoch) {
     if (ui.pendingEpoch > 0) followHead = true
   }
-  LaunchedEffect(Unit) {
-    snapshotFlow { scrollState.maxValue to followHead }
-      .collect { (max, stick) ->
-        if (!stick) return@collect
-        var guard = 0
-        while (followHead && scrollState.value < scrollState.maxValue && guard < 8) {
-          settling = true
-          scrollState.scrollTo(scrollState.maxValue)
-          settling = false
-          guard += 1
-        }
-        if (followHead && max > 0 && scrollState.value < scrollState.maxValue) {
-          settling = true
-          scrollState.scrollTo(scrollState.maxValue)
-          settling = false
-        }
+  LaunchedEffect(rows.size, followHead) {
+    if (followHead && rows.isNotEmpty()) listState.scrollToItem(rows.lastIndex)
+  }
+  LaunchedEffect(listState, rows) {
+    snapshotFlow { listState.isScrollInProgress to listState.firstVisibleItemIndex }
+      .collect { (scrolling, index) ->
+        if (scrolling && rows.isNotEmpty() && index < rows.lastIndex) followHead = false
       }
   }
-  LaunchedEffect(scrollState) {
-    var previousValue = scrollState.value
-    var previousMax = scrollState.maxValue
-    snapshotFlow { Triple(scrollState.isScrollInProgress, scrollState.value, scrollState.maxValue) }
-      .collect { (_, value, max) ->
-        if (!settling) followHead = stickToHead(followHead, previousValue, value, previousMax, max, false)
-        previousValue = value
-        previousMax = max
+  LaunchedEffect(listState, rows) {
+    snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { item -> item.index } }
+      .collect { indices ->
+        val visible = indices.mapNotNull { index -> rows.getOrNull(index)?.turnIndex }.filter { index -> index >= 0 }.toSet()
+        if (visible.isEmpty()) reportVisible.value(prefetchRecent(virtualSlots(ui.turns, ui.live, showLive)))
+        else reportVisible.value(visible)
+        visible.forEach { index -> need.value(index) }
       }
   }
-  val reportVisible = rememberUpdatedState(onVisibleTurns)
-  LaunchedEffect(slots) {
-    reportVisible.value(prefetchRecent(slots))
-  }
-  LaunchedEffect(scrollState, slots) {
-    snapshotFlow { Triple(scrollState.value, scrollState.viewportSize, measured.toMap()) }
-      .distinctUntilChanged()
-      .collect { (value, viewport, heights) ->
-        var top = 0
-        val view = viewport.coerceAtLeast(1)
-        for (slot in slots) {
-          val height = heights[slotKey(slot)] ?: 1
-          if (top < value + view && top + height > value && slot.turnIndex >= 0) need.value(slot.turnIndex)
-          top += height
-        }
-      }
-  }
-  Column(
-    modifier.fillMaxHeight().verticalScroll(scrollState).onSizeChanged { size ->
+  LazyColumn(
+    state = listState,
+    modifier = modifier.fillMaxHeight().onSizeChanged { size ->
       if (size.width > 0) onViewWidth(size.width)
     },
     verticalArrangement = Arrangement.spacedBy(8.dp)
   ) {
-      slots.forEach { slot ->
-        Box(Modifier.onSizeChanged { size ->
-          val key = slotKey(slot)
-          val previous = measured[key]
-          measured[key] = size.height
-          if (previous == null || followHead) return@onSizeChanged
-          val delta = size.height - previous
-          if (delta == 0) return@onSizeChanged
-          val top = prefixHeight(slots, measured, key)
-          if (top < scrollState.value) {
-            scope.launch { scrollState.scrollTo((scrollState.value + delta).coerceAtLeast(0)) }
-          }
-        }) {
-          SlotBody(
-            slot,
-            bodyFor(ui, slot),
-            ui.hostGeneration,
-            ui.conversationGeneration,
-            ui.showThinking,
-            ui.showTools,
-            bitmaps,
-            ui.imageReasons,
-            !ui.disconnected
-          )
-        }
+    items(rows, key = { row -> row.key }) { row ->
+      if (row.block == null) {
+        Text(row.label, color = QuietText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      } else {
+        RoleBlock(
+          row.block,
+          bitmaps,
+          ui.imageReasons,
+          ui.hostGeneration,
+          foldBlockKey(ui.conversationGeneration, row.turnId, row.block.blockId, 0),
+          !ui.disconnected
+        )
       }
-      if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt) && !hostHasLaterUserBlock(ui)) {
+    }
+    if (ui.pendingPrompt.isNotEmpty()) {
+      item(key = "pending") {
         val pending = WireBlock(
           ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()
         )
@@ -278,6 +242,7 @@ private fun ConversationPane(
           !ui.disconnected
         )
       }
+    }
   }
 }
 
@@ -363,15 +328,30 @@ fun ActivityStatus(
   // displayInterrupted must not replace this slot, and must not start a reconnect clock.
   val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else activity
   val statusStyle = MaterialTheme.typography.bodySmall
-  // Equal side columns keep the model on the screen centre. Connection stays left; progress stays right.
+  val chip = connectionChip(
+    phase,
+    ui.disconnected,
+    ui.pairedElsewhere,
+    ui.catchingUp,
+    ui.statusBusy,
+    ui.hostCursor,
+    ui.syncHead,
+    ui.lastSyncMs
+  )
+  val connectionText = if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) ui.banner else chip.label
+  // Equal side columns keep the model on the screen centre. The chip stays left; progress stays right.
   Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
-      statusCaption(ui, phase),
+      connectionText,
+      modifier = Modifier
+        .weight(1f)
+        .clip(RoundedCornerShape(12.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant)
+        .padding(horizontal = 8.dp, vertical = 2.dp),
       color = QuietText,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
-      style = statusStyle,
-      modifier = Modifier.weight(1f)
+      style = statusStyle
     )
     Text(
       runtime,

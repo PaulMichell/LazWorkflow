@@ -1068,7 +1068,10 @@ class LanSession(
       }
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
-        if (bye?.reason == "disabled" || bye?.reason == "revoked") {
+        if (bye?.reason == "replaced") {
+          noteReadEnd(epoch, ReadEnd.Rejected, owned)
+          publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason)
+        } else if (bye?.reason == "disabled" || bye?.reason == "revoked") {
           noteReadEnd(epoch, ReadEnd.Disabled, owned)
           publishCurrent(epoch, LinkPhase.Paused, HostClosedBanner, bye.reason)
         }

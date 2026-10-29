@@ -73,6 +73,40 @@ fun shownBlocks(turn: WireTurn?, showThinking: Boolean, showTools: Boolean): Lis
   return displayBlocks(turn).filter { block -> blockShown(block, showThinking, showTools) }
 }
 
+data class ConversationRow(
+  val key: String,
+  val turnId: String,
+  val turnIndex: Int,
+  val block: WireBlock?,
+  val label: String
+)
+
+/** One lazy row per visible block. The key is the turn id plus the block id. */
+fun conversationRows(
+  turns: List<WireTurn>,
+  live: WireTurn?,
+  sending: Boolean,
+  showThinking: Boolean,
+  showTools: Boolean
+): List<ConversationRow> {
+  val slots = virtualSlots(turns, live, sending)
+  val rows = ArrayList<ConversationRow>()
+  for (slot in slots) {
+    val turn = if (slot.live) live else turns.firstOrNull { it.turnIndex == slot.turnIndex }
+    val shown = shownBlocks(turn, showThinking, showTools)
+    if (shown.isEmpty()) {
+      val turnId = turn?.id.orEmpty().ifEmpty { "slot-${slot.turnIndex}" }
+      rows += ConversationRow(conversationRowKey(turnId, "", 0), turnId, slot.turnIndex, null, slot.label)
+      continue
+    }
+    val turnId = turn?.id.orEmpty()
+    shown.forEachIndexed { index, block ->
+      rows += ConversationRow(conversationRowKey(turnId, block.blockId, index), turnId, slot.turnIndex, block, slot.label)
+    }
+  }
+  return rows
+}
+
 fun spotAt(units: List<Int>, fraction: Float): ScrollSpot {
   if (units.isEmpty()) return ScrollSpot(0, 0, 1)
   val sizes = units.map { size -> size.coerceAtLeast(1) }

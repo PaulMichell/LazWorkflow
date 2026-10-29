@@ -209,7 +209,9 @@ class MonitorCoordinator(
       }
       MessageKind.Snapshot -> applySnapshot(decodeSnapshot(message.payloadJson) ?: snapshotFrom(message))
       MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
-      MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { local = local.copy(view = it) }
+      MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
+        local = local.copy(view = view, statusBusy = view.busy)
+      }
       MessageKind.InsertResult -> decodeText(message.payloadJson)?.let { text ->
         if (local.draft.isEmpty()) local = local.copy(draft = text)
       }
@@ -225,6 +227,7 @@ class MonitorCoordinator(
     val live = snapshot.live?.takeIf { turn -> turn.live }
     content.replace(contentHost, local.conversationId, snapshot.storedTurns, live)
     local = local.copy(
+      catchingUp = false,
       view = snapshot.view,
       planPath = snapshot.planPath,
       planTitle = snapshot.planTitle,
@@ -292,21 +295,46 @@ class MonitorCoordinator(
   }
 
   private fun resumeNow(): MonitorEffect {
+    local = local.copy(catchingUp = true)
     return MonitorEffect.Send(encodeResume(session.nextCommandId(), local.hostEpoch, local.hostCursor))
   }
 
+  fun noteSyncTime(updatedAt: Long) = synchronized(gate) {
+    if (updatedAt <= 0L || updatedAt == local.lastSyncMs) return
+    local = local.copy(lastSyncMs = updatedAt)
+  }
+
   private fun linkChanged(status: LinkStatus): List<MonitorEffect> {
+    val replaced = status.lastError == ReplacedReason || status.banner == PairedElsewhereLabel
+    if (replaced) {
+      local = local.copy(
+        pairedElsewhere = true,
+        disconnected = true,
+        catchingUp = false,
+        statusBusy = false,
+        banner = PairedElsewhereLabel,
+        view = clearRemoteActions(local.view)
+      )
+      return emptyList()
+    }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
       local = local.copy(
+        pairedElsewhere = false,
         disconnected = true,
+        statusBusy = false,
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
         view = clearRemoteActions(local.view)
       )
       return emptyList()
     }
     if (status.phase == LinkPhase.Live || status.phase == LinkPhase.Idle) {
-      local = local.copy(disconnected = false, reachedLive = true, banner = if (linkBanner(local.banner)) "" else local.banner)
+      local = local.copy(
+        pairedElsewhere = false,
+        disconnected = false,
+        reachedLive = true,
+        banner = if (linkBanner(local.banner)) "" else local.banner
+      )
     }
     return emptyList()
   }

@@ -223,7 +223,11 @@ data class MonitorUi(
   val closedPending: Boolean = false,
   val closedQueued: Boolean = false,
   val blockFetchIds: List<String> = emptyList(),
-  val undeliveredPrompt: String = ""
+  val undeliveredPrompt: String = "",
+  val statusBusy: Boolean = false,
+  val pairedElsewhere: Boolean = false,
+  val lastSyncMs: Long = 0,
+  val syncHead: Long = 0
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -1573,9 +1577,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     contentWatch = viewModelScope.launch {
       kotlinx.coroutines.flow.combine(
         conversations.turns(hostId, conversationId),
-        conversations.blocks(hostId, conversationId)
-      ) { turns, blocks -> documentFromRows(turns, blocks) }
-        .collect { document ->
+        conversations.blocks(hostId, conversationId),
+        conversations.conversation(hostId, conversationId)
+      ) { turns, blocks, row -> documentFromRows(turns, blocks) to (row?.updatedAt ?: 0L) }
+        .collect { (document, updatedAt) ->
+          coordinator.noteSyncTime(updatedAt)
           content.adopt(hostId, conversationId, document.turns, document.live)
           uiState.value = coordinator.state
         }
