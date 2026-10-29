@@ -37,7 +37,7 @@ Uses
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
   AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient,
-  AssistantToolBroker,
+  AssistantToolBroker, AssistantMCPBridge, AssistantMCPListener,
   AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
   AssistantPlanRun, AssistantSessionObserve, AssistantCodexContext;
 
@@ -235,7 +235,7 @@ Type
     FPollingCodex: Boolean;
     FClaudeRun: TAssistantClaudeRun;
     FPollingClaude: Boolean;
-    FClaudeRuntime, FClaudeModel, FClaudeApproval, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
+    FClaudeRuntime, FClaudeModel, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
     FClaudeEffort: String;
     FClaudeLaunchReady: Boolean;
     FClaudeRetries: Integer;
@@ -256,6 +256,9 @@ Type
     FCodexLaunchReady: Boolean;
     FCodexWorkspace: TAssistantIDEWorkspace;
     FCodexBroker: TAssistantToolBroker;
+    { The running Claude turn's Lazarus tools: its broker run on FCodexBroker and its loopback MCP server. }
+    ClaudeBridge: TMCPBrokerBridge;
+    ClaudeListener: TMCPListener;
     Procedure LoadConnectionSettings;
     Procedure RecordCompletedUsage;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
@@ -270,6 +273,9 @@ Type
     Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
     Procedure ReleaseClaudeProcess;
+    Function StartClaudeTools(Scope: TClaudeToolScope; Out ConfigFile, ErrorText: String): Boolean;
+    Procedure ReleaseClaudeTools;
+    Function ApproveClaudeTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
     Procedure ClearTransportWait;
     Procedure AdoptRecoverySentence(Const Sentence: String);
@@ -4484,7 +4490,6 @@ Begin
     FCodexModelsJson := '';
     FClaudeRuntime := '';
     FClaudeModel := '';
-    FClaudeApproval := '';
     FClaudeEffort := '';
     FActiveEffort := '';
     FActiveApproval := '';
@@ -4530,7 +4535,7 @@ Begin
         Begin
           FClaudeRuntime := Item.Runtime;
           FClaudeModel := Item.Model;
-          FClaudeApproval := Item.ApprovalMode;
+          { The approval setting reaches Claude turns through AssistantChatConfig, as for every backend. }
           FClaudeEffort := Item.ReasoningEffort;
         End;
     Finally Connections.Free; End;
@@ -4554,7 +4559,6 @@ Begin
         FCodexModelsJson := '';
         FClaudeRuntime := '';
         FClaudeModel := '';
-        FClaudeApproval := '';
     FClaudeEffort := '';
         FActiveEffort := '';
         FActiveApproval := '';
@@ -4592,10 +4596,54 @@ Begin
       ReapCodexWorker(FClaudeRun);
       FClaudeRun := Nil;
     End;
+  ReleaseClaudeTools;
 End;
 
-{ Claude Code's own tools for each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
-  Build works on the project. }
+{ The Lazarus tools for one Claude turn: a broker run in the turn's scope, served on a loopback port with a new
+  token. ConfigFile is the owner-only --mcp-config file, deleted again by ReleaseClaudeTools. }
+Function TProjectAssistantForm.StartClaudeTools(Scope: TClaudeToolScope; Out ConfigFile, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ConfigFile := '';
+  ErrorText := '';
+  ReleaseClaudeTools;
+  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
+  { A Codex launch sets this back to Nil; only one backend runs a turn at a time. }
+  FCodexBroker.OnApproval := @ApproveClaudeTool;
+  ClaudeBridge := TMCPBrokerBridge.Create(FCodexBroker);
+  ClaudeBridge.BeginRun(Scope);
+  ClaudeListener := TMCPListener.Create(ClaudeBridge.ToolsJSON, @ClaudeBridge.Execute);
+  If Not ClaudeListener.Start(ErrorText) Then
+    Begin
+      ReleaseClaudeTools;
+      Exit;
+    End;
+  ConfigFile := ClaudeListener.ConfigFileName;
+  Result := True;
+End;
+
+{ Finish, cancel and failure all come here through ReleaseClaudeProcess. Waiting calls are released before the
+  listener stops, so Stop does not wait on a call the IDE thread will never run. }
+Procedure TProjectAssistantForm.ReleaseClaudeTools;
+Begin
+  If Assigned(ClaudeBridge) Then
+    ClaudeBridge.Cancel;
+  FreeAndNil(ClaudeListener);
+  FreeAndNil(ClaudeBridge);
+End;
+
+{ The broker asks before a write, build or git command. The approval setting decides, as for the assistant's own
+  tools: Ask shows the confirmation, Auto and Always allow. }
+Function TProjectAssistantForm.ApproveClaudeTool(Const Tool, Path, OldText, NewText: String): Boolean;
+Var
+  ErrorText: String;
+Begin
+  Result := ApproveToolIfNeeded(Tool, '', MCPApprovalSummary(Path, OldText, NewText), ErrorText);
+End;
+
+{ What a Claude turn may do in each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
+  Build works on the project. The Lazarus tools' broker run enforces it. }
 Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
 Begin
   Case Mode Of
@@ -4728,6 +4776,7 @@ End;
 Function TProjectAssistantForm.LaunchStoredClaudeRun: Boolean;
 Var
   TurnSettings: TClaudeTurnSettings;
+  ConfigFile, ToolsError: String;
 Begin
   Result := False;
   If (Not FClaudeLaunchReady) Or (FClaudeRuntime = '') Or (FClaudeModel = '') Or (FClaudeLaunchPrompt = '') Then
@@ -4735,7 +4784,6 @@ Begin
   TurnSettings := Default(TClaudeTurnSettings);
   TurnSettings.Executable := FClaudeRuntime;
   TurnSettings.Model := FClaudeModel;
-  TurnSettings.ApprovalMode := FClaudeApproval;
   TurnSettings.ToolScope := ClaudeToolScopeForMode(ActiveMode);
   TurnSettings.Effort := FClaudeEffort;
   TurnSettings.WorkingDirectory := FClaudeDirectory;
@@ -4744,6 +4792,14 @@ Begin
   TurnSettings.Resume := FClaudeResume;
   FClaudeToolsShown := 0;
   Try
+    { Chat has no tools. Every other mode acts only through the Lazarus tools, so a turn without them is refused
+      rather than run with reading alone. }
+    If TurnSettings.ToolScope <> ctsNone Then
+      Begin
+        If Not StartClaudeTools(TurnSettings.ToolScope, ConfigFile, ToolsError) Then
+          Raise Exception.Create('The Lazarus tools could not start: ' + ToolsError);
+        TurnSettings.MCPConfigFile := ConfigFile;
+      End;
     FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, FClaudeLaunchPrompt);
     SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
@@ -5198,7 +5254,7 @@ Begin
       Step := Snapshot.Tools[I];
       ApplyAssistantSnapshots(Copy(Snapshot.Content, 1, Step.TextBefore), Copy(Snapshot.Thinking, 1, Step.ThinkingBefore));
       ApplyLiveThinkingAndAnswer;
-      Block := FTrace.AddTool(Step.Id, Step.Name, Step.Input);
+      Block := FTrace.AddTool(Step.Id, ClaudeToolDisplayName(Step.Name), Step.Input);
       Block.Running := True;
       FAnswerSliceStart := Step.TextBefore + 1;
       FThinkingSliceStart := Step.ThinkingBefore + 1;

@@ -51,8 +51,14 @@ Type
 
 /// The broker write scope for a Claude tool scope: the same permissions the Codex launch gives each mode.
 Function ClaudeBrokerWriteScope(Scope: TClaudeToolScope): TAssistantWriteScope;
+/// What an approval names for a broker write: the path, the changed line range and the start of the new lines,
+/// short enough for the confirmation's 240 characters. Without a path, the start of NewText (git arguments).
+Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
 
 Implementation
+
+Uses
+  fpjson;
 
 Type
   { One queued call, shared by the waiting listener thread and the queued Run. The last Release frees it. }
@@ -85,6 +91,65 @@ Begin
     ctsProject: Result := awsProject;
   Else
     Result := awsReadOnly;
+  End;
+End;
+
+Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
+Const
+  SnippetChars = 100;
+Var
+  OldLines, NewLines: TStringList;
+  First, OldLast, NewLast, I: Integer;
+  Change, Snippet: String;
+Begin
+  If Path = '' Then
+    Begin
+      Result := Copy(NewText, 1, 240);
+      Exit;
+    End;
+  OldLines := TStringList.Create;
+  NewLines := TStringList.Create;
+  Try
+    OldLines.Text := OldText;
+    NewLines.Text := NewText;
+    First := 0;
+    While (First < OldLines.Count) And (First < NewLines.Count) And (OldLines[First] = NewLines[First]) Do
+      Inc(First);
+    OldLast := OldLines.Count - 1;
+    NewLast := NewLines.Count - 1;
+    While (OldLast >= First) And (NewLast >= First) And (OldLines[OldLast] = NewLines[NewLast]) Do
+      Begin
+        Dec(OldLast);
+        Dec(NewLast);
+      End;
+    If OldText = NewText Then
+      Change := 'no change'
+    Else If OldText = '' Then
+      Change := 'new text, ' + IntToStr(NewLines.Count) + ' lines'
+    Else If OldLast < First Then
+      Change := IntToStr(NewLast - First + 1) + ' lines inserted after line ' + IntToStr(First) + ' of ' +
+        IntToStr(OldLines.Count)
+    Else
+      Change := 'lines ' + IntToStr(First + 1) + '-' + IntToStr(OldLast + 1) + ' of ' + IntToStr(OldLines.Count) +
+        ' replaced by ' + IntToStr(NewLast - First + 1);
+    Snippet := '';
+    For I := First To NewLast Do
+      Begin
+        If Snippet <> '' Then
+          Snippet := Snippet + ' / ';
+        Snippet := Snippet + Trim(NewLines[I]);
+        If Length(Snippet) >= SnippetChars Then
+          Break;
+      End;
+    If Length(Snippet) > SnippetChars Then
+      Snippet := Copy(Snippet, 1, SnippetChars) + '…';
+    Result := '{"path":"' + StringToJSONString(Path) + '","change":"' + Change + '"';
+    If Snippet <> '' Then
+      Result := Result + ',"new":"' + StringToJSONString(Snippet) + '"';
+    Result := Result + '}';
+  Finally
+    NewLines.Free;
+    OldLines.Free;
   End;
 End;
 

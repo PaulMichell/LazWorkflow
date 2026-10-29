@@ -194,6 +194,37 @@ Begin
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
 
+Procedure CheckSummaries;
+Const
+  Before = 'unit Main;' + LineEnding + 'var' + LineEnding + '  X: Integer;' + LineEnding + 'end.';
+  After = 'unit Main;' + LineEnding + 'var' + LineEnding + '  Y: Integer;' + LineEnding + '  Z: Integer;' + LineEnding +
+    'end.';
+Var
+  Summary: String;
+  Data: TJSONData;
+Begin
+  Summary := MCPApprovalSummary('Main.pas', Before, After);
+  Check('a summary names the replaced lines', Pos('"change":"lines 3-3 of 4 replaced by 2"', Summary) > 0);
+  Check('a summary shows the start of the new lines', Pos('"new":"Y: Integer; / Z: Integer;"', Summary) > 0);
+  Check('an insertion is named as one', Pos('2 lines inserted after line 2 of 4',
+    MCPApprovalSummary('Main.pas', Before, 'unit Main;' + LineEnding + 'var' + LineEnding + 'a' + LineEnding + 'b' +
+    LineEnding + '  X: Integer;' + LineEnding + 'end.')) > 0);
+  Check('new text is named as new', Pos('"change":"new text, 4 lines"', MCPApprovalSummary('New.md', '', Before)) > 0);
+  Check('no change is named as none', Pos('"change":"no change"', MCPApprovalSummary('Main.pas', Before, Before)) > 0);
+  Check('without a path the start of the text is shown', MCPApprovalSummary('', '', '["status"]') = '["status"]');
+  Summary := MCPApprovalSummary('Odd "name".pas', '', StringOfChar('x', 500));
+  Check('a long change fits the confirmation', Length(Summary) <= 240);
+  Data := Nil;
+  Try
+    Data := GetJSON(Summary);
+  Except
+    Data := Nil;
+  End;
+  Check('a summary with quotes in the path is valid JSON',
+    Assigned(Data) And (Data.FindPath('path').AsString = 'Odd "name".pas'));
+  Data.Free;
+End;
+
 Procedure CheckCall;
 Var
   Client: TClientThread;
@@ -293,6 +324,7 @@ Begin
   Listener := Nil;
   Try
     CheckScopes;
+    CheckSummaries;
     CheckCall;
     CheckDirectCall;
     CheckCancel;

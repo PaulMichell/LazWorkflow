@@ -197,6 +197,7 @@ Var
   Stream: TClaudeStreamState;
   TurnSettings: TClaudeTurnSettings;
   Args, ParentVariables, Filtered: TStringList;
+  Scope: TClaudeToolScope;
   {$IFDEF UNIX}
   Handle: THandle;
   FakeDirectory, FakeClaude, LargePrompt: String;
@@ -337,11 +338,6 @@ Begin
     FreeAndNil(ParentVariables);
   End;
 
-  Check('ask leaves the program default', ClaudePermissionMode('ask') = '');
-  Check('an empty approval leaves the program default', ClaudePermissionMode('') = '');
-  Check('auto maps to accept edits', ClaudePermissionMode('auto') = 'acceptEdits');
-  Check('always maps to bypass', ClaudePermissionMode(' Always ') = 'bypassPermissions');
-  Check('plan maps to plan', ClaudePermissionMode('plan') = 'plan');
   Check('refused mode stderr is recognised', PermissionFlagRefused(RefusedModeFixture));
   Check('unknown flag stderr is recognised', PermissionFlagRefused('error: unknown option ''--permission-mode'''));
   Check('a model error is not a refused flag', Not PermissionFlagRefused('model not found'));
@@ -350,51 +346,52 @@ Begin
 
   Args := TStringList.Create;
   Try
-    AppendClaudeTurnArguments('sonnet', 'acceptEdits', '', '', False, Args);
+    AppendClaudeTurnArguments('sonnet', '', '', False, Args);
     Check('turn is claude print stream-json', (Args[0] = '-p') And (Args[1] = '--output-format') And
       (Args[2] = 'stream-json') And (Args[3] = '--verbose'));
     Check('turn sets the connection model', (Args[4] = '--model') And (Args[5] = 'sonnet'));
-    Check('turn maps the accepted permission mode', (Args[6] = '--permission-mode') And (Args[7] = 'acceptEdits'));
+    Check('turn leaves Claude Code''s permission mode at its default', (Args.Count = 6) And
+      (Args.IndexOf('--permission-mode') < 0));
     Check('turn does not send tools or skills', (Args.IndexOf('--tools') < 0) And (Args.IndexOf('--skill') < 0));
     Check('turn without a session leaves it to Claude Code', (Args.IndexOf('--session-id') < 0) And
       (Args.IndexOf('--resume') < 0));
     Args.Clear;
-    AppendClaudeTurnArguments('sonnet', '', '', 'a1b2', False, Args);
+    AppendClaudeTurnArguments('sonnet', '', 'a1b2', False, Args);
     Check('first turn names its session', (Args.IndexOf('--session-id') >= 0) And
       (Args[Args.IndexOf('--session-id') + 1] = 'a1b2') And (Args.IndexOf('--permission-mode') < 0));
     Args.Clear;
-    AppendClaudeTurnArguments('sonnet', '', '', 'a1b2', True, Args);
+    AppendClaudeTurnArguments('sonnet', '', 'a1b2', True, Args);
     Check('later turn resumes its session', (Args.IndexOf('--resume') >= 0) And
       (Args[Args.IndexOf('--resume') + 1] = 'a1b2') And (Args.IndexOf('--session-id') < 0));
     Check('turn without an effort leaves it to the model', Args.IndexOf('--effort') < 0);
     Args.Clear;
-    AppendClaudeTurnArguments('default', '', 'high', '', False, Args);
+    AppendClaudeTurnArguments('default', 'high', '', False, Args);
     Check('default model leaves the choice to Claude Code', Args.IndexOf('--model') < 0);
     Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
 
     Args.Clear;
-    AppendClaudeModeArguments(ctsNone, Args);
-    Check('chat turns get no tools', (Args.Count = 2) And (Args[0] = '--tools=') And
+    AppendClaudeModeArguments(ctsNone, '/tmp/lazarus-mcp-x.json', Args);
+    Check('chat turns get no tools and no server, even with a config file', (Args.Count = 2) And (Args[0] = '--tools=') And
       (Args[1] = '--strict-mcp-config'));
+    For Scope In [ctsRead, ctsMarkdown, ctsProject] Do
+      Begin
+        Args.Clear;
+        AppendClaudeModeArguments(Scope, '/tmp/lazarus-mcp-x.json', Args);
+        Check('turns outside chat read with Claude Code and act through the Lazarus server', (Args.Count = 4) And
+          (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--mcp-config=/tmp/lazarus-mcp-x.json') And
+          (Args[2] = '--allowedTools=mcp__lazarus__*') And (Args[3] = '--strict-mcp-config'));
+        Check('turns outside chat have no Claude Code edit, write or shell tool',
+          (Pos('Edit', Args.Text) = 0) And (Pos('Write', Args.Text) = 0) And (Pos('Bash', Args.Text) = 0));
+      End;
     Args.Clear;
-    AppendClaudeModeArguments(ctsRead, Args);
-    Check('inspect turns only read', (Args.Count = 2) And (Args[0] = '--tools=Read,Grep,Glob') And
-      (Args[1] = '--strict-mcp-config'));
-    Args.Clear;
-    AppendClaudeModeArguments(ctsMarkdown, Args);
-    Check('document turns may edit Markdown only', (Args.Count = 3) And
-      (Args[0] = '--tools=Read,Grep,Glob,Edit,Write') And
-      (Args[1] = '--allowedTools=Edit(**/*.md),Edit(**/*.markdown),Edit(**/*.mdown)') And
-      (Args[2] = '--strict-mcp-config'));
-    Args.Clear;
-    Args.Clear;
-    AppendClaudeModeArguments(ctsProject, Args);
-    Check('build turns keep the Claude Code tools', Args.Count = 0);
+    AppendClaudeModeArguments(ctsProject, '', Args);
+    Check('without a config file a turn only reads and loads no server', (Args.Count = 2) And
+      (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--strict-mcp-config'));
+    Check('a Lazarus tool is shown without the server prefix', ClaudeToolDisplayName('mcp__lazarus__read_buffer') = 'read_buffer');
+    Check('a Claude Code tool keeps its name', ClaudeToolDisplayName('Read') = 'Read');
+    Check('a malformed MCP name is left alone', (ClaudeToolDisplayName('mcp__lazarus__') = 'mcp__lazarus__') And
+      (ClaudeToolDisplayName('mcp____x') = 'mcp____x'));
     Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = ctsRead);
-    Check('build applies the approval setting', ClaudeTurnPermissionMode(ctsProject, 'always') = 'bypassPermissions');
-    Check('chat ignores the approval setting', ClaudeTurnPermissionMode(ctsNone, 'always') = '');
-    Check('document ignores the approval setting', ClaudeTurnPermissionMode(ctsMarkdown, 'auto') = '');
-    Check('inspect ignores the approval setting', ClaudeTurnPermissionMode(ctsRead, 'always') = '');
   Finally
     Args.Free;
   End;
@@ -468,7 +465,6 @@ Begin
 
   TurnSettings := Default(TClaudeTurnSettings);
   TurnSettings.Executable := FakeClaude;
-  TurnSettings.ApprovalMode := 'ask';
   TurnSettings.WorkingDirectory := FakeDirectory;
   TurnSettings.TimeoutMs := 20000;
   TurnSettings.Model := 'answer';

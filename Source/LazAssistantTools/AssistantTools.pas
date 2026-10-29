@@ -86,6 +86,8 @@ Function QueryAssistantRemoteApproval(Const ToolName, ToolId, ArgumentsJson: Str
 /// Actor-thread abort callback for ApproveToolIfNeeded. The IDE thread does not see it.
 Procedure BindAssistantApprovalAbort(Aborting: TAssistantApprovalAbort);
 Procedure UnbindAssistantApprovalAbort;
+/// The approval setting applied to one mutating tool call: Ask confirms on the IDE thread, Auto and Always allow.
+Function ApproveToolIfNeeded(Const ToolName, ToolId, ArgumentsJson: String; Out ErrorText: String): Boolean;
 
 Implementation
 

@@ -426,8 +426,9 @@ Begin
   EnsureItems(KeySourceCombo, ['Environment variable', 'Stored key'], 0);
   EnsureItems(CompatibleApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
     'Always — never prompt (like Build always-approve)'], 0);
-  EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
-    'Always — never prompt (like Build always-approve)'], 0);
+  { Claude Code's own tools only read; these choices govern the Lazarus tools, which the broker runs. }
+  EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each edit, save, build and git command',
+    'Auto — run them without asking', 'Always — run them without asking (the same as Auto for Claude)'], 0);
   CompatibleWireLabel.Caption := 'Chat completions';
   CodexUsageLabel.Caption := 'This program did not report counts.';
   GrokUsageLabel.Caption := 'This connection did not report usage.';

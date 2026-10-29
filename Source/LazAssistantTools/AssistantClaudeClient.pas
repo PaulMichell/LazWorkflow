@@ -6,8 +6,9 @@ Unit AssistantClaudeClient;
   on the user's Claude subscription. The child environment drops the variables that select per-use billing, and
   the program's own auth status is checked once per executable per IDE session. Each turn is claude -p with
   stream-json output, folded into TClaudeStreamState so the IDE sees text, tool calls, usage and the
-  subscription's rate-limit windows while the turn runs. A Claude row does not receive this assistant's tool
-  list, skill bodies, or transcript compactor. }
+  subscription's rate-limit windows while the turn runs. Outside Chat a turn reaches the IDE's Lazarus tools
+  through the MCP server named in its config file; it does not receive this assistant's own tool list, skill
+  bodies, or transcript compactor. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -36,9 +37,10 @@ Type
   TClaudeTurnSettings = Record
     Executable: String;
     Model: String;
-    ApprovalMode: String;
-    { Which Claude Code tools the turn may use, from the conversation mode. }
+    { What the turn may do, from the conversation mode. The approval setting is not here: the broker applies it. }
     ToolScope: TClaudeToolScope;
+    { The --mcp-config file for the IDE's Lazarus tools. Empty loads no MCP server. }
+    MCPConfigFile: String;
     WorkingDirectory: String;
     TimeoutMs: Integer;
     { Empty uses the model's default effort. }
@@ -100,19 +102,16 @@ Const
 Function DetectClaudeExecutable: String;
 /// The expanded path when it names an executable file, otherwise empty.
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
-/// Claude Code permission mode for an approval setting. Empty means the program default, which refuses
-/// anything that needs approval in print mode.
-Function ClaudePermissionMode(Const ApprovalMode: String): String;
-/// The permission mode for a turn in Scope. Only the project scope applies the approval setting; the others keep
-/// the program default so nothing outside their tool list is approved.
-Function ClaudeTurnPermissionMode(Scope: TClaudeToolScope; Const ApprovalMode: String): String;
-/// Tool arguments that hold a turn to Scope: none has no tools, read reads, Markdown may also edit Markdown, and
-/// project keeps Claude Code's own set. Outside the project scope no MCP server is loaded.
-Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Args: TStrings);
+/// Tool arguments that hold a turn to Scope. None has no tools. Every other scope reads with Claude Code's own
+/// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile, whose broker run
+/// enforces the scope's writes. An empty MCPConfigFile loads no server, which leaves reading only.
+Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
+/// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
+Function ClaudeToolDisplayName(Const ToolName: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
-/// leave those choices to Claude Code.
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, Effort, SessionId: String; Resume: Boolean;
-  Args: TStrings);
+/// leave those choices to Claude Code. No --permission-mode is passed: the turn has no Claude Code tool that
+/// needs approval, and the approval setting is applied by the broker to the Lazarus tools.
+Procedure AppendClaudeTurnArguments(Const Model, Effort, SessionId: String; Resume: Boolean; Args: TStrings);
 /// The models this sign-in offers, as Claude Code's own model picker lists them. No model call is made.
 Function ReadClaudeModels(Const Executable: String; Out ModelsJson, ErrorText: String): Boolean;
 /// A new lower-case UUID without braces, as --session-id requires. Empty on failure.
@@ -141,7 +140,7 @@ Procedure ForgetClaudeAccounts;
 Implementation
 
 Uses
-  SysUtils, Process, Pipes, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession;
+  SysUtils, Process, Pipes, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession, AssistantMCPProtocol;
 
 Type
   TClaudeStopQuery = Function: Boolean Of Object;
@@ -178,52 +177,42 @@ Begin
     Result := Path;
 End;
 
-Function ClaudePermissionMode(Const ApprovalMode: String): String;
-Var
-  Approval: String;
-Begin
-  { Fixed values from the documented choices. The local 'auto' is not Claude Code's own auto mode. }
-  Approval := LowerCase(Trim(ApprovalMode));
-  If Approval = 'auto' Then
-    Result := 'acceptEdits'
-  Else If Approval = 'always' Then
-    Result := 'bypassPermissions'
-  Else If Approval = 'plan' Then
-    Result := 'plan'
-  Else
-    Result := '';
-End;
-
-Function ClaudeTurnPermissionMode(Scope: TClaudeToolScope; Const ApprovalMode: String): String;
-Begin
-  { Accept-edits or bypass would approve every file edit, not just the Markdown that Document and Plan allow. }
-  If Scope = ctsProject Then
-    Result := ClaudePermissionMode(ApprovalMode)
-  Else
-    Result := '';
-End;
-
-Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Args: TStrings);
+Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
 Const
   ReadTools = 'Read,Grep,Glob';
-  { The extensions the Markdown write scope accepts for Codex. Edit rules cover Write as well. }
-  MarkdownEdits = 'Edit(**/*.md),Edit(**/*.markdown),Edit(**/*.mdown)';
 Begin
-  If (Not Assigned(Args)) Or (Scope = ctsProject) Then
+  If Not Assigned(Args) Then
     Exit;
   { One argument each, so an empty list cannot be lost or swallow the next option. }
-  Case Scope Of
-    ctsNone: Args.Add('--tools=');
-    ctsMarkdown:
-      Begin
-        Args.Add('--tools=' + ReadTools + ',Edit,Write');
-        Args.Add('--allowedTools=' + MarkdownEdits);
-      End;
+  If Scope = ctsNone Then
+    Args.Add('--tools=')
   Else
-    Args.Add('--tools=' + ReadTools);
-  End;
-  { No --mcp-config is passed, so this loads no MCP servers. }
+    Begin
+      { No Edit, Write or Bash: writes, builds and git go through the broker, which holds the scope and asks. }
+      Args.Add('--tools=' + ReadTools);
+      If MCPConfigFile <> '' Then
+        Begin
+          Args.Add('--mcp-config=' + MCPConfigFile);
+          { The only --allowedTools list. Whether a second one adds to it or replaces it is not known. }
+          Args.Add('--allowedTools=mcp__' + MCPServerName + '__*');
+        End;
+    End;
+  { Only the server named above, never one from the user's or the project's Claude Code settings. }
   Args.Add('--strict-mcp-config');
+End;
+
+Function ClaudeToolDisplayName(Const ToolName: String): String;
+Var
+  Rest: String;
+  Separator: Integer;
+Begin
+  Result := ToolName;
+  If Copy(ToolName, 1, 5) <> 'mcp__' Then
+    Exit;
+  Rest := Copy(ToolName, 6, MaxInt);
+  Separator := Pos('__', Rest);
+  If (Separator > 1) And (Separator + 2 <= Length(Rest)) Then
+    Result := Copy(Rest, Separator + 2, MaxInt);
 End;
 
 Function NewClaudeSessionId: String;
@@ -241,8 +230,7 @@ Begin
   Result := Pos('no conversation found', LowerCase(ErrorText)) > 0;
 End;
 
-Procedure AppendClaudeTurnArguments(Const Model, PermissionMode, Effort, SessionId: String; Resume: Boolean;
-  Args: TStrings);
+Procedure AppendClaudeTurnArguments(Const Model, Effort, SessionId: String; Resume: Boolean; Args: TStrings);
 Begin
   If Not Assigned(Args) Then
     Exit;
@@ -260,11 +248,6 @@ Begin
     Begin
       Args.Add('--effort');
       Args.Add(Effort);
-    End;
-  If PermissionMode <> '' Then
-    Begin
-      Args.Add('--permission-mode');
-      Args.Add(PermissionMode);
     End;
   If SessionId = '' Then
     Exit;
@@ -889,9 +872,8 @@ Begin
         ErrorText := 'Cancelled.'
       Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
         Begin
-          AppendClaudeTurnArguments(Settings.Model, ClaudeTurnPermissionMode(Settings.ToolScope, Settings.ApprovalMode),
-            Settings.Effort, Settings.SessionId, Settings.Resume, Args);
-          AppendClaudeModeArguments(Settings.ToolScope, Args);
+          AppendClaudeTurnArguments(Settings.Model, Settings.Effort, Settings.SessionId, Settings.Resume, Args);
+          AppendClaudeModeArguments(Settings.ToolScope, Settings.MCPConfigFile, Args);
           BuildClaudeEnvironment(Environment);
           If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
             StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then

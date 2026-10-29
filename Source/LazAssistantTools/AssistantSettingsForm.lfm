@@ -1322,7 +1322,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
                 Height = 17
                 Top = 4
                 Width = 84
-                Caption = 'Tool approvals'
+                Caption = 'Lazarus tool edits, builds and git (Claude Code''s own tools only read)'
                 ParentColor = False
               end
               object ClaudeApprovalCombo: TComboBox
