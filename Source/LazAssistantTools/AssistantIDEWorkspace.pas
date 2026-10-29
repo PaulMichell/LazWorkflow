@@ -11,7 +11,7 @@ Unit AssistantIDEWorkspace;
 Interface
 
 Uses
-  Classes, AssistantToolBroker, AssistantBuildJob;
+  Classes, AssistantToolBroker, AssistantBuildJob, AssistantConversation;
 
 Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
@@ -23,6 +23,7 @@ Type
     FDefineStep: Integer;
     FBuildGeneration: QWord;
     FBuildIdentity, FBuildMode: String;
+    FToolMode: TAssistantMode;
     Function EditorAffectsBuild(Editor: TObject): Boolean;
   Protected
     Function BuildExecutable: String; Virtual;
@@ -38,6 +39,8 @@ Type
     Function CanCreateFiles: Boolean; Override;
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Override;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanWriteMarkdown: Boolean; Override;
+    Function WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanFindDeclaration: Boolean; Override;
     Function CanInspectSymbols: Boolean; Override;
     Function CanPreviewRename: Boolean; Override;
@@ -61,6 +64,8 @@ Type
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
+    /// The conversation mode WriteMarkdown applies the assistant's rules for. Inspect, the default, writes nothing.
+    Property ToolMode: TAssistantMode Read FToolMode Write FToolMode;
   End;
 
 Implementation
@@ -69,7 +74,7 @@ Uses
   SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
   SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings,
   AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits,
-  AssistantIDEContext, AssistantProtocol, AssistantPlan, fpjson, jsonparser, SafeFileAccess;
+  AssistantIDEContext, AssistantProtocol, AssistantPlan, AssistantImages, fpjson, jsonparser, SafeFileAccess;
 
 Type
   { Owned by the editor control, so reopening a file cannot reuse a receipt's
@@ -101,6 +106,27 @@ End;
 Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   Result := ToolRunGit(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.CanWriteMarkdown: Boolean;
+Begin
+  Result := AssistantTarget.Available And (ProjectRootPath <> '');
+End;
+
+{ The assistant's own write_markdown and update_markdown, in ToolMode: the same path defaults, mode refusals,
+  structure check and completion rule. The broker has already asked for approval. }
+Function TAssistantIDEWorkspace.WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  ImageRefs: TAssistantImageRefArray;
+Begin
+  ResultText := '';
+  ErrorText := '';
+  If (Tool <> 'write_markdown') And (Tool <> 'update_markdown') Then
+    Begin
+      ErrorText := 'Not a Markdown tool: ' + Tool;
+      Exit(False);
+    End;
+  Result := ExecuteAssistantToolForMode(Tool, Arguments, '', FToolMode, ResultText, ErrorText, ImageRefs, True);
 End;
 
 Destructor TAssistantIDEWorkspace.Destroy;

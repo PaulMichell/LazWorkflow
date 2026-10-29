@@ -4611,6 +4611,8 @@ Begin
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   { A Codex launch sets this back to Nil; only one backend runs a turn at a time. }
   FCodexBroker.OnApproval := @ApproveClaudeTool;
+  { write_markdown and update_markdown follow this mode's rules, as for an assistant turn. }
+  FCodexWorkspace.ToolMode := ActiveMode;
   ClaudeBridge := TMCPBrokerBridge.Create(FCodexBroker);
   ClaudeBridge.BeginRun(Scope);
   ClaudeListener := TMCPListener.Create(ClaudeBridge.ToolsJSON, @ClaudeBridge.Execute);
@@ -5229,8 +5231,12 @@ Var
   PlanRel, Input: String;
 Begin
   Result := False;
-  If (Not Step.Done) Or Step.IsError Or
-    Not (SameText(Step.Name, 'Edit') Or SameText(Step.Name, 'Write') Or SameText(Step.Name, 'MultiEdit')) Then
+  If (Not Step.Done) Or Step.IsError Then
+    Exit;
+  { A Lazarus Markdown write counts as a plan write in any mode, as the assistant's own write_markdown does. }
+  If (Step.Name = 'mcp__lazarus__write_markdown') Or (Step.Name = 'mcp__lazarus__update_markdown') Then
+    Exit(True);
+  If Not (SameText(Step.Name, 'Edit') Or SameText(Step.Name, 'Write') Or SameText(Step.Name, 'MultiEdit')) Then
     Exit;
   PlanRel := StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll]);
   If PlanRel = '' Then

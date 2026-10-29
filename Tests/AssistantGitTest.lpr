@@ -1,7 +1,7 @@
 Program AssistantGitTest;
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, Process, fpjson, jsonparser,
-  AssistantGit, AssistantPlan, AssistantToolBroker, AssistantWorkTarget;
+  AssistantGit, AssistantPlan, AssistantToolBroker, AssistantWorkTarget, AssistantIDEWorkspace, AssistantConversation;
 Type
   TWorkspace = Class(TAssistantWorkspaceAdapter)
     Root: String; Calls: Integer;
@@ -39,9 +39,21 @@ Begin
     P.Execute; Check('temporary repository setup', P.ExitCode = 0);
   Finally P.Free; End;
 End;
+Const
+  { How a Claude turn sets a Status line: the Lazarus update_markdown, with no live window in a console test. }
+  BrokerCompletion = '{"path":"Documents/Plan.md","old_text":"Status: not started","new_text":"Status: complete","open":false}';
 Var W: TWorkspace; B: TAssistantToolBroker; A: TApproval; G: TGuid;
-  Run, Reply, Err, Note, PlanPath, Resolved, SelectErr: String;
+  Run, Reply, Err, Note, PlanPath, Resolved, SelectErr, Before: String;
   Lines: TStringList; Data: TJSONData; ReplaceCount, CallsBefore: Integer; Hook: TProcess;
+  IDEWorkspace: TAssistantIDEWorkspace; IDEBroker: TAssistantToolBroker;
+
+Function PlanText: String;
+Var PlanLines: TStringList;
+Begin
+  PlanLines := TStringList.Create;
+  Try PlanLines.LoadFromFile(PlanPath); Result := PlanLines.Text; Finally PlanLines.Free; End;
+End;
+
 Begin
   CreateGUID(G); W := TWorkspace.Create;
   W.Root := IncludeTrailingPathDelimiter(GetTempDir) + 'assistant-git-' + GUIDToString(G);
@@ -244,6 +256,61 @@ Begin
     Check('reject path traversal', Not RunAssistantGit(W.Root, '{"arguments":["add","--","../outside"]}', Reply, Err));
     Check('reject malformed arguments', Not RunAssistantGit(W.Root, '{"arguments":[17]}', Reply, Err));
     Check('reject missing repository', Not RunAssistantGit(GetTempDir, '{"arguments":["status"]}', Reply, Err));
+
+    { The same rule through the broker and the IDE workspace, as a Claude turn reaches it. }
+    DeleteFile(W.Root + '/.git/hooks/pre-commit');
+    IDEWorkspace := TAssistantIDEWorkspace.Create;
+    IDEBroker := TAssistantToolBroker.Create(IDEWorkspace);
+    Try
+      IDEWorkspace.ToolMode := amInspect;
+      Run := IDEBroker.BeginRun(awsReadOnly);
+      Check('Inspect offers no Lazarus Markdown writes', Pos('lazarus_update_markdown', IDEBroker.ToolsJson) = 0);
+      Check('Inspect refuses a Lazarus Markdown write', Not IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err));
+      IDEWorkspace.ToolMode := amBuild;
+      Run := IDEBroker.BeginRun(awsProject);
+      Check('Build offers the Lazarus Markdown writes', (Pos('"lazarus_write_markdown"', IDEBroker.ToolsJson) > 0) And
+        (Pos('"lazarus_update_markdown"', IDEBroker.ToolsJson) > 0));
+      Data := GetJSON(IDEBroker.ToolsJson); Data.Free;
+      Check('a Lazarus Markdown write only writes Markdown', Not IDEBroker.Execute(Run, 'lazarus_update_markdown',
+        '{"path":"work.txt","old_text":"finished","new_text":"changed","open":false}', Reply, Err) And (Pos('Markdown', Err) > 0));
+      ResetAssistantGitTurn;
+      ResetAssistantPlanTurn;
+      Before := PlanText;
+      Check('a Lazarus completion before any commit in the turn is refused as an assistant one is',
+        Not IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err) And (Pos('run_git commit', Err) > 0));
+      Check('the refused completion leaves the plan unchanged', PlanText = Before);
+      Check('there is nothing to settle after a refusal', Not RevertUncommittedPlanCompletion(Note) And (Note = ''));
+      Lines := TStringList.Create;
+      Try
+        Lines.Text := 'more finished work';
+        Lines.SaveToFile(W.Root + '/work2.txt');
+      Finally Lines.Free; End;
+      Check('commit the finished work through the Lazarus git tool',
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","work2.txt"]}', Reply, Err) And
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","Claude: do the next item","--","work2.txt"]}',
+        Reply, Err) And AssistantGitTurnCommitted);
+      Check('a Lazarus completion after the work commit is allowed',
+        IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err) And (Pos('1 replacement', Reply) > 0));
+      Check('the completion is on disk', Pos('### 2.2 Next item' + LineEnding + 'Status: complete', PlanText) > 0);
+      Check('the turn end commits the plan file as for an assistant turn',
+        RevertUncommittedPlanCompletion(Note) And (Pos('Committed', Note) > 0) And (Pos('Documents/Plan.md', Note) > 0));
+      Check('the plan file is clean after the turn', RunAssistantGit(W.Root, '{"arguments":["status","--short"]}', Reply, Err) And
+        (Pos('Documents/Plan.md', Reply) = 0));
+      IDEWorkspace.ToolMode := amPlan;
+      Run := IDEBroker.BeginRun(awsMarkdown);
+      Check('Plan offers the Lazarus Markdown writes', Pos('"lazarus_update_markdown"', IDEBroker.ToolsJson) > 0);
+      ResetAssistantGitTurn;
+      ResetAssistantPlanTurn;
+      { Renaming a complete item's heading would count as a new completion, so this edit only adds a note. }
+      Check('Plan writes a plan through the Lazarus tool', IDEBroker.Execute(Run, 'lazarus_update_markdown',
+        '{"path":"Documents/Plan.md","old_text":"Generated by Lazarus Project Assistant.",' +
+        '"new_text":"Generated by Lazarus Project Assistant.\n\nA note from Plan mode.","open":false}', Reply, Err) And
+        (Pos('A note from Plan mode.', PlanText) > 0));
+      Check('Plan cannot commit, so it cannot complete an item either', Pos('lazarus_run_git', IDEBroker.ToolsJson) = 0);
+    Finally
+      IDEBroker.Free;
+      IDEWorkspace.Free;
+    End;
     B.Cancel;
     Check('cancelled run rejects Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err));
     WriteLn('Temporary test repository: ', W.Root);

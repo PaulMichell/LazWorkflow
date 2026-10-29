@@ -34,6 +34,10 @@ Type
     Function CanCreateFiles: Boolean; Virtual;
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Virtual;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    { Plans and documents. Tool is write_markdown or update_markdown with the assistant's own arguments; the
+      adapter applies the plan rules, including the completion rule, as the assistant's tool does. }
+    Function CanWriteMarkdown: Boolean; Virtual;
+    Function WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanFindDeclaration: Boolean; Virtual;
     Function CanInspectSymbols: Boolean; Virtual;
     Function CanPreviewRename: Boolean; Virtual;
@@ -202,6 +206,18 @@ Function TAssistantWorkspaceAdapter.CreateFile(Const Path, Text: String; Out Res
 Begin
   ResultText := '';
   ErrorText := 'New file creation unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.CanWriteMarkdown: Boolean;
+Begin
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Markdown writing unavailable.';
   Result := False;
 End;
 
@@ -913,6 +929,38 @@ Begin
           Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText);
           Exit;
         End;
+      If (Tool = 'lazarus_write_markdown') Or (Tool = 'lazarus_update_markdown') Then
+        Begin
+          If (FWriteScope = awsReadOnly) Or Not FAdapter.CanWriteMarkdown Then
+            Begin
+              ErrorText := 'Markdown writes require Document, Plan or Build mode.';
+              Exit;
+            End;
+          Path := '';
+          Node := Args.Find('path');
+          If Assigned(Node) Then
+            If Node.JSONType = jtString Then
+              Path := Node.AsString
+            Else
+              Begin
+                ErrorText := 'path must be a string.';
+                Exit;
+              End;
+          { The adapter resolves an omitted path to the active plan or current document and refuses anything but .md. }
+          If Tool = 'lazarus_write_markdown' Then
+            Begin
+              Text := '';
+              NewText := Args.Get('content', '');
+            End
+          Else
+            Begin
+              Text := Args.Get('old_text', '');
+              NewText := Args.Get('new_text', '');
+            End;
+          If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
+          Result := FAdapter.WriteMarkdown(Copy(Tool, Length('lazarus_') + 1, MaxInt), Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Or (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanBuild Then
@@ -1229,6 +1277,20 @@ Begin
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
   If (FWriteScope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
     ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
+  If (FWriteScope <> awsReadOnly) And FAdapter.CanWriteMarkdown Then Result := Result +
+    ',{"type":"function","name":"lazarus_write_markdown","description":"Create or overwrite a project Markdown plan or document ' +
+    '(prefer Documents/) and open its live window. This is the only way to write an existing .md file. Omit path for the ' +
+    'active plan in Plan and Build mode, or the current document in Document mode. In a plan a Status: line belongs under a ' +
+    '### item, never a ## heading. In a Git repository, Status: complete is refused until run_git commit has succeeded in ' +
+    'this turn; commit the plan file after that change. Without a repository, complete needs no commit.","inputSchema":' +
+    '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"open":{"type":"boolean"}},' +
+    '"required":["content"],"additionalProperties":false}},' +
+    '{"type":"function","name":"lazarus_update_markdown","description":"Exact text replacement in a project Markdown plan ' +
+    'or document. Prefer it over a rewrite for a Status: line or one section. Omit path for the active plan in Plan and ' +
+    'Build mode, or the current document in Document mode. The same Status and commit rules as write_markdown apply.",' +
+    '"inputSchema":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},' +
+    '"new_text":{"type":"string"},"replace_all":{"type":"boolean"},"open":{"type":"boolean"}},' +
+    '"required":["old_text","new_text"],"additionalProperties":false}}';
   If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project or package using its saved inputs. Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
