@@ -20,3 +20,16 @@ signatures and `commands_changed` events are removed. Session IDs, message IDs a
 | `badresume.jsonl` | `--resume` with an unknown session | `error_during_execution`, `errors: ["No conversation found …"]`. |
 
 To refresh: rerun the commands in an empty scratch directory, redact as above, and keep the file names.
+
+## MCP requests
+
+`mcp-requests.jsonl` is used by `Tests/AssistantMCPProtocolTest.lpr`: one JSON-RPC message per line, the HTTP
+request bodies Claude Code sends to a `--mcp-config` server called `lazarus`, in the order it sends them
+(`server/discover`, `initialize`, `notifications/initialized`, `tools/list`, `tools/call` for `read_buffer`).
+
+**Not yet captured.** The lines are written by hand in the shape of the MCP TypeScript SDK that Claude Code uses;
+the methods and their order are the ones seen with a stub server (review §12.1), but that run kept no request
+bodies. To capture: serve a stub over HTTP that logs each request body and offers one tool `read_buffer`, run
+`claude -p --model haiku --tools=Read --mcp-config=<file> --strict-mcp-config --allowedTools=mcp__lazarus__*` with
+a prompt asking it to read `Main.pas` through that tool, then replace the lines with the logged bodies, keeping the
+`tools/call` arguments as `{"path":"Main.pas"}`.
