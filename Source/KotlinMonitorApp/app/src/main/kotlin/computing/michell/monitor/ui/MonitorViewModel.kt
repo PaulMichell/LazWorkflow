@@ -19,6 +19,7 @@ import android.graphics.BitmapFactory
 import android.speech.SpeechRecognizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import computing.michell.monitor.connection.BackgroundBanner
 import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
@@ -59,6 +60,8 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.WaitingForWifiBanner
+import computing.michell.monitor.connection.WifiLanWatch
 import java.io.ByteArrayOutputStream
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
@@ -280,7 +283,8 @@ const val StallGapMs = 5_000L
 
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
-    banner == HostClosedBanner || banner == OfflineBanner || banner == NoAddressBanner
+    banner == HostClosedBanner || banner == OfflineBanner || banner == NoAddressBanner ||
+    banner == BackgroundBanner || banner == WaitingForWifiBanner
 }
 
 fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
@@ -1095,6 +1099,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val conversationCapText = MutableStateFlow(displayPrefs.getInt(ConversationCapKey, DefaultConversationCap).toString())
   val imageBudgetText = MutableStateFlow(displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB).toString())
   private val session = LanSession(store)
+  private val lanWatch = WifiLanWatch(application, session::onWifiAvailable, session::onWifiLost)
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
   private var cacheSaveJob: Job? = null
@@ -1172,6 +1177,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val finalWatch = DictationFinalWatch(viewModelScope, onExpired = ::abandonAwaitingFinal)
 
   init {
+    lanWatch.start()
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
@@ -1348,6 +1354,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     callbackSession = 0
     supportGeneration = 0
     engine.cancel()
+  }
+
+  fun enterForeground() {
+    session.enterForeground()
+  }
+
+  fun leaveForeground() {
+    session.leaveForeground()
   }
 
   fun connectFromPair() {
@@ -1600,6 +1614,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   override fun onCleared() {
+    lanWatch.stop()
     saveCacheNow(uiState.value, true)
     supportPending = false
     linkGrace?.cancel()

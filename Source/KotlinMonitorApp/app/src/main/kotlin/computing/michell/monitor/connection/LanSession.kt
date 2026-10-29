@@ -2,6 +2,10 @@ package computing.michell.monitor.connection
 
 /* TLS session for the monitor phone (c) 2026 Michell Computing.
 
+   Size note: exceeds the 1000 line preference. The socket, pin rules, and
+   reconnect loop are one session. Wi-Fi registration lives in WifiLanWatch.
+   Reviewed 2026-10-29.
+
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
    proxy never reaches the desktop listener. Reads and writes run on Dispatchers.IO. An empty fingerprint
@@ -11,7 +15,11 @@ package computing.michell.monitor.connection
    is a failed delivery, not a dropped frame. A silent, rejected, or
    failed-write peer leaves the read loop and the owned socket is closed.
    The unsent prompt draft is kept across disconnect. A catalogue command
-   is written only on the socket that accepted it. */
+   is written only on the socket that accepted it. Wi-Fi becoming available
+   reconnects at once and resets the backoff. On a LAN the wait is 1, 2, 4,
+   8 seconds, then capped at 10 seconds with equal jitter. The link is up
+   only in the foreground: background sends bye and waits to resume.
+   Connect still keeps a saved pin and does not clear it. */
 
 import computing.michell.monitor.protocol.ChunkAssembly
 import computing.michell.monitor.protocol.FrameAssembler
@@ -27,6 +35,7 @@ import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePairOk
 import computing.michell.monitor.protocol.decodeTicks
 import computing.michell.monitor.protocol.encodeAuth
+import computing.michell.monitor.protocol.encodeBye
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeHello
@@ -37,6 +46,7 @@ import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.Closeable
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
@@ -48,6 +58,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
@@ -68,6 +79,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.onTimeout as selectOnTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -75,6 +88,10 @@ import kotlinx.coroutines.withContext
 const val HostClosedBanner = "Host closed"
 const val ConnectionRefusedBanner = "Connection refused."
 const val ReconnectingBanner = "Reconnecting"
+const val BackgroundBanner = "In the background"
+const val WaitingForWifiBanner = "Waiting for Wi-Fi"
+const val ByeBackground = "background"
+const val LanBackoffCapMs = 10_000L
 const val DeliveryFailedDetail = "Delivery failed."
 const val ClientName = "Phone"
 const val ClientVersion = "1"
@@ -94,15 +111,37 @@ data class LinkStatus(
   val lastError: String = ""
 )
 
-class ReconnectPolicy {
+/**
+ * Equal jitter in [base/2, base], never above the LAN cap.
+ * roll may be any Int; only its residue in 0..999 is used. 999 returns the base.
+ */
+fun jitteredLanDelayMs(baseMs: Long, roll: Int, capMs: Long = LanBackoffCapMs): Long {
+  val capped = baseMs.coerceIn(0L, capMs)
+  if (capped <= 1L) return capped
+  val half = capped / 2L
+  val unit = roll.mod(1000)
+  return half + (half * unit) / 999L
+}
+
+private val LanBackoffBases = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, LanBackoffCapMs)
+
+class ReconnectPolicy(private val roll: () -> Int = { ThreadLocalRandom.current().nextInt(1000) }) {
   private var index = 0
+  @Volatile
   var paused: Boolean = false
     private set
 
   fun nextDelayMs(): Long {
-    val delay = Delays[index.coerceAtMost(Delays.lastIndex)]
-    if (index < Delays.lastIndex) index += 1
-    return delay
+    val base = synchronized(this) {
+      val current = index
+      if (index < LanBackoffBases.lastIndex) index += 1
+      LanBackoffBases[current.coerceAtMost(LanBackoffBases.lastIndex)]
+    }
+    return jitteredLanDelayMs(base, roll())
+  }
+
+  fun resetBackoff() {
+    synchronized(this) { index = 0 }
   }
 
   fun pause() {
@@ -111,11 +150,7 @@ class ReconnectPolicy {
 
   fun resume() {
     paused = false
-    index = 0
-  }
-
-  companion object {
-    val Delays = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 30_000L)
+    resetBackoff()
   }
 }
 
@@ -235,6 +270,7 @@ private enum class AttemptResult {
   Pinned,
   Refused,
   Failed,
+  Deferred,
   Superseded
 }
 
@@ -246,7 +282,8 @@ private enum class ReadEnd {
   Rejected,
   Disabled,
   WriteFailed,
-  Retry
+  Retry,
+  Background
 }
 
 /** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
@@ -434,6 +471,7 @@ class LanSession(
   private val writeLock = Mutex()
   private val socketLock = Any()
   private val resumes = Channel<Unit>(Channel.CONFLATED)
+  private val wakes = Channel<Unit>(Channel.CONFLATED)
   private val ids = AtomicInteger(1)
   private val epochCounter = AtomicInteger(0)
   private val commandResultsChannel = Channel<CatalogueResult>(Channel.BUFFERED)
@@ -453,6 +491,18 @@ class LanSession(
   private var lastReceivedMs = 0L
   private var pairCode = ""
   private var stopped = false
+  @Volatile
+  private var armed = false
+  @Volatile
+  private var terminal = false
+  @Volatile
+  private var inForeground = true
+  @Volatile
+  private var lanAvailable = true
+  @Volatile
+  private var connectNow = false
+  @Volatile
+  private var leftForBackground = false
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
   val messages: Flow<computing.michell.monitor.protocol.MonitorMessage> = inbound.messages
@@ -509,9 +559,49 @@ class LanSession(
     }
     store.save(next)
     pairCode = code
+    armed = true
+    terminal = false
     policy.resume()
     stopped = false
     startLoop()
+  }
+
+  /** Activity is visible. A return from the background reconnects at once. */
+  fun enterForeground() {
+    val returning = !inForeground
+    inForeground = true
+    leftForBackground = false
+    if (returning) {
+      connectNow = true
+      if (!policy.paused) policy.resetBackoff()
+    }
+    wakes.trySend(Unit)
+    if (mayReconnect() && loop?.isActive != true) startLoop()
+  }
+
+  /** Activity is no longer visible. Send bye, then wait until it returns. */
+  fun leaveForeground() {
+    if (!inForeground && leftForBackground) return
+    inForeground = false
+    leftForBackground = true
+    val epoch = epochCounter.get()
+    scope.launch { closeForBackground(epoch) }
+    wakes.trySend(Unit)
+  }
+
+  /** Wi-Fi is up. Reset the LAN backoff and connect at once if the link is down. */
+  fun onWifiAvailable() {
+    lanAvailable = true
+    connectNow = true
+    if (!policy.paused) policy.resetBackoff()
+    wakes.trySend(Unit)
+    if (mayReconnect() && loop?.isActive != true) startLoop()
+  }
+
+  /** Wi-Fi is gone. Do not open another socket until it returns. */
+  fun onWifiLost() {
+    lanAvailable = false
+    wakes.trySend(Unit)
   }
 
   /**
@@ -543,6 +633,7 @@ class LanSession(
 
   fun disconnect() {
     stopped = true
+    armed = false
     policy.pause()
     epochCounter.incrementAndGet()
     loop?.cancel()
@@ -574,6 +665,11 @@ class LanSession(
     }
   }
 
+  private fun mayReconnect(): Boolean {
+    return armed && !stopped && !terminal && !policy.paused && inForeground && lanAvailable &&
+      store.load().address.isNotEmpty()
+  }
+
   private suspend fun runLoop() {
     val epoch = epochCounter.get()
     var waitBeforeConnect = false
@@ -582,15 +678,42 @@ class LanSession(
         val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
         publish(LinkPhase.Paused, shown, statusState.value.lastError)
         resumes.receive()
-        if (stopped) return
+        if (stopped || epochCounter.get() != epoch) return
         waitBeforeConnect = false
+        continue
       }
-      if (waitBeforeConnect) delay(policy.nextDelayMs())
-      if (stopped) return
+      if (!inForeground || !lanAvailable) {
+        val shown = if (!inForeground) BackgroundBanner else WaitingForWifiBanner
+        publishCurrent(epoch, LinkPhase.Disconnected, shown, statusState.value.lastError)
+        wakes.receive()
+        continue
+      }
+      if (connectNow || leftForBackground) {
+        connectNow = false
+        waitBeforeConnect = false
+        policy.resetBackoff()
+      }
+      if (waitBeforeConnect) {
+        val woke = waitBackoffOrWake(policy.nextDelayMs())
+        if (stopped || epochCounter.get() != epoch) return
+        if (woke) {
+          policy.resetBackoff()
+          waitBeforeConnect = false
+          continue
+        }
+      }
+      if (stopped || epochCounter.get() != epoch) return
       waitBeforeConnect = true
       when (attempt(epoch)) {
-        AttemptResult.Pinned -> return
+        AttemptResult.Pinned -> {
+          terminal = true
+          return
+        }
         AttemptResult.Superseded -> return
+        AttemptResult.Deferred -> {
+          waitBeforeConnect = false
+          policy.resetBackoff()
+        }
         AttemptResult.Refused -> {
           // A refused port may be the listener starting. Keep the backoff instead of waiting for a tap.
         }
@@ -602,11 +725,15 @@ class LanSession(
           closeLink()
           session.onSocketClosed()
           if (epochCounter.get() != epoch) return
-          // Rejected and Disabled pause. Every other terminal result uses the existing reconnect path.
+          // Rejected and Disabled pause. Background waits for the foreground. Everything else backs off.
           if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
             policy.pause()
             val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
             publishCurrent(epoch, LinkPhase.Disconnected, shown, statusState.value.lastError)
+          } else if (end == ReadEnd.Background || leftForBackground) {
+            waitBeforeConnect = false
+            policy.resetBackoff()
+            publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, statusState.value.lastError)
           } else {
             publishCurrent(epoch, LinkPhase.Disconnected, ReconnectingBanner, statusState.value.lastError)
           }
@@ -615,7 +742,38 @@ class LanSession(
     }
   }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private suspend fun waitBackoffOrWake(delayMs: Long): Boolean {
+    if (delayMs <= 0L) return false
+    return select {
+      wakes.onReceive { true }
+      selectOnTimeout(delayMs) { false }
+    }
+  }
+
+  private suspend fun closeForBackground(epoch: Int) {
+    val current = link ?: return
+    if (epochCounter.get() != epoch || !leftForBackground) return
+    closeWithBye(current)
+    noteReadEnd(epoch, ReadEnd.Background, current)
+  }
+
+  private suspend fun closeWithBye(target: TlsLink) {
+    val writing = scope.launch { writeJson(encodeBye(newId(), ByeBackground), target) }
+    withTimeoutOrNull(BackgroundByeMs) { writing.join() }
+    closeOwned(target)
+    try {
+      writing.join()
+    } catch (error: CancellationException) {
+      throw error
+    } catch (error: Exception) {
+      // Closing the socket unblocks a write that could not finish.
+    }
+  }
+
   private suspend fun attempt(epoch: Int): AttemptResult {
+    if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
+    if (!inForeground || !lanAvailable) return AttemptResult.Deferred
     val record = store.load()
     val pinned = normalizeFingerprint(record.fingerprint)
     if (record.fingerprint.isNotEmpty() && pinned.length != 64) {
@@ -646,7 +804,19 @@ class LanSession(
       closeOwned(opened)
       return AttemptResult.Superseded
     }
+    if (!inForeground) {
+      closeWithBye(opened)
+      return AttemptResult.Deferred
+    }
+    if (!lanAvailable) {
+      closeOwned(opened)
+      return AttemptResult.Deferred
+    }
     link = opened
+    if (!inForeground || stopped || epochCounter.get() != epoch) {
+      if (!inForeground && epochCounter.get() == epoch) closeWithBye(opened) else closeOwned(opened)
+      return if (epochCounter.get() == epoch && !stopped) AttemptResult.Deferred else AttemptResult.Superseded
+    }
     session.onHandshakeComplete()
     val helloId = newId()
     val openPair = !record.paired
@@ -991,4 +1161,5 @@ private fun isRefused(error: Throwable): Boolean {
 
 private const val ConnectTimeoutMs = 10_000
 private const val ReadTimeoutMs = 1_000
+private const val BackgroundByeMs = 500L
 private const val HexDigits = "0123456789abcdef"

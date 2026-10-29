@@ -91,8 +91,16 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  override fun onStart() {
+    super.onStart()
+    model.enterForeground()
+  }
+
   override fun onStop() {
-    if (!isChangingConfigurations) model.leaveDictation()
+    if (!isChangingConfigurations) {
+      model.leaveDictation()
+      model.leaveForeground()
+    }
     super.onStop()
   }
 }

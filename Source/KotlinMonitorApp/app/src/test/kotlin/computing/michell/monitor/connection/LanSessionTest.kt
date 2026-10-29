@@ -7,6 +7,7 @@ import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeAuth
+import computing.michell.monitor.protocol.decodeBye
 import computing.michell.monitor.protocol.decodeHello
 import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
@@ -45,19 +46,34 @@ import org.junit.Test
 
 class LanSessionTest {
   @Test
-  fun backoffIsOneTwoFourEightThenThirtySeconds() {
-    val policy = ReconnectPolicy()
-    assertEquals(1_000L, policy.nextDelayMs())
-    assertEquals(2_000L, policy.nextDelayMs())
-    assertEquals(4_000L, policy.nextDelayMs())
-    assertEquals(8_000L, policy.nextDelayMs())
-    assertEquals(30_000L, policy.nextDelayMs())
-    assertEquals(30_000L, policy.nextDelayMs())
+  fun lanBackoffIsCappedAtTenSecondsWithJitter() {
+    val full = ReconnectPolicy { 999 }
+    assertEquals(1_000L, full.nextDelayMs())
+    assertEquals(2_000L, full.nextDelayMs())
+    assertEquals(4_000L, full.nextDelayMs())
+    assertEquals(8_000L, full.nextDelayMs())
+    assertEquals(LanBackoffCapMs, full.nextDelayMs())
+    assertEquals(LanBackoffCapMs, full.nextDelayMs())
+    full.resume()
+    assertEquals(1_000L, full.nextDelayMs())
+    val half = ReconnectPolicy { 0 }
+    assertEquals(500L, half.nextDelayMs())
+    assertEquals(1_000L, half.nextDelayMs())
+    assertEquals(2_000L, half.nextDelayMs())
+    assertEquals(4_000L, half.nextDelayMs())
+    assertEquals(5_000L, half.nextDelayMs())
+    assertEquals(5_000L, half.nextDelayMs())
+    for (roll in -3..1004) {
+      val delay = jitteredLanDelayMs(30_000L, roll)
+      assertTrue(delay in 5_000L..LanBackoffCapMs)
+    }
+    assertEquals(8_000L, jitteredLanDelayMs(8_000L, 999))
+    assertEquals(4_000L, jitteredLanDelayMs(8_000L, 0))
   }
 
   @Test
   fun refusedConnectPausesUntilTheUserResumes() {
-    val policy = ReconnectPolicy()
+    val policy = ReconnectPolicy { 999 }
     policy.pause()
     assertTrue(policy.paused)
     policy.resume()
@@ -131,24 +147,139 @@ class LanSessionTest {
   }
 
   @Test
-  fun connectionRefusedPausesBackoffUntilResume() {
+  fun connectionRefusedKeepsTheDraftAndRetriesWithoutATap() {
     val store = pairedStore()
+    val pin = store.load().fingerprint
     val opens = AtomicInteger(0)
     val session = LanSession(store, TlsConnector { _, _, _ ->
       opens.incrementAndGet()
       throw ConnectException("Connection refused")
     })
-    session.updateDraft("draft")
-    session.connect("10.0.0.8", 56122)
-    waitUntil { session.reconnectPaused }
-    Thread.sleep(400)
-    assertEquals(1, opens.get())
-    assertEquals(ConnectionRefusedBanner, session.status.value.banner)
-    assertEquals("draft", session.promptDraft)
-    session.resume()
-    waitUntil { opens.get() >= 2 }
-    assertEquals("draft", session.promptDraft)
-    session.close()
+    try {
+      session.updateDraft("draft")
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      Thread.sleep(400)
+      assertEquals(1, opens.get())
+      assertFalse(session.reconnectPaused)
+      assertEquals(ConnectionRefusedBanner, session.status.value.banner)
+      assertEquals("draft", session.promptDraft)
+      assertEquals(pin, store.load().fingerprint)
+      // Equal jitter keeps the first retry between 500 ms and 1 s.
+      waitUntil(2_000) { opens.get() >= 2 }
+      assertEquals("draft", session.promptDraft)
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun wifiLossWaitsAndAvailableReconnectsWithoutClearingThePin() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, fingerprint ->
+      assertEquals(pin, fingerprint)
+      opens.incrementAndGet()
+      throw ConnectException("Connection refused")
+    })
+    try {
+      session.onWifiLost()
+      session.connect("10.0.0.8", 56122)
+      Thread.sleep(400)
+      assertEquals(0, opens.get())
+      assertEquals(WaitingForWifiBanner, session.status.value.banner)
+      assertEquals(pin, store.load().fingerprint)
+      val started = System.currentTimeMillis()
+      session.onWifiAvailable()
+      waitUntil { opens.get() >= 1 }
+      assertTrue(System.currentTimeMillis() - started < 400)
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun wifiAvailableDuringBackoffReconnectsAtOnce() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      val count = opens.incrementAndGet()
+      if (count == 1) throw ConnectException("Connection refused")
+      ScriptedLink()
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      val started = System.currentTimeMillis()
+      session.onWifiAvailable()
+      waitUntil { opens.get() >= 2 }
+      assertTrue(System.currentTimeMillis() - started < 400)
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun backgroundSendsByeAndForegroundResumesWithoutClearingThePin() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val link = ScriptedLink()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, fingerprint ->
+      assertEquals(pin, fingerprint)
+      opens.incrementAndGet()
+      link
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      session.leaveForeground()
+      waitUntil {
+        link.frames().any { frame -> envelope(frame).kind == MessageKind.Bye }
+      }
+      val bye = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Bye }
+      assertEquals(ByeBackground, decodeBye(bye.payloadJson)!!.reason)
+      waitUntil { link.closed }
+      Thread.sleep(400)
+      assertEquals(1, opens.get())
+      assertEquals(pin, store.load().fingerprint)
+      session.enterForeground()
+      waitUntil { opens.get() >= 2 }
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun wifiDoesNotResumeADisabledHost() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val link = ScriptedLink()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      link
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeBye("host-bye", "disabled")))
+      waitUntil { session.reconnectPaused }
+      session.onWifiAvailable()
+      session.enterForeground()
+      Thread.sleep(400)
+      assertEquals(1, opens.get())
+      assertTrue(session.reconnectPaused)
+      assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
   }
 
   @Test
