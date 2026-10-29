@@ -9,6 +9,11 @@ Unit AssistantMonitorSession;
   fpsha256.TSHA256.HMAC. JSON stays in the codec. The pair code, session token,
   and HMAC are never logged.
 
+  Heartbeat: a ping goes out after MonitorHeartbeatMs with nothing sent, and the link
+  is dead after MonitorDeadSessionMs with nothing received. A ping is answered with a
+  pong on the control lane from the carrier thread. The phone's MonitorLimits holds the
+  same two values.
+
   Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
   gates, approval, the in-memory carrier, the resume ring, and the outbound lanes
   are one state machine.
@@ -33,8 +38,9 @@ Const
   MonitorNonceBytes = 16;
   MonitorClientIdBytes = 16;
   MonitorSessionTokenBytes = 32;
-  MonitorHeartbeatMs = 15000;
-  MonitorDeadSessionMs = 45000;
+  { Wire timing shared with the phone (MonitorLimits.HeartbeatSilenceMs and DeadSessionMs). }
+  MonitorHeartbeatMs = 10000;
+  MonitorDeadSessionMs = 30000;
   MonitorPartialFrameMs = 10000;
   MonitorCoalesceWindowMs = 100;
   { Bulk lane only. Control is not capped, and live holds one unsent patch part-set. }
@@ -107,7 +113,10 @@ Type
     FCloseRequested: Boolean;
     FNowMs: QWord;
     FLastFrameMs: QWord;
-    FPingSent: Boolean;
+    { Last frame the carrier accepted. Zero until this connection sends one. }
+    LastSentMs: QWord;
+    { When the last heartbeat ping was queued. A ping the carrier has not taken is not queued again. }
+    PingQueuedMs: QWord;
     FPartialOpen: Boolean;
     FPartialSinceMs: QWord;
     FFramesSent: Integer;
@@ -482,7 +491,8 @@ Begin
   FCloseRequested := False;
   FNowMs := 0;
   FLastFrameMs := 0;
-  FPingSent := False;
+  LastSentMs := 0;
+  PingQueuedMs := 0;
   FPartialOpen := False;
   FPartialSinceMs := 0;
   FFramesSent := 0;
@@ -636,7 +646,13 @@ Begin
   Frame.Json := Json;
   If FCarrier.Send(Frame, ErrorText) Then
     Begin
-      Inc(FFramesSent);
+      LockSession;
+      Try
+        Inc(FFramesSent);
+        LastSentMs := ClockMs;
+      Finally
+        UnlockSession;
+      End;
       Result := True;
     End
   Else
@@ -821,7 +837,8 @@ Begin
   FPartialOpen := False;
   FPartialSinceMs := 0;
   FLastFrameMs := 0;
-  FPingSent := False;
+  LastSentMs := 0;
+  PingQueuedMs := 0;
   FHasUnsentTranscript := False;
   SetLength(FUnsentTranscripts, 0);
   FHasLivePatch := False;
@@ -1373,7 +1390,6 @@ Var
   ErrorText: String;
 Begin
   FLastFrameMs := ClockMs;
-  FPingSent := False;
   If Not TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText) Then
     Begin
       LogLine(2, 'version mismatch bytes=' + IntToStr(Length(Frame.Json)) + ' bind=' + FBindAddress +
@@ -1442,6 +1458,8 @@ Begin
 End;
 
 Procedure TMonitorSession.CheckTimeoutsLocked;
+Var
+  QuietSince: QWord;
 Begin
   If (FPairCode <> '') And (ClockMs >= FPairCodeUntil) Then
     DiscardPairCode(True);
@@ -1461,15 +1479,20 @@ Begin
     Exit;
   If FLastFrameMs = 0 Then
     Exit;
-  If (Not FPingSent) And (ClockMs >= FLastFrameMs + MonitorHeartbeatMs) Then
-    Begin
-      FPingSent := True;
-      QueueSend(EncodeMonitorTicks(mmkPing, NewHostId, Int64(ClockMs)));
-    End;
+  { Only received frames keep the link alive. Our own pings do not. }
   If ClockMs >= FLastFrameMs + MonitorDeadSessionMs Then
     Begin
       LogLine(2, 'heartbeat timeout bind=' + FBindAddress + ' port=' + IntToStr(FPort));
       CloseToListening;
+      Exit;
+    End;
+  QuietSince := LastSentMs;
+  If QuietSince = 0 Then
+    QuietSince := FLastFrameMs;
+  If (ClockMs >= QuietSince + MonitorHeartbeatMs) And ((PingQueuedMs = 0) Or (ClockMs >= PingQueuedMs + MonitorHeartbeatMs)) Then
+    Begin
+      PingQueuedMs := ClockMs;
+      QueueSend(EncodeMonitorTicks(mmkPing, NewHostId, Int64(ClockMs)));
     End;
 End;
 

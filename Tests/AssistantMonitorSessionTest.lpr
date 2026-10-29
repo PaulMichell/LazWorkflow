@@ -1082,6 +1082,50 @@ Begin
   End;
 End;
 
+{ Plan item 4.3. The session clock is driven through NoteTime, so no test waits. Leaves the controller live again. }
+Procedure TestHeartbeat;
+Var
+  Start, Heard: QWord;
+  Nonce: String;
+Begin
+  Check('heartbeat interval is 10 s', MonitorHeartbeatMs = 10000);
+  Check('dead link time is 30 s', MonitorDeadSessionMs = 30000);
+  Check('heartbeat starts live', Session.State = mssLive);
+  Start := 5000;
+  Session.NoteTime(Start);
+  Carrier.ClearSent;
+  { The pong to this ping is the last frame sent, and the ping is the last frame received. }
+  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'beat-start', 1));
+  Carrier.ClearSent;
+  Session.NoteTime(Start + MonitorHeartbeatMs - 1);
+  Check('no ping before 10 s without sending', CountSent('ping') = 0);
+  Session.NoteTime(Start + MonitorHeartbeatMs);
+  Check('a ping after 10 s without sending', CountSent('ping') = 1);
+  Session.NoteTime(Start + MonitorHeartbeatMs + 5000);
+  Check('the ping restarts the quiet clock', CountSent('ping') = 1);
+  Session.SendHostJson(EncodeMonitorTicks(mmkPong, 'beat-host-frame', 2));
+  Session.NoteTime(Start + 2 * MonitorHeartbeatMs);
+  Check('any sent frame restarts the quiet clock', CountSent('ping') = 1);
+  Session.NoteTime(Start + 2 * MonitorHeartbeatMs + 5000);
+  Check('a second ping after another quiet 10 s', CountSent('ping') = 2);
+  Session.NoteTime(Start + MonitorDeadSessionMs - 1);
+  Check('live just under 30 s without receiving', (Session.State = mssLive) And (Not Session.CloseRequested));
+  Heard := Start + MonitorDeadSessionMs - 1;
+  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'beat-heard', 3));
+  Session.NoteTime(Start + MonitorDeadSessionMs);
+  Check('a received frame restarts the dead-link clock', (Session.State = mssLive) And (Not Session.CloseRequested));
+  Session.NoteTime(Heard + MonitorDeadSessionMs - 1);
+  Check('our own pings do not end the link', (Session.State = mssLive) And (CountSent('ping') >= 3));
+  Session.NoteTime(Heard + MonitorDeadSessionMs);
+  Check('dead after 30 s without receiving', Session.CloseRequested And (Session.State = mssListening));
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeMonitorAuth('auth-beat', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('the phone reconnects after a dead link', Session.State = mssLive);
+End;
+
 Procedure CleanupSettings;
 Begin
   If SettingsRoot = '' Then
@@ -1149,6 +1193,7 @@ Begin
       TestSetPermissions;
       TestUnknownTypeDoesNotChangeLive;
       TestSecondControllerWhileLive;
+      TestHeartbeat;
       TestDecisionIgnoredWhenDisabled;
       TestResumeQueued;
       TestRevokeLive;

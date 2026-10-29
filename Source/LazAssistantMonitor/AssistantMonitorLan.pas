@@ -15,6 +15,7 @@ Unit AssistantMonitorLan;
   Accepted-socket non-blocking is not SetSocketBlockingMode and not
   TSocketServer.SetNonBlocking. Those helpers do not cover the accepted handle.
   The two calls below are the helpers' own fpfcntl or ioctlsocket lines.
+  Every accepted socket also gets TCP keepalive, a backstop under the session heartbeat.
   The kernel port is sockets.fpGetSockName on TInetServer.FPSocket.
   TInetServer.Port is not read. Bind failures are TThread.Queue to the main thread. }
 
@@ -160,6 +161,10 @@ Const
   MonitorReadChunk = 16384;
   MonitorOutboundCap = 32;
   MonitorBindWaitMs = 10000;
+  { Keepalive probes start after the heartbeat's dead-link time, so the heartbeat normally acts first. }
+  MonitorKeepAliveIdleSeconds = MonitorDeadSessionMs Div 1000;
+  MonitorKeepAliveIntervalSeconds = MonitorHeartbeatMs Div 1000;
+  MonitorKeepAliveProbes = 3;
 
 Type
   TMonitorBindNotice = Class
@@ -230,6 +235,35 @@ Begin
 {$IFDEF WINDOWS}
   NonBlock := 1; { u_long. FIONBIO treats a non-zero value as non-blocking. }
   ioctlsocket(Handle, Longint(FIONBIO), @NonBlock);
+{$ENDIF}
+End;
+
+{ Backstop for a peer that vanished without a FIN. Linux also takes the probe timing,
+  other systems keep their default timing. A failed call leaves the heartbeat in charge. }
+Procedure EnableAcceptedKeepAlive(Handle: THandle);
+{$IFDEF LINUX}
+Const
+  { Linux netinet/tcp.h values. }
+  TcpKeepIdle = 4;
+  TcpKeepInterval = 5;
+  TcpKeepCount = 6;
+{$ENDIF}
+Var
+  Value: Longint;
+Begin
+  Value := 1;
+  If fpsetsockopt(Handle, SOL_SOCKET, SO_KEEPALIVE, @Value, SizeOf(Value)) <> 0 Then
+    Begin
+      LogMonitor(2, 'keepalive not enabled error=' + IntToStr(socketerror));
+      Exit;
+    End;
+{$IFDEF LINUX}
+  Value := MonitorKeepAliveIdleSeconds;
+  fpsetsockopt(Handle, IPPROTO_TCP, TcpKeepIdle, @Value, SizeOf(Value));
+  Value := MonitorKeepAliveIntervalSeconds;
+  fpsetsockopt(Handle, IPPROTO_TCP, TcpKeepInterval, @Value, SizeOf(Value));
+  Value := MonitorKeepAliveProbes;
+  fpsetsockopt(Handle, IPPROTO_TCP, TcpKeepCount, @Value, SizeOf(Value));
 {$ENDIF}
 End;
 
@@ -906,6 +940,7 @@ Begin
   End;
   { Registration has returned. The accepted handle is still blocking until these calls. }
   SetAcceptedHandleNonBlocking(Data.Handle);
+  EnableAcceptedKeepAlive(Data.Handle);
 End;
 
 {$PUSH}{$HINTS OFF}

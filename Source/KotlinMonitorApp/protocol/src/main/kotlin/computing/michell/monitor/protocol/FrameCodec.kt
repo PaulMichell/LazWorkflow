@@ -30,8 +30,9 @@ object MonitorLimits {
   const val MaxOpenImageAssemblies = 8
   const val ImageAssemblyTtlMs = 60_000L
   const val SnapshotStoredTurns = 30
-  const val HeartbeatSilenceMs = 15_000L
-  const val DeadSessionMs = 45_000L
+  // Wire timing shared with the host (MonitorHeartbeatMs and MonitorDeadSessionMs).
+  const val HeartbeatSilenceMs = 10_000L
+  const val DeadSessionMs = 30_000L
   const val PartialFrameMs = 10_000L
   const val PairingCodeTtlMs = 120_000L
   const val ApprovalWaitMs = 120_000L
