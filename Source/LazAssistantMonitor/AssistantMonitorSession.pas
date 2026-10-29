@@ -615,7 +615,10 @@ Begin
   Case Message.Kind Of
     mmkPatch:
       Result := olLive;
-    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
+    { Plan rows are the phone's only copy. They must not wait behind snapshot pages. }
+    mmkPlan:
+      Result := olControl;
+    mmkSnapshot, mmkTranscript, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
       Result := olBulk;
   Else
     Result := olControl;

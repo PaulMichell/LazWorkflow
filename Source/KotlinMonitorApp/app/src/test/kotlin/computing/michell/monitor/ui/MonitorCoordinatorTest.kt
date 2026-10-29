@@ -14,11 +14,13 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
+import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.encodePatch
+import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import kotlinx.coroutines.flow.Flow
@@ -97,6 +99,36 @@ class MonitorCoordinatorTest {
     assertTrue(coordinator.state.disconnected)
     assertFalse(coordinator.holdingLink)
     assertNull(coordinator.revealHeldLink(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
+  }
+
+  @Test
+  fun aPlanFrameFillsTheScreenAndALaterPatchKeepsTheRows() {
+    val coordinator = open()
+    val row = PlanRow(1, 3, "Sync the plan", "", "not started", true)
+    val frame = encodePlan("plan-1", "Documents/Plan.md", "Improved App Plan", true, listOf(row))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(frame)))
+    assertEquals("Documents/Plan.md", coordinator.state.planPath)
+    assertEquals("Improved App Plan", coordinator.state.planTitle)
+    assertTrue(coordinator.state.planRunning)
+    assertEquals("Sync the plan", coordinator.state.planRows.single().title)
+    assertEquals("not started", coordinator.state.planRows.single().status)
+    coordinator.noteSelectedPlan(1)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p2", patch("second", 8)))))
+    assertEquals(1, coordinator.state.selectedPlan)
+    assertEquals("Sync the plan", coordinator.state.planRows.single().title)
+    val choices = frame.replace(
+      "\"rows\" :",
+      "\"choices\" : [{ \"path\" : \"Documents/Plan.md\", \"caption\" : \"Improved\" }], \"rows\" :"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(choices)))
+    assertEquals("Documents/Plan.md", coordinator.state.planChoices.single().path)
+    assertEquals(1, coordinator.state.selectedPlan)
+    val moved = encodePlan("plan-2", "Documents/Other.md", "Other", false, emptyList())
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(moved)))
+    assertEquals(-1, coordinator.state.selectedPlan)
+    assertEquals("Documents/Other.md", coordinator.state.planPath)
+    assertTrue(coordinator.state.planChoices.isEmpty())
+    assertFalse(coordinator.state.planRunning)
   }
 
   @Test

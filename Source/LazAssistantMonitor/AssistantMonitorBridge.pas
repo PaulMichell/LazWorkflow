@@ -10,7 +10,7 @@ Unit AssistantMonitorBridge;
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
   Reviewed 2026-10-29: snapshot, transcript, and turn_data are no longer sent.
-  Snapshot pages replace them. Status and plan notices no longer push a second frame.
+  Snapshot pages replace them and do not carry plan rows. A plan notice sends the plan frame.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -727,7 +727,10 @@ Begin
               SendJson(Json);
               Form := OpenForm;
               If Assigned(Form) Then
-                PushStatus(Form);
+                Begin
+                  PushStatus(Form);
+                  PushPlan(Form);
+                End;
               Exit;
             End;
         End;
@@ -746,6 +749,7 @@ Begin
       Exit;
     End;
   SendCatchupSnapshot(Form, Id);
+  PushPlan(Form);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
@@ -994,6 +998,8 @@ Begin
       End
     Else
       SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
+    If Assigned(Session) Then
+      FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
   Finally
     Captions.Free;
     Paths.Free;
@@ -1128,7 +1134,8 @@ Begin
           PushTargets(Form);
         End;
     asnPlan:
-      ;
+      If Assigned(Form) Then
+        PushPlan(Form);
     asnTasks:
       If Assigned(Form) Then
         Begin

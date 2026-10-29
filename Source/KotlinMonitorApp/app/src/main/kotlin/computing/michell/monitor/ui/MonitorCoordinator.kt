@@ -23,6 +23,7 @@ import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePatch
+import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
@@ -234,8 +235,9 @@ class MonitorCoordinator(
       MessageKind.Snapshot -> applySnapshot(decodeSnapshot(message.payloadJson) ?: snapshotFrom(message))
       MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
       MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
-        local = local.copy(view = view, statusBusy = view.busy)
+        local = local.copy(view = view, statusBusy = view.busy, planRunning = view.planRunning)
       }
+      MessageKind.Plan -> applyPlan(message)
       MessageKind.InsertResult -> decodeText(message.payloadJson)?.let { text ->
         if (local.draft.isEmpty()) local = local.copy(draft = text)
       }
@@ -261,6 +263,21 @@ class MonitorCoordinator(
       disconnected = false,
       reachedLive = true,
       banner = if (linkBanner(local.banner)) "" else local.banner
+    )
+  }
+
+  /** Snapshot pages do not carry rows. This frame is the phone's plan. */
+  private fun applyPlan(message: MonitorMessage) {
+    val plan = (message.inbound as? InboundPayload.Plan)?.value ?: decodePlan(message.payloadJson) ?: return
+    val samePath = local.planPath == plan.path
+    local = local.copy(
+      planPath = plan.path,
+      planTitle = plan.title,
+      planRunning = plan.running,
+      planRows = plan.rows,
+      planChoices = plan.choices.orEmpty(),
+      selectedPlan = if (samePath) local.selectedPlan else -1,
+      view = local.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
     )
   }
 
@@ -327,6 +344,12 @@ class MonitorCoordinator(
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {
     if (updatedAt <= 0L || updatedAt == local.lastSyncMs) return
     local = local.copy(lastSyncMs = updatedAt)
+  }
+
+  /** The Plan tab highlight. A later plan frame for the same path keeps it. */
+  fun noteSelectedPlan(index: Int): MonitorUi = synchronized(gate) {
+    local = local.copy(selectedPlan = index)
+    published()
   }
 
   private fun linkChanged(status: LinkStatus): List<MonitorEffect> {

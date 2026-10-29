@@ -1688,7 +1688,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun selectPlan(index: Int) {
-    uiState.update { it.copy(selectedPlan = index) }
+    uiState.value = coordinator.noteSelectedPlan(index)
   }
 
   fun runPlan() {
@@ -1894,10 +1894,17 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
+  private fun planChromeChanged(before: MonitorUi, after: MonitorUi): Boolean {
+    return before.planPath != after.planPath || before.planTitle != after.planTitle ||
+      before.planRunning != after.planRunning || before.planRows != after.planRows ||
+      before.planChoices != after.planChoices
+  }
+
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     val before = uiState.value
     uiState.value = coordinator.state
-    if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value)) scheduleCacheSave()
+    if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value) ||
+      planChromeChanged(before, uiState.value)) scheduleCacheSave()
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {
