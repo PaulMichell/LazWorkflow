@@ -91,6 +91,7 @@ fun conversationRows(
 ): List<ConversationRow> {
   val slots = virtualSlots(turns, live, sending)
   val rows = ArrayList<ConversationRow>()
+  val used = HashSet<String>()
   for (slot in slots) {
     val turn = if (slot.live) live else turns.firstOrNull { it.turnIndex == slot.turnIndex }
     val turnId = turn?.id.orEmpty()
@@ -99,14 +100,42 @@ fun conversationRows(
       val preview = turn?.promptPreview?.ifEmpty { null } ?: slot.label
       if (preview.isEmpty() || preview == "Turn ${slot.turnIndex}" || preview == "Live") continue
       val block = WireBlock("answer", "", "", "", "", preview, false, true, 0, emptyList())
-      rows += ConversationRow(conversationRowKey(turnId, "preview", 0), turnId, slot.turnIndex, block, slot.label)
+      val key = uniqueRowKey(used, conversationRowKey(turnId, "preview", 0))
+      rows += ConversationRow(key, turnId, slot.turnIndex, block, slot.label)
       continue
     }
     shown.forEachIndexed { index, block ->
-      rows += ConversationRow(conversationRowKey(turnId, block.blockId, index), turnId, slot.turnIndex, block, slot.label)
+      val key = uniqueRowKey(used, conversationRowKey(turnId, block.blockId, index))
+      rows += ConversationRow(key, turnId, slot.turnIndex, block, slot.label)
     }
   }
   return rows
+}
+
+/** LazyColumn throws, and the process dies, when two rows share a key. */
+internal fun uniqueRowKey(used: MutableSet<String>, key: String): String {
+  if (used.add(key)) return key
+  var copy = 2
+  var unique = "$key\u0000$copy"
+  while (!used.add(unique)) {
+    copy += 1
+    unique = "$key\u0000$copy"
+  }
+  return unique
+}
+
+/** Outline rows the screen does not already show. One row per turn index and id. */
+fun addedOutlineTurns(existing: List<WireTurn>, outline: List<WireTurn>): List<WireTurn> {
+  val haveIndex = existing.map { turn -> turn.turnIndex }.toMutableSet()
+  val haveId = existing.map { turn -> turn.id }.filter { id -> id.isNotEmpty() }.toMutableSet()
+  val added = ArrayList<WireTurn>()
+  for (row in outline) {
+    if (row.live || row.id.isEmpty() || row.turnIndex in haveIndex || row.id in haveId) continue
+    haveIndex += row.turnIndex
+    haveId += row.id
+    added += row
+  }
+  return added
 }
 
 fun spotAt(units: List<Int>, fraction: Float): ScrollSpot {

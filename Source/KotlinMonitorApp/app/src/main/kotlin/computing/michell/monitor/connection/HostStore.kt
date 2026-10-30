@@ -12,6 +12,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import computing.michell.monitor.protocol.MonitorLimits
+import java.security.KeyStore
 
 data class HostRecord(
   val address: String = "",
@@ -43,22 +44,57 @@ internal class MemoryStringMap : StringMap {
 }
 
 private class EncryptedStringMap(context: Context) : StringMap {
-  private val preferences: SharedPreferences = encryptedPreferences(context)
+  private val appContext = context.applicationContext
+  private var preferences: SharedPreferences = encryptedPreferences(appContext)
 
-  override fun get(key: String): String? = preferences.getString(key, null)
+  override fun get(key: String): String? {
+    return try {
+      preferences.getString(key, null)
+    } catch (error: Exception) {
+      // A key the keystore can no longer open must not kill the process on the next launch.
+      preferences = recoverEncryptedPreferences(appContext)
+      null
+    }
+  }
 
   override fun putAll(values: Map<String, String>) {
-    val editor = preferences.edit()
-    for ((key, value) in values) editor.putString(key, value)
-    editor.apply()
+    try {
+      val editor = preferences.edit()
+      for ((key, value) in values) editor.putString(key, value)
+      editor.apply()
+    } catch (error: Exception) {
+      preferences = recoverEncryptedPreferences(appContext)
+    }
   }
 
   override fun clear() {
-    preferences.edit().clear().apply()
+    try {
+      preferences.edit().clear().apply()
+    } catch (error: Exception) {
+      preferences = recoverEncryptedPreferences(appContext)
+    }
   }
 }
 
 private fun encryptedPreferences(context: Context): SharedPreferences {
+  return try {
+    openEncryptedPreferences(context)
+  } catch (error: Exception) {
+    recoverEncryptedPreferences(context)
+  }
+}
+
+/** Drops a store the keystore can no longer open, then creates an empty one. */
+private fun recoverEncryptedPreferences(context: Context): SharedPreferences {
+  forgetEncryptedHostStore(context)
+  return try {
+    openEncryptedPreferences(context)
+  } catch (error: Exception) {
+    context.getSharedPreferences(HostStore.PreferenceFile + ".plain", Context.MODE_PRIVATE)
+  }
+}
+
+private fun openEncryptedPreferences(context: Context): SharedPreferences {
   val masterKey = MasterKey.Builder(context)
     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
     .build()
@@ -69,6 +105,21 @@ private fun encryptedPreferences(context: Context): SharedPreferences {
     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
   )
+}
+
+private fun forgetEncryptedHostStore(context: Context) {
+  try {
+    context.deleteSharedPreferences(HostStore.PreferenceFile)
+  } catch (error: Exception) {
+    context.getSharedPreferences(HostStore.PreferenceFile, Context.MODE_PRIVATE).edit().clear().commit()
+  }
+  try {
+    val store = KeyStore.getInstance("AndroidKeyStore")
+    store.load(null)
+    store.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+  } catch (error: Exception) {
+    // The alias may already be gone. Opening must still continue.
+  }
 }
 
 class HostStore internal constructor(private val values: StringMap) {

@@ -338,8 +338,7 @@ class MonitorCoordinator(
     val foreign = board.conversationId.isNotEmpty() && pageConversation.isNotEmpty() &&
       board.conversationId != pageConversation && (board.turns.isNotEmpty() || board.live != null)
     if (foreign) return
-    val have = board.turns.map { turn -> turn.turnIndex }.toSet()
-    val added = outline.filter { row -> !row.live && row.turnIndex !in have && row.id.isNotEmpty() }
+    val added = addedOutlineTurns(board.turns, outline)
     if (added.isEmpty()) return
     val id = pageConversation.ifEmpty { local.conversationId }
     content.replace(contentHost, id, (board.turns + added).sortedBy { turn -> turn.turnIndex }, board.live)
@@ -469,10 +468,15 @@ class MonitorCoordinator(
       return
     }
     // Keep the cached screen until the host pages arrive. Clearing here is the blank open.
+    // A hello cursor is the desktop head. Copying it before resume asks for nothing, or the
+    // desktop answers with every page and the phone dies under that dump.
+    val board = content.current()
+    val haveBody = board.turns.isNotEmpty() || board.live != null
+    val keepPlace = haveBody && local.hostEpoch.isNotEmpty() && local.hostCursor > 0L
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
-      hostEpoch = hello.epoch.ifEmpty { local.hostEpoch },
-      hostCursor = if (hello.cursor > 0L) hello.cursor else local.hostCursor,
+      hostEpoch = if (keepPlace) local.hostEpoch else hello.epoch.ifEmpty { local.hostEpoch },
+      hostCursor = if (keepPlace) local.hostCursor else if (hello.cursor > 0L) hello.cursor else local.hostCursor,
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
       conversationTitle = hello.title.ifEmpty { local.conversationTitle },
       catchingUp = true

@@ -4,7 +4,7 @@ package computing.michell.monitor.connection
 
    Size note: exceeds the 1000 line preference. The socket, pin rules, and
    reconnect loop are one session. Wi-Fi registration lives in WifiLanWatch.
-   Reviewed 2026-10-29.
+   Reviewed 2026-10-30.
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
@@ -66,6 +66,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -471,7 +472,10 @@ class LanSession(
   private val ledger: CommandLedger = NoCommandLedger
 ) : SessionPort {
   private val job = SupervisorJob()
-  private val scope = CoroutineScope(job + Dispatchers.IO)
+  private val scope = CoroutineScope(job + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+    if (error is CancellationException) return@CoroutineExceptionHandler
+    publish(LinkPhase.Disconnected, HostClosedBanner, error.message ?: "Connection failed.")
+  })
   private val writeLock = Mutex()
   private val socketLock = Any()
   private val resumes = Channel<Unit>(Channel.CONFLATED)
@@ -505,6 +509,8 @@ class LanSession(
   private var lanAvailable = true
   @Volatile
   private var connectNow = false
+  @Volatile
+  private var replaceLink = false
   @Volatile
   private var leftForBackground = false
 
@@ -620,7 +626,11 @@ class LanSession(
     startLoop()
   }
 
-  /** Activity is visible. A return from the background reconnects at once. */
+  /**
+   * Activity is visible. A return from the background reconnects.
+   * The socket is closed on the reader thread. Closing it here, on the UI thread, kills the
+   * process on some phones while SSL_read is still in that socket.
+   */
   fun enterForeground() {
     val returning = !inForeground
     inForeground = true
@@ -629,11 +639,8 @@ class LanSession(
       // A screen-off Wi-Fi callback must not leave the open app waiting forever.
       lanAvailable = true
       connectNow = true
+      replaceLink = true
       if (!policy.paused) policy.resetBackoff()
-      if (mayReconnect()) {
-        startLoop()
-        return
-      }
     }
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
@@ -748,8 +755,9 @@ class LanSession(
         wakes.receive()
         continue
       }
-      if (connectNow || leftForBackground) {
+      if (connectNow || leftForBackground || replaceLink) {
         connectNow = false
+        replaceLink = false
         waitBeforeConnect = false
         policy.resetBackoff()
       }
@@ -973,6 +981,11 @@ class LanSession(
         val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
         val reader = FrameAssembler()
         while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
+          // Close on this thread. The UI thread must not close the socket under SSL_read.
+          if (replaceLink) {
+            replaceLink = false
+            return@withContext finishRead(epoch, current, ReadEnd.PeerClosed)
+          }
           if (inboundIsDead()) return@withContext finishRead(epoch, current, ReadEnd.Dead)
           val count = try {
             current.input.read(buffer)
@@ -1057,9 +1070,9 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
-          // Auth is already queued. Resume on the same lane cannot pass it, and an empty
-          // ledger must still ask for the desktop conversation.
-          offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
+          // Open commands only. A resume at the host head makes the desktop send every page again,
+          // and that dump on top of the cached screen is what kills the process on open.
+          if (ledger.openIds().isNotEmpty()) offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
         }
       }
       MessageKind.CommandStates -> {

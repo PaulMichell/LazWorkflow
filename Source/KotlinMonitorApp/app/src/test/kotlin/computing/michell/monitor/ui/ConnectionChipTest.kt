@@ -55,4 +55,30 @@ class ConnectionChipTest {
     assertFalse(rows[0].key.contains("Running"))
     assertFalse(rows[1].key.contains("second"))
   }
+
+  @Test
+  fun duplicateTurnIdentityDoesNotReuseALazyKey() {
+    val first = WireTurn(1, "same", "build", "", "One", "", blocks = listOf(
+      WireBlock("answer", "block", "", "", "", "one", false, true, 0, emptyList())
+    ))
+    val second = WireTurn(1, "same", "build", "", "Two", "", blocks = listOf(
+      WireBlock("answer", "block", "", "", "", "two", false, true, 0, emptyList())
+    ))
+    val rows = conversationRows(listOf(first, second), null, false, true, true)
+    assertEquals(2, rows.size)
+    assertFalse(rows[0].key == rows[1].key)
+  }
+
+  @Test
+  fun outlineDoesNotAddATurnAlreadyOnScreen() {
+    val shown = WireTurn(3, "turn-3", "build", "", "Shown", "")
+    val outline = listOf(
+      WireTurn(3, "turn-3", "build", "", "Shown again", ""),
+      WireTurn(4, "turn-4", "build", "", "Next", ""),
+      WireTurn(4, "turn-4b", "build", "", "Same index", "")
+    )
+    val added = addedOutlineTurns(listOf(shown), outline)
+    assertEquals(1, added.size)
+    assertEquals("turn-4", added[0].id)
+  }
 }

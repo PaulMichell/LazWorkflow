@@ -8,7 +8,7 @@ package computing.michell.monitor.ui
    and cache policy live in ImageCache. What remains is speech,
    preferences, bitmap decode, and effect execution.
    Offline copies are Room rows. The retired file cache is imported once.
-   Reviewed 2026-10-29. */
+   Reviewed 2026-10-30. */
 
 import android.Manifest
 import android.app.Application
@@ -1226,15 +1226,29 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
     }
     if (cached != null || record.address.isEmpty()) {
-      val seeded = if (cached != null) applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty())
-      else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
+      val seeded = if (cached != null) {
+        applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty()).copy(
+          conversationId = open?.id.orEmpty(),
+          hostEpoch = open?.streamId.orEmpty(),
+          hostCursor = open?.seq ?: 0L,
+          projectRoot = open?.projectRoot ?: coordinator.state.projectRoot,
+          conversationTitle = open?.title ?: coordinator.state.conversationTitle,
+          lastSyncMs = open?.updatedAt ?: 0L
+        )
+      } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
       coordinator.restoreOffline(seeded)
     }
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
     if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
     viewModelScope.launch(Dispatchers.Default) {
-      session.messages.collect { message -> applyIncoming(message) }
+      session.messages.collect { message ->
+        try {
+          applyIncoming(message)
+        } catch (error: Exception) {
+          // A bad frame must not kill the process. The next resume can ask again.
+        }
+      }
     }
     viewModelScope.launch(Dispatchers.Default) {
       while (isActive) {
@@ -1282,9 +1296,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
     }
     if (record.address.isNotEmpty()) {
-      runBlocking(Dispatchers.IO) {
-        commandLedger.refresh()
-        commandLedger.dropOpenPrompts()
+      try {
+        runBlocking(Dispatchers.IO) {
+          commandLedger.refresh()
+          commandLedger.dropOpenPrompts()
+        }
+      } catch (error: Exception) {
+        // A damaged outbox must not stop the app opening.
       }
       session.connect(record.address, record.port)
     }

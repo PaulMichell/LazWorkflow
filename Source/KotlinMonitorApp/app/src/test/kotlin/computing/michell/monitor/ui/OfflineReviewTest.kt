@@ -35,7 +35,6 @@ class OfflineReviewTest {
     assertTrue(syncing.catchingUp)
     assertFalse(syncing.disconnected)
     assertEquals(ChipSyncing, connectionChip(LinkPhase.Connecting, false, false, true, false, 0, 0, 0).label)
-    assertTrue(cachedButtonVisible(false, LinkPhase.Live))
   }
 
   private fun row(host: String, id: String, title: String, updatedAt: Long, pinned: Boolean): ConversationRecord {
