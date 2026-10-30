@@ -7,7 +7,8 @@ package computing.michell.monitor.ui
    The final-result deadline lives in DictationFinalWatch. Image request
    and cache policy live in ImageCache. What remains is speech,
    preferences, bitmap decode, and effect execution.
-   Offline copies are Room rows. The retired file cache is imported once.
+   Offline copies are Room rows. The current plan is a host row, shown
+   before the next plan frame. The retired file cache is imported once.
    Reviewed 2026-10-30. */
 
 import android.Manifest
@@ -23,6 +24,8 @@ import computing.michell.monitor.connection.BackgroundBanner
 import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
+import computing.michell.monitor.data.StoredPlan
+import computing.michell.monitor.data.hasStoredPlan
 import computing.michell.monitor.data.documentFromRows
 import computing.michell.monitor.ui.BoardContent
 import computing.michell.monitor.data.RoomCommandLedger
@@ -1233,15 +1236,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         importLegacyCache(application.filesDir, conversations, imageRoot)
         conversations.retain()
         val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
-        val open = newestConversation(conversations.listForHost(key), key) ?: return@runBlocking null
-        val document = conversations.loadDocument(open.host, open.id) ?: return@runBlocking null
-        open to document
+        val open = newestConversation(conversations.listForHost(key), key)
+        val document = if (open == null) null else conversations.loadDocument(open.host, open.id)
+        RestoredScreen(open, document, conversations.loadPlan(key))
       }
     } catch (error: Exception) {
       null
     }
-    val open = restored?.first
-    val cached = restored?.second
+    val open = restored?.row
+    val cached = restored?.document
+    val cachedPlan = restored?.plan
     if (record.address.isNotEmpty()) {
       coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
     }
@@ -1258,6 +1262,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
       coordinator.restoreOffline(seeded)
     }
+    if (cachedPlan != null) coordinator.noteCachedPlan(cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected)
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
     if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
@@ -1340,6 +1345,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       closeCachedList()
     }
     screenState.value = tab
+    // The cached plan is already on screen. This only asks for a newer copy.
     if (tab == AppTab.Plan && !uiState.value.disconnected)
       session.sendCatalogue(encodePlanChoices(session.nextCommandId()))
   }
@@ -1793,6 +1799,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   override fun onCleared() {
     lanWatch.stop()
     saveCacheNow(uiState.value, true)
+    if (hasStoredPlan(uiState.value.planPath, uiState.value.planTitle, uiState.value.planRows))
+      rememberPlan(uiState.value, uiState.value, true)
     supportPending = false
     contentWatch?.cancel()
     finalWatch.cancel()
@@ -1814,6 +1822,34 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheSaveJob?.cancel()
     cacheSaveJob = null
     writeCache(ui, await)
+  }
+
+  private fun rememberPlan(before: MonitorUi, after: MonitorUi, await: Boolean) {
+    val afterHas = hasStoredPlan(after.planPath, after.planTitle, after.planRows)
+    val beforeHas = hasStoredPlan(before.planPath, before.planTitle, before.planRows)
+    // A status tick on an empty plan must not delete a cache this start failed to read.
+    if (!afterHas && !beforeHas) return
+    if (suppressCache) return
+    val hostId = store.load().hostId
+    if (!hostIdIsValid(hostId)) return
+    val write = Runnable {
+      synchronized(cacheGate) {
+        if (suppressCache) return@Runnable
+        try {
+          runBlocking {
+            if (afterHas) {
+              conversations.savePlan(hostId, after.planPath, after.planTitle, after.planRows, after.selectedPlan, System.currentTimeMillis())
+            } else {
+              conversations.deletePlan(hostId)
+            }
+          }
+        } catch (error: Exception) {
+          // A failed local copy must not drop the live session.
+        }
+      }
+    }
+    if (await) write.run()
+    else viewModelScope.launch(Dispatchers.IO) { write.run() }
   }
 
   private fun writeCache(ui: MonitorUi, await: Boolean) {
@@ -1978,6 +2014,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       }
     }
     uiState.value = coordinator.state
+    if (planChromeChanged(before, uiState.value)) rememberPlan(before, uiState.value, false)
     if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value) ||
       planChromeChanged(before, uiState.value)) scheduleCacheSave()
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
@@ -2207,6 +2244,12 @@ private fun speechFailureMessage(code: Int): String {
     else -> DictationFailedMessage
   }
 }
+
+private data class RestoredScreen(
+  val row: ConversationRecord?,
+  val document: computing.michell.monitor.protocol.OfflineCacheDocument?,
+  val plan: StoredPlan?
+)
 
 const val MicrophoneRequiredMessage = "Microphone permission is required."
 const val MicrophoneSettingsMessage = "Microphone permission is off. System settings can enable it."

@@ -3,8 +3,8 @@ package computing.michell.monitor.data
 /* Map a retired cache document onto Room rows (c) 2026 Michell Computing.
 
    The imported cursor is always zero. A later save keeps a cursor the sync
-   applier has already advanced. Plan rows and the unsent draft are not
-   columns; the next snapshot restores them. */
+   applier has already advanced. Plan rows are a host cache, not turn
+   columns. The unsent draft is not stored. */
 
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.WireBlock

@@ -3,6 +3,7 @@ package computing.michell.monitor.ui
 /* Offline restore keeps browseable rows and disables remote actions (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.data.ConversationRecord
+import computing.michell.monitor.data.StoredPlan
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
@@ -123,6 +124,35 @@ class OfflineCacheUiTest {
     assertEquals("LazWorkflow", projectDisplay("C:\\work\\LazWorkflow"))
     assertEquals("current", cacheRowTitle(rows[0]))
     assertEquals("26 Oct 2026, 12:00", cacheUpdatedText(java.time.Instant.parse("2026-10-26T12:00:00Z").toEpochMilli(), java.time.ZoneId.of("UTC")))
+  }
+
+  @Test
+  fun aCachedPlanFillsAnEmptyTabAndDoesNotReplaceALivePlan() {
+    val cached = StoredPlan("Documents/Plan.md", "Overview", listOf(PlanRow(0, 3, "Cache the plan", "", "not started", true)), 1)
+    val filled = withCachedPlan(MonitorUi(), cached)
+    assertEquals("Overview", filled.planTitle)
+    assertEquals("Cache the plan", filled.planRows.single().title)
+    assertEquals(1, filled.selectedPlan)
+    val live = filled.copy(planTitle = "Live", planRows = listOf(PlanRow(0, 3, "Live row", "", "in progress", true)))
+    assertEquals("Live", withCachedPlan(live, cached).planTitle)
+    assertEquals(filled.planTitle, withCachedPlan(filled, StoredPlan("", "", emptyList(), -1)).planTitle)
+  }
+
+  @Test
+  fun openingAStoredConversationKeepsThePlanAlreadyShown() {
+    val shown = MonitorUi(
+      planPath = "Documents/Plan.md",
+      planTitle = "Overview",
+      planRows = listOf(PlanRow(0, 3, "Cache the plan", "", "not started", true)),
+      selectedPlan = 0
+    )
+    val stored = MonitorUi(conversationId = "conversation-1", turns = listOf(WireTurn(1, "t", "build", "", "Shown", "")))
+    val kept = keepShownPlan(stored, shown)
+    assertEquals("Overview", kept.planTitle)
+    assertEquals("Cache the plan", kept.planRows.single().title)
+    assertEquals("Shown", kept.turns.single().promptPreview)
+    val newer = stored.copy(planTitle = "Other", planPath = "Documents/Other.md", planRows = listOf(PlanRow(0, 2, "Other", "", "", false)))
+    assertEquals("Other", keepShownPlan(newer, shown).planTitle)
   }
 
   @Test

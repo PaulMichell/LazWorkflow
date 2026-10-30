@@ -5,6 +5,7 @@ package computing.michell.monitor.ui
    at once. A prompt is not matched against older blocks.
    (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.data.StoredPlan
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.HostClosedBanner
@@ -15,6 +16,7 @@ import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
+import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WireConversationClosed
 import computing.michell.monitor.protocol.WirePatch
@@ -122,7 +124,8 @@ class MonitorCoordinator(
   val loadedImageKeys: Set<String> get() = emptySet()
   val bitmapKeyEntries: Set<String> get() = emptySet()
 
-  /** Shows a Room conversation. A live open is Syncing until the host snapshot arrives. */
+  /** Shows a Room conversation. A live open is Syncing until the host snapshot arrives.
+      The current plan stays. A stored conversation does not carry that host row. */
   fun showStored(cached: MonitorUi, liveSync: Boolean) = synchronized(gate) {
     val typed = unsentPrompt()
     if (held.isNotEmpty()) {
@@ -130,8 +133,9 @@ class MonitorCoordinator(
       submittedId = ""
     }
     held.clear()
-    local = cached.copy(
-      draft = cached.draft.ifEmpty { typed },
+    val kept = keepShownPlan(cached, local)
+    local = kept.copy(
+      draft = kept.draft.ifEmpty { typed },
       disconnected = !liveSync,
       reachedLive = false,
       catchingUp = liveSync,
@@ -146,11 +150,16 @@ class MonitorCoordinator(
       turns = emptyList(),
       live = null,
       history = emptyMap(),
-      view = if (liveSync) cached.view else clearRemoteActions(cached.view),
+      view = if (liveSync) kept.view else clearRemoteActions(kept.view),
       showThinking = display.showThinking,
       showTools = display.showTools
     )
-    content.replace(contentHost, cached.conversationId, cached.turns, cached.live)
+    content.replace(contentHost, kept.conversationId, kept.turns, kept.live)
+  }
+
+  /** Puts the cached plan on an empty plan tab. Does not wait for the host. */
+  fun noteCachedPlan(path: String, title: String, rows: List<PlanRow>, selected: Int) = synchronized(gate) {
+    local = withCachedPlan(local, StoredPlan(path, title, rows, selected))
   }
 
   fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
@@ -160,8 +169,9 @@ class MonitorCoordinator(
       submittedId = ""
     }
     held.clear()
-    local = cached.copy(
-      draft = cached.draft.ifEmpty { typed },
+    val kept = keepShownPlan(cached, local)
+    local = kept.copy(
+      draft = kept.draft.ifEmpty { typed },
       disconnected = true,
       reachedLive = false,
       pairHold = false,
@@ -172,11 +182,11 @@ class MonitorCoordinator(
       turns = emptyList(),
       live = null,
       history = emptyMap(),
-      view = clearRemoteActions(cached.view),
+      view = clearRemoteActions(kept.view),
       showThinking = display.showThinking,
       showTools = display.showTools
     )
-    content.replace(contentHost, cached.conversationId, cached.turns, cached.live)
+    content.replace(contentHost, kept.conversationId, kept.turns, kept.live)
   }
 
   fun onEvent(event: MonitorEvent): List<MonitorEffect>? = synchronized(gate) {

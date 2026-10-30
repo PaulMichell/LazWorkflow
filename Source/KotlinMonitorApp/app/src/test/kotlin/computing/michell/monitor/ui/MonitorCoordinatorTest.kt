@@ -149,6 +149,22 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aStoredConversationKeepsThePlanAlreadyOnScreen() {
+    val coordinator = open()
+    coordinator.noteCachedPlan(
+      "Documents/Plan.md",
+      "Overview",
+      listOf(PlanRow(0, 3, "Cache the plan", "", "not started", true)),
+      0
+    )
+    coordinator.showStored(MonitorUi(conversationId = "conversation-1", turns = listOf(WireTurn(1, "t", "build", "", "Shown", ""))), true)
+    assertEquals("Overview", coordinator.state.planTitle)
+    assertEquals("Cache the plan", coordinator.state.planRows.single().title)
+    assertEquals("Shown", coordinator.state.turns.single().promptPreview)
+    assertFalse(coordinator.state.planRunning)
+  }
+
+  @Test
   fun helloAsksForTheOpenScreenNotTheSavedCursor() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())

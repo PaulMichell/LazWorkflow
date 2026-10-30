@@ -8,6 +8,7 @@ package computing.michell.monitor.data
 
 import androidx.room3.withWriteTransaction
 import computing.michell.monitor.protocol.OfflineCacheDocument
+import computing.michell.monitor.protocol.PlanRow
 import kotlinx.coroutines.flow.Flow
 import java.io.File
 
@@ -154,6 +155,31 @@ class ConversationRepository(
       database.hosts().delete(host.id)
       val folder = imageRoot?.let { root -> safeImageDir(root, host.id) }
       if (folder != null && folder.isDirectory) folder.deleteRecursively()
+    }
+    for (plan in database.plans().listAll()) {
+      if (hostKey(plan.host) == wanted) database.plans().delete(plan.host)
+    }
+  }
+
+  /** The plan page reads this before the host frame arrives. */
+  suspend fun loadPlan(key: String): StoredPlan? {
+    if (key.isEmpty()) return null
+    val wanted = hostKey(key)
+    val row = database.plans().listAll().firstOrNull { plan -> hostKey(plan.host) == wanted } ?: return null
+    return storedPlanOf(row.path, row.title, row.selected, row.rowsJson)
+  }
+
+  suspend fun savePlan(host: String, path: String, title: String, rows: List<PlanRow>, selected: Int, nowMs: Long) {
+    if (host.isEmpty() || !hasStoredPlan(path, title, rows)) return
+    database.hosts().insertIfAbsent(HostRecord(host, host, ""))
+    database.plans().upsert(PlanRecord(host, path, title, planCacheText(path, title, rows, selected), selected, nowMs))
+  }
+
+  suspend fun deletePlan(key: String) {
+    if (key.isEmpty()) return
+    val wanted = hostKey(key)
+    for (plan in database.plans().listAll()) {
+      if (hostKey(plan.host) == wanted) database.plans().delete(plan.host)
     }
   }
 

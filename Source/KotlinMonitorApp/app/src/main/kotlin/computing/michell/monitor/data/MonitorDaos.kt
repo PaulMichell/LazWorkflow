@@ -154,3 +154,15 @@ interface OutboxDao {
   @Query("DELETE FROM outbox WHERE commandId = :commandId")
   suspend fun delete(commandId: String)
 }
+
+@Dao
+interface PlanDao {
+  @Query("SELECT * FROM plan")
+  suspend fun listAll(): List<PlanRecord>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun upsert(row: PlanRecord)
+
+  @Query("DELETE FROM plan WHERE host = :host")
+  suspend fun delete(host: String)
+}

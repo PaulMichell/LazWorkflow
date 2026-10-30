@@ -213,9 +213,11 @@ private fun MonitorShell(model: MonitorViewModel) {
               model.selectTab(item)
               scope.launch { pagerState.animateScrollToPage(pageForTab(item)) }
             }
+            // The other page stays composed, so a swipe shows the cached plan at once.
             HorizontalPager(
               state = pagerState,
               modifier = Modifier.weight(1f).fillMaxWidth(),
+              beyondViewportPageCount = 1,
               userScrollEnabled = !ui.approvalOpen
             ) { page ->
               when (tabForPage(page)) {

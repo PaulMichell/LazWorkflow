@@ -7,6 +7,8 @@ package computing.michell.monitor.ui
 
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.data.ConversationRecord
+import computing.michell.monitor.data.StoredPlan
+import computing.michell.monitor.data.hasStoredPlan
 import computing.michell.monitor.data.hostKey
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.WireTurn
@@ -178,6 +180,33 @@ fun imageTileLabel(hasBitmap: Boolean, reason: String?, missing: Boolean, allowF
   if (missing) return "Image unavailable: missing"
   if (!allowFetch) return ImagePlaceholder
   return LoadingImageLabel
+}
+
+/** Fills an empty plan tab from the host cache. A plan already on screen wins. */
+fun withCachedPlan(state: MonitorUi, plan: StoredPlan): MonitorUi {
+  if (!hasStoredPlan(plan.path, plan.title, plan.rows)) return state
+  if (hasStoredPlan(state.planPath, state.planTitle, state.planRows)) return state
+  return state.copy(
+    planPath = plan.path,
+    planTitle = plan.title,
+    planRows = plan.rows,
+    selectedPlan = plan.selected,
+    view = state.view.copy(planPath = plan.path, planTitle = plan.title)
+  )
+}
+
+/** Opening a stored conversation must not blank the plan already on screen. */
+fun keepShownPlan(incoming: MonitorUi, shown: MonitorUi): MonitorUi {
+  if (hasStoredPlan(incoming.planPath, incoming.planTitle, incoming.planRows)) return incoming
+  if (!hasStoredPlan(shown.planPath, shown.planTitle, shown.planRows)) return incoming
+  return incoming.copy(
+    planPath = shown.planPath,
+    planTitle = shown.planTitle,
+    planRows = shown.planRows,
+    selectedPlan = shown.selectedPlan,
+    planChoices = if (incoming.planChoices.isNotEmpty()) incoming.planChoices else shown.planChoices,
+    view = incoming.view.copy(planPath = shown.planPath, planTitle = shown.planTitle)
+  )
 }
 
 /** Restores browseable rows. Remote actions stay off until a live snapshot arrives. */

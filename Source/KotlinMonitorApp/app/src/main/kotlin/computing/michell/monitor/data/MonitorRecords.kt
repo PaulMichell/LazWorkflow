@@ -115,6 +115,17 @@ data class ImageRecord(
   val size: Long
 )
 
+/** The desktop's current plan for one host. Not a conversation row. */
+@Entity(tableName = "plan")
+data class PlanRecord(
+  @PrimaryKey val host: String,
+  val path: String,
+  val title: String,
+  val rowsJson: String,
+  val selected: Int,
+  val updatedAt: Long
+)
+
 @Entity(tableName = "outbox")
 data class OutboxRecord(
   @PrimaryKey val commandId: String,

@@ -359,12 +359,21 @@ class InboundDelivery(
         }
       }
       if (queuedBytes + incoming > byteBudget) return@synchronized false
-      pending.addLast(message)
+      // A plan must not wait behind pages or images. The page can show the cached copy,
+      // and this frame is the replacement.
+      val slot = if (message.kind == MessageKind.Plan) planInsertAt() else pending.size
+      pending.add(slot, message)
       queuedBytes += incoming
       true
     }
     if (stored) available.trySend(Unit)
     return stored
+  }
+
+  private fun planInsertAt(): Int {
+    val index = pending.indexOfFirst { message -> message.kind in PlanBefore }
+    if (index < 0) return pending.size
+    return index
   }
 
   private suspend fun take(): MonitorMessage {
@@ -396,6 +405,15 @@ private fun messageBytes(message: MonitorMessage): Int {
       MessageKind.Target,
       MessageKind.Plan,
       MessageKind.Tasks
+    )
+    private val PlanBefore = setOf(
+      MessageKind.Snapshot,
+      MessageKind.SnapshotPage,
+      MessageKind.Transcript,
+      MessageKind.Catchup,
+      MessageKind.ImageData,
+      MessageKind.ImageUnavailable,
+      MessageKind.Chunk
     )
   }
 }

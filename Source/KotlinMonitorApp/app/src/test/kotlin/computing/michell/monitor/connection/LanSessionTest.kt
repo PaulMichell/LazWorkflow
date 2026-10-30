@@ -630,6 +630,39 @@ class LanSessionTest {
   }
 
   @Test
+  fun aPlanFrameIsDeliveredBeforeQueuedPages() = runBlocking {
+    val delivery = InboundDelivery(SteppableClock())
+    val received = mutableListOf<String>()
+    val hold = CompletableDeferred<Unit>()
+    val started = CompletableDeferred<Unit>()
+    val collector = launch {
+      delivery.messages.collect { message ->
+        received += message.id
+        if (received.size == 1) {
+          started.complete(Unit)
+          hold.await()
+        }
+      }
+    }
+    try {
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Ping, "held")))
+      started.await()
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.SnapshotPage, "page")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.ImageData, "image")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Plan, "plan")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status")))
+      hold.complete(Unit)
+      withTimeout(5_000) {
+        while (received.size < 5) yield()
+      }
+      assertEquals(listOf("held", "plan", "page", "image", "status"), received.toList())
+    } finally {
+      hold.complete(Unit)
+      collector.cancel()
+    }
+  }
+
+  @Test
   fun aFullCreditWindowFailsWithoutWaiting() = runBlocking {
     val delivery = InboundDelivery(SteppableClock(), byteBudget = 3)
     assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
