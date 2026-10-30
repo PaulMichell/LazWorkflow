@@ -5,7 +5,6 @@ package computing.michell.monitor.ui
    The file cache is gone. Room holds the rows. These functions still build
    the browseable screen the conversation page already knows. */
 
-import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.hostKey
@@ -34,7 +33,7 @@ fun offlineDocument(ui: MonitorUi): OfflineCacheDocument {
     ui.planTitle,
     ui.planRows,
     ui.selectedPlan,
-    ui.draft
+    ""
   )
 }
 
@@ -131,11 +130,6 @@ fun conversationsForHost(rows: List<ConversationRecord>, host: String): List<Con
     .sortedWith(compareByDescending<ConversationRecord> { it.pinned }.thenByDescending { it.updatedAt }.thenBy { it.id })
 }
 
-/** The stored list is available offline and while the link is live. */
-fun cachedButtonVisible(disconnected: Boolean, phase: LinkPhase): Boolean {
-  return true
-}
-
 /** The page copy of a stored conversation. Remote actions stay off. Does not open a socket. */
 fun reviewedCacheState(state: MonitorUi, document: OfflineCacheDocument, row: ConversationRecord, hasAddress: Boolean): MonitorUi {
   return applyOfflineCache(state, document, hasAddress).copy(
@@ -203,7 +197,8 @@ fun applyOfflineCache(state: MonitorUi, document: OfflineCacheDocument, hasAddre
     planRows = document.planRows,
     planRunning = false,
     selectedPlan = document.selectedPlan,
-    draft = document.draft,
+    // An unsent prompt is not a default. Opening the app must not put it back in the composer.
+    draft = "",
     disconnected = true,
     reachedLive = false,
     pairHold = false,

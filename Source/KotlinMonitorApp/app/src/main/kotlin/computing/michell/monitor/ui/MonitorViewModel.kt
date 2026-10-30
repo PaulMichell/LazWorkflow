@@ -325,6 +325,20 @@ fun actionEnabled(view: WireView): Boolean {
   return view.canSend || view.canSteer
 }
 
+/** A live idle link can send before the first status frame sets canSend. A running turn still cannot. */
+fun sendActionEnabled(view: WireView, disconnected: Boolean, phase: LinkPhase, planRunning: Boolean): Boolean {
+  if (disconnected || phase != LinkPhase.Live) return false
+  if (view.canSteer || view.canSend) return true
+  if (view.sending || view.busy || view.planRunning || planRunning) return false
+  return true
+}
+
+fun newConversationEnabled(view: WireView, disconnected: Boolean, phase: LinkPhase, planRunning: Boolean): Boolean {
+  if (disconnected || phase != LinkPhase.Live) return false
+  if (view.sending || view.busy || view.planRunning || planRunning || view.canSteer) return false
+  return true
+}
+
 fun loadedTurnIndices(state: MonitorUi): Set<Int> {
   val stored = state.history.filterValues { turn -> liveHasContent(turn) }.keys
   val live = state.live
@@ -1266,7 +1280,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     if (record.address.isNotEmpty()) {
       coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
-      runBlocking(Dispatchers.IO) { commandLedger.refresh() }
+      runBlocking(Dispatchers.IO) {
+        commandLedger.refresh()
+        commandLedger.dropOpenPrompts()
+      }
       session.connect(record.address, record.port)
     }
   }
@@ -1421,6 +1438,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun showCachedList() {
+    leaveDictation()
+    uiState.update { it.copy(settingsOpen = false) }
     cacheBackToListState.value = false
     viewModelScope.launch(Dispatchers.IO) {
       val record = store.load()

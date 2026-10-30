@@ -2,7 +2,6 @@ package computing.michell.monitor.ui
 
 /* Offline restore keeps browseable rows and disables remote actions (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
@@ -31,7 +30,7 @@ class OfflineCacheUiTest {
     assertEquals("Release layout", restored.planTitle)
     assertEquals("Anchor the composer", restored.turns[0].promptPreview)
     assertEquals(0, restored.selectedPlan)
-    assertEquals("draft", restored.draft)
+    assertEquals("", restored.draft)
     assertTrue(restored.disconnected)
     assertFalse(restored.reachedLive)
     assertFalse(restored.view.canSend)
@@ -124,9 +123,6 @@ class OfflineCacheUiTest {
     assertEquals("LazWorkflow", projectDisplay("C:\\work\\LazWorkflow"))
     assertEquals("current", cacheRowTitle(rows[0]))
     assertEquals("26 Oct 2026, 12:00", cacheUpdatedText(java.time.Instant.parse("2026-10-26T12:00:00Z").toEpochMilli(), java.time.ZoneId.of("UTC")))
-    assertFalse(cachedButtonVisible(false, LinkPhase.Live))
-    assertTrue(cachedButtonVisible(true, LinkPhase.Disconnected))
-    assertTrue(cachedButtonVisible(false, LinkPhase.Disconnected))
   }
 
   @Test

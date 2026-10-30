@@ -170,6 +170,7 @@ private fun MonitorShell(model: MonitorViewModel) {
           model::setShowTools,
           model::setConversationCapText,
           model::setImageBudgetText,
+          model::showCachedList,
           model::closeSettings
         )
       }
@@ -217,7 +218,6 @@ private fun MonitorShell(model: MonitorViewModel) {
                   model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
                   dictation, model::toggleDictationOn, model::toggleDictationOff,
                   permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
-                  model::showCachedList,
                   model::retryUndelivered
                 )
                 AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)
@@ -239,7 +239,7 @@ private fun MonitorShell(model: MonitorViewModel) {
     }
   }
   val notice = ui.approval
-  if (!showSettings && tab == AppTab.Conversation && cacheListOpen) {
+  if (!showSettings && cacheListOpen) {
     CachedListDialog(cacheRows, model::openCachedRow, model::pinCached, model::deleteCached, model::closeCachedList)
   }
   if (!showSettings && ui.approvalOpen && notice != null) {

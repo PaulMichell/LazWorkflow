@@ -115,7 +115,6 @@ fun ConversationScreen(
   permissionRequest: Boolean,
   onPermissionResult: (Boolean) -> Unit,
   onPermissionConsumed: () -> Unit,
-  onCached: () -> Unit = {},
   onRetry: () -> Unit = {}
 ) {
   val activity = LocalContext.current as? Activity
@@ -129,11 +128,6 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (cachedButtonVisible(ui.disconnected, phase)) {
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        TextButton(onClick = onCached) { Text("Cached") }
-      }
-    }
     ConversationPane(ui, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
@@ -151,10 +145,10 @@ fun ConversationScreen(
       }, onDictateOff)
       Button(
         onClick = onSend,
-        enabled = actionEnabled(ui.view) && !ui.disconnected && !dictation.sendMustWait
+        enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning) && !dictation.sendMustWait
       ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
-      Button(onClick = onNew, enabled = ui.view.canSend && !ui.disconnected) { Text("New") }
+      Button(onClick = onNew, enabled = newConversationEnabled(ui.view, ui.disconnected, phase, ui.planRunning)) { Text("New") }
     }
   }
 }

@@ -10,7 +10,6 @@ import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
-import computing.michell.monitor.connection.NotDeliveredRetry
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.InboundPayload
@@ -168,8 +167,9 @@ class MonitorCoordinator(
 
   fun flush(current: MonitorUi): List<MonitorEffect>? = null
 
+  /** The retry chip may offer the old text. It must not become the composer on the next open. */
   fun noteUndelivered(current: MonitorUi, text: String): MonitorUi = synchronized(gate) {
-    local = local.copy(draft = text, undeliveredPrompt = text, banner = NotDeliveredRetry)
+    local = local.copy(undeliveredPrompt = text)
     published()
   }
 

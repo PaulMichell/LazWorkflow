@@ -67,6 +67,7 @@ fun SettingsScreen(
   onTools: (Boolean) -> Unit,
   onConversationCap: (String) -> Unit,
   onImageBudget: (String) -> Unit,
+  onCached: () -> Unit,
   onBack: () -> Unit
 ) {
   val shownError = settingsErrorText(errorText)
@@ -137,6 +138,7 @@ fun SettingsScreen(
           keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
       }
+      Button(onClick = onCached, modifier = Modifier.fillMaxWidth()) { Text("Cached conversations") }
       HorizontalDivider()
       HelpRow(helpOpen) { helpOpen = !helpOpen }
       if (helpOpen) {

@@ -29,6 +29,17 @@ class RoomCommandLedger(private val repository: ConversationRepository) : Comman
     replace(repository.listOutbox())
   }
 
+  /** A prompt from a previous open is not put back in the composer. */
+  suspend fun dropOpenPrompts() {
+    val current = synchronized(gate) { rows }
+    for (row in current) {
+      if (row.state == OutboxDone || row.state == OutboxRejected) continue
+      if (row.kind != "send" && row.kind != "steer") continue
+      repository.removeOutbox(row.commandId)
+    }
+    refresh()
+  }
+
   override fun openIds(): List<String> = synchronized(gate) {
     rows.filter { it.state != OutboxDone && it.state != OutboxRejected }.map { it.commandId }
   }

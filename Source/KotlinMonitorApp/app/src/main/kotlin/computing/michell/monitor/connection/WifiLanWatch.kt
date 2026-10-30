@@ -26,11 +26,10 @@ class WifiLanWatch(
     }
 
     override fun onLost(network: Network) {
-      val empty = synchronized(networks) {
-        networks.remove(network)
-        networks.isEmpty()
-      }
-      if (empty) onDown()
+      synchronized(networks) { networks.remove(network) }
+      val connectivity = manager
+      if (connectivity != null && wifiPresent(connectivity)) return
+      if (synchronized(networks) { networks.isEmpty() }) onDown()
     }
   }
   private var manager: ConnectivityManager? = null
@@ -40,15 +39,16 @@ class WifiLanWatch(
     if (registered) return
     val connectivity = appContext.getSystemService(ConnectivityManager::class.java) ?: return
     manager = connectivity
-    // Down until a Wi-Fi network is known. The callback also reports one that already exists.
-    onDown()
-    if (activeWifi(connectivity)) onUp()
+    // A desk LAN often has no upstream. Do not wait for Android to mark it as the default route.
+    if (wifiPresent(connectivity)) onUp() else onDown()
     val request = NetworkRequest.Builder()
       .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+      .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
       .build()
     try {
       connectivity.registerNetworkCallback(request, callback)
       registered = true
+      if (wifiPresent(connectivity)) onUp()
     } catch (error: Exception) {
       // A missing permission must not crash startup, or leave the link waiting forever.
       onUp()
@@ -67,17 +67,21 @@ class WifiLanWatch(
     }
   }
 
-  private fun activeWifi(connectivity: ConnectivityManager): Boolean {
-    val network = try {
-      connectivity.activeNetwork
+  /** Any Wi-Fi network, including one Android will not use as the default because it has no internet. */
+  private fun wifiPresent(connectivity: ConnectivityManager): Boolean {
+    val networks = try {
+      connectivity.allNetworks
     } catch (error: Exception) {
       return false
-    } ?: return false
-    val caps = try {
-      connectivity.getNetworkCapabilities(network)
-    } catch (error: Exception) {
-      null
     }
-    return caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+    for (network in networks) {
+      val caps = try {
+        connectivity.getNetworkCapabilities(network)
+      } catch (error: Exception) {
+        null
+      } ?: continue
+      if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return true
+    }
+    return false
   }
 }
