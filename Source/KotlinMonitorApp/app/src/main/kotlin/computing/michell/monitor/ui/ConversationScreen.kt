@@ -186,19 +186,28 @@ private fun ConversationPane(
   }
   val listState = rememberLazyListState()
   var followHead by remember { mutableStateOf(true) }
+  val programmatic = remember { mutableStateOf(false) }
   val need = rememberUpdatedState(onNeed)
   val reportVisible = rememberUpdatedState(onVisibleTurns)
   LaunchedEffect(ui.pendingEpoch) {
     if (ui.pendingEpoch > 0) followHead = true
   }
-  LaunchedEffect(rows.size, followHead) {
-    if (followHead && rows.isNotEmpty()) listState.scrollToItem(rows.lastIndex)
-  }
-  LaunchedEffect(listState, rows) {
-    snapshotFlow { listState.isScrollInProgress to listState.firstVisibleItemIndex }
-      .collect { (scrolling, index) ->
-        if (scrolling && rows.isNotEmpty() && index < rows.lastIndex) followHead = false
+  LaunchedEffect(listState) {
+    snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+      .collect { (scrolling, more) ->
+        followHead = followAfterMotion(followHead, scrolling, !more, programmatic.value)
       }
+  }
+  val tail = liveTailToken(rows, ui.pendingPrompt)
+  LaunchedEffect(tail, followHead) {
+    if (!followHead || rows.isEmpty()) return@LaunchedEffect
+    programmatic.value = true
+    try {
+      // A large offset pins the growing last block, not only its first line.
+      listState.scrollToItem(rows.lastIndex, Int.MAX_VALUE)
+    } finally {
+      programmatic.value = false
+    }
   }
   LaunchedEffect(listState, rows) {
     snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { item -> item.index } }

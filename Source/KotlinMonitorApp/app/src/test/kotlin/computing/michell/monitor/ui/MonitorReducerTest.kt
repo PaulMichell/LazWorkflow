@@ -659,6 +659,25 @@ class MonitorReducerTest {
     assertTrue(stickToHead(true, 400, 400, 400, 900, false))
     assertFalse(stickToHead(true, 400, 200, 400, 900, false))
     assertTrue(stickToHead(false, 200, 900, 900, 900, false))
+    assertFalse(followAfterMotion(true, true, false, false))
+    assertTrue(followAfterMotion(false, true, true, false))
+    assertFalse(followAfterMotion(false, false, false, false))
+    assertTrue(followAfterMotion(true, true, false, true))
+    val growing = conversationRows(
+      emptyList(),
+      WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(
+        WireBlock("answer", "a", "", "", "", "Hello", false, true, 0, emptyList())
+      )),
+      true, true, true
+    )
+    val longer = conversationRows(
+      emptyList(),
+      WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(
+        WireBlock("answer", "a", "", "", "", "Hello there", false, true, 0, emptyList())
+      )),
+      true, true, true
+    )
+    assertFalse(liveTailToken(growing, "") == liveTailToken(longer, ""))
     val kept = WireTurn(2, "b", "build", "", "second prompt", "", prompt = "kept", blocks = listOf(WireBlock("answer", "b", "", "", "", "body", false, true, 0, emptyList())))
     val start = MonitorUi(draft = "half written", turns = listOf(older, newer), history = mapOf(2 to kept), reachedLive = true)
     val snapshot = WireSnapshot(

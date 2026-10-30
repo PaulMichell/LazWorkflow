@@ -176,6 +176,25 @@ fun stickToHead(following: Boolean, previousValue: Int, value: Int, previousMax:
   return following
 }
 
+/** Row count misses a growing last block. The tail text is what the live turn is writing. */
+fun liveTailToken(rows: List<ConversationRow>, pending: String): String {
+  val last = rows.lastOrNull()
+  val body = last?.block?.body.orEmpty()
+  val end = if (body.length <= 48) body else body.substring(body.length - 48)
+  return "${rows.size}\u0000${last?.key.orEmpty()}\u0000$end\u0000${pending.length}"
+}
+
+/**
+ * Leaving the bottom stops the live tail. Returning to it resumes the tail.
+ * A scroll the screen itself started must not count as the finger.
+ */
+fun followAfterMotion(following: Boolean, userScrolling: Boolean, atEnd: Boolean, programmatic: Boolean): Boolean {
+  if (programmatic) return following
+  if (atEnd) return true
+  if (userScrolling) return false
+  return following
+}
+
 fun mergeLiveTurn(previous: WireTurn?, incoming: WireTurn?, sameGeneration: Boolean = true): WireTurn? {
   if (incoming == null) return null
   val sameTurn = sameGeneration && previous != null && previous.id.isNotEmpty() && previous.id == incoming.id
