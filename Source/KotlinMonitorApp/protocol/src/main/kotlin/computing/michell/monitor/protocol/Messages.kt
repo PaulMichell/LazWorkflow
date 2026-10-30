@@ -1784,6 +1784,40 @@ fun encodeImageGet(id: String, turnIndex: Int, imageId: String): String {
   return encodeEnvelope(MessageKind.ImageGet, id, payload.build())
 }
 
+fun encodeSnapshotPage(id: String, payloadJson: String): String {
+  val payload = parseObject(payloadJson) ?: return ""
+  return encodeEnvelope(MessageKind.SnapshotPage, id, payload)
+}
+
+/** Sequence on a snapshot page. Zero when the page has none. */
+fun snapshotPageSeq(payloadJson: String): Long {
+  val obj = parseObject(payloadJson) ?: return 0L
+  val seq = obj.readLong("seq", false)
+  return if (seq.ok && seq.value > 0L) seq.value else 0L
+}
+
+/** Outline page turns. Null when this page is a turn body, not an outline. */
+fun snapshotPageOutline(payloadJson: String): List<WireTurn>? {
+  val obj = parseObject(payloadJson) ?: return null
+  if (!obj.has("turns")) return null
+  val turns = obj.field("turns") as? JsonValue.Arr ?: return null
+  return turns.items.map { item ->
+    val row = item as? JsonValue.Obj ?: return null
+    val index = row.readInt("turn_index", true)
+    val id = row.readString("turn_id", true)
+    if (!index.ok || !id.ok) return null
+    WireTurn(
+      index.value,
+      id.value,
+      row.readString("mode", false).value,
+      row.readString("created_at", false).value,
+      row.readString("prompt_preview", false).value,
+      "",
+      durationMs = row.readInt("duration_ms", false).value.coerceAtLeast(0)
+    )
+  }
+}
+
 /** A snapshot page turn, or null when this page is only an outline. */
 fun snapshotPageTurn(payloadJson: String): WireTurn? {
   val obj = parseObject(payloadJson) ?: return null

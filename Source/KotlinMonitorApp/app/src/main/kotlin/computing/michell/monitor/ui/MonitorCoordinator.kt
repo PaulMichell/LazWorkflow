@@ -16,10 +16,13 @@ import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
+import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
+import computing.michell.monitor.protocol.applySnapshotPageJson
+import computing.michell.monitor.protocol.decodeCatchup
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePatch
@@ -27,6 +30,8 @@ import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
+import computing.michell.monitor.protocol.snapshotPageOutline
+import computing.michell.monitor.protocol.snapshotPageSeq
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.tryEncodeSend
@@ -233,6 +238,8 @@ class MonitorCoordinator(
         effects += resumeNow()
       }
       MessageKind.Snapshot -> applySnapshot(decodeSnapshot(message.payloadJson) ?: snapshotFrom(message))
+      MessageKind.SnapshotPage -> applySnapshotPage(message)
+      MessageKind.Catchup -> decodeCatchup(message.payloadJson)?.let { applyCatchup(it) }
       MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
       MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
         local = local.copy(view = view, statusBusy = view.busy, planRunning = view.planRunning)
@@ -266,6 +273,51 @@ class MonitorCoordinator(
     )
   }
 
+  /** The host no longer sends a snapshot frame. Pages are the conversation. */
+  private fun applySnapshotPage(message: MonitorMessage) {
+    val seq = snapshotPageSeq(message.payloadJson)
+    val outline = snapshotPageOutline(message.payloadJson)
+    if (outline != null) {
+      val liveId = content.current().live?.id.orEmpty()
+      val live = outline.firstOrNull { turn -> liveId.isNotEmpty() && turn.id == liveId }
+      val stored = if (live == null) outline else outline.filter { turn -> turn.id != live.id }
+      content.replace(contentHost, local.conversationId, stored, live)
+      noteCaughtUp(seq)
+      return
+    }
+    val board = content.current()
+    val applied = applySnapshotPageJson(board.turns, board.live, message.payloadJson) ?: return
+    content.replace(contentHost, local.conversationId, applied.first, applied.second)
+    noteCaughtUp(seq)
+  }
+
+  private fun applyCatchup(catchup: WireCatchup) {
+    if (catchup.mode == "snapshot") {
+      applySnapshot(catchup.snapshot)
+      return
+    }
+    if (catchup.mode != "events") return
+    for (patch in catchup.patches) applyPatch(patch)
+    local = local.copy(
+      conversationId = catchup.conversationId.ifEmpty { local.conversationId },
+      projectRoot = catchup.projectRoot.ifEmpty { local.projectRoot },
+      conversationTitle = catchup.title.ifEmpty { local.conversationTitle }
+    )
+    noteCaughtUp(catchup.cursor)
+    if (catchup.epoch.isNotEmpty()) local = local.copy(hostEpoch = catchup.epoch)
+  }
+
+  private fun noteCaughtUp(seq: Long) {
+    local = local.copy(
+      catchingUp = false,
+      reviewingOffline = false,
+      disconnected = false,
+      reachedLive = true,
+      hostCursor = if (seq > 0L) seq else local.hostCursor,
+      banner = if (linkBanner(local.banner)) "" else local.banner
+    )
+  }
+
   /** Snapshot pages do not carry rows. This frame is the phone's plan. */
   private fun applyPlan(message: MonitorMessage) {
     val plan = (message.inbound as? InboundPayload.Plan)?.value ?: decodePlan(message.payloadJson) ?: return
@@ -295,17 +347,23 @@ class MonitorCoordinator(
       durationMs = patch.elapsedMs
     )
     content.replace(contentHost, local.conversationId, board.turns, live)
+    val flagged = local.view.copy(
+      busy = patch.busy,
+      sending = patch.sending,
+      planRunning = patch.planRunning,
+      canSend = patch.canSend,
+      canSteer = patch.canSteer,
+      canStop = patch.canStop,
+      elapsedMs = patch.elapsedMs,
+      phase = patch.phase
+    )
+    val view = if (patch.hasView) {
+      flagged.copy(model = patch.model, signedIn = patch.signedIn, statusText = patch.statusText)
+    } else {
+      flagged
+    }
     local = local.copy(
-      view = local.view.copy(
-        busy = patch.busy,
-        sending = patch.sending,
-        planRunning = patch.planRunning,
-        canSend = patch.canSend,
-        canSteer = patch.canSteer,
-        canStop = patch.canStop,
-        elapsedMs = patch.elapsedMs,
-        phase = patch.phase
-      ),
+      view = view,
       hostEpoch = patch.epoch.ifEmpty { local.hostEpoch },
       hostCursor = patch.cursor,
       planRunning = patch.planRunning

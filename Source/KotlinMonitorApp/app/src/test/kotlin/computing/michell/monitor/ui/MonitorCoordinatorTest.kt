@@ -19,9 +19,12 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.HelloOkMessage
+import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.encodePatch
 import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeSnapshot
+import computing.michell.monitor.protocol.encodeSnapshotPage
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -99,6 +102,26 @@ class MonitorCoordinatorTest {
     assertTrue(coordinator.state.disconnected)
     assertFalse(coordinator.holdingLink)
     assertNull(coordinator.revealHeldLink(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
+  }
+
+  @Test
+  fun aSnapshotPageEndsSyncingAndShowsTheDesktopTurn() {
+    val coordinator = open()
+    val hello = HelloOkMessage("nonce", "ide", "epoch", 118, "conversation-1", "/work", "Chat", "")
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello))))
+    assertTrue(coordinator.state.catchingUp)
+    assertEquals(118, coordinator.state.hostCursor)
+    val page = encodeSnapshotPage(
+      "page-0",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"turn-1","mode":"build","prompt_preview":"hello from the desktop","created_at":"","duration_ms":0}]}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(page)))
+    assertFalse(coordinator.state.catchingUp)
+    assertEquals("hello from the desktop", coordinator.state.turns.single().promptPreview)
+    val moved = encodePlan("plan-2", "Documents/Other.md", "Other", false, emptyList())
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(moved)))
+    assertEquals("Documents/Other.md", coordinator.state.planPath)
+    assertEquals("Other", coordinator.state.planTitle)
   }
 
   @Test

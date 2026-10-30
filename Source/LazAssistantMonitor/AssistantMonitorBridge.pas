@@ -728,7 +728,10 @@ Begin
               SendJson(Json);
               Form := OpenForm;
               If Assigned(Form) Then
-                PushStatus(Form);
+                Begin
+                  PushStatus(Form);
+                  PushPlan(Form);
+                End;
               Exit;
             End;
         End;
@@ -747,6 +750,8 @@ Begin
       Exit;
     End;
   SendCatchupSnapshot(Form, Id);
+  PushStatus(Form);
+  PushPlan(Form);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
