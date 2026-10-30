@@ -138,6 +138,7 @@ fun ConversationScreen(
     if (ui.undeliveredPrompt.isNotEmpty()) {
       TextButton(onClick = onRetry) { Text(NotDeliveredRetry) }
     }
+    val syncing = linkSyncing(phase, ui.disconnected, ui.catchingUp, ui.pairedElsewhere)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       DictateToggle(dictation, promptValue.selection.start, promptValue.selection.end, { start, end ->
         val showRationale = activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == true
@@ -149,10 +150,10 @@ fun ConversationScreen(
           if (promptValue.text != ui.draft) onPrompt(promptValue.text, promptValue.selection.start, promptValue.selection.end)
           onSend()
         },
-        enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning) && !dictation.sendMustWait
+        enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning, syncing) && !dictation.sendMustWait
       ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
-      Button(onClick = onNew, enabled = newConversationEnabled(ui.view, ui.disconnected, phase, ui.planRunning)) { Text("New") }
+      Button(onClick = onNew, enabled = newConversationEnabled(ui.view, ui.disconnected, phase, ui.planRunning, syncing)) { Text("New") }
     }
   }
 }

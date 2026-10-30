@@ -325,16 +325,30 @@ fun actionEnabled(view: WireView): Boolean {
   return view.canSend || view.canSteer
 }
 
-/** A live idle link can send before the first status frame sets canSend. A running turn still cannot. */
-fun sendActionEnabled(view: WireView, disconnected: Boolean, phase: LinkPhase, planRunning: Boolean): Boolean {
-  if (disconnected || phase != LinkPhase.Live) return false
+/** A live idle link can send before the first status frame sets canSend. A running turn still cannot.
+    Syncing is not a disconnect: the buttons stay up, and the coordinator holds the command. */
+fun sendActionEnabled(
+  view: WireView,
+  disconnected: Boolean,
+  phase: LinkPhase,
+  planRunning: Boolean,
+  syncing: Boolean = false
+): Boolean {
+  if (!syncing && (disconnected || phase != LinkPhase.Live)) return false
   if (view.canSteer || view.canSend) return true
   if (view.sending || view.busy || view.planRunning || planRunning) return false
   return true
 }
 
-fun newConversationEnabled(view: WireView, disconnected: Boolean, phase: LinkPhase, planRunning: Boolean): Boolean {
-  if (disconnected || phase != LinkPhase.Live) return false
+/** New stays available through a short sync. A running turn still cannot start another conversation. */
+fun newConversationEnabled(
+  view: WireView,
+  disconnected: Boolean,
+  phase: LinkPhase,
+  planRunning: Boolean,
+  syncing: Boolean = false
+): Boolean {
+  if (!syncing && (disconnected || phase != LinkPhase.Live)) return false
   if (view.sending || view.busy || view.planRunning || planRunning || view.canSteer) return false
   return true
 }

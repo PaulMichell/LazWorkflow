@@ -26,6 +26,8 @@ class ConnectionChipTest {
   fun syncingShowsProgressAndOfflineShowsTheLastSync() {
     val syncing = connectionChip(LinkPhase.Connecting, false, false, true, false, 4, 10, 0)
     assertEquals("Syncing 40%", syncing.label)
+    assertTrue(linkSyncing(LinkPhase.Connecting, false, true, false))
+    assertFalse(linkSyncing(LinkPhase.Connecting, false, false, false))
     val offline = connectionChip(
       LinkPhase.Disconnected, true, false, false, false, 0, 0, 1_700_000_000_000L, ZoneOffset.UTC
     )

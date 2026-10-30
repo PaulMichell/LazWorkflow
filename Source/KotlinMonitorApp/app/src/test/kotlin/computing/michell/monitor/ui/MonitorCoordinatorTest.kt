@@ -278,6 +278,91 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aPromptDuringSyncWaitsUntilTheLinkIsLive() {
+    val coordinator = open()
+    showAnswer(coordinator, "conversation-1", "epoch", "old answer")
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Connecting, "", "")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello-2", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Old", "")
+    ))))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "queued while syncing"))
+    val held = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertTrue(held.none { effect -> effect is MonitorEffect.Send })
+    assertEquals("", coordinator.state.draft)
+    assertEquals("queued while syncing", coordinator.state.pendingPrompt)
+    assertEquals("old answer", coordinator.state.live?.blocks?.single()?.body)
+    val stillDown = coordinator.onEvent(MonitorEvent.LinkChanged(
+      coordinator.state, LinkStatus(LinkPhase.Connecting, "", "")
+    )).orEmpty()
+    assertTrue(stillDown.none { effect -> effect is MonitorEffect.Send })
+    val flushed = coordinator.onEvent(MonitorEvent.LinkChanged(
+      coordinator.state, LinkStatus(LinkPhase.Live, "", "")
+    )).orEmpty()
+    val sent = flushed.filterIsInstance<MonitorEffect.Send>().single()
+    assertTrue(sent.json.contains("queued while syncing"))
+    assertEquals("queued while syncing", coordinator.state.pendingPrompt)
+  }
+
+  @Test
+  fun aLiveSyncStillSendsAtOnce() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Old", "")
+    ))))
+    assertTrue(coordinator.state.catchingUp)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "send now"))
+    val effects = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertTrue(effects.filterIsInstance<MonitorEffect.Send>().any { effect -> effect.json.contains("send now") })
+  }
+
+  @Test
+  fun newDuringSyncKeepsTheScreenUntilTheLinkIsLive() {
+    val coordinator = open()
+    showAnswer(coordinator, "conversation-1", "epoch", "old answer")
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Connecting, "", "")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello-2", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Old", "")
+    ))))
+    val held = coordinator.onEvent(MonitorEvent.NewConversation(coordinator.state)).orEmpty()
+    assertTrue(held.none { effect -> effect is MonitorEffect.Send })
+    assertEquals("old answer", coordinator.state.live?.blocks?.single()?.body)
+    val flushed = coordinator.onEvent(MonitorEvent.LinkChanged(
+      coordinator.state, LinkStatus(LinkPhase.Live, "", "")
+    )).orEmpty()
+    assertTrue(flushed.filterIsInstance<MonitorEffect.Send>().any { effect -> effect.json.contains("new_conversation") })
+    assertNull(coordinator.state.live)
+  }
+
+  @Test
+  fun offlineWithoutSyncDoesNotQueueAPrompt() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "still here"))
+    assertNull(coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
+    assertEquals("still here", coordinator.state.draft)
+  }
+
+  @Test
+  fun aRunningTurnDuringSyncDoesNotQueue() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
+      view = emptyView().copy(sending = true, busy = true, canSend = false)
+    )))))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Old", "")
+    ))))
+    assertTrue(coordinator.state.catchingUp)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Connecting, "", "")))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "too soon"))
+    assertNull(coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
+    assertEquals("too soon", coordinator.state.draft)
+  }
+
+  @Test
   fun newConversationFilesTheScreenAndTheNextPageDoesNotKeepIt() {
     val coordinator = open()
     showAnswer(coordinator, "conversation-1", "epoch", "old answer")

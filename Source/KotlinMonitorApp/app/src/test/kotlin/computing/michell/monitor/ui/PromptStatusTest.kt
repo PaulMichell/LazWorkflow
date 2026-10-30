@@ -40,6 +40,20 @@ class PromptStatusTest {
   }
 
   @Test
+  fun syncingKeepsSendAndNewAvailable() {
+    val idle = emptyView()
+    assertTrue(linkSyncing(LinkPhase.Connecting, true, true, false))
+    assertFalse(linkSyncing(LinkPhase.Disconnected, true, true, false))
+    assertFalse(linkSyncing(LinkPhase.Connecting, true, false, false))
+    assertTrue(sendActionEnabled(idle, true, LinkPhase.Connecting, false, true))
+    assertTrue(newConversationEnabled(idle, true, LinkPhase.Connecting, false, true))
+    val running = idle.copy(sending = true, busy = true, canSend = false)
+    assertFalse(sendActionEnabled(running, true, LinkPhase.Connecting, false, true))
+    assertFalse(newConversationEnabled(running, true, LinkPhase.Connecting, false, true))
+    assertFalse(sendActionEnabled(idle, true, LinkPhase.Disconnected, false, false))
+  }
+
+  @Test
   fun microphoneAskDoesNotLoopADeniedDialog() {
     assertEquals(MicrophoneAsk.Start, microphoneAsk(true, false, false))
     assertEquals(MicrophoneAsk.RequestPermission, microphoneAsk(false, false, false))

@@ -18,7 +18,7 @@ The protocol module is a JVM library. It must not apply the Android plugin. Unit
 
 ## What the screen shows
 
-The connection chip is Live, Syncing, Offline, Paired elsewhere, or Busy. Busy comes only from a state-channel status frame. The transcript is a lazy list keyed by turn id and block id. Cached conversations are per host, pinned rows first, then newest. Opening one while the link is down reads Room and does not open a socket. Send, Stop, and New stay off, with the offline-review explanation. Opening one while connected selects it and shows Syncing until the host snapshot arrives.
+The connection chip is Live, Syncing, Offline, Paired elsewhere, or Busy. Busy comes only from a state-channel status frame. The transcript is a lazy list keyed by turn id and block id. Cached conversations are per host, pinned rows first, then newest. Opening one while the link is down reads Room and does not open a socket. Send, Stop, and New stay off, with the offline-review explanation. Opening one while connected selects it and shows Syncing until the host snapshot arrives. Syncing keeps Send and New on. A tap while the socket is still down waits, and is sent when the link is live again.
 
 ## Not measured here
 

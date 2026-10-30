@@ -108,6 +108,10 @@ class MonitorCoordinator(
   private var selectedTurn = -1
   private var awaitingConversation = false
   private val visibleTurns = HashSet<Int>()
+  /** Live until the first status, so an idle form can send before that frame. */
+  private var linkPhase = LinkPhase.Live
+  /** Send or New tapped while Syncing, before the socket can take it. */
+  private val held = ArrayList<HeldCommand>()
 
   val state: MonitorUi
     get() = synchronized(gate) { published() }
@@ -120,7 +124,14 @@ class MonitorCoordinator(
 
   /** Shows a Room conversation. A live open is Syncing until the host snapshot arrives. */
   fun showStored(cached: MonitorUi, liveSync: Boolean) = synchronized(gate) {
+    val typed = unsentPrompt()
+    if (held.isNotEmpty()) {
+      submittedText = ""
+      submittedId = ""
+    }
+    held.clear()
     local = cached.copy(
+      draft = cached.draft.ifEmpty { typed },
       disconnected = !liveSync,
       reachedLive = false,
       catchingUp = liveSync,
@@ -143,7 +154,14 @@ class MonitorCoordinator(
   }
 
   fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
+    val typed = unsentPrompt()
+    if (held.isNotEmpty()) {
+      submittedText = ""
+      submittedId = ""
+    }
+    held.clear()
     local = cached.copy(
+      draft = cached.draft.ifEmpty { typed },
       disconnected = true,
       reachedLive = false,
       pairHold = false,
@@ -230,11 +248,9 @@ class MonitorCoordinator(
     return listOf(MonitorEffect.RememberDraft(text))
   }
 
-  /** Same rule as the enabled Send button. A live idle link can send before status sets canSend. */
+  /** Same rule as the enabled Send button. Syncing does not count as disconnected. */
   private fun maySubmit(): Boolean {
-    if (local.disconnected) return false
-    if (local.view.canSteer || local.view.canSend) return true
-    return !local.view.sending && !local.view.busy && !local.view.planRunning && !local.planRunning
+    return sendActionEnabled(local.view, local.disconnected, linkPhase, local.planRunning, syncingAccept())
   }
 
   private fun submit(): List<MonitorEffect>? {
@@ -270,15 +286,31 @@ class MonitorCoordinator(
         statusText = phase
       )
     )
+    if (syncingGap()) {
+      held += HeldCommand(commandId, encoded.json, text, false)
+      return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation)
+    }
     return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation, MonitorEffect.Send(encoded.json))
   }
 
-  private fun newConversation(): List<MonitorEffect> {
+  private fun newConversation(): List<MonitorEffect>? {
+    if (!newConversationEnabled(local.view, local.disconnected, linkPhase, local.planRunning, syncingAccept())) return null
+    val commandId = session.nextCommandId()
+    val json = encodeEmpty(MessageKind.NewConversation, commandId)
+    if (syncingGap()) {
+      if (held.any { command -> command.freshConversation }) return emptyList()
+      held += HeldCommand(commandId, json, "", true)
+      return emptyList()
+    }
+    return openFreshConversation(json)
+  }
+
+  private fun openFreshConversation(json: String): List<MonitorEffect> {
     val filed = fileOpenScreen()
     awaitingConversation = true
     content.replace(contentHost, "", emptyList(), null)
     local = local.copy(conversationId = "", conversationTitle = "", banner = "")
-    return filed + MonitorEffect.Send(encodeEmpty(MessageKind.NewConversation, session.nextCommandId()))
+    return filed + MonitorEffect.Send(json)
   }
 
   private fun incoming(message: MonitorMessage): List<MonitorEffect> {
@@ -583,8 +615,10 @@ class MonitorCoordinator(
   }
 
   private fun linkChanged(status: LinkStatus): List<MonitorEffect> {
+    linkPhase = status.phase
     val replaced = status.lastError == ReplacedReason || status.banner == PairedElsewhereLabel
     if (replaced) {
+      val restored = abandonHeld(true)
       local = local.copy(
         pairedElsewhere = true,
         disconnected = true,
@@ -593,7 +627,7 @@ class MonitorCoordinator(
         banner = PairedElsewhereLabel,
         view = clearRemoteActions(local.view)
       )
-      return emptyList()
+      return restored
     }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
@@ -602,7 +636,7 @@ class MonitorCoordinator(
         disconnected = true,
         statusBusy = false,
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
-        view = clearRemoteActions(local.view)
+        view = viewAfterDrop(clearRemoteActions(local.view))
       )
       return emptyList()
     }
@@ -614,15 +648,19 @@ class MonitorCoordinator(
         banner = if (linkBanner(local.banner)) "" else local.banner
       )
     }
-    return emptyList()
+    return releaseHeld()
   }
 
   private fun commandResult(result: CatalogueResult): List<MonitorEffect> {
+    if (held.any { command -> command.commandId == result.commandId }) return emptyList()
     if (result.outcome == CatalogueWrite.Written) {
-      submittedText = ""
-      submittedId = ""
+      if (result.commandId == submittedId) {
+        submittedText = ""
+        submittedId = ""
+      }
       return emptyList()
     }
+    if (held.any { command -> command.commandId == submittedId }) return emptyList()
     if (local.draft.isNotEmpty()) return emptyList()
     val text = submittedText.ifEmpty { session.promptDraft }
     submittedText = ""
@@ -643,19 +681,75 @@ class MonitorCoordinator(
   }
 
   private fun noteHost(clientId: String): List<MonitorEffect> {
+    val draft = local.draft.ifEmpty { unsentPrompt() }
+    if (held.isNotEmpty()) {
+      submittedText = ""
+      submittedId = ""
+    }
+    held.clear()
     content.clear()
     contentHost = clientId
-    val draft = local.draft
     local = MonitorUi(draft = draft, showThinking = display.showThinking, showTools = display.showTools, disconnected = true)
     return listOf(MonitorEffect.ClearCaches)
   }
 
   private fun forgetPairing(): List<MonitorEffect> {
+    held.clear()
     content.clear()
     contentHost = ""
     local = MonitorUi(showThinking = display.showThinking, showTools = display.showTools, disconnected = true)
     return listOf(MonitorEffect.ClearCaches, MonitorEffect.RememberDraft(""))
   }
+
+  private fun syncingAccept(): Boolean {
+    return linkSyncing(linkPhase, local.disconnected, local.catchingUp, local.pairedElsewhere)
+  }
+
+  private fun commandsReady(): Boolean {
+    return linkPhase == LinkPhase.Live && !local.disconnected && !local.pairedElsewhere
+  }
+
+  /** The chip says Syncing and the socket cannot take a command yet. */
+  private fun syncingGap(): Boolean = syncingAccept() && !commandsReady()
+
+  private fun unsentPrompt(): String {
+    return held.lastOrNull { command -> command.prompt.isNotEmpty() }?.prompt.orEmpty()
+  }
+
+  /** A dropped link must not look idle while a prompt is waiting to go out. */
+  private fun viewAfterDrop(cleared: WireView): WireView {
+    if (held.none { command -> command.prompt.isNotEmpty() }) return cleared
+    return cleared.copy(sending = true, busy = true, canSend = false, canSteer = false, canStop = false)
+  }
+
+  private fun abandonHeld(restore: Boolean): List<MonitorEffect> {
+    val prompt = if (restore) unsentPrompt() else ""
+    held.clear()
+    if (!restore || prompt.isEmpty() || local.draft.isNotEmpty()) return emptyList()
+    submittedText = ""
+    submittedId = ""
+    local = local.copy(draft = prompt, pendingPrompt = "", pendingKind = "", pendingCommandId = "", banner = "")
+    return listOf(MonitorEffect.RememberDraft(prompt))
+  }
+
+  private fun releaseHeld(): List<MonitorEffect> {
+    if (!commandsReady() || held.isEmpty()) return emptyList()
+    val waiting = held.toList()
+    held.clear()
+    val effects = ArrayList<MonitorEffect>()
+    for (command in waiting) {
+      if (command.freshConversation) effects += openFreshConversation(command.json)
+      else effects += MonitorEffect.Send(command.json)
+    }
+    return effects
+  }
+
+  private data class HeldCommand(
+    val commandId: String,
+    val json: String,
+    val prompt: String,
+    val freshConversation: Boolean
+  )
 
   private fun snapshotFrom(message: MonitorMessage): WireSnapshot? {
     return (message.inbound as? InboundPayload.Snapshot)?.value

@@ -17,6 +17,17 @@ const val ReplacedReason = "replaced"
 
 data class ConnectionChip(val label: String)
 
+/** The chip says Syncing. That catch-up is short, so Send and New stay available. */
+fun linkSyncing(
+  phase: LinkPhase,
+  disconnected: Boolean,
+  catchingUp: Boolean,
+  pairedElsewhere: Boolean
+): Boolean {
+  if (pairedElsewhere || !catchingUp) return false
+  return phase == LinkPhase.Live || phase == LinkPhase.Connecting || !disconnected
+}
+
 fun connectionChip(
   phase: LinkPhase,
   disconnected: Boolean,
@@ -29,7 +40,7 @@ fun connectionChip(
   zone: ZoneId = ZoneId.systemDefault()
 ): ConnectionChip {
   if (pairedElsewhere) return ConnectionChip(PairedElsewhereLabel)
-  if (catchingUp && (phase == LinkPhase.Live || phase == LinkPhase.Connecting || !disconnected)) {
+  if (linkSyncing(phase, disconnected, catchingUp, pairedElsewhere)) {
     return ConnectionChip(syncingLabel(appliedSeq, syncHead))
   }
   val live = phase == LinkPhase.Live && !disconnected
