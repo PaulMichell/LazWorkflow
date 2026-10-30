@@ -1222,6 +1222,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     val open = restored?.first
     val cached = restored?.second
+    if (record.address.isNotEmpty()) {
+      coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
+    }
     if (cached != null || record.address.isEmpty()) {
       val seeded = if (cached != null) applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty())
       else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
@@ -1279,7 +1282,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
     }
     if (record.address.isNotEmpty()) {
-      coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
       runBlocking(Dispatchers.IO) {
         commandLedger.refresh()
         commandLedger.dropOpenPrompts()

@@ -116,7 +116,9 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"old","mode":"build","prompt_preview":"old","created_at":"","duration_ms":0}]}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
-    assertTrue(coordinator.state.turns.isEmpty())
+    assertEquals("old", coordinator.state.turns.single().id)
+    assertEquals("old", coordinator.state.turns.single().promptPreview)
+    assertNull(coordinator.state.live)
     val current = encodeSnapshotPage(
       "page-1",
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turn":{"live":true,"turn_id":"live-1","turn_index":4,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"},{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the answer"}]}}"""

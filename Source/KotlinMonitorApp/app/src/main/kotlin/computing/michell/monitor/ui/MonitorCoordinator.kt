@@ -300,7 +300,7 @@ class MonitorCoordinator(
     val seq = snapshotPageSeq(payload)
     val pageConversation = snapshotPageConversationId(payload)
     val pageEpoch = snapshotPageStreamId(payload)
-    if (pageStartsFresh(pageConversation, pageEpoch)) {
+    if (pageStartsFresh(pageConversation)) {
       awaitingConversation = false
       val id = pageConversation.ifEmpty { local.conversationId }
       content.replace(contentHost, id, emptyList(), null)
@@ -315,8 +315,10 @@ class MonitorCoordinator(
       local = local.copy(conversationId = pageConversation)
     }
     if (pageEpoch.isNotEmpty()) local = local.copy(hostEpoch = pageEpoch)
-    if (snapshotPageOutline(payload) != null) {
-      // An outline is an index. Painting it would replay empty turns from the top.
+    val outline = snapshotPageOutline(payload)
+    if (outline != null) {
+      // The index is the conversation until each turn page arrives. Do not wipe bodies already shown.
+      seedOutline(outline, pageConversation)
       if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
       return
     }
@@ -330,19 +332,30 @@ class MonitorCoordinator(
     noteCaughtUp(seq)
   }
 
+  /** Adds index rows the screen does not have yet. A later turn page supplies the body. */
+  private fun seedOutline(outline: List<WireTurn>, pageConversation: String) {
+    val board = content.current()
+    val foreign = board.conversationId.isNotEmpty() && pageConversation.isNotEmpty() &&
+      board.conversationId != pageConversation && (board.turns.isNotEmpty() || board.live != null)
+    if (foreign) return
+    val have = board.turns.map { turn -> turn.turnIndex }.toSet()
+    val added = outline.filter { row -> !row.live && row.turnIndex !in have && row.id.isNotEmpty() }
+    if (added.isEmpty()) return
+    val id = pageConversation.ifEmpty { local.conversationId }
+    content.replace(contentHost, id, (board.turns + added).sortedBy { turn -> turn.turnIndex }, board.live)
+  }
+
   /** A new id or epoch is a new cache copy. The previous turns are not a prefix. */
-  private fun pageStartsFresh(pageConversation: String, pageEpoch: String): Boolean {
+  private fun pageStartsFresh(pageConversation: String): Boolean {
     if (awaitingConversation) return true
     val board = content.current()
     if (pageConversation.isNotEmpty() && board.conversationId.isNotEmpty() && pageConversation != board.conversationId) return true
-    if (pageConversation.isNotEmpty() && local.conversationId.isNotEmpty() && pageConversation != local.conversationId) return true
-    val showing = board.turns.isNotEmpty() || board.live != null
-    return showing && pageEpoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && pageEpoch != local.hostEpoch
+    return pageConversation.isNotEmpty() && local.conversationId.isNotEmpty() && pageConversation != local.conversationId
   }
 
   private fun applyCatchup(catchup: WireCatchup) {
     if (catchup.mode == "snapshot") {
-      if (pageStartsFresh(catchup.conversationId, catchup.epoch)) {
+      if (pageStartsFresh(catchup.conversationId)) {
         awaitingConversation = false
         val id = catchup.conversationId.ifEmpty { local.conversationId }
         content.replace(contentHost, id, emptyList(), null)
@@ -455,15 +468,14 @@ class MonitorCoordinator(
       local = local.copy(projectRoot = hello.projectRoot.ifEmpty { local.projectRoot })
       return
     }
-    val switched = hello.conversationId.isNotEmpty() && local.conversationId.isNotEmpty() &&
-      hello.conversationId != local.conversationId
-    if (switched) content.replace(contentHost, hello.conversationId, emptyList(), null)
+    // Keep the cached screen until the host pages arrive. Clearing here is the blank open.
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
       hostEpoch = hello.epoch.ifEmpty { local.hostEpoch },
       hostCursor = if (hello.cursor > 0L) hello.cursor else local.hostCursor,
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
-      conversationTitle = if (switched) hello.title else hello.title.ifEmpty { local.conversationTitle }
+      conversationTitle = hello.title.ifEmpty { local.conversationTitle },
+      catchingUp = true
     )
   }
 
@@ -490,8 +502,12 @@ class MonitorCoordinator(
   }
 
   private fun resumeNow(): MonitorEffect {
+    val board = content.current()
+    val haveBody = board.turns.isNotEmpty() || board.live != null
     local = local.copy(catchingUp = true)
-    return MonitorEffect.Send(encodeResume(session.nextCommandId(), local.hostEpoch, local.hostCursor))
+    val epoch = if (haveBody) local.hostEpoch else ""
+    val cursor = if (haveBody) local.hostCursor else 0L
+    return MonitorEffect.Send(encodeResume(session.nextCommandId(), epoch, cursor))
   }
 
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {

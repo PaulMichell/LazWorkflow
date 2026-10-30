@@ -626,8 +626,14 @@ class LanSession(
     inForeground = true
     leftForBackground = false
     if (returning) {
+      // A screen-off Wi-Fi callback must not leave the open app waiting forever.
+      lanAvailable = true
       connectNow = true
       if (!policy.paused) policy.resetBackoff()
+      if (mayReconnect()) {
+        startLoop()
+        return
+      }
     }
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
@@ -1051,7 +1057,9 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
-          if (ledger.openIds().isNotEmpty()) offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
+          // Auth is already queued. Resume on the same lane cannot pass it, and an empty
+          // ledger must still ask for the desktop conversation.
+          offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
         }
       }
       MessageKind.CommandStates -> {

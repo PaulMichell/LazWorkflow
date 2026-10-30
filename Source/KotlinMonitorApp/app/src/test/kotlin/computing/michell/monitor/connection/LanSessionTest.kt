@@ -261,6 +261,27 @@ class LanSessionTest {
   }
 
   @Test
+  fun screenReturnReconnectsAfterAStaleWifiLoss() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink()
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      session.onWifiLost()
+      session.leaveForeground()
+      Thread.sleep(200)
+      session.enterForeground()
+      waitUntil { opens.get() >= 2 }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun wifiDoesNotResumeADisabledHost() {
     val store = pairedStore()
     val pin = store.load().fingerprint

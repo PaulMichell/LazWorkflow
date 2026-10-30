@@ -93,9 +93,15 @@ fun conversationRows(
   val rows = ArrayList<ConversationRow>()
   for (slot in slots) {
     val turn = if (slot.live) live else turns.firstOrNull { it.turnIndex == slot.turnIndex }
-    val shown = shownBlocks(turn, showThinking, showTools)
-    if (shown.isEmpty()) continue
     val turnId = turn?.id.orEmpty()
+    val shown = shownBlocks(turn, showThinking, showTools)
+    if (shown.isEmpty()) {
+      val preview = turn?.promptPreview?.ifEmpty { null } ?: slot.label
+      if (preview.isEmpty() || preview == "Turn ${slot.turnIndex}" || preview == "Live") continue
+      val block = WireBlock("answer", "", "", "", "", preview, false, true, 0, emptyList())
+      rows += ConversationRow(conversationRowKey(turnId, "preview", 0), turnId, slot.turnIndex, block, slot.label)
+      continue
+    }
     shown.forEachIndexed { index, block ->
       rows += ConversationRow(conversationRowKey(turnId, block.blockId, index), turnId, slot.turnIndex, block, slot.label)
     }

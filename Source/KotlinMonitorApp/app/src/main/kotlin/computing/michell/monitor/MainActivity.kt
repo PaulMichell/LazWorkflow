@@ -96,6 +96,12 @@ class MainActivity : ComponentActivity() {
     model.enterForeground()
   }
 
+  override fun onResume() {
+    super.onResume()
+    // A screen that only paused, or a wake that was missed in onStart, still reconnects.
+    model.enterForeground()
+  }
+
   override fun onStop() {
     if (!isChangingConfigurations) {
       model.leaveDictation()
