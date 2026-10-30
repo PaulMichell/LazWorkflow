@@ -1,6 +1,7 @@
 package computing.michell.monitor.ui
 
 /* Plan list. Status tags match the assistant plan list.
+   The title and document name scroll with the rows.
    Headings stay plain. No Open action and no Done button (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.background
@@ -67,9 +68,12 @@ fun PlanScreen(
 ) {
   if (ui.planPath.isEmpty() && ui.planTitle.isEmpty() && ui.planRows.isEmpty()) return
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (ui.planTitle.isNotEmpty()) Text(ui.planTitle, style = MaterialTheme.typography.titleLarge)
-    if (ui.planPath.isNotEmpty()) Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
     LazyColumn(modifier = Modifier.weight(1f)) {
+      if (ui.planTitle.isNotEmpty() || ui.planPath.isNotEmpty()) {
+        item {
+          PlanHeading(ui.planTitle, ui.planPath)
+        }
+      }
       items(ui.planRows) { row ->
         PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan) {
           onSelect(row.index)
@@ -83,6 +87,17 @@ fun PlanScreen(
       Button(onClick = onNew, enabled = online) { Text("New") }
       Button(onClick = onRemove, enabled = online && ui.planPath.isNotEmpty()) { Text("Remove") }
     }
+  }
+}
+
+@Composable
+private fun PlanHeading(title: String, path: String) {
+  Column(
+    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp)
+  ) {
+    if (title.isNotEmpty()) Text(title, style = MaterialTheme.typography.titleLarge)
+    if (path.isNotEmpty()) Text(path, style = MaterialTheme.typography.bodySmall)
   }
 }
 
