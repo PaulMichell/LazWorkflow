@@ -1796,6 +1796,18 @@ fun snapshotPageSeq(payloadJson: String): Long {
   return if (seq.ok && seq.value > 0L) seq.value else 0L
 }
 
+/** Conversation identity on a snapshot page. Empty when the page has none. */
+fun snapshotPageConversationId(payloadJson: String): String {
+  val obj = parseObject(payloadJson) ?: return ""
+  return obj.readString("conversation_id", false).value
+}
+
+/** Mirror epoch on a snapshot page. The host sends it as stream_id. */
+fun snapshotPageStreamId(payloadJson: String): String {
+  val obj = parseObject(payloadJson) ?: return ""
+  return obj.readString("stream_id", false).value
+}
+
 /** Outline page turns. Null when this page is a turn body, not an outline. */
 fun snapshotPageOutline(payloadJson: String): List<WireTurn>? {
   val obj = parseObject(payloadJson) ?: return null

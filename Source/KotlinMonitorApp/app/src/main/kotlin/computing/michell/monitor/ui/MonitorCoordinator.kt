@@ -16,12 +16,15 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.WireCatchup
+import computing.michell.monitor.protocol.WireConversationClosed
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.applySnapshotPageJson
+import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.decodeCatchup
+import computing.michell.monitor.protocol.decodeConversationClosed
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePatch
@@ -29,8 +32,11 @@ import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
+import computing.michell.monitor.protocol.encodeClosedScreen
+import computing.michell.monitor.protocol.snapshotPageConversationId
 import computing.michell.monitor.protocol.snapshotPageOutline
 import computing.michell.monitor.protocol.snapshotPageSeq
+import computing.michell.monitor.protocol.snapshotPageStreamId
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.tryEncodeSend
@@ -98,6 +104,7 @@ class MonitorCoordinator(
   private var contentHost = ""
   private var submittedText = ""
   private var selectedTurn = -1
+  private var awaitingConversation = false
   private val visibleTurns = HashSet<Int>()
 
   val state: MonitorUi
@@ -232,9 +239,11 @@ class MonitorCoordinator(
   }
 
   private fun newConversation(): List<MonitorEffect> {
+    val filed = fileOpenScreen()
+    awaitingConversation = true
     content.replace(contentHost, "", emptyList(), null)
-    local = local.copy(conversationId = "", banner = "")
-    return listOf(MonitorEffect.Send(encodeEmpty(MessageKind.NewConversation, session.nextCommandId())))
+    local = local.copy(conversationId = "", conversationTitle = "", banner = "")
+    return filed + MonitorEffect.Send(encodeEmpty(MessageKind.NewConversation, session.nextCommandId()))
   }
 
   private fun incoming(message: MonitorMessage): List<MonitorEffect> {
@@ -248,6 +257,11 @@ class MonitorCoordinator(
       MessageKind.SnapshotPage -> applySnapshotPage(message)
       MessageKind.Catchup -> decodeCatchup(message.payloadJson)?.let { applyCatchup(it) }
       MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
+      MessageKind.ConversationClosed -> {
+        val closed = (message.inbound as? InboundPayload.ConversationClosed)?.value
+          ?: decodeConversationClosed(message.payloadJson)
+        if (closed != null) effects += applyClosed(closed)
+      }
       MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
         local = local.copy(view = view, statusBusy = view.busy, planRunning = view.planRunning)
       }
@@ -282,26 +296,68 @@ class MonitorCoordinator(
 
   /** The host no longer sends a snapshot frame. Pages are the conversation. */
   private fun applySnapshotPage(message: MonitorMessage) {
-    val seq = snapshotPageSeq(message.payloadJson)
-    if (snapshotPageOutline(message.payloadJson) != null) {
+    val payload = message.payloadJson
+    val seq = snapshotPageSeq(payload)
+    val pageConversation = snapshotPageConversationId(payload)
+    val pageEpoch = snapshotPageStreamId(payload)
+    if (pageStartsFresh(pageConversation, pageEpoch)) {
+      awaitingConversation = false
+      val id = pageConversation.ifEmpty { local.conversationId }
+      content.replace(contentHost, id, emptyList(), null)
+      local = local.copy(
+        conversationId = id,
+        conversationTitle = "",
+        hostEpoch = pageEpoch.ifEmpty { local.hostEpoch },
+        hostCursor = 0,
+        catchingUp = false
+      )
+    } else if (pageConversation.isNotEmpty() && local.conversationId.isEmpty()) {
+      local = local.copy(conversationId = pageConversation)
+    }
+    if (pageEpoch.isNotEmpty()) local = local.copy(hostEpoch = pageEpoch)
+    if (snapshotPageOutline(payload) != null) {
       // An outline is an index. Painting it would replay empty turns from the top.
       if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
       return
     }
     val board = content.current()
-    val applied = applySnapshotPageJson(board.turns, board.live, message.payloadJson) ?: return
-    if (applied.first !== board.turns || applied.second !== board.live) {
-      content.replace(contentHost, local.conversationId, applied.first, applied.second)
+    val applied = applySnapshotPageJson(board.turns, board.live, payload) ?: return
+    val id = pageConversation.ifEmpty { local.conversationId }
+    if (id.isNotEmpty() && id != local.conversationId) local = local.copy(conversationId = id)
+    if (applied.first !== board.turns || applied.second !== board.live || id != board.conversationId) {
+      content.replace(contentHost, id, applied.first, applied.second)
     }
     noteCaughtUp(seq)
   }
 
+  /** A new id or epoch is a new cache copy. The previous turns are not a prefix. */
+  private fun pageStartsFresh(pageConversation: String, pageEpoch: String): Boolean {
+    if (awaitingConversation) return true
+    val board = content.current()
+    if (pageConversation.isNotEmpty() && board.conversationId.isNotEmpty() && pageConversation != board.conversationId) return true
+    if (pageConversation.isNotEmpty() && local.conversationId.isNotEmpty() && pageConversation != local.conversationId) return true
+    val showing = board.turns.isNotEmpty() || board.live != null
+    return showing && pageEpoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && pageEpoch != local.hostEpoch
+  }
+
   private fun applyCatchup(catchup: WireCatchup) {
     if (catchup.mode == "snapshot") {
+      if (pageStartsFresh(catchup.conversationId, catchup.epoch)) {
+        awaitingConversation = false
+        val id = catchup.conversationId.ifEmpty { local.conversationId }
+        content.replace(contentHost, id, emptyList(), null)
+        local = local.copy(conversationId = id, conversationTitle = "")
+      }
+      if (catchup.conversationId.isNotEmpty()) local = local.copy(conversationId = catchup.conversationId)
+      if (catchup.projectRoot.isNotEmpty()) local = local.copy(projectRoot = catchup.projectRoot)
+      if (catchup.title.isNotEmpty()) local = local.copy(conversationTitle = catchup.title)
+      if (catchup.epoch.isNotEmpty()) local = local.copy(hostEpoch = catchup.epoch)
       applySnapshot(catchup.snapshot)
+      noteCaughtUp(catchup.cursor)
       return
     }
     if (catchup.mode != "events") return
+    if (awaitingConversation || (catchup.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && catchup.epoch != local.hostEpoch)) return
     for (patch in catchup.patches) applyPatch(patch)
     local = local.copy(
       conversationId = catchup.conversationId.ifEmpty { local.conversationId },
@@ -339,6 +395,11 @@ class MonitorCoordinator(
   }
 
   private fun applyPatch(patch: WirePatch) {
+    if (awaitingConversation) return
+    if (patch.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && patch.epoch != local.hostEpoch) {
+      local = local.copy(catchingUp = true, announcedEpoch = patch.epoch)
+      return
+    }
     val board = content.current()
     val live = WireTurn(
       patch.turnIndex,
@@ -390,13 +451,42 @@ class MonitorCoordinator(
   private fun noteHello(message: MonitorMessage) {
     val hello = (message.inbound as? InboundPayload.HelloOk)?.value ?: decodeHelloOk(message.payloadJson) ?: return
     if (hello.hostId.isNotEmpty()) contentHost = hello.hostId
+    if (awaitingConversation) {
+      local = local.copy(projectRoot = hello.projectRoot.ifEmpty { local.projectRoot })
+      return
+    }
+    val switched = hello.conversationId.isNotEmpty() && local.conversationId.isNotEmpty() &&
+      hello.conversationId != local.conversationId
+    if (switched) content.replace(contentHost, hello.conversationId, emptyList(), null)
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
       hostEpoch = hello.epoch.ifEmpty { local.hostEpoch },
       hostCursor = if (hello.cursor > 0L) hello.cursor else local.hostCursor,
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
-      conversationTitle = hello.title.ifEmpty { local.conversationTitle }
+      conversationTitle = if (switched) hello.title else hello.title.ifEmpty { local.conversationTitle }
     )
+  }
+
+  /** Writes the open screen under its id, then the caller drops it. */
+  private fun fileOpenScreen(closedId: String = "", closedTitle: String = "", epoch: String = "", cursor: Long = 0): List<MonitorEffect> {
+    val board = content.current()
+    val id = closedId.ifEmpty { local.conversationId.ifEmpty { board.conversationId } }
+    if (!conversationIdIsIdentity(id) || (board.turns.isEmpty() && board.live == null)) return emptyList()
+    val title = cacheTitle(closedTitle.ifEmpty { local.conversationTitle }, board.turns, board.live, emptyList())
+    val screen = local.copy(conversationId = id, conversationTitle = title).withBoard(board)
+    val document = encodeClosedScreen(id, title, offlineDocument(screen))
+    if (document.isEmpty()) return emptyList()
+    val filedEpoch = epoch.ifEmpty { local.hostEpoch }
+    val filedCursor = if (cursor > 0L) cursor else local.hostCursor
+    return listOf(MonitorEffect.FileClosed(id, title, local.projectRoot, document, filedEpoch, filedCursor))
+  }
+
+  private fun applyClosed(closed: WireConversationClosed): List<MonitorEffect> {
+    val filed = fileOpenScreen(closed.conversationId, closed.title, closed.epoch, closed.cursor)
+    awaitingConversation = true
+    content.replace(contentHost, "", emptyList(), null)
+    local = local.copy(conversationId = "", conversationTitle = "", banner = "")
+    return filed
   }
 
   private fun resumeNow(): MonitorEffect {
@@ -407,6 +497,11 @@ class MonitorCoordinator(
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {
     if (updatedAt <= 0L || updatedAt == local.lastSyncMs) return
     local = local.copy(lastSyncMs = updatedAt)
+  }
+
+  /** Room may paint only the conversation New has not left. */
+  fun acceptsRepository(conversationId: String): Boolean = synchronized(gate) {
+    !awaitingConversation && conversationId.isNotEmpty() && conversationId == local.conversationId
   }
 
   /** The Plan tab highlight. A later plan frame for the same path keeps it. */

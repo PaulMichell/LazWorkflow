@@ -1620,7 +1620,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun watchRepository(hostId: String, conversationId: String) {
-    if (!hostIdIsValid(hostId) || conversationId.isEmpty()) return
+    if (!hostIdIsValid(hostId) || conversationId.isEmpty() || !coordinator.acceptsRepository(conversationId)) {
+      contentWatch?.cancel()
+      contentWatch = null
+      watchedHost = ""
+      watchedConversation = ""
+      return
+    }
     if (hostId == watchedHost && conversationId == watchedConversation) return
     watchedHost = hostId
     watchedConversation = conversationId
@@ -1632,6 +1638,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         conversations.conversation(hostId, conversationId)
       ) { turns, blocks, row -> documentFromRows(turns, blocks) to (row?.updatedAt ?: 0L) }
         .collect { (document, updatedAt) ->
+          if (!coordinator.acceptsRepository(conversationId)) return@collect
           coordinator.noteSyncTime(updatedAt)
           content.adopt(hostId, conversationId, document.turns, document.live)
           uiState.value = coordinator.state
@@ -1924,6 +1931,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     val before = uiState.value
+    // File the open screen before the coordinator's clear replaces it.
+    for (effect in effects) {
+      if (effect is MonitorEffect.FileClosed) {
+        fileClosed(effect.id, effect.title, effect.projectRoot, effect.document, effect.epoch, effect.cursor)
+      }
+    }
     uiState.value = coordinator.state
     if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value) ||
       planChromeChanged(before, uiState.value)) scheduleCacheSave()
@@ -1941,7 +1954,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
-        is MonitorEffect.FileClosed -> fileClosed(effect.id, effect.title, effect.projectRoot, effect.document, effect.epoch, effect.cursor)
+        is MonitorEffect.FileClosed -> {}
       }
     }
   }

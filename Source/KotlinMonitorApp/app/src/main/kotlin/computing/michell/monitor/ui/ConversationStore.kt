@@ -40,7 +40,11 @@ class MemoryConversationStore : ConversationStore {
 
   override fun adopt(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?) {
     val current = current()
-    if (turns.isEmpty() && live == null && current.turns.isNotEmpty() && current.conversationId == conversationId) return
+    val showing = current.turns.isNotEmpty() || current.live != null
+    // An empty repository read must not wipe a screen the host just painted.
+    if (turns.isEmpty() && live == null && showing && current.conversationId == conversationId) return
+    // A late read of the previous conversation must not paint over the new one.
+    if (showing && current.conversationId.isNotEmpty() && conversationId != current.conversationId) return
     publish(host, conversationId, turns, live, current.revision)
   }
 

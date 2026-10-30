@@ -20,6 +20,7 @@ import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.HelloOkMessage
+import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.encodePatch
 import computing.michell.monitor.protocol.encodePlan
@@ -197,6 +198,61 @@ class MonitorCoordinatorTest {
     assertEquals("keep this", computing.michell.monitor.protocol.decodeText(
       tryDecodeEnvelope(send.json).message.payloadJson
     ))
+  }
+
+  @Test
+  fun newConversationFilesTheScreenAndTheNextPageDoesNotKeepIt() {
+    val coordinator = open()
+    showAnswer(coordinator, "conversation-1", "epoch", "old answer")
+    val started = coordinator.onEvent(MonitorEvent.NewConversation(coordinator.state)).orEmpty()
+    val filed = started.filterIsInstance<MonitorEffect.FileClosed>().single()
+    assertEquals("conversation-1", filed.id)
+    assertTrue(filed.document.contains("old answer"))
+    assertNull(coordinator.state.live)
+    assertFalse(coordinator.acceptsRepository("conversation-1"))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", patch("should not stick", 5)))))
+    assertNull(coordinator.state.live)
+    showNote(coordinator, "conversation-2", "epoch-2")
+    assertEquals("conversation-2", coordinator.state.conversationId)
+    assertEquals(listOf("New conversation started."), coordinator.state.live?.blocks?.map { block -> block.body })
+    assertTrue(coordinator.state.turns.isEmpty())
+    assertTrue(coordinator.acceptsRepository("conversation-2"))
+    assertFalse(coordinator.acceptsRepository("conversation-1"))
+  }
+
+  @Test
+  fun closingAConversationReplacesItInsteadOfAppendingTheNote() {
+    val coordinator = open()
+    showAnswer(coordinator, "conversation-1", "epoch", "old answer")
+    val closed = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeConversationClosed("closed", "epoch", 4, "conversation-1", "Old")
+    ))).orEmpty()
+    val filed = closed.filterIsInstance<MonitorEffect.FileClosed>().single()
+    assertEquals("conversation-1", filed.id)
+    assertTrue(filed.document.contains("old answer"))
+    assertNull(coordinator.state.live)
+    showNote(coordinator, "conversation-2", "epoch-2")
+    assertEquals(listOf("New conversation started."), coordinator.state.live?.blocks?.map { block -> block.body })
+    assertTrue(coordinator.state.turns.none { turn -> turn.blocks.any { block -> block.body == "old answer" } })
+  }
+
+  private fun showAnswer(coordinator: MonitorCoordinator, conversationId: String, epoch: String, body: String) {
+    val hello = HelloOkMessage("nonce", "ide", epoch, 4, conversationId, "/work", "Old", "")
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello))))
+    val answer = encodeSnapshotPage(
+      "page-1",
+      """{"conversation_id":"$conversationId","stream_id":"$epoch","seq":4,"turn":{"live":true,"turn_id":"turn-1","turn_index":1,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"$body"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(answer)))
+    assertEquals(body, coordinator.state.live?.blocks?.single()?.body)
+  }
+
+  private fun showNote(coordinator: MonitorCoordinator, conversationId: String, epoch: String) {
+    val note = encodeSnapshotPage(
+      "page-2",
+      """{"conversation_id":"$conversationId","stream_id":"$epoch","seq":1,"turn":{"live":true,"turn_id":"live","turn_index":-2,"blocks":[{"block_id":"n","kind":"note","title":"Note","state":"ok","body":"New conversation started."}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(note)))
   }
 
   private fun open(session: FakeSession = FakeSession()): MonitorCoordinator {

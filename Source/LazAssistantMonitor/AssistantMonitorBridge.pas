@@ -517,13 +517,28 @@ Begin
   ProjectAssistantConversation.NoteMonitorLogPosition(Epoch, Cursor);
 End;
 
+Function FormConversationMoved(Form: TProjectAssistantForm; Session: TMonitorSession): Boolean;
+Var
+  ConversationId, ProjectRoot, Title, Epoch, MirrorId, MirrorRoot, MirrorTitle: String;
+  Cursor: Int64;
+Begin
+  Result := False;
+  If (Not Assigned(Form)) Or (Not Assigned(Session)) Then
+    Exit;
+  Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
+  If (ConversationId = '') Or (ConversationId = 'current') Then
+    Exit;
+  Session.CopyMirrorIdentity(Epoch, MirrorId, MirrorRoot, MirrorTitle, Cursor);
+  Result := MirrorId <> ConversationId;
+End;
+
 Procedure TAssistantMonitorBridge.PublishEpoch;
 Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
   Closed: TMonitorConversationClosed;
-  ConversationId, ProjectRoot, Title, Epoch: String;
-  SavedCursor: Int64;
+  ConversationId, ProjectRoot, Title, Epoch, MirrorEpoch, MirrorId, MirrorRoot, MirrorTitle: String;
+  SavedCursor, MirrorCursor: Int64;
   HadEpoch: Boolean;
 Begin
   LockBridge;
@@ -532,6 +547,19 @@ Begin
   Finally
     UnlockBridge;
   End;
+  Form := OpenForm;
+  ConversationId := '';
+  ProjectRoot := '';
+  Title := '';
+  If Assigned(Form) Then
+    Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
+  { New already opened this conversation. A second publish must not close it. }
+  If Assigned(Session) And (ConversationId <> '') And (ConversationId <> 'current') Then
+    Begin
+      Session.CopyMirrorIdentity(MirrorEpoch, MirrorId, MirrorRoot, MirrorTitle, MirrorCursor);
+      If (MirrorId = ConversationId) And (MirrorEpoch <> '') Then
+        Exit;
+    End;
   HadEpoch := False;
   If Assigned(Session) Then
     Begin
@@ -545,14 +573,8 @@ Begin
       If Assigned(ProjectAssistantConversation) Then
         ProjectAssistantConversation.SaveClosedLogPosition(Closed.ConversationId, Closed.Epoch, Closed.Cursor);
     End;
-  ConversationId := '';
-  ProjectRoot := '';
-  Title := '';
   Epoch := '';
   SavedCursor := 0;
-  Form := OpenForm;
-  If Assigned(Form) Then
-    Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If Assigned(ProjectAssistantConversation) Then
     ProjectAssistantConversation.ReadMonitorLogPosition(Epoch, SavedCursor);
   If Not Assigned(Session) Then
@@ -863,6 +885,9 @@ Begin
     End;
   Form.FillMonitorView(View);
   ApplyHostFlags(View);
+  { New has already minted the next id. Do not observe its note onto the closed mirror. }
+  If FormConversationMoved(Form, Session) Then
+    PublishEpoch;
   Turn := Default(TAssistantMonitorTurn);
   If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
