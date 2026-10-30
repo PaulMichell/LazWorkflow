@@ -144,7 +144,11 @@ fun ConversationScreen(
         onDictateOn(start, end, showRationale)
       }, onDictateOff)
       Button(
-        onClick = onSend,
+        onClick = {
+          // The field is controlled, but a tap must still submit the text on screen.
+          if (promptValue.text != ui.draft) onPrompt(promptValue.text, promptValue.selection.start, promptValue.selection.end)
+          onSend()
+        },
         enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning) && !dictation.sendMustWait
       ) { Text(actionCaption(ui.view)) }
       Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }

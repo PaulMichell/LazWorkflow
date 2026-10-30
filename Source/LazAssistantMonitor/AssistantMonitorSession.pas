@@ -1430,8 +1430,9 @@ Function TMonitorSession.CommandBlocked(Kind: Integer; Out MessageText: String):
 Begin
   Result := False;
   MessageText := 'The desktop control is not available.';
+  { CanSend starts false until the first status frame. An idle form still accepts Send. }
   If Kind = Ord(mmkSend) Then
-    Result := (Not FHostFlags.CanSend) Or FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
   Else If Kind = Ord(mmkSetMode) Then
     Result := FHostFlags.Sending Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode)
   Else If Kind = Ord(mmkNewConversation) Then

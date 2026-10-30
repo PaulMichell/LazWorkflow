@@ -104,6 +104,7 @@ class MonitorCoordinator(
   private var local = MonitorUi()
   private var contentHost = ""
   private var submittedText = ""
+  private var submittedId = ""
   private var selectedTurn = -1
   private var awaitingConversation = false
   private val visibleTurns = HashSet<Int>()
@@ -210,11 +211,18 @@ class MonitorCoordinator(
   fun noteAckSent(nowMs: Long, seq: Long) {}
 
   private fun published(): MonitorUi {
+    val board = content.current()
+    if (local.pendingPrompt.isNotEmpty()) {
+      val shown = local.withBoard(board)
+      if (promptShown(shown, local.pendingPrompt) || hostHasLaterUserBlock(shown)) {
+        local = local.copy(pendingPrompt = "", pendingKind = "", pendingCommandId = "")
+      }
+    }
     return local.copy(
       selectedTurn = selectedTurn,
       showThinking = display.showThinking,
       showTools = display.showTools
-    ).withBoard(content.current())
+    ).withBoard(board)
   }
 
   private fun editDraft(text: String): List<MonitorEffect> {
@@ -222,12 +230,18 @@ class MonitorCoordinator(
     return listOf(MonitorEffect.RememberDraft(text))
   }
 
+  /** Same rule as the enabled Send button. A live idle link can send before status sets canSend. */
+  private fun maySubmit(): Boolean {
+    if (local.disconnected) return false
+    if (local.view.canSteer || local.view.canSend) return true
+    return !local.view.sending && !local.view.busy && !local.view.planRunning && !local.planRunning
+  }
+
   private fun submit(): List<MonitorEffect>? {
-    if (local.disconnected) return null
+    if (!maySubmit()) return null
     val text = local.draft.trim()
     if (text.isEmpty()) return null
     val steer = local.view.canSteer
-    if (!local.view.canSend && !steer) return null
     val commandId = session.nextCommandId()
     val encoded = if (steer) tryEncodeSteer(commandId, text) else tryEncodeSend(commandId, text)
     if (!encoded.ok) {
@@ -235,7 +249,27 @@ class MonitorCoordinator(
       return emptyList()
     }
     submittedText = text
-    local = local.copy(draft = "", banner = "", undeliveredPrompt = "")
+    submittedId = commandId
+    val phase = if (steer) PhaseSteering else PhaseWaiting
+    local = local.copy(
+      draft = "",
+      banner = "",
+      undeliveredPrompt = "",
+      pendingPrompt = text,
+      pendingKind = if (steer) "steer" else "user",
+      pendingCommandId = commandId,
+      pendingEpoch = local.pendingEpoch + 1,
+      promptBaseline = promptBaselineOf(content.current().live),
+      view = local.view.copy(
+        sending = true,
+        busy = true,
+        canSend = false,
+        canSteer = steer,
+        canStop = true,
+        phase = phase,
+        statusText = phase
+      )
+    )
     return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation, MonitorEffect.Send(encoded.json))
   }
 
@@ -463,6 +497,20 @@ class MonitorCoordinator(
       local = local.copy(banner = "")
       return MonitorEffect.Send(encoded.json)
     }
+    if (body.refId.isNotEmpty() && body.refId == submittedId && local.draft.isEmpty() && submittedText.isNotEmpty()) {
+      val text = submittedText
+      submittedText = ""
+      submittedId = ""
+      local = local.copy(
+        draft = text,
+        pendingPrompt = "",
+        pendingKind = "",
+        pendingCommandId = "",
+        banner = body.messageText,
+        view = clearRemoteActions(local.view)
+      )
+      return MonitorEffect.RememberDraft(text)
+    }
     local = local.copy(banner = body.messageText)
     return null
   }
@@ -572,15 +620,25 @@ class MonitorCoordinator(
   private fun commandResult(result: CatalogueResult): List<MonitorEffect> {
     if (result.outcome == CatalogueWrite.Written) {
       submittedText = ""
+      submittedId = ""
       return emptyList()
     }
     if (local.draft.isNotEmpty()) return emptyList()
     val text = submittedText.ifEmpty { session.promptDraft }
+    submittedText = ""
+    submittedId = ""
     if (text.isEmpty()) {
-      local = local.copy(banner = CouldNotSendBanner)
+      local = local.copy(banner = CouldNotSendBanner, pendingPrompt = "", pendingKind = "", pendingCommandId = "")
       return emptyList()
     }
-    local = local.copy(draft = text, banner = CouldNotSendBanner, view = clearRemoteActions(local.view))
+    local = local.copy(
+      draft = text,
+      pendingPrompt = "",
+      pendingKind = "",
+      pendingCommandId = "",
+      banner = CouldNotSendBanner,
+      view = clearRemoteActions(local.view)
+    )
     return listOf(MonitorEffect.RememberDraft(text))
   }
 

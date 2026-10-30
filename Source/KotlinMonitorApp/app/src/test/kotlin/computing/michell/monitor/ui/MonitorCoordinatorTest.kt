@@ -21,6 +21,7 @@ import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.encodeConversationClosed
+import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.encodePatch
@@ -44,6 +45,47 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("old answer"))))))
     assertEquals("keep this", coordinator.state.draft)
     assertEquals("old answer", coordinator.state.live?.blocks?.first()?.body)
+  }
+
+  @Test
+  fun anIdleLiveLinkSendsBeforeStatusSetsCanSend() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "hello from the phone"))
+    val effects = coordinator.onEvent(MonitorEvent.Submit(coordinator.state)).orEmpty()
+    assertEquals("", coordinator.state.draft)
+    assertEquals("hello from the phone", coordinator.state.pendingPrompt)
+    assertTrue(coordinator.state.view.canStop)
+    assertFalse(coordinator.state.view.canSend)
+    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
+    val decoded = tryDecodeEnvelope(sent.json)
+    assertTrue(decoded.errorText, decoded.ok)
+    assertEquals(MessageKind.Send, decoded.message.kind)
+    assertTrue(decoded.message.payloadJson.contains("hello from the phone"))
+  }
+
+  @Test
+  fun aRunningTurnDoesNotSendWhenCanSendIsFalse() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
+      view = emptyView().copy(sending = true, busy = true, canSend = false)
+    )))))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "too soon"))
+    assertNull(coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
+    assertEquals("too soon", coordinator.state.draft)
+  }
+
+  @Test
+  fun aHostRejectionPutsThePromptBack() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    assertEquals("", coordinator.state.draft)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeError("e1", "host_busy", "The desktop control is not available.", "c1")
+    )))
+    assertEquals("keep this", coordinator.state.draft)
+    assertEquals("The desktop control is not available.", coordinator.state.banner)
   }
 
   @Test
