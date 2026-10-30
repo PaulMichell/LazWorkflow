@@ -2,15 +2,22 @@ Unit AssistantMonitorMirror;
 
 { Per-conversation event log and materialised model (c) 2026 Michell Computing.
 
-  Plan item 5.3 of Documents/Plan-20261029-035918.md. The IDE thread appends.
-  The connection thread replays the tail, builds snapshot pages, and fetches a
-  turn from the model. It does not read the form. Older events are dropped once
-  the log passes its byte budget; the model already holds their effect.
+  Plan item 5.3 of Documents/Plan-20261029-035918.md. The IDE thread appends
+  events. A resume or a snapshot notice also builds snapshot pages on that
+  thread. The connection thread replays the tail and fetches a turn from the
+  model. It does not read the form. Older events are dropped once the log
+  passes its byte budget; the model already holds their effect.
 
   Catalogue 2 patch tails live in the same log so resume can replay them.
   Item 5.6 stopped sending snapshot, transcript, and turn_data; pages replace
   those frames. A patch larger than the budget is not stored.
-  Resume behind a dropped record needs a snapshot. }
+  Resume behind a dropped record needs a snapshot.
+
+  Size note: exceeds the 1000 line preference. The log, the materialised model,
+  and the page JSON are one conversation mirror. Splitting the page writer
+  would hide the budget that decides a deferred body.
+  Reviewed 2026-10-30: JSON escaping is one pass because those pages are built
+  on the IDE thread. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -193,25 +200,76 @@ Begin
     Result := 'failed';
 End;
 
+{ One pass into a sized buffer. Snapshot pages are built on the IDE thread.
+  Result := Result + once per byte copies the whole body on every character.
+  Controls other than the seven named escapes stay raw; this is not the chunk codec. }
 Function JsonEscape(Const Text: String): String;
 Var
-  Index: Integer;
+  Index, OutLen, At: Integer;
   C: Char;
 Begin
-  Result := '';
+  OutLen := 0;
+  For Index := 1 To Length(Text) Do
+    Begin
+      Case Text[Index] Of
+        '"', '\', #8, #9, #10, #12, #13: Inc(OutLen, 2);
+      Else
+        Inc(OutLen);
+      End;
+    End;
+  SetLength(Result, OutLen);
+  At := 1;
   For Index := 1 To Length(Text) Do
     Begin
       C := Text[Index];
       Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
+        '"':
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := '"';
+            Inc(At, 2);
+          End;
+        '\':
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := '\';
+            Inc(At, 2);
+          End;
+        #8:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'b';
+            Inc(At, 2);
+          End;
+        #9:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 't';
+            Inc(At, 2);
+          End;
+        #10:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'n';
+            Inc(At, 2);
+          End;
+        #12:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'f';
+            Inc(At, 2);
+          End;
+        #13:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'r';
+            Inc(At, 2);
+          End;
       Else
-        Result := Result + C;
+        Begin
+          Result[At] := C;
+          Inc(At);
+        End;
       End;
     End;
 End;

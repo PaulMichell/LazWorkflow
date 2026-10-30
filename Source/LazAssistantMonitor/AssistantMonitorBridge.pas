@@ -675,7 +675,8 @@ Begin
     Id := HostId;
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
-  Session.SendMirrorPages(Id);
+  If Not Session.SendMirrorPages(Id) Then
+    WorkflowLogger.Warning('AssistantMonitor', 'snapshot did not fit');
 End;
 
 Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);

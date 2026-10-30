@@ -12,8 +12,9 @@ Unit AssistantMonitorCodec;
 
   Size note: exceeds the 1000 line preference. The catalogue is one table of
   message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-29: snapshot pages and image chunks stay in this table. The old snapshot,
+  Reviewed 2026-10-30: snapshot pages and image chunks stay in this table. The old snapshot,
   transcript, and turn_data encoders remain so a catchup can still embed a snapshot object.
+  Chunk packing stays one pass: a resume publishes those pages on the IDE thread.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -3291,28 +3292,95 @@ Begin
   End;
 End;
 
+{ One pass into a sized buffer. A resume publishes these pages on the IDE thread.
+  Result := Result + once per byte copies the whole page on every character and Lazarus never opens. }
+Function EscapedByteLen(C: Char): Integer;
+Begin
+  Case C Of
+    '"', '\', #8, #9, #10, #12, #13: Result := 2;
+  Else
+    If Ord(C) < 32 Then
+      Result := 6
+    Else
+      Result := 1;
+  End;
+End;
+
 Function EscapeChunkData(Const Text: String): String;
+Const
+  HexDigits = '0123456789ABCDEF';
 Var
-  Index: Integer;
+  Index, OutLen, At, Code: Integer;
   C: Char;
 Begin
-  Result := '';
+  OutLen := 0;
+  For Index := 1 To Length(Text) Do
+    Inc(OutLen, EscapedByteLen(Text[Index]));
+  SetLength(Result, OutLen);
+  At := 1;
   For Index := 1 To Length(Text) Do
     Begin
       C := Text[Index];
       Case C Of
-        '"': Result := Result + '\"';
-        '\': Result := Result + '\\';
-        #8: Result := Result + '\b';
-        #9: Result := Result + '\t';
-        #10: Result := Result + '\n';
-        #12: Result := Result + '\f';
-        #13: Result := Result + '\r';
+        '"':
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := '"';
+            Inc(At, 2);
+          End;
+        '\':
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := '\';
+            Inc(At, 2);
+          End;
+        #8:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'b';
+            Inc(At, 2);
+          End;
+        #9:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 't';
+            Inc(At, 2);
+          End;
+        #10:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'n';
+            Inc(At, 2);
+          End;
+        #12:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'f';
+            Inc(At, 2);
+          End;
+        #13:
+          Begin
+            Result[At] := '\';
+            Result[At + 1] := 'r';
+            Inc(At, 2);
+          End;
       Else
         If Ord(C) < 32 Then
-          Result := Result + '\u00' + IntToHex(Ord(C), 2)
+          Begin
+            Code := Ord(C);
+            Result[At] := '\';
+            Result[At + 1] := 'u';
+            Result[At + 2] := '0';
+            Result[At + 3] := '0';
+            Result[At + 4] := HexDigits[(Code Div 16) + 1];
+            Result[At + 5] := HexDigits[(Code Mod 16) + 1];
+            Inc(At, 6);
+          End
         Else
-          Result := Result + C;
+          Begin
+            Result[At] := C;
+            Inc(At);
+          End;
       End;
     End;
 End;
@@ -3324,25 +3392,15 @@ Begin
     '","data":"' + EscapeChunkData(Data) + '"}}';
 End;
 
-{ Last index of a slice that does not end inside a UTF-8 code point. }
-Function Utf8PrefixLen(Const Text: String; Start, Wanted: Integer): Integer;
+{ Bytes of one UTF-8 code point starting at Index, or 1 for a stray byte. Never zero when Index is in range. }
+Function Utf8UnitLen(Const Text: String; Index: Integer): Integer;
 Var
-  Last, Lead, Need, Follow: Integer;
+  Lead, Need, Follow: Integer;
 Begin
-  Result := Wanted;
-  If Result > Length(Text) - Start + 1 Then
-    Result := Length(Text) - Start + 1;
-  If Result <= 0 Then
-    Exit;
-  Last := Start + Result - 1;
-  While (Result > 0) And ((Ord(Text[Last]) And $C0) = $80) Do
-    Begin
-      Dec(Result);
-      Dec(Last);
-    End;
-  If Result <= 0 Then
-    Exit;
-  Lead := Ord(Text[Last]);
+  Result := 1;
+  If (Index < 1) Or (Index > Length(Text)) Then
+    Exit(0);
+  Lead := Ord(Text[Index]);
   If Lead < $80 Then
     Exit;
   If (Lead And $E0) = $C0 Then
@@ -3352,45 +3410,44 @@ Begin
   Else If (Lead And $F8) = $F0 Then
     Need := 4
   Else
-    Need := 1;
+    Exit;
   Follow := 1;
-  While (Last + Follow <= Length(Text)) And (Follow < Need) And ((Ord(Text[Last + Follow]) And $C0) = $80) Do
+  While (Index + Follow <= Length(Text)) And (Follow < Need) And ((Ord(Text[Index + Follow]) And $C0) = $80) Do
     Inc(Follow);
-  If Follow < Need Then
-    Dec(Result);
+  If Follow = Need Then
+    Result := Need;
 End;
 
-Function FitChunkSlice(Const Item, FrameId, ItemId, ItemType: String; Start, PartCount: Integer): Integer;
+{ Source bytes from Start whose escaped form fits in DataBudget, ending on a code point. }
+Function ChunkSourceLen(Const Item: String; Start, DataBudget: Integer): Integer;
 Var
-  Low, High, Mid: Integer;
-  Frame: String;
+  Index, Escaped, UnitLen, UnitEsc, Offset: Integer;
 Begin
   Result := 0;
-  Low := 1;
-  High := Length(Item) - Start + 1;
-  While Low <= High Do
+  If (DataBudget < 1) Or (Start < 1) Or (Start > Length(Item)) Then
+    Exit;
+  Index := Start;
+  Escaped := 0;
+  While Index <= Length(Item) Do
     Begin
-      Mid := Utf8PrefixLen(Item, Start, (Low + High) Div 2);
-      If Mid < 1 Then
-        Begin
-          High := (Low + High) Div 2 - 1;
-          Continue;
-        End;
-      Frame := ChunkFrame(FrameId, ItemId, ItemType, Copy(Item, Start, Mid), 1, PartCount);
-      If Length(Frame) <= MonitorOutboxChunkBytes Then
-        Begin
-          Result := Mid;
-          Low := Mid + 1;
-        End
-      Else
-        High := Mid - 1;
+      UnitLen := Utf8UnitLen(Item, Index);
+      If UnitLen < 1 Then
+        Exit;
+      UnitEsc := 0;
+      For Offset := 0 To UnitLen - 1 Do
+        Inc(UnitEsc, EscapedByteLen(Item[Index + Offset]));
+      If Escaped + UnitEsc > DataBudget Then
+        Exit;
+      Inc(Escaped, UnitEsc);
+      Inc(Result, UnitLen);
+      Inc(Index, UnitLen);
     End;
 End;
 
 Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Frames: TStringArray): Boolean;
 Var
   Item, BudgetId: String;
-  Start, Taken, Part, Count: Integer;
+  Start, Taken, Part, Count, Overhead, DataBudget: Integer;
   Cuts: Array Of Integer;
 Begin
   Result := False;
@@ -3407,13 +3464,18 @@ Begin
       Frames[0] := Item;
       Exit(True);
     End;
-  { Size the slices against a full-length id so the real shorter id still fits. }
+  { Size the slices against a full-length id and four-digit part numbers so the real frame still fits.
+    One walk. Searching by rebuilding each probe locked the IDE on a multi-megabyte conversation. }
   BudgetId := StringOfChar('a', MonitorMaxMessageIdChars);
+  Overhead := Length(ChunkFrame(BudgetId, ItemId, ItemType, '', 9999, 9999));
+  If Overhead >= MonitorOutboxChunkBytes Then
+    Exit;
+  DataBudget := MonitorOutboxChunkBytes - Overhead;
   SetLength(Cuts, 0);
   Start := 1;
   While Start <= Length(Item) Do
     Begin
-      Taken := FitChunkSlice(Item, BudgetId, ItemId, ItemType, Start, 9999);
+      Taken := ChunkSourceLen(Item, Start, DataBudget);
       If Taken < 1 Then
         Exit;
       SetLength(Cuts, Length(Cuts) + 1);

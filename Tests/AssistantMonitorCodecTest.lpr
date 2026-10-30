@@ -17,7 +17,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs,
-  AssistantMonitorCodec, AssistantMonitorFrames, AssistantSessionObserve;
+  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorOutbox, AssistantSessionObserve;
 
 Type
   TWireSample = Record
@@ -918,6 +918,104 @@ Begin
     End;
 End;
 
+Function TextIsCompleteUtf8(Const Text: String): Boolean;
+Var
+  Index, Lead, Need, Follow: Integer;
+Begin
+  Result := True;
+  Index := 1;
+  While Index <= Length(Text) Do
+    Begin
+      Lead := Ord(Text[Index]);
+      If Lead < $80 Then
+        Need := 1
+      Else If (Lead And $E0) = $C0 Then
+        Need := 2
+      Else If (Lead And $F0) = $E0 Then
+        Need := 3
+      Else If (Lead And $F8) = $F0 Then
+        Need := 4
+      Else
+        Exit(False);
+      If Index + Need - 1 > Length(Text) Then
+        Exit(False);
+      For Follow := 1 To Need - 1 Do
+        If (Ord(Text[Index + Follow]) And $C0) <> $80 Then
+          Exit(False);
+      Inc(Index, Need);
+    End;
+End;
+
+Procedure TestLargeChunkPack;
+Const
+  PayloadBytes = 900000;
+Var
+  Payload, Expected, Piece, Joined, Euro: String;
+  Frames: TStringArray;
+  Data: TJSONData;
+  Root, PayloadObj: TJSONObject;
+  Started: QWord;
+  Index, Part, PartCount: Integer;
+Begin
+  SetLength(Payload, PayloadBytes);
+  For Index := 1 To PayloadBytes Do
+    Payload[Index] := 'a';
+  Euro := #$E2#$82#$AC;
+  Index := 1;
+  While Index <= PayloadBytes - 16 Do
+    Begin
+      Payload[Index] := '"';
+      Payload[Index + 1] := '\';
+      Payload[Index + 2] := #8;
+      Payload[Index + 3] := #9;
+      Payload[Index + 4] := #10;
+      Payload[Index + 5] := #12;
+      Payload[Index + 6] := #13;
+      Payload[Index + 7] := #1;
+      Payload[Index + 8] := Euro[1];
+      Payload[Index + 9] := Euro[2];
+      Payload[Index + 10] := Euro[3];
+      Inc(Index, 10000);
+    End;
+  Payload[PayloadBytes - 2] := Euro[1];
+  Payload[PayloadBytes - 1] := Euro[2];
+  Payload[PayloadBytes] := Euro[3];
+  Started := GetTickCount64;
+  Check('large page packs', PackMonitorBulkItem('bulk-pack', 'snapshot_page', Payload, Frames));
+  Check('large page packs promptly', GetTickCount64 - Started < 2000);
+  Check('large page is chunked', Length(Frames) > 1);
+  Expected := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"bulk-pack","type":"snapshot_page","payload":' +
+    Payload + '}';
+  Joined := '';
+  PartCount := 0;
+  For Index := 0 To High(Frames) Do
+    Begin
+      Check('chunk fits the outbox', Length(Frames[Index]) <= MonitorOutboxChunkBytes);
+      Data := Nil;
+      If Not PayloadObject(Frames[Index], Data, PayloadObj) Then
+        Begin
+          Data.Free;
+          Check('chunk payload', False);
+          Continue;
+        End;
+      Try
+        Root := TJSONObject(Data);
+        Part := PayloadObj.Get('part', 0);
+        If Index = 0 Then
+          PartCount := PayloadObj.Get('part_count', 0);
+        Piece := PayloadObj.Get('data', '');
+        Check('chunk fields', (Root.Get('type', '') = 'chunk') And (Part = Index + 1) And
+          (PayloadObj.Get('part_count', 0) = Length(Frames)) And (PartCount = Length(Frames)) And
+          (PayloadObj.Get('item_id', '') = 'bulk-pack') And (PayloadObj.Get('item_type', '') = 'snapshot_page'));
+        Check('chunk is whole UTF-8', TextIsCompleteUtf8(Piece));
+        Joined := Joined + Piece;
+      Finally
+        Data.Free;
+      End;
+    End;
+  Check('chunks rebuild the item', Joined = Expected);
+End;
+
 Procedure TestPatchOverCap;
 Var
   Patch, Part, Assembled: TMonitorPatch;
@@ -1334,6 +1432,7 @@ Begin
   TestSetReasoningLevel;
   TestSelectTargetPathIsNotAnId;
   TestPatchOverCap;
+  TestLargeChunkPack;
   TestVersion2PatchAndClosed;
   TestOldCatalogue;
   TestDirtyBlocks;

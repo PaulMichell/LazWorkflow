@@ -121,9 +121,35 @@ Begin
   End;
 End;
 
+Procedure TestBodyEscape;
+Var
+  Turn: TAssistantMonitorTurn;
+  Page, Body: String;
+  Started: QWord;
+  Index: Integer;
+Begin
+  Body := StringOfChar('a', 200000);
+  For Index := 1 To Length(Body) Do
+    Case Index Mod 1000 Of
+      0: Body[Index] := '"';
+      1: Body[Index] := '\';
+      2: Body[Index] := #10;
+      3: Body[Index] := #1;
+    Else
+      ;
+    End;
+  Turn := SampleTurn('turn-esc', Body, 2);
+  Started := GetTickCount64;
+  Page := MonitorTurnPageJson('conversation-a', 'ab12cd34', 1, Turn);
+  Check('a quoted body escapes in one pass', (GetTickCount64 - Started < 2000) And (Page <> ''));
+  Check('quotes, slashes, and newlines are escaped', (Pos('\"', Page) > 0) And (Pos('\\', Page) > 0) And (Pos('\n', Page) > 0));
+  Check('other controls stay raw', (Pos(#1, Page) > 0) And (Pos('\u0001', Page) = 0));
+End;
+
 Begin
   FailCount := 0;
   TestFoldAndReplay;
+  TestBodyEscape;
   If FailCount = 0 Then
     WriteLn('AssistantMonitorMirrorTest passed')
   Else
