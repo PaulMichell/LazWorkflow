@@ -314,7 +314,8 @@ fun ActivityStatus(
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
   val linkLive = ideLinkLive(ui.disconnected, phase)
   val running = turnStillRunning(ui.view, pending, blocks, ui.live)
-  LaunchedEffect(running, ui.activityStartedMs, linkLive) {
+  // A host sample may move the start. That must not restart the one-second tick.
+  LaunchedEffect(running, linkLive) {
     if (!running || !linkLive) return@LaunchedEffect
     while (true) {
       now = System.currentTimeMillis()

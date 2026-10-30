@@ -286,6 +286,7 @@ class MonitorCoordinator(
         statusText = phase
       )
     )
+    noteRunClock()
     if (syncingGap()) {
       held += HeldCommand(commandId, encoded.json, text, false)
       return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation)
@@ -340,6 +341,7 @@ class MonitorCoordinator(
       MessageKind.ImageData, MessageKind.ImageUnavailable -> effects += MonitorEffect.DecodeImage(message)
       else -> {}
     }
+    noteRunClock()
     return effects
   }
 
@@ -627,6 +629,7 @@ class MonitorCoordinator(
         banner = PairedElsewhereLabel,
         view = clearRemoteActions(local.view)
       )
+      noteRunClock()
       return restored
     }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
@@ -638,6 +641,7 @@ class MonitorCoordinator(
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
         view = viewAfterDrop(clearRemoteActions(local.view))
       )
+      noteRunClock()
       return emptyList()
     }
     if (status.phase == LinkPhase.Live || status.phase == LinkPhase.Idle) {
@@ -648,7 +652,9 @@ class MonitorCoordinator(
         banner = if (linkBanner(local.banner)) "" else local.banner
       )
     }
-    return releaseHeld()
+    val released = releaseHeld()
+    noteRunClock()
+    return released
   }
 
   private fun commandResult(result: CatalogueResult): List<MonitorEffect> {
@@ -711,6 +717,29 @@ class MonitorCoordinator(
 
   /** The chip says Syncing and the socket cannot take a command yet. */
   private fun syncingGap(): Boolean = syncingAccept() && !commandsReady()
+
+  /** The status clock is this start plus local time. A later zero sample must not put it back to 0:00. */
+  private fun noteRunClock() {
+    val board = content.current()
+    val shown = local.withBoard(board)
+    val blocks = displayBlocks(board.live)
+    val pending = local.pendingPrompt.isNotEmpty() && !promptShown(shown, local.pendingPrompt)
+    val running = turnStillRunning(local.view, pending, blocks, board.live)
+    val now = clock.nowMs()
+    if (!running) {
+      if (local.activityStartedMs == 0L && local.activityObservedMs == 0) return
+      local = local.copy(activityStartedMs = 0L, activityObservedMs = 0, activityAppliedMs = now.coerceAtLeast(0L))
+      return
+    }
+    val observed = observedElapsedMs(local.view, board.live, blocks)
+    val start = activityStart(local.activityStartedMs, now, observed, local.activityObservedMs)
+    if (start == local.activityStartedMs && observed == local.activityObservedMs) return
+    local = local.copy(
+      activityStartedMs = start,
+      activityObservedMs = observed,
+      activityAppliedMs = now.coerceAtLeast(0L)
+    )
+  }
 
   private fun unsentPrompt(): String {
     return held.lastOrNull { command -> command.prompt.isNotEmpty() }?.prompt.orEmpty()

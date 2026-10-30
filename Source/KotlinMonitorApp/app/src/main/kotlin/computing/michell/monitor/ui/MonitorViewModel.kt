@@ -517,7 +517,13 @@ fun activityCaption(
     return text
   }
   val phase = activityPhase(view, pending, pendingKind, blocks)
-  val start = if (startedMs > 0L) startedMs else nowMs
+  // A missing start must not be replaced with now. That freezes the caption at 0:00.
+  val elapsed = observedElapsedMs(view, live, blocks).toLong()
+  val start = when {
+    startedMs > 0L -> startedMs
+    elapsed > 0L && nowMs > elapsed -> nowMs - elapsed
+    else -> 0L
+  }
   if (nowMs <= 0L || start <= 0L || nowMs < start) return phase
   return "$phase ${formatActivityClock(nowMs - start)}"
 }

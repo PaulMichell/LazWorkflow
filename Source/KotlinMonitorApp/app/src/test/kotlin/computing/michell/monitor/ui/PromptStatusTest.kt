@@ -51,6 +51,9 @@ class PromptStatusTest {
     assertFalse(sendActionEnabled(running, true, LinkPhase.Connecting, false, true))
     assertFalse(newConversationEnabled(running, true, LinkPhase.Connecting, false, true))
     assertFalse(sendActionEnabled(idle, true, LinkPhase.Disconnected, false, false))
+    val thinking = emptyView().copy(sending = true, phase = "Thinking…")
+    assertEquals("Thinking…", activityCaption(thinking, false, "", 0L, 5_000L))
+    assertEquals("Thinking… 0:04", activityCaption(thinking, false, "", 1_000L, 5_000L))
   }
 
   @Test

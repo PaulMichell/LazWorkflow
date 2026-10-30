@@ -363,6 +363,42 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aRunningTurnStartsTheStatusClockOnce() {
+    val clock = MovableClock(10_000L)
+    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "go"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    assertEquals(10_000L, coordinator.state.activityStartedMs)
+    assertEquals("Waiting… 0:05", activityCaption(
+      coordinator.state.view, true, "user", coordinator.state.activityStartedMs, 15_000L,
+      displayBlocks(coordinator.state.live), coordinator.state.live
+    ))
+    clock.millis = 20_000L
+    val sampled = WirePatch(
+      "epoch", 2, 1, "turn-1", emptyList(), true, true, false, "Thinking…",
+      false, false, true, 12_000, hasView = true, statusText = "Thinking… 0:12"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", sampled))))
+    assertEquals(8_000L, coordinator.state.activityStartedMs)
+    clock.millis = 25_000L
+    val zero = sampled.copy(cursor = 3, elapsedMs = 0, statusText = "Thinking…")
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p2", zero))))
+    assertEquals(8_000L, coordinator.state.activityStartedMs)
+    assertEquals("Thinking… 0:17", activityCaption(
+      coordinator.state.view, false, "", coordinator.state.activityStartedMs, 25_000L,
+      displayBlocks(coordinator.state.live), coordinator.state.live
+    ))
+    val echoed = WireBlock("user", "u", "", "", "", "go", false, true, 0, emptyList())
+    val idle = zero.copy(
+      cursor = 4, blocks = listOf(echoed), busy = false, sending = false, canSend = true, canStop = false,
+      phase = "Ready", statusText = "Ready"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p3", idle))))
+    assertEquals(0L, coordinator.state.activityStartedMs)
+  }
+
+  @Test
   fun newConversationFilesTheScreenAndTheNextPageDoesNotKeepIt() {
     val coordinator = open()
     showAnswer(coordinator, "conversation-1", "epoch", "old answer")
@@ -443,6 +479,10 @@ private fun envelope(json: String): MonitorMessage {
 }
 
 private class FixedClock(private val millis: Long) : MonitorClock {
+  override fun nowMs(): Long = millis
+}
+
+private class MovableClock(var millis: Long) : MonitorClock {
   override fun nowMs(): Long = millis
 }
 
