@@ -21,6 +21,7 @@ import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.encodeConversationClosed
+import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.encodePatch
 import computing.michell.monitor.protocol.encodePlan
@@ -103,6 +104,38 @@ class MonitorCoordinatorTest {
     assertTrue(coordinator.state.disconnected)
     assertFalse(coordinator.holdingLink)
     assertNull(coordinator.revealHeldLink(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
+  }
+
+  @Test
+  fun helloAsksForTheOpenScreenNotTheSavedCursor() {
+    val coordinator = open()
+    val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "conversation-1",
+      hostEpoch = "epoch",
+      hostCursor = 118,
+      turns = listOf(WireTurn(1, "turn-1", "build", "", "the prompt", "", blocks = listOf(prompt)))
+    ))
+    val hello = HelloOkMessage("nonce", "ide", "epoch", 200, "conversation-1", "/work", "Chat", "")
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello)))).orEmpty()
+    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
+    val asked = decodeResume(tryDecodeEnvelope(sent.json).message.payloadJson)
+    assertEquals("", asked!!.epoch)
+    assertEquals(0L, asked.cursor)
+    assertEquals("the prompt", coordinator.state.turns.single().blocks.single().body)
+  }
+
+  @Test
+  fun aLaterPatchKeepsThePromptBesideTheReply() {
+    val coordinator = open()
+    val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(
+      WireTurn(1, "turn-1", "build", "", "the prompt", "", live = true, blocks = listOf(prompt))
+    )))))
+    val reply = WireBlock("answer", "a", "", "", "", "the reply", false, true, 0, emptyList())
+    val delta = WirePatch("epoch", 9, 1, "turn-1", listOf(reply), false, false, false, "", true, false, false, 0)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", delta))))
+    assertEquals(listOf("the prompt", "the reply"), coordinator.state.live?.blocks?.map { block -> block.body })
   }
 
   @Test

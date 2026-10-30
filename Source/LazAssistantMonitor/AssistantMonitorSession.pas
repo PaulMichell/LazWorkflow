@@ -2535,15 +2535,17 @@ Var
   Json: String;
 Begin
   Result := False;
-  If TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) Then
+  { An empty event list means the cursor matched. It does not mean the phone has this screen.
+    Fall through and send the mirror pages, which are the open conversation. }
+  If TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) And (Length(Catchup.Patches) > 0) Then
     Begin
       Json := EncodeMonitorCatchup(Id, Catchup);
       If Json <> '' Then
         Begin
           QueueSend(Json);
           Result := True;
+          Exit;
         End;
-      Exit;
     End;
   If (Not Assigned(FMirror)) Or (Not FMirror.HasModel) Then
     Exit;

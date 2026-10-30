@@ -22,6 +22,7 @@ import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.applySnapshotPageJson
+import computing.michell.monitor.protocol.mergePatchBlocks
 import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.decodeCatchup
 import computing.michell.monitor.protocol.decodeConversationClosed
@@ -370,6 +371,8 @@ class MonitorCoordinator(
     }
     if (catchup.mode != "events") return
     if (awaitingConversation || (catchup.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && catchup.epoch != local.hostEpoch)) return
+    // No patches means the cursor matched. It does not mean this screen is the desktop's.
+    if (catchup.patches.isEmpty()) return
     for (patch in catchup.patches) applyPatch(patch)
     local = local.copy(
       conversationId = catchup.conversationId.ifEmpty { local.conversationId },
@@ -413,18 +416,22 @@ class MonitorCoordinator(
       return
     }
     val board = content.current()
+    val previous = board.live?.takeIf { turn -> turn.id == patch.turnId || turn.turnIndex == patch.turnIndex }
+      ?: board.turns.firstOrNull { turn -> turn.id == patch.turnId || turn.turnIndex == patch.turnIndex }
+    val merged = mergePatchBlocks(previous?.blocks.orEmpty(), patch.blocks).blocks
     val live = WireTurn(
-      patch.turnIndex,
-      patch.turnId,
-      "",
-      "",
-      "",
+      if (patch.turnIndex != 0) patch.turnIndex else previous?.turnIndex ?: -2,
+      patch.turnId.ifEmpty { previous?.id.orEmpty() },
+      previous?.mode.orEmpty(),
+      previous?.createdAt.orEmpty(),
+      previous?.promptPreview.orEmpty(),
       "",
       live = true,
-      blocks = patch.blocks,
-      durationMs = patch.elapsedMs
+      blocks = merged,
+      durationMs = if (patch.elapsedMs > 0) patch.elapsedMs else previous?.durationMs ?: 0
     )
-    content.replace(contentHost, local.conversationId, board.turns, live)
+    val kept = board.turns.filter { turn -> turn.id != live.id && turn.turnIndex != live.turnIndex }
+    content.replace(contentHost, local.conversationId, kept, live)
     val flagged = local.view.copy(
       busy = patch.busy,
       sending = patch.sending,
@@ -506,12 +513,9 @@ class MonitorCoordinator(
   }
 
   private fun resumeNow(): MonitorEffect {
-    val board = content.current()
-    val haveBody = board.turns.isNotEmpty() || board.live != null
+    // A saved cursor is not the open screen. Empty epoch makes the host send the mirror pages.
     local = local.copy(catchingUp = true)
-    val epoch = if (haveBody) local.hostEpoch else ""
-    val cursor = if (haveBody) local.hostCursor else 0L
-    return MonitorEffect.Send(encodeResume(session.nextCommandId(), epoch, cursor))
+    return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
   }
 
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {

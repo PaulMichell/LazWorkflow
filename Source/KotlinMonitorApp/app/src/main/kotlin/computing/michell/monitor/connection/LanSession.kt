@@ -1070,9 +1070,9 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
-          // Open commands only. A resume at the host head makes the desktop send every page again,
-          // and that dump on top of the cached screen is what kills the process on open.
-          if (ledger.openIds().isNotEmpty()) offerControl(resumeNow(hello.epoch, hello.cursor), owned, outbound)
+          // Empty epoch asks for the open conversation. The host head is not that screen: an empty
+          // event list means the cursor matches, and the phone then stays on whatever it cached.
+          offerControl(resumeNow("", 0), owned, outbound)
         }
       }
       MessageKind.CommandStates -> {
