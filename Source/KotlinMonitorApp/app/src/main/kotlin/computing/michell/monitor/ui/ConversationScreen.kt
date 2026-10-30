@@ -218,9 +218,7 @@ private fun ConversationPane(
     verticalArrangement = Arrangement.spacedBy(8.dp)
   ) {
     items(rows, key = { row -> row.key }) { row ->
-      if (row.block == null) {
-        Text(row.label, color = QuietText, maxLines = 2, overflow = TextOverflow.Ellipsis)
-      } else {
+      if (row.block != null) {
         RoleBlock(
           row.block,
           bitmaps,

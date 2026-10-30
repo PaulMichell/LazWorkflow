@@ -822,23 +822,28 @@ Begin
     Pages[0].Page := 0;
     Pages[0].Json := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
       '","seq":' + IntToStr(HeadSeq) + ',' + Outline + '}';
+    { Current turn first, then older turns newest-first. The phone draws the desktop point at once. }
     PageNo := 1;
-    For Index := 0 To High(FTurns) + Ord(FHasLive) Do
+    For Index := High(FTurns) + Ord(FHasLive) DownTo 0 Do
       Begin
-        If Index <= High(FTurns) Then
-          Turn := FTurns[Index]
+        If FHasLive And (Index > High(FTurns)) Then
+          Turn := FLive
         Else
-          Turn := FLive;
+          Turn := FTurns[Index];
         PageBody := MonitorTurnPageJson(FConversationId, FStreamId, HeadSeq, Turn);
-        If Utf8Bytes(PageBody) > MonitorSnapshotPageBytes Then
+        If FHasLive And (Turn.Id = FLive.Id) And (Turn.TurnIndex = FLive.TurnIndex) Then
+          PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
+        If Utf8Bytes(PageBody) > 4 * 1024 * 1024 Then
           Begin
-            { One block per page when the turn does not fit. Nothing is truncated. }
+            { The chunk packer cannot take the whole turn. One block per page, still untruncated. }
             For BlockIndex := 0 To High(Turn.Blocks) Do
               Begin
                 PageBody := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' +
                   JsonEscape(FStreamId) + '","seq":' + IntToStr(HeadSeq) + ',"turn":{"turn_id":"' + JsonEscape(Turn.Id) +
                   '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[' + BlockJson(Turn.Blocks[BlockIndex], Turn.Id) +
                   ']}}';
+                If FHasLive And (Turn.Id = FLive.Id) Then
+                  PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
                 SetLength(Pages, Length(Pages) + 1);
                 Pages[High(Pages)].Page := PageNo;
                 Pages[High(Pages)].Json := PageBody;

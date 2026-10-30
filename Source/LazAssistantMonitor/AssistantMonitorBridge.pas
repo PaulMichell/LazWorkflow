@@ -749,9 +749,10 @@ Begin
       SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
       Exit;
     End;
-  SendCatchupSnapshot(Form, Id);
+  { Status and the plan go out before the history pages, or they wait behind the replay. }
   PushStatus(Form);
   PushPlan(Form);
+  SendCatchupSnapshot(Form, Id);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;

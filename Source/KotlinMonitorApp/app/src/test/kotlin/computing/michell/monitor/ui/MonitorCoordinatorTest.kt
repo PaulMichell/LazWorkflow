@@ -105,19 +105,30 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun aSnapshotPageEndsSyncingAndShowsTheDesktopTurn() {
+  fun theCurrentTurnArrivesWholeAndACachedTurnIsNotReplayed() {
     val coordinator = open()
     val hello = HelloOkMessage("nonce", "ide", "epoch", 118, "conversation-1", "/work", "Chat", "")
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello))))
     assertTrue(coordinator.state.catchingUp)
-    assertEquals(118, coordinator.state.hostCursor)
-    val page = encodeSnapshotPage(
+    val outline = encodeSnapshotPage(
       "page-0",
-      """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"turn-1","mode":"build","prompt_preview":"hello from the desktop","created_at":"","duration_ms":0}]}"""
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"old","mode":"build","prompt_preview":"old","created_at":"","duration_ms":0}]}"""
     )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(page)))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
+    assertTrue(coordinator.state.turns.isEmpty())
+    val current = encodeSnapshotPage(
+      "page-1",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turn":{"live":true,"turn_id":"live-1","turn_index":4,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"},{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the answer"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(current)))
     assertFalse(coordinator.state.catchingUp)
-    assertEquals("hello from the desktop", coordinator.state.turns.single().promptPreview)
+    assertEquals(listOf("the prompt", "the answer"), coordinator.state.live?.blocks?.map { block -> block.body })
+    val again = encodeSnapshotPage(
+      "page-2",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turn":{"live":true,"turn_id":"live-1","turn_index":4,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(again)))
+    assertEquals(2, coordinator.state.live?.blocks?.size)
     val moved = encodePlan("plan-2", "Documents/Other.md", "Other", false, emptyList())
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(moved)))
     assertEquals("Documents/Other.md", coordinator.state.planPath)

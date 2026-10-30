@@ -1849,23 +1849,60 @@ fun snapshotPageTurn(payloadJson: String): WireTurn? {
       )
     }
   }
-  return WireTurn(index.value, id.value, "", "", "", "", "", "", "", 0, false, blocks)
+  val live = turn.readBool("live", false).value
+  return WireTurn(index.value, id.value, "", "", "", "", "", "", "", 0, live, blocks)
 }
 
 fun snapshotPageTurnIndex(payloadJson: String): Int? = snapshotPageTurn(payloadJson)?.turnIndex
 
+/** A later block page must not replace the turn with that one block. */
+fun mergeTurnBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): List<WireBlock> {
+  if (incoming.isEmpty()) return existing
+  if (existing.isEmpty()) return incoming
+  val incomingById = incoming.associateBy { block -> block.blockId }
+  val seen = HashSet<String>()
+  val merged = ArrayList<WireBlock>(existing.size + incoming.size)
+  for (block in existing) {
+    val next = if (block.blockId.isNotEmpty()) incomingById[block.blockId] else null
+    merged += if (next != null && (next.body.isNotEmpty() || next.title.isNotEmpty())) next else block
+    if (block.blockId.isNotEmpty()) seen += block.blockId
+  }
+  for (block in incoming) {
+    if (block.blockId.isEmpty() || block.blockId !in seen) merged += block
+  }
+  return merged
+}
+
+/** True when every incoming block is already in the cache with the same body. */
+fun snapshotBlocksUnchanged(existing: List<WireBlock>, incoming: List<WireBlock>): Boolean {
+  if (incoming.isEmpty()) return existing.isNotEmpty()
+  return incoming.all { block ->
+    block.blockId.isNotEmpty() && existing.any { cached ->
+      cached.blockId == block.blockId && cached.body == block.body && cached.kind == block.kind
+    }
+  }
+}
+
 fun applySnapshotPageJson(stateTurns: List<WireTurn>, live: WireTurn?, payloadJson: String): Pair<List<WireTurn>, WireTurn?>? {
   val turn = snapshotPageTurn(payloadJson) ?: return null
   val current = live
-  val isLive = current != null && current.id.isNotEmpty() && current.id == turn.id
-  val shown = if (current != null && isLive) turn.copy(live = true, mode = current.mode, prompt = current.prompt,
-    thinking = current.thinking, response = current.response, promptPreview = current.promptPreview,
-    createdAt = current.createdAt, durationMs = current.durationMs, images = current.images) else turn
-  val turns = if (isLive) stateTurns else {
-    val kept = stateTurns.filter { it.turnIndex != turn.turnIndex }
-    (kept + turn).sortedBy { it.turnIndex }
+  val isLive = turn.live || (current != null && current.id.isNotEmpty() && current.id == turn.id)
+  val existing = if (isLive) current ?: stateTurns.firstOrNull { stored -> stored.id == turn.id }
+    else stateTurns.firstOrNull { stored -> stored.id == turn.id || stored.turnIndex == turn.turnIndex }
+  if (existing != null && snapshotBlocksUnchanged(existing.blocks, turn.blocks)) return stateTurns to live
+  val merged = mergeTurnBlocks(existing?.blocks ?: emptyList(), turn.blocks)
+  val shown = (existing ?: turn).copy(
+    blocks = merged,
+    live = isLive,
+    mode = existing?.mode?.ifEmpty { turn.mode } ?: turn.mode,
+    promptPreview = turn.promptPreview.ifEmpty { existing?.promptPreview.orEmpty() }
+  )
+  if (isLive) {
+    val kept = stateTurns.filter { stored -> stored.id != shown.id && stored.turnIndex != shown.turnIndex }
+    return kept to shown
   }
-  return turns to if (isLive) shown else live
+  val kept = stateTurns.filter { stored -> stored.id != shown.id && stored.turnIndex != shown.turnIndex }
+  return (kept + shown.copy(live = false)).sortedBy { stored -> stored.turnIndex } to live
 }
 
 /** Joins chunk frames into the item they split. A partial item returns null. */

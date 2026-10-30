@@ -94,11 +94,7 @@ fun conversationRows(
   for (slot in slots) {
     val turn = if (slot.live) live else turns.firstOrNull { it.turnIndex == slot.turnIndex }
     val shown = shownBlocks(turn, showThinking, showTools)
-    if (shown.isEmpty()) {
-      val turnId = turn?.id.orEmpty().ifEmpty { "slot-${slot.turnIndex}" }
-      rows += ConversationRow(conversationRowKey(turnId, "", 0), turnId, slot.turnIndex, null, slot.label)
-      continue
-    }
+    if (shown.isEmpty()) continue
     val turnId = turn?.id.orEmpty()
     shown.forEachIndexed { index, block ->
       rows += ConversationRow(conversationRowKey(turnId, block.blockId, index), turnId, slot.turnIndex, block, slot.label)

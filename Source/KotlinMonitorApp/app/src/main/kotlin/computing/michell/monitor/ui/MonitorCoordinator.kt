@@ -276,18 +276,16 @@ class MonitorCoordinator(
   /** The host no longer sends a snapshot frame. Pages are the conversation. */
   private fun applySnapshotPage(message: MonitorMessage) {
     val seq = snapshotPageSeq(message.payloadJson)
-    val outline = snapshotPageOutline(message.payloadJson)
-    if (outline != null) {
-      val liveId = content.current().live?.id.orEmpty()
-      val live = outline.firstOrNull { turn -> liveId.isNotEmpty() && turn.id == liveId }
-      val stored = if (live == null) outline else outline.filter { turn -> turn.id != live.id }
-      content.replace(contentHost, local.conversationId, stored, live)
-      noteCaughtUp(seq)
+    if (snapshotPageOutline(message.payloadJson) != null) {
+      // An outline is an index. Painting it would replay empty turns from the top.
+      if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
       return
     }
     val board = content.current()
     val applied = applySnapshotPageJson(board.turns, board.live, message.payloadJson) ?: return
-    content.replace(contentHost, local.conversationId, applied.first, applied.second)
+    if (applied.first !== board.turns || applied.second !== board.live) {
+      content.replace(contentHost, local.conversationId, applied.first, applied.second)
+    }
     noteCaughtUp(seq)
   }
 

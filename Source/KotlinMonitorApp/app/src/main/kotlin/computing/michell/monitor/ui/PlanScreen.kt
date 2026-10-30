@@ -65,9 +65,10 @@ fun PlanScreen(
   onNew: () -> Unit,
   onRemove: () -> Unit
 ) {
+  if (ui.planPath.isEmpty() && ui.planTitle.isEmpty() && ui.planRows.isEmpty()) return
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Text(ui.planTitle.ifEmpty { "Plan" }, style = MaterialTheme.typography.titleLarge)
-    Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
+    if (ui.planTitle.isNotEmpty()) Text(ui.planTitle, style = MaterialTheme.typography.titleLarge)
+    if (ui.planPath.isNotEmpty()) Text(ui.planPath, style = MaterialTheme.typography.bodySmall)
     LazyColumn(modifier = Modifier.weight(1f)) {
       items(ui.planRows) { row ->
         PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan) {
