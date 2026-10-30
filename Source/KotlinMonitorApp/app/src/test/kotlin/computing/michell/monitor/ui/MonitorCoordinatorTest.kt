@@ -136,6 +136,26 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aPlanFrameWithNoEffectStillReachesTheScreen() {
+    val coordinator = open()
+    val waiting = PlanRow(0, 3, "Check the first show", "", "not started", true)
+    val first = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodePlan("plan-1", "Documents/Plan.md", "Overview", false, listOf(waiting))
+    ))).orEmpty()
+    assertTrue(first.isEmpty())
+    assertTrue(incomingCopiesScreen(first))
+    val started = waiting.copy(status = "in progress")
+    val next = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodePlan("plan-2", "Documents/Plan.md", "Overview", true, listOf(started))
+    ))).orEmpty()
+    assertTrue(next.isEmpty())
+    assertTrue(incomingCopiesScreen(next))
+    assertEquals("in progress", coordinator.state.planRows.single().status)
+    assertTrue(coordinator.state.planRunning)
+    assertFalse(incomingCopiesScreen(listOf(MonitorEffect.DecodeImage(envelope(encodePlan("img", "", "", false, emptyList()))))))
+  }
+
+  @Test
   fun aPlanFrameFillsTheScreenAndALaterPatchKeepsTheRows() {
     val coordinator = open()
     val row = PlanRow(1, 3, "Sync the plan", "", "not started", true)

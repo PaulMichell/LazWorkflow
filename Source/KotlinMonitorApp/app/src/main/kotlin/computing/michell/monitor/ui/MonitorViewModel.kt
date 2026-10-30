@@ -1871,7 +1871,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         }
       }
     }
-    val copyState = effects.any { it !is MonitorEffect.DecodeImage }
+    // An empty effect list is a plan or status frame. Leaving it unpublished is why
+    // the Plan page stayed stale until Conversation was opened and closed.
+    val copyState = incomingCopiesScreen(effects)
     withContext(Dispatchers.Main) {
       for (image in decoded) storeDecoded(image)
       if (copyState) applyUiEffects(effects)

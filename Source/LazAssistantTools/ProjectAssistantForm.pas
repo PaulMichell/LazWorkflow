@@ -360,6 +360,9 @@ Type
     FPlanAgentMaxPackages: Integer;
     FPlanAgentResumeIndex: Integer; { Same in-progress item after a turn with no machine validation. }
     FPlanStallTimer: TTimer; { Create(Nil). Not streamed. Lost continuations retry on this. }
+    FPlanFileTimer: TTimer; { Create(Nil). Not streamed. Notices a desktop save of the active plan. }
+    FPlanDiskAge: LongInt;
+    FPlanDiskPendingAge: LongInt;
     FPlanStallArmedTick: QWord;
     FPlanStallNoted: Boolean;
     FPlanStallRestarting: Boolean;
@@ -463,6 +466,9 @@ Type
     Procedure MarkPlanAgentAlive;
     Procedure ReleasePlanStallWatch;
     Procedure PlanStallTimerTimer(Sender: TObject);
+    Procedure NotePlanDiskAge;
+    Procedure EnsurePlanFileTimer;
+    Procedure PlanFileTimerTimer(Sender: TObject);
     Procedure ContinuePlanInNewChat(UsagePercent: Integer);
     Function PlanContextThreshold: Integer;
     Function PlanHasOpenItems: Boolean;
@@ -844,6 +850,9 @@ Begin
   FPlanAgentMaxPackages := 25;
   FPlanAgentResumeIndex := -1;
   FPlanStallTimer := Nil;
+  FPlanFileTimer := Nil;
+  FPlanDiskAge := -1;
+  FPlanDiskPendingAge := -1;
   FPlanStallArmedTick := 0;
   FPlanStallNoted := False;
   FPlanStallRestarting := False;
@@ -856,6 +865,7 @@ Begin
   LoadConnectionSettings;
   WorkflowEventBus.AddListener(Self);
   SyncModeUi;
+  EnsurePlanFileTimer;
 End;
 
 Procedure TProjectAssistantForm.Resize;
@@ -906,6 +916,12 @@ Begin
     Begin
       FPlanStallTimer.OnTimer := Nil;
       FreeAndNil(FPlanStallTimer);
+    End;
+  If Assigned(FPlanFileTimer) Then
+    Begin
+      FPlanFileTimer.Enabled := False;
+      FPlanFileTimer.OnTimer := Nil;
+      FreeAndNil(FPlanFileTimer);
     End;
   ReleaseAccountUsageRefresh;
   Application.RemoveAsyncCalls(Self);
@@ -2542,6 +2558,7 @@ Begin
     BuildStatusLabel.Caption := '';
   If Not Assigned(BuildTodoList) Then
     Begin
+      NotePlanDiskAge;
       AssistantSessionObserve.AssistantSessionObserve(asnPlan);
       AssistantSessionObserve.TouchAssistantMirror;
       Exit;
@@ -2636,9 +2653,66 @@ Begin
     FBuildSelectedIndex := BuildTodoList.ItemIndex;
   Finally
     BuildTodoList.Items.EndUpdate;
+    NotePlanDiskAge;
+    If Assigned(BuildTodoList) Then
+      BuildTodoList.Invalidate;
     AssistantSessionObserve.AssistantSessionObserve(asnPlan);
     AssistantSessionObserve.TouchAssistantMirror;
   End;
+End;
+
+Procedure TProjectAssistantForm.NotePlanDiskAge;
+Var
+  PlanRel, Resolved, Err: String;
+  Age: LongInt;
+Begin
+  Age := -1;
+  PlanRel := GetActivePlanRelativePath;
+  If (PlanRel <> '') And ResolvePlanPath(PlanRel, Resolved, Err) And FileExistsUTF8(Resolved) Then
+    Age := FileAge(Resolved);
+  FPlanDiskAge := Age;
+  FPlanDiskPendingAge := Age;
+End;
+
+Procedure TProjectAssistantForm.EnsurePlanFileTimer;
+Begin
+  If Assigned(FPlanFileTimer) Or (csDestroying In ComponentState) Then
+    Exit;
+  { Nil owner: a streamed form must not gain a designer timer from Create(Self). }
+  FPlanFileTimer := TTimer.Create(Nil);
+  FPlanFileTimer.Enabled := False;
+  FPlanFileTimer.Interval := 250;
+  FPlanFileTimer.OnTimer := @PlanFileTimerTimer;
+  FPlanFileTimer.Enabled := True;
+End;
+
+Procedure TProjectAssistantForm.PlanFileTimerTimer(Sender: TObject);
+Var
+  PlanRel, Resolved, Err: String;
+  Age: LongInt;
+Begin
+  If (csDestroying In ComponentState) Or (Not (Sender Is TTimer)) Then
+    Exit;
+  PlanRel := GetActivePlanRelativePath;
+  If (PlanRel = '') Or (Not ResolvePlanPath(PlanRel, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
+    Begin
+      If FPlanDiskAge <> -1 Then
+        RefreshBuildTodos;
+      Exit;
+    End;
+  Age := FileAge(Resolved);
+  If Age = FPlanDiskAge Then
+    Begin
+      FPlanDiskPendingAge := Age;
+      Exit;
+    End;
+  { One quiet tick, so a save that touches the file twice is scanned once. }
+  If Age <> FPlanDiskPendingAge Then
+    Begin
+      FPlanDiskPendingAge := Age;
+      Exit;
+    End;
+  RefreshBuildTodos;
 End;
 
 Function TProjectAssistantForm.SelectedBuildSectionIndex: Integer;

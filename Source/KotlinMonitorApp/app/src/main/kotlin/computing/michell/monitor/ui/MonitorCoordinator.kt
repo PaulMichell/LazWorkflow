@@ -81,6 +81,13 @@ sealed class MonitorEffect {
   ) : MonitorEffect()
 }
 
+/** A plan or status frame has no effect. The screen still has to show it.
+    Image-only effects stay off this path; those bitmaps are stored separately. */
+fun incomingCopiesScreen(effects: List<MonitorEffect>): Boolean {
+  if (effects.isEmpty()) return true
+  return effects.any { effect -> effect !is MonitorEffect.DecodeImage }
+}
+
 class MonitorCoordinator(
   private val session: SessionPort,
   private val clock: MonitorClock,

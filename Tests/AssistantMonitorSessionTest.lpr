@@ -469,6 +469,48 @@ Begin
   Check('bulk frames follow the live patch', Carrier.SentJson(2) = BulkFrame(1));
 End;
 
+Procedure TestPlanFrameBeforeBulk;
+Var
+  Before, Index: Integer;
+  Ping, First, Second, Seen: String;
+  Row: TAssistantMonitorPlanRow;
+  Rows: Array Of TAssistantMonitorPlanRow;
+Begin
+  Ping := EncodeMonitorTicks(mmkPing, 'plan-ping', 2);
+  Row.Index := 0;
+  Row.Level := 3;
+  Row.Title := 'Check the first show';
+  Row.ParentTitle := '';
+  Row.Status := 'not started';
+  Row.Actionable := True;
+  SetLength(Rows, 1);
+  Rows[0] := Row;
+  First := EncodeMonitorPlan('plan-old', 'Documents/Plan.md', 'Overview', False, Rows);
+  Row.Status := 'in progress';
+  Rows[0] := Row;
+  Second := EncodeMonitorPlan('plan-new', 'Documents/Plan.md', 'Overview', True, Rows);
+  Carrier.ClearSent;
+  Before := Session.FramesDropped;
+  Check('first plan is queued', Session.TryQueueHostJson(First));
+  Check('later plan replaces the unsent plan', Session.TryQueueHostJson(Second));
+  Check('replaced plan is dropped', Session.FramesDropped = Before + 1);
+  For Index := 1 To MonitorOutboundQueueLimit Do
+    Check('bulk still fills beside a plan', Session.TryQueueHostJson(BulkFrame(Index)));
+  Check('full bulk lane still accepts the latest plan', Session.TryQueueHostJson(Second));
+  Check('replacing the unsent plan drops the previous copy', Session.FramesDropped = Before + 2);
+  Check('control ping is queued beside a plan', Session.TryQueueHostJson(Ping));
+  Session.DrainOutbound;
+  Check('ping, plan, and bulk are sent', Carrier.SentCount = 2 + MonitorOutboundQueueLimit);
+  Check('ping stays ahead of the plan', Carrier.SentJson(0) = Ping);
+  Check('latest plan is sent before bulk', Carrier.SentJson(1) = Second);
+  Check('bulk follows the plan', Carrier.SentJson(2) = BulkFrame(1));
+  Seen := '';
+  For Index := 0 To Carrier.SentCount - 1 Do
+    Seen := Seen + Carrier.SentJson(Index) + #10;
+  Check('the older plan status is not sent', Pos('"plan-old"', Seen) = 0);
+  Check('the new status is in the sent plan', Pos('"in progress"', Carrier.SentJson(1)) > 0);
+End;
+
 Procedure TestLivePatchReplaces;
 Var
   First, Second: TStringArray;
@@ -1206,6 +1248,7 @@ Begin
       TestResumeRing;
       TestResumeHostRules;
       TestOutboundLanes;
+      TestPlanFrameBeforeBulk;
       TestLivePatchReplaces;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');

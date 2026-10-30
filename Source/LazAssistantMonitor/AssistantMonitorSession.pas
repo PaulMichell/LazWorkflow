@@ -133,6 +133,9 @@ Type
     FRevokedIds: Array Of String;
     FControlSends: Array Of String;
     FBulkSends: Array Of String;
+    { Latest unsent plan. Replaced, not queued, so a status change is not dropped behind bulk. }
+    FPlanSend: String;
+    FHasPlanSend: Boolean;
     FOutbox: TMonitorOutbox;
     FIntake: TMonitorCommandIntake;
     FEpoch: String;
@@ -202,6 +205,8 @@ Type
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
     Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
     Procedure EnqueueAccepted(Const Json: String);
+    { Caller holds the session lock. The previous unsent plan is counted as dropped. }
+    Procedure StorePlanSend(Const Json: String);
     Procedure NoteLogAck(Const PayloadJson: String);
     Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: String);
@@ -542,6 +547,8 @@ Begin
   SetLength(FRevokedIds, 0);
   SetLength(FControlSends, 0);
   SetLength(FBulkSends, 0);
+  FPlanSend := '';
+  FHasPlanSend := False;
   FEpoch := '';
   FConversationId := '';
   FInstallationHostId := '';
@@ -601,7 +608,7 @@ Begin
 End;
 
 Type
-  TOutboundLane = (olControl, olLive, olBulk);
+  TOutboundLane = (olControl, olLive, olPlan, olBulk);
 
 Function OutboundLane(Const Json: String): TOutboundLane;
 Var
@@ -615,8 +622,11 @@ Begin
   Case Message.Kind Of
     mmkPatch:
       Result := olLive;
-    { A plan frame must not sit ahead of a pong. A full control lane stops the transfer. }
-    mmkSnapshot, mmkTranscript, mmkPlan, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
+    { After control, so a pong is not stuck behind it, and before bulk, so a status
+      change is not stuck behind pages or images. A full control lane must not hold it. }
+    mmkPlan:
+      Result := olPlan;
+    mmkSnapshot, mmkTranscript, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk:
       Result := olBulk;
   Else
     Result := olControl;
@@ -660,6 +670,14 @@ Begin
   End;
 End;
 
+Procedure TMonitorSession.StorePlanSend(Const Json: String);
+Begin
+  If FHasPlanSend Then
+    Inc(FFramesDropped);
+  FPlanSend := Json;
+  FHasPlanSend := True;
+End;
+
 Procedure TMonitorSession.EnqueueAccepted(Const Json: String);
 Var
   Index: Integer;
@@ -673,6 +691,11 @@ Begin
       SetLength(FLiveFrames, 1);
       FLiveFrames[0] := Json;
       FHasLivePatch := True;
+      Exit;
+    End;
+  If Lane = olPlan Then
+    Begin
+      StorePlanSend(Json);
       Exit;
     End;
   If Lane = olBulk Then
@@ -780,6 +803,12 @@ Begin
       Result := True;
       Exit;
     End;
+  If Lane = olPlan Then
+    Begin
+      StorePlanSend(Json);
+      Result := True;
+      Exit;
+    End;
   If Lane = olBulk Then
     Begin
       If Length(FBulkSends) >= MonitorOutboundQueueLimit Then
@@ -883,8 +912,9 @@ End;
 Procedure TMonitorSession.DrainSends;
 Var
   Control, Live, Bulk: TStringArray;
+  Plan: String;
   Cursor: Int64;
-  HadLive: Boolean;
+  HadLive, HadPlan: Boolean;
   Index, Sent: Integer;
 Begin
   LockSession;
@@ -954,6 +984,32 @@ Begin
     End;
   LockSession;
   Try
+    HadPlan := FHasPlanSend;
+    Plan := FPlanSend;
+    FHasPlanSend := False;
+    FPlanSend := '';
+  Finally
+    UnlockSession;
+  End;
+  If HadPlan Then
+    Begin
+      If Not Transmit(Plan) Then
+        Begin
+          LockSession;
+          Try
+            { A plan queued while this one was in flight is newer. Keep that one. }
+            If FHasPlanSend Then
+              Inc(FFramesDropped)
+            Else
+              StorePlanSend(Plan);
+          Finally
+            UnlockSession;
+          End;
+          Exit;
+        End;
+    End;
+  LockSession;
+  Try
     Bulk := FBulkSends;
     SetLength(FBulkSends, 0);
   Finally
@@ -1010,6 +1066,8 @@ Begin
   FHasLivePatch := False;
   FLiveCursor := 0;
   SetLength(FLiveFrames, 0);
+  FHasPlanSend := False;
+  FPlanSend := '';
 End;
 
 Procedure TMonitorSession.CloseToListening;
