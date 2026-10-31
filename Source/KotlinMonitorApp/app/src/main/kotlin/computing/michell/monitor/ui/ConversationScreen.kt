@@ -199,6 +199,16 @@ private fun ConversationPane(
       }
   }
   val tail = liveTailToken(rows, ui.pendingPrompt)
+  LaunchedEffect(ui.desktopPoint) {
+    if (ui.desktopPoint <= 0 || rows.isEmpty()) return@LaunchedEffect
+    followHead = true
+    programmatic.value = true
+    try {
+      listState.scrollToItem(rows.lastIndex, Int.MAX_VALUE)
+    } finally {
+      programmatic.value = false
+    }
+  }
   LaunchedEffect(tail, followHead) {
     if (!followHead || rows.isEmpty()) return@LaunchedEffect
     programmatic.value = true

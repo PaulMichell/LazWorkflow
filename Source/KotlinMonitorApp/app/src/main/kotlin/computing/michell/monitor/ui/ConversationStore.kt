@@ -21,6 +21,8 @@ interface ConversationStore {
   fun current(): BoardContent
   fun replace(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?)
   fun adopt(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?)
+  fun sealHostPaint()
+  fun unsealHostPaint()
   fun clear()
 }
 
@@ -28,6 +30,7 @@ class MemoryConversationStore : ConversationStore {
   private val gate = Any()
   private var board = BoardContent()
   private var revision = 0L
+  private var sealed = false
   private val updatesState = MutableStateFlow(board)
   override val updates: StateFlow<BoardContent> = updatesState.asStateFlow()
 
@@ -38,8 +41,17 @@ class MemoryConversationStore : ConversationStore {
     publish(host, conversationId, turns, live, revision)
   }
 
+  override fun sealHostPaint() {
+    synchronized(gate) { sealed = true }
+  }
+
+  override fun unsealHostPaint() {
+    synchronized(gate) { sealed = false }
+  }
+
   override fun adopt(host: String, conversationId: String, turns: List<WireTurn>, live: WireTurn?) {
     val current = current()
+    if (sealed && conversationId == current.conversationId && (current.turns.isNotEmpty() || current.live != null)) return
     val showing = current.turns.isNotEmpty() || current.live != null
     // An empty repository read must not wipe a screen the host just painted.
     if (turns.isEmpty() && live == null && showing && current.conversationId == conversationId) return
@@ -50,6 +62,7 @@ class MemoryConversationStore : ConversationStore {
 
   override fun clear() {
     synchronized(gate) {
+      sealed = false
       board = BoardContent()
       updatesState.value = board
     }

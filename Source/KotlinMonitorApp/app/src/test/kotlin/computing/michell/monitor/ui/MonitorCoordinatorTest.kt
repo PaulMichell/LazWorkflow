@@ -207,8 +207,7 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"old","mode":"build","prompt_preview":"old","created_at":"","duration_ms":0}]}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
-    assertEquals("old", coordinator.state.turns.single().id)
-    assertEquals("old", coordinator.state.turns.single().promptPreview)
+    assertTrue(coordinator.state.turns.isEmpty())
     assertNull(coordinator.state.live)
     val current = encodeSnapshotPage(
       "page-1",
@@ -262,8 +261,46 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
       "hello", HelloOkMessage("nonce", "ide", "epoch", 9, "conversation-1", "/work", "Chat", "")
     ))))
-    assertEquals("conversation-1", coordinator.state.conversationId)
+    assertEquals("old section", coordinator.state.turns.single().blocks.single().body)
+    val point = encodeSnapshotPage(
+      "page-1",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":9,"point":true,"point_end":true,"turn":{"live":true,"turn_id":"live-1","turn_index":2,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the desktop part"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
+    assertEquals("the desktop part", coordinator.state.live?.blocks?.single()?.body)
     assertTrue(coordinator.state.turns.isEmpty())
+  }
+
+  @Test
+  fun theCacheStaysUntilTheDesktopPointThenOlderPagesFillBehindIt() {
+    val coordinator = open()
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "conversation-1",
+      planTitle = "Cached plan",
+      turns = listOf(WireTurn(1, "old-turn", "build", "", "cached section", "", blocks = listOf(
+        WireBlock("answer", "old", "", "", "", "cached section", false, true, 0, emptyList())
+      )))
+    ))
+    val outline = encodeSnapshotPage(
+      "page-0",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":4,"point_id":"live-1","turns":[{"turn_index":1,"turn_id":"old-turn","mode":"build","prompt_preview":"cached section","created_at":"","duration_ms":0},{"turn_index":2,"turn_id":"live-1","mode":"build","prompt_preview":"now","created_at":"","duration_ms":0}]}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
+    assertEquals("cached section", coordinator.state.turns.single().blocks.single().body)
+    assertEquals("Cached plan", coordinator.state.planTitle)
+    val point = encodeSnapshotPage(
+      "page-1",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":4,"point":true,"point_end":true,"turn":{"live":true,"turn_id":"live-1","turn_index":2,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"},{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the desktop part"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
+    assertEquals("the desktop part", coordinator.state.live?.blocks?.last()?.body)
+    val older = encodeSnapshotPage(
+      "page-2",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":4,"turn":{"turn_id":"old-turn","turn_index":1,"blocks":[{"block_id":"old","kind":"answer","title":"","state":"ok","body":"filled later"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(older)))
+    assertEquals("the desktop part", coordinator.state.live?.blocks?.last()?.body)
+    assertEquals("filled later", coordinator.state.turns.single().blocks.single().body)
   }
 
   @Test

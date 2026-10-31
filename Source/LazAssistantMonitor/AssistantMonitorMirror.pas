@@ -190,6 +190,15 @@ Begin
     Result := 'false';
 End;
 
+{ Marks the turn the desktop is showing. point_end is the last page of that turn. }
+Function MarkPoint(Const Json: String; Point, PointEnd: Boolean): String;
+Begin
+  Result := Json;
+  If (Not Point) Or (Json = '') Or (Json[1] <> '{') Then
+    Exit;
+  Result := '{"point":true,"point_end":' + YesNo(PointEnd) + ',' + Copy(Json, 2, MaxInt);
+End;
+
 Function BlockStateName(Const Block: TAssistantMonitorBlock): String;
 Begin
   If Block.Running Then
@@ -852,9 +861,10 @@ End;
 
 Function TMonitorMirror.BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
 Var
-  Outline, PageBody: String;
+  Outline, PageBody, PointId: String;
   Index, BlockIndex, PageNo: Integer;
   Turn: TAssistantMonitorTurn;
+  IsPoint: Boolean;
 Begin
   Result := False;
   SetLength(Pages, 0);
@@ -876,10 +886,15 @@ Begin
         Outline := Outline + TurnOutlineJson(FLive);
       End;
     Outline := Outline + ']';
+    PointId := '';
+    If FHasLive Then
+      PointId := FLive.Id
+    Else If Length(FTurns) > 0 Then
+      PointId := FTurns[High(FTurns)].Id;
     SetLength(Pages, 1);
     Pages[0].Page := 0;
     Pages[0].Json := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
-      '","seq":' + IntToStr(HeadSeq) + ',' + Outline + '}';
+      '","seq":' + IntToStr(HeadSeq) + ',"point_id":"' + JsonEscape(PointId) + '",' + Outline + '}';
     { Current turn first, then older turns newest-first. The phone draws the desktop point at once. }
     PageNo := 1;
     For Index := High(FTurns) + Ord(FHasLive) DownTo 0 Do
@@ -889,6 +904,7 @@ Begin
         Else
           Turn := FTurns[Index];
         PageBody := MonitorTurnPageJson(FConversationId, FStreamId, HeadSeq, Turn);
+        IsPoint := (PointId <> '') And (Turn.Id = PointId);
         If FHasLive And (Turn.Id = FLive.Id) And (Turn.TurnIndex = FLive.TurnIndex) Then
           PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
         If Utf8Bytes(PageBody) > 4 * 1024 * 1024 Then
@@ -902,6 +918,7 @@ Begin
                   ']}}';
                 If FHasLive And (Turn.Id = FLive.Id) Then
                   PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
+                PageBody := MarkPoint(PageBody, IsPoint, IsPoint And (BlockIndex = High(Turn.Blocks)));
                 SetLength(Pages, Length(Pages) + 1);
                 Pages[High(Pages)].Page := PageNo;
                 Pages[High(Pages)].Json := PageBody;
@@ -910,6 +927,7 @@ Begin
           End
         Else
           Begin
+            PageBody := MarkPoint(PageBody, IsPoint, IsPoint);
             SetLength(Pages, Length(Pages) + 1);
             Pages[High(Pages)].Page := PageNo;
             Pages[High(Pages)].Json := PageBody;

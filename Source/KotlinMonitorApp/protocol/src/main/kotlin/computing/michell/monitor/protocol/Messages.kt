@@ -1809,6 +1809,22 @@ fun snapshotPageStreamId(payloadJson: String): String {
   return obj.readString("stream_id", false).value
 }
 
+/** The turn the desktop is showing. Empty when this page does not name one. */
+fun snapshotPagePointId(payloadJson: String): String {
+  val obj = parseObject(payloadJson) ?: return ""
+  return obj.readString("point_id", false).value
+}
+
+fun snapshotPageIsPoint(payloadJson: String): Boolean {
+  val obj = parseObject(payloadJson) ?: return false
+  return obj.readBool("point", false).value
+}
+
+fun snapshotPagePointEnd(payloadJson: String): Boolean {
+  val obj = parseObject(payloadJson) ?: return false
+  return obj.readBool("point_end", false).value
+}
+
 /** Outline page turns. Null when this page is a turn body, not an outline. */
 fun snapshotPageOutline(payloadJson: String): List<WireTurn>? {
   val obj = parseObject(payloadJson) ?: return null

@@ -231,7 +231,8 @@ data class MonitorUi(
   val statusBusy: Boolean = false,
   val pairedElsewhere: Boolean = false,
   val lastSyncMs: Long = 0,
-  val syncHead: Long = 0
+  val syncHead: Long = 0,
+  val desktopPoint: Int = 0
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -1227,45 +1228,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val finalWatch = DictationFinalWatch(viewModelScope, onExpired = ::abandonAwaitingFinal)
 
   init {
-    lanWatch.start()
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
-    val restored = try {
-      runBlocking(Dispatchers.IO) {
-        importLegacyCache(application.filesDir, conversations, imageRoot)
-        conversations.retain()
-        val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
-        val open = newestConversation(conversations.listForHost(key), key)
-        val document = if (open == null) null else conversations.loadDocument(open.host, open.id)
-        RestoredScreen(open, document, conversations.loadPlan(key))
-      }
-    } catch (error: Exception) {
-      null
-    }
-    val open = restored?.row
-    val cached = restored?.document
-    val cachedPlan = restored?.plan
-    if (record.address.isNotEmpty()) {
-      coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, record.address, record.port, record.clientId))
-    }
-    if (cached != null || record.address.isEmpty()) {
-      val seeded = if (cached != null) {
-        applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty()).copy(
-          conversationId = open?.id.orEmpty(),
-          hostEpoch = open?.streamId.orEmpty(),
-          hostCursor = open?.seq ?: 0L,
-          projectRoot = open?.projectRoot ?: coordinator.state.projectRoot,
-          conversationTitle = open?.title ?: coordinator.state.conversationTitle,
-          lastSyncMs = open?.updatedAt ?: 0L
-        )
-      } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
-      coordinator.restoreOffline(seeded)
-    }
-    if (cachedPlan != null) coordinator.noteCachedPlan(cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected)
+    // 1. The shell is on screen before Room or the socket.
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
-    if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
     viewModelScope.launch(Dispatchers.Default) {
       session.messages.collect { message ->
         try {
@@ -1320,15 +1288,57 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (!engine.available()) {
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
     }
-    if (record.address.isNotEmpty()) {
-      try {
-        runBlocking(Dispatchers.IO) {
-          commandLedger.refresh()
-          commandLedger.dropOpenPrompts()
-        }
-      } catch (error: Exception) {
-        // A damaged outbox must not stop the app opening.
+    // 2. Cached conversation and plan. 3. Only then reconnect.
+    viewModelScope.launch {
+      showCachedThenConnect(record)
+    }
+  }
+
+  private suspend fun showCachedThenConnect(record: computing.michell.monitor.connection.HostRecord) {
+    val restored = try {
+      withContext(Dispatchers.IO) {
+        importLegacyCache(imageRoot.parentFile ?: imageRoot, conversations, imageRoot)
+        conversations.retain()
+        val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
+        val open = newestConversation(conversations.listForHost(key), key)
+        val document = if (open == null) null else conversations.loadDocument(open.host, open.id)
+        RestoredScreen(open, document, conversations.loadPlan(key))
       }
+    } catch (error: Exception) {
+      null
+    }
+    val open = restored?.row
+    val cached = restored?.document
+    val cachedPlan = restored?.plan
+    withContext(Dispatchers.Main) {
+      if (cached != null || record.address.isEmpty()) {
+        val seeded = if (cached != null) {
+          applyOfflineCache(coordinator.state, cached, record.address.isNotEmpty()).copy(
+            conversationId = open?.id.orEmpty(),
+            hostEpoch = open?.streamId.orEmpty(),
+            hostCursor = open?.seq ?: 0L,
+            projectRoot = open?.projectRoot ?: coordinator.state.projectRoot,
+            conversationTitle = open?.title ?: coordinator.state.conversationTitle,
+            lastSyncMs = open?.updatedAt ?: 0L
+          )
+        } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
+        coordinator.restoreOffline(seeded)
+      }
+      if (cachedPlan != null) coordinator.noteCachedPlan(cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected)
+      uiState.value = coordinator.state
+      if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
+    }
+    if (record.address.isEmpty()) return
+    try {
+      withContext(Dispatchers.IO) {
+        commandLedger.refresh()
+        commandLedger.dropOpenPrompts()
+      }
+    } catch (error: Exception) {
+      // A damaged outbox must not stop the app opening.
+    }
+    withContext(Dispatchers.Main) {
+      lanWatch.start()
       session.connect(record.address, record.port)
     }
   }
