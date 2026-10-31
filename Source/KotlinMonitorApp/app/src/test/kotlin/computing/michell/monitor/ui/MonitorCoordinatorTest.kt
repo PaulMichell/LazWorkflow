@@ -230,6 +230,43 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aDeferredAnswerIsFetchedAndShown() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 1, "conversation-1", "/work", "Chat", "")
+    ))))
+    val page = encodeSnapshotPage(
+      "page-1",
+      """{"conversation_id":"conversation-1","stream_id":"stream","seq":8,"turn":{"live":true,"turn_id":"live-1","turn_index":1,"blocks":[{"block_id":"think","kind":"thinking","title":"Thinking","state":"ok","body":"short"},{"block_id":"answer","kind":"answer","title":"","state":"ok","body":"","deferred":true}]}}"""
+    )
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(page))).orEmpty()
+    val fetch = effects.filterIsInstance<MonitorEffect.Send>().single()
+    assertTrue(fetch.json.contains("block_get"))
+    assertTrue(fetch.json.contains("answer"))
+    assertEquals("", coordinator.state.live?.blocks?.last()?.body)
+    val data = """{"v":2,"id":"bd","type":"block_data","payload":{"conversation_id":"conversation-1","block_id":"answer","offset":0,"text":"the desktop answer","total_bytes":18,"last":true}}"""
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(data)))
+    assertEquals("the desktop answer", coordinator.state.live?.blocks?.last()?.body)
+    assertFalse(coordinator.state.live?.blocks?.last()?.deferred ?: true)
+  }
+
+  @Test
+  fun aDifferentDesktopConversationDoesNotKeepTheCachedSection() {
+    val coordinator = open()
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "old",
+      turns = listOf(WireTurn(1, "old-turn", "build", "", "old section", "", blocks = listOf(
+        WireBlock("answer", "a", "", "", "", "old section", false, true, 0, emptyList())
+      )))
+    ))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 9, "conversation-1", "/work", "Chat", "")
+    ))))
+    assertEquals("conversation-1", coordinator.state.conversationId)
+    assertTrue(coordinator.state.turns.isEmpty())
+  }
+
+  @Test
   fun aPlanFrameWithNoEffectStillReachesTheScreen() {
     val coordinator = open()
     val waiting = PlanRow(0, 3, "Check the first show", "", "not started", true)

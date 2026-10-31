@@ -177,7 +177,8 @@ data class WireBlock(
   val part: Int = 1,
   val partCount: Int = 1,
   val revision: Int = 0,
-  val appendOffset: Int? = null
+  val appendOffset: Int? = null,
+  val deferred: Boolean = false
 )
 
 data class WireView(
@@ -1847,6 +1848,7 @@ fun snapshotPageTurn(payloadJson: String): WireTurn? {
       if (!blockId.ok || !kind.ok) continue
       val state = block.readString("state", false).value
       val body = block.readString("body", false).value
+      val deferred = block.readBool("deferred", false).value && body.isEmpty()
       blocks += WireBlock(
         kind.value,
         blockId.value,
@@ -1857,7 +1859,8 @@ fun snapshotPageTurn(payloadJson: String): WireTurn? {
         state == "running",
         state != "failed",
         0,
-        emptyList()
+        emptyList(),
+        deferred = deferred
       )
     }
   }
@@ -1866,6 +1869,14 @@ fun snapshotPageTurn(payloadJson: String): WireTurn? {
 }
 
 fun snapshotPageTurnIndex(payloadJson: String): Int? = snapshotPageTurn(payloadJson)?.turnIndex
+
+/** Puts a fetched body into the block the desktop deferred. */
+fun fillBlockBody(blocks: List<WireBlock>, blockId: String, body: String, finished: Boolean): List<WireBlock> {
+  return blocks.map { block ->
+    if (block.blockId != blockId) block
+    else block.copy(body = body, deferred = !finished && block.deferred)
+  }
+}
 
 /** A later block page must not replace the turn with that one block. */
 fun mergeTurnBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): List<WireBlock> {
@@ -1960,6 +1971,47 @@ fun encodeAck(id: String, conversationId: String, streamId: String, seq: Long): 
   payload.add("stream_id", streamId)
   payload.add("seq", seq)
   return encodeEnvelope(MessageKind.Ack, id, payload.build())
+}
+
+data class BlockData(
+  val conversationId: String,
+  val blockId: String,
+  val offset: Int,
+  val text: String,
+  val totalBytes: Int,
+  val last: Boolean
+)
+
+fun decodeBlockData(payloadJson: String): BlockData? {
+  val obj = parseObject(payloadJson) ?: return null
+  val blockId = obj.readString("block_id", true)
+  val text = obj.readString("text", true)
+  val offset = obj.readInt("offset", true)
+  val total = obj.readInt("total_bytes", true)
+  val last = obj.readBool("last", true)
+  if (!blockId.ok || !text.ok || !offset.ok || !total.ok || !last.ok || offset.value < 0) return null
+  return BlockData(
+    obj.readString("conversation_id", false).value,
+    blockId.value,
+    offset.value,
+    text.value,
+    total.value,
+    last.value
+  )
+}
+
+/** Pieces are keyed by UTF-8 byte offset, the same offset the host sends. */
+fun joinBlockPieces(pieces: Map<Int, String>): String {
+  if (pieces.isEmpty()) return ""
+  var at = 0
+  val bytes = java.io.ByteArrayOutputStream()
+  for ((offset, text) in pieces.toSortedMap()) {
+    if (offset != at) break
+    val raw = text.toByteArray(Charsets.UTF_8)
+    bytes.write(raw)
+    at += raw.size
+  }
+  return bytes.toByteArray().toString(Charsets.UTF_8)
 }
 
 fun encodeBlockGet(id: String, conversationId: String, blockId: String): String {

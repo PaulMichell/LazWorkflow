@@ -17,6 +17,7 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.PlanRow
+import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WireConversationClosed
 import computing.michell.monitor.protocol.WirePatch
@@ -40,6 +41,11 @@ import computing.michell.monitor.protocol.snapshotPageConversationId
 import computing.michell.monitor.protocol.snapshotPageOutline
 import computing.michell.monitor.protocol.snapshotPageSeq
 import computing.michell.monitor.protocol.snapshotPageStreamId
+import java.util.TreeMap
+import computing.michell.monitor.protocol.decodeBlockData
+import computing.michell.monitor.protocol.encodeBlockGet
+import computing.michell.monitor.protocol.fillBlockBody
+import computing.michell.monitor.protocol.joinBlockPieces
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.tryEncodeSend
@@ -110,6 +116,8 @@ class MonitorCoordinator(
   private var selectedTurn = -1
   private var awaitingConversation = false
   private val visibleTurns = HashSet<Int>()
+  private val requestedBlocks = HashSet<String>()
+  private val blockPieces = HashMap<String, TreeMap<Int, String>>()
   /** Live until the first status, so an idle form can send before that frame. */
   private var linkPhase = LinkPhase.Live
   /** Send or New tapped while Syncing, before the socket can take it. */
@@ -332,7 +340,8 @@ class MonitorCoordinator(
         effects += resumeNow()
       }
       MessageKind.Snapshot -> applySnapshot(decodeSnapshot(message.payloadJson) ?: snapshotFrom(message))
-      MessageKind.SnapshotPage -> applySnapshotPage(message)
+      MessageKind.SnapshotPage -> effects += applySnapshotPage(message)
+      MessageKind.BlockData -> applyBlockData(message)
       MessageKind.Catchup -> decodeCatchup(message.payloadJson)?.let { applyCatchup(it) }
       MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
       MessageKind.ConversationClosed -> {
@@ -374,13 +383,15 @@ class MonitorCoordinator(
   }
 
   /** The host no longer sends a snapshot frame. Pages are the conversation. */
-  private fun applySnapshotPage(message: MonitorMessage) {
+  private fun applySnapshotPage(message: MonitorMessage): List<MonitorEffect> {
     val payload = message.payloadJson
     val seq = snapshotPageSeq(payload)
     val pageConversation = snapshotPageConversationId(payload)
     val pageEpoch = snapshotPageStreamId(payload)
     if (pageStartsFresh(pageConversation)) {
       awaitingConversation = false
+      requestedBlocks.clear()
+      blockPieces.clear()
       val id = pageConversation.ifEmpty { local.conversationId }
       content.replace(contentHost, id, emptyList(), null)
       local = local.copy(
@@ -396,19 +407,52 @@ class MonitorCoordinator(
     if (pageEpoch.isNotEmpty()) local = local.copy(hostEpoch = pageEpoch)
     val outline = snapshotPageOutline(payload)
     if (outline != null) {
-      // The index is the conversation until each turn page arrives. Do not wipe bodies already shown.
       seedOutline(outline, pageConversation)
       if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
-      return
+      return emptyList()
     }
     val board = content.current()
-    val applied = applySnapshotPageJson(board.turns, board.live, payload) ?: return
+    val applied = applySnapshotPageJson(board.turns, board.live, payload) ?: return emptyList()
     val id = pageConversation.ifEmpty { local.conversationId }
     if (id.isNotEmpty() && id != local.conversationId) local = local.copy(conversationId = id)
     if (applied.first !== board.turns || applied.second !== board.live || id != board.conversationId) {
       content.replace(contentHost, id, applied.first, applied.second)
     }
     noteCaughtUp(seq)
+    val shown = content.current()
+    return deferredFetches(shown.turns.flatMap { turn -> turn.blocks } + (shown.live?.blocks ?: emptyList()))
+  }
+
+  /** A body over the inline limit arrives empty. Ask for the text the desktop is showing. */
+  private fun deferredFetches(blocks: List<WireBlock>): List<MonitorEffect> {
+    val conversationId = local.conversationId
+    if (conversationId.isEmpty()) return emptyList()
+    val effects = ArrayList<MonitorEffect>()
+    for (block in blocks) {
+      if (!block.deferred || block.body.isNotEmpty() || block.blockId.isEmpty()) continue
+      if (!requestedBlocks.add(block.blockId)) continue
+      effects += MonitorEffect.Send(encodeBlockGet(session.nextCommandId(), conversationId, block.blockId))
+    }
+    return effects
+  }
+
+  private fun applyBlockData(message: MonitorMessage) {
+    val data = decodeBlockData(message.payloadJson) ?: return
+    if (data.blockId.isEmpty()) return
+    val pieces = blockPieces.getOrPut(data.blockId) { TreeMap() }
+    pieces[data.offset] = data.text
+    val body = joinBlockPieces(pieces)
+    if (data.last) blockPieces.remove(data.blockId)
+    val board = content.current()
+    val live = board.live
+    val liveBlocks = if (live == null) null else fillBlockBody(live.blocks, data.blockId, body, data.last)
+    val turns = board.turns.map { turn ->
+      if (turn.blocks.none { block -> block.blockId == data.blockId }) turn
+      else turn.copy(blocks = fillBlockBody(turn.blocks, data.blockId, body, data.last))
+    }
+    val nextLive = if (liveBlocks == null || live == null) live else live.copy(blocks = liveBlocks)
+    if (nextLive == live && turns == board.turns) return
+    content.replace(contentHost, board.conversationId, turns, nextLive)
   }
 
   /** The outline is the desktop list. Cached bodies fill it until each turn page arrives. */
@@ -568,7 +612,14 @@ class MonitorCoordinator(
     // A hello cursor is the desktop head. Copying it before resume asks for nothing, or the
     // desktop answers with every page and the phone dies under that dump.
     val board = content.current()
-    val haveBody = board.turns.isNotEmpty() || board.live != null
+    val sameConversation = hello.conversationId.isEmpty() || local.conversationId.isEmpty() ||
+      hello.conversationId == local.conversationId
+    if (!sameConversation) {
+      requestedBlocks.clear()
+      blockPieces.clear()
+      content.replace(contentHost, hello.conversationId, emptyList(), null)
+    }
+    val haveBody = sameConversation && (board.turns.isNotEmpty() || board.live != null)
     val keepPlace = haveBody && local.hostEpoch.isNotEmpty() && local.hostCursor > 0L
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
