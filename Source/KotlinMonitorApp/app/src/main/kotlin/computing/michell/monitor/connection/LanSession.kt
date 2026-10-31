@@ -335,6 +335,7 @@ class InboundDelivery(
   private val pending = ArrayDeque<MonitorMessage>()
   private val gate = Any()
   private val available = Channel<Unit>(Channel.CONFLATED)
+  private val space = Channel<Unit>(Channel.CONFLATED)
   private var queuedBytes = 0L
 
   val messages: Flow<MonitorMessage> = flow {
@@ -344,7 +345,11 @@ class InboundDelivery(
   internal fun isWaiting(): Boolean = false
 
   suspend fun publish(message: MonitorMessage): DeliveryResult {
-    return if (offer(message)) DeliveryResult.Queued else DeliveryResult.Failed
+    while (!offer(message)) {
+      // A full queue is backpressure, not a dead link. Closing here reconnects into the same dump.
+      space.receive()
+    }
+    return DeliveryResult.Queued
   }
 
   private fun offer(message: MonitorMessage): Boolean {
@@ -385,7 +390,10 @@ class InboundDelivery(
           message
         }
       }
-      if (next != null) return next
+      if (next != null) {
+        space.trySend(Unit)
+        return next
+      }
       available.receive()
     }
   }
@@ -1088,9 +1096,7 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
-          // Empty epoch asks for the open conversation. The host head is not that screen: an empty
-          // event list means the cursor matches, and the phone then stays on whatever it cached.
-          offerControl(resumeNow("", 0), owned, outbound)
+          // The coordinator sends the one resume. A second one here queues the mirror twice.
         }
       }
       MessageKind.CommandStates -> {

@@ -53,6 +53,7 @@ import computing.michell.monitor.protocol.fillBlockBody
 import computing.michell.monitor.protocol.joinBlockPieces
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
+import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.tryEncodeSteer
 
@@ -128,6 +129,7 @@ class MonitorCoordinator(
   private var desktopMatched = false
   private var heldOutline: List<WireTurn> = emptyList()
   private val backgroundPages = ArrayDeque<String>()
+  private val askedTurns = HashSet<Int>()
   /** Live until the first status, so an idle form can send before that frame. */
   private var linkPhase = LinkPhase.Live
   /** Send or New tapped while Syncing, before the socket can take it. */
@@ -464,7 +466,26 @@ class MonitorCoordinator(
     if (id.isNotEmpty()) local = local.copy(conversationId = id)
     local = local.copy(desktopPoint = local.desktopPoint + 1)
     noteCaughtUp(seq)
-    return deferredFetches(point.blocks)
+    return deferredFetches(point.blocks) + backgroundTurnFetches()
+  }
+
+  /** Older turns after the desktop point. A few at a time, so the link is not filled again. */
+  private fun backgroundTurnFetches(): List<MonitorEffect> {
+    if (!desktopMatched) return emptyList()
+    val board = content.current()
+    val have = board.turns.map { turn -> turn.turnIndex }.toMutableSet()
+    board.live?.let { live -> have += live.turnIndex }
+    val effects = ArrayList<MonitorEffect>()
+    var asked = 0
+    for (row in heldOutline.asReversed()) {
+      if (row.id == pointId || row.turnIndex in have || row.turnIndex in askedTurns) continue
+      if (row.turnIndex < 0) continue
+      askedTurns += row.turnIndex
+      effects += MonitorEffect.Send(encodeTurnRequest(session.nextCommandId(), row.turnIndex))
+      asked += 1
+      if (asked >= 2) break
+    }
+    return effects
   }
 
   private fun flushBackground(): List<MonitorEffect> {
@@ -479,7 +500,7 @@ class MonitorCoordinator(
       val shown = content.current()
       effects += deferredFetches(shown.turns.flatMap { turn -> turn.blocks } + (shown.live?.blocks ?: emptyList()))
     }
-    return effects
+    return effects + backgroundTurnFetches()
   }
 
   private fun resetMatch() {
@@ -488,6 +509,7 @@ class MonitorCoordinator(
     desktopMatched = false
     heldOutline = emptyList()
     backgroundPages.clear()
+    askedTurns.clear()
     content.unsealHostPaint()
     requestedBlocks.clear()
     blockPieces.clear()
@@ -761,6 +783,7 @@ class MonitorCoordinator(
       local = local.copy(
         pairedElsewhere = false,
         disconnected = true,
+        catchingUp = false,
         statusBusy = false,
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
         view = viewAfterDrop(clearRemoteActions(local.view))

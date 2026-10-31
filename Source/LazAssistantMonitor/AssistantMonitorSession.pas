@@ -217,7 +217,7 @@ Type
     Procedure AdoptRunningHost;
     Procedure QueueBulkFramesLocked(Const Frames: TStringArray);
     { Caller holds the session lock. Does not drain. }
-    Function QueueMirrorPagesLocked(Const Id: String): Boolean;
+    Function QueueMirrorPagesLocked(Const Id: String; PointOnly: Boolean = False): Boolean;
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
     Function GetLastError: String;
@@ -2488,11 +2488,27 @@ Begin
   Until Last;
 End;
 
-Function TMonitorSession.QueueMirrorPagesLocked(Const Id: String): Boolean;
+Function PageIsOutline(Const Json: String): Boolean;
+Begin
+  Result := Pos('"turns":', Json) > 0;
+End;
+
+Function PageIsPoint(Const Json: String): Boolean;
+Begin
+  Result := Pos('"point":true', Json) > 0;
+End;
+
+Function PageEndsPoint(Const Json: String): Boolean;
+Begin
+  Result := Pos('"point_end":true', Json) > 0;
+End;
+
+Function TMonitorSession.QueueMirrorPagesLocked(Const Id: String; PointOnly: Boolean): Boolean;
 Var
   Pages: TMonitorSnapshotPageArray;
   Frames: TStringArray;
   Index: Integer;
+  SawPoint: Boolean;
 Begin
   Result := False;
   SetLength(Pages, 0);
@@ -2501,11 +2517,20 @@ Begin
     Exit;
   If Not FMirror.BuildSnapshotPages(FEpoch, FCommittedCursor, Pages) Then
     Exit;
+  { A resume that asks for every older turn fills the phone and the link drops mid-sync. }
+  SawPoint := False;
   For Index := 0 To High(Pages) Do
     Begin
+      If PointOnly And (Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)) And SawPoint Then
+        Break;
       If Not PackMonitorBulkItem(Id, 'snapshot_page', Pages[Index].Json, Frames) Then
         Exit;
       QueueBulkFramesLocked(Frames);
+      If PageIsPoint(Pages[Index].Json) Then
+        SawPoint := True;
+      If PointOnly And (PageEndsPoint(Pages[Index].Json) Or
+        ((Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)))) Then
+        Break;
     End;
   Result := Length(Pages) > 0;
 End;
@@ -2550,7 +2575,7 @@ Begin
     End;
   If (Not Assigned(FMirror)) Or (Not FMirror.HasModel) Then
     Exit;
-  Result := QueueMirrorPagesLocked(Id);
+  Result := QueueMirrorPagesLocked(Id, True);
 End;
 
 Function TMonitorSession.CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
