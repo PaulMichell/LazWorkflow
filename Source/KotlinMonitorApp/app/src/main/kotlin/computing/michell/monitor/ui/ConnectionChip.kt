@@ -1,6 +1,7 @@
 package computing.michell.monitor.ui
 
 /* One connection chip. Busy comes only from the state channel.
+   Catch-up is not a status. A live link says Live or Busy, the same as the desktop.
    (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.LinkPhase
@@ -17,7 +18,7 @@ const val ReplacedReason = "replaced"
 
 data class ConnectionChip(val label: String)
 
-/** The chip says Syncing. That catch-up is short, so Send and New stay available. */
+/** Send and New stay available during catch-up. A live chip does not say Syncing. */
 fun linkSyncing(
   phase: LinkPhase,
   disconnected: Boolean,
@@ -40,21 +41,21 @@ fun connectionChip(
   zone: ZoneId = ZoneId.systemDefault()
 ): ConnectionChip {
   if (pairedElsewhere) return ConnectionChip(PairedElsewhereLabel)
+  val live = phase == LinkPhase.Live && !disconnected
+  // The log cursor is not a progress count. Sync runs behind a live screen.
+  if (live && statusBusy) return ConnectionChip(ChipBusy)
+  if (live) return ConnectionChip(ChipLive)
   if (linkSyncing(phase, disconnected, catchingUp, pairedElsewhere)) {
     return ConnectionChip(syncingLabel(appliedSeq, syncHead))
   }
-  val live = phase == LinkPhase.Live && !disconnected
-  if (live && statusBusy) return ConnectionChip(ChipBusy)
-  if (live) return ConnectionChip(ChipLive)
   return ConnectionChip(offlineLabel(lastSyncMs, zone))
 }
 
 fun syncingLabel(appliedSeq: Long, syncHead: Long): String {
-  if (syncHead > 0L && appliedSeq >= 0L) {
+  if (syncHead > 1L && appliedSeq >= 0L && appliedSeq < syncHead) {
     val percent = ((appliedSeq.coerceAtMost(syncHead) * 100L) / syncHead).toInt()
     return "$ChipSyncing $percent%"
   }
-  if (appliedSeq > 0L) return "$ChipSyncing · $appliedSeq"
   return ChipSyncing
 }
 

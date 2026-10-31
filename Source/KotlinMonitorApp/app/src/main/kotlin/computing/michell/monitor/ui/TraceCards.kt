@@ -2,9 +2,9 @@ package computing.michell.monitor.ui
 
 /* Card captions follow the assistant trace layout (c) 2026 Michell Computing.
 
-   Thinking stays a grey chevron title with the body underneath, not a bubble.
-   A tool or subagent is a grey header. The body stays closed until the row is
-   opened. The assistant answer stays in its own bubble. */
+   Thinking stays a grey chevron title. The body stays closed until the row is
+   opened, the same as the assistant. A tool or subagent is a grey header.
+   The assistant answer stays in its own bubble. */
 
 import computing.michell.monitor.protocol.WireBlock
 import java.util.Locale
@@ -57,5 +57,5 @@ fun toolCardCaption(block: WireBlock): String {
   return toolCardCaption(block.title, block.toolName, block.running, block.ok, block.durationMs)
 }
 
-/** Thinking opens. Tools and subagents stay closed, matching the assistant. */
-fun cardStartsOpen(kind: String): Boolean = kind == "thinking"
+/** Thinking, tools, and subagents start closed, matching the assistant. */
+fun cardStartsOpen(kind: String): Boolean = false

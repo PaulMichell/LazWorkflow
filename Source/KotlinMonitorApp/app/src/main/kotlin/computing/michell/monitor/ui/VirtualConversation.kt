@@ -49,15 +49,46 @@ fun prefetchRecent(slots: List<VirtualSlot>, window: Int = RecentTurnWindow): Se
   return slots.takeLast(window).map { slot -> slot.turnIndex }.filter { index -> index >= 0 }.toSet()
 }
 
+/** A finished turn must not keep a running thought in the middle of the transcript. */
+fun settledBlocks(blocks: List<WireBlock>, live: Boolean): List<WireBlock> {
+  if (live) return blocks
+  return blocks.map { block ->
+    if (displayKind(block) == "thinking" && block.running) block.copy(running = false) else block
+  }
+}
+
 fun displayBlocks(turn: WireTurn?): List<WireBlock> {
   if (turn == null) return emptyList()
-  if (turn.blocks.isNotEmpty()) return turn.blocks
+  if (turn.blocks.isNotEmpty()) return settledBlocks(turn.blocks, turn.live)
   val built = ArrayList<WireBlock>()
   if (turn.prompt.isNotEmpty()) built += WireBlock("user", "", "", "", "", turn.prompt, false, true, 0, emptyList())
   if (turn.thinking.isNotEmpty()) built += WireBlock("thinking", "", "", "", "", turn.thinking, false, true, 0, emptyList())
   if (turn.response.isNotEmpty()) built += WireBlock("answer", "", "", "", "", turn.response, false, true, 0, emptyList())
   if (turn.errorText.isNotEmpty()) built += WireBlock("note", "", "", "", "", turn.errorText, false, true, 0, emptyList())
-  return built
+  return settledBlocks(built, turn.live)
+}
+
+/**
+ * The outline is the desktop's turn list. A cached body is kept only for a turn
+ * the desktop still has. A thought the desktop has finished is not left running.
+ */
+fun turnsFromDesktopOutline(existing: List<WireTurn>, live: WireTurn?, outline: List<WireTurn>): List<WireTurn> {
+  val cached = LinkedHashMap<String, WireTurn>()
+  for (turn in existing) if (turn.id.isNotEmpty()) cached[turn.id] = turn
+  if (live != null && live.id.isNotEmpty()) cached[live.id] = live
+  return outline.map { row ->
+    val body = if (row.id.isEmpty()) null else cached[row.id]
+    if (body == null) row
+    else body.copy(
+      turnIndex = row.turnIndex,
+      mode = row.mode.ifEmpty { body.mode },
+      createdAt = row.createdAt.ifEmpty { body.createdAt },
+      promptPreview = row.promptPreview.ifEmpty { body.promptPreview },
+      durationMs = if (row.durationMs > 0) row.durationMs else body.durationMs,
+      live = false,
+      blocks = settledBlocks(body.blocks, false)
+    )
+  }
 }
 
 fun blockShown(block: WireBlock, showThinking: Boolean, showTools: Boolean): Boolean {

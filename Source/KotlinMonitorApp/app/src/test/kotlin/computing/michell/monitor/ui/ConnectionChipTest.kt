@@ -23,6 +23,13 @@ class ConnectionChipTest {
   }
 
   @Test
+  fun aLiveCatchUpDoesNotPrintTheLogCursor() {
+    val chip = connectionChip(LinkPhase.Live, false, false, true, false, 413, 0, 0)
+    assertEquals(ChipLive, chip.label)
+    assertEquals(ChipSyncing, syncingLabel(413, 0))
+  }
+
+  @Test
   fun syncingShowsProgressAndOfflineShowsTheLastSync() {
     val syncing = connectionChip(LinkPhase.Connecting, false, false, true, false, 4, 10, 0)
     assertEquals("Syncing 40%", syncing.label)
@@ -82,5 +89,21 @@ class ConnectionChipTest {
     val added = addedOutlineTurns(listOf(shown), outline)
     assertEquals(1, added.size)
     assertEquals("turn-4", added[0].id)
+  }
+
+  @Test
+  fun theDesktopOutlineDropsACachedThoughtTheDesktopDoesNotHave() {
+    val thought = WireBlock("thinking", "think", "Thinking…", "", "", "still going", true, true, 0, emptyList())
+    val stale = WireTurn(2, "stale", "build", "", "Old thought", "", live = true, blocks = listOf(thought))
+    val kept = WireTurn(1, "turn-1", "build", "", "Kept", "", blocks = listOf(
+      WireBlock("thinking", "t", "Thinking…", "", "", "done", true, true, 0, emptyList()),
+      WireBlock("answer", "a", "", "", "", "the answer", false, true, 0, emptyList())
+    ))
+    val outline = listOf(WireTurn(1, "turn-1", "build", "", "Kept", ""))
+    val shown = turnsFromDesktopOutline(listOf(kept), stale, outline)
+    assertEquals(1, shown.size)
+    assertEquals("turn-1", shown[0].id)
+    assertFalse(shown[0].blocks.first().running)
+    assertEquals("the answer", displayBlocks(shown[0]).last().body)
   }
 }

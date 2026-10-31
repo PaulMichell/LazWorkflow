@@ -1902,7 +1902,8 @@ fun applySnapshotPageJson(stateTurns: List<WireTurn>, live: WireTurn?, payloadJs
   val existing = if (isLive) current ?: stateTurns.firstOrNull { stored -> stored.id == turn.id }
     else stateTurns.firstOrNull { stored -> stored.id == turn.id || stored.turnIndex == turn.turnIndex }
   if (existing != null && snapshotBlocksUnchanged(existing.blocks, turn.blocks)) return stateTurns to live
-  val merged = mergeTurnBlocks(existing?.blocks ?: emptyList(), turn.blocks)
+  // A whole turn page is the desktop display. A single later block must not wipe the rest.
+  val merged = if (turn.blocks.size > 1) turn.blocks else mergeTurnBlocks(existing?.blocks ?: emptyList(), turn.blocks)
   val shown = (existing ?: turn).copy(
     blocks = merged,
     live = isLive,

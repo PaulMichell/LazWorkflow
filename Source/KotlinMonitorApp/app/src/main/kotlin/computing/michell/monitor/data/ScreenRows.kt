@@ -60,6 +60,7 @@ fun storedScreen(
 fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): OfflineCacheDocument {
   val byTurn = blocks.groupBy { block -> block.turn }
   val wire = turns.sortedBy { turn -> turn.ordinal }.map { turn ->
+    val turnRunning = turn.outcome == "running"
     val bodies = (byTurn[turn.turnId] ?: emptyList()).sortedBy { block -> block.ordinal }.map { block ->
       WireBlock(
         block.kind,
@@ -68,7 +69,7 @@ fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): Offlin
         "",
         "",
         block.body,
-        block.state == "running",
+        turnRunning && block.state == "running",
         block.state == "ok",
         0,
         emptyList()
@@ -85,7 +86,7 @@ fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): Offlin
       prompt = turn.prompt,
       response = response,
       durationMs = turn.durationMs,
-      live = turn.outcome == "running",
+      live = turnRunning,
       blocks = bodies
     )
   }

@@ -509,7 +509,7 @@ private fun BubbleBlock(
 
 @Composable
 private fun ThinkingCard(foldKey: String, block: WireBlock) {
-  var open by remember(foldKey) { mutableStateOf(true) }
+  var open by remember(foldKey) { mutableStateOf(cardStartsOpen("thinking")) }
   val body = thinkingDisplayBody(block.body)
   Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 4.dp)) {
     Text(

@@ -411,16 +411,14 @@ class MonitorCoordinator(
     noteCaughtUp(seq)
   }
 
-  /** Adds index rows the screen does not have yet. A later turn page supplies the body. */
+  /** The outline is the desktop list. Cached bodies fill it until each turn page arrives. */
   private fun seedOutline(outline: List<WireTurn>, pageConversation: String) {
     val board = content.current()
     val foreign = board.conversationId.isNotEmpty() && pageConversation.isNotEmpty() &&
       board.conversationId != pageConversation && (board.turns.isNotEmpty() || board.live != null)
     if (foreign) return
-    val added = addedOutlineTurns(board.turns, outline)
-    if (added.isEmpty()) return
     val id = pageConversation.ifEmpty { local.conversationId }
-    content.replace(contentHost, id, (board.turns + added).sortedBy { turn -> turn.turnIndex }, board.live)
+    content.replace(contentHost, id, turnsFromDesktopOutline(board.turns, board.live, outline), null)
   }
 
   /** A new id or epoch is a new cache copy. The previous turns are not a prefix. */
