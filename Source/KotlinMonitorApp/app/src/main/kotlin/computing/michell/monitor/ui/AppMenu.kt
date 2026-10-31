@@ -3,6 +3,8 @@ package computing.michell.monitor.ui
 /* App menu drawer. Seven sections, host check only (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.defaultMinSize
@@ -16,6 +18,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,6 +120,38 @@ data class MenuSectionModel(
 /** The check is the host id. A tap must not paint a new one before the next frame. */
 fun menuCheckedId(hostId: String): String = hostId
 
+/** A left swipe closes. A short or rightward drag does not. */
+fun menuClosesOnLeftSwipe(totalDx: Float, minPx: Float): Boolean = minPx > 0f && totalDx <= -minPx
+
+/** Sees the swipe before the menu's vertical scroller, so a list drag still scrolls. */
+fun Modifier.menuLeftSwipeToClose(onClose: () -> Unit): Modifier = pointerInput(onClose) {
+  val threshold = 48.dp.toPx()
+  val slop = viewConfiguration.touchSlop
+  awaitEachGesture {
+    val down = awaitFirstDown(requireUnconsumed = false)
+    var total = 0f
+    var tracking = false
+    while (true) {
+      val event = awaitPointerEvent(PointerEventPass.Initial)
+      val change = event.changes.firstOrNull { pointer -> pointer.id == down.id } ?: break
+      if (!change.pressed) {
+        if (tracking && menuClosesOnLeftSwipe(total, threshold)) onClose()
+        break
+      }
+      val dx = change.position.x - change.previousPosition.x
+      val dy = change.position.y - change.previousPosition.y
+      if (!tracking) {
+        if (kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) tracking = true
+        else if (kotlin.math.abs(dy) > slop) break
+      }
+      if (tracking) {
+        total += dx
+        change.consume()
+      }
+    }
+  }
+}
+
 /** Choosing the current row closes and sends nothing. Another row closes and sends. A disabled row does neither. */
 fun menuTap(rowId: String, currentId: String, enabled: Boolean): MenuTap? {
   if (!enabled) return null
@@ -193,6 +229,7 @@ fun AppMenu(
 ) {
   Column(
     Modifier
+      .menuLeftSwipeToClose(onClose)
       .fillMaxSize()
       .verticalScroll(rememberScrollState())
       .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 16.dp)
