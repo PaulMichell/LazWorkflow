@@ -566,6 +566,8 @@ Begin
       { Commit the live patch before the closed cursor is copied. }
       Session.FlushLivePatch;
       HadEpoch := Session.CopyClosedMirror(Closed);
+      { The previous dump must not fill the phone, or sit in front of this empty chat. }
+      Session.DiscardUnsentBulk;
     End;
   If HadEpoch Then
     Begin

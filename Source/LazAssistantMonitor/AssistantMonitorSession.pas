@@ -246,6 +246,8 @@ Type
     Procedure NoteTurnEnded;
     { New epoch. Cursor returns to zero. Safe from the IDE thread. }
     Procedure BeginMirrorEpoch(Const Epoch, ConversationId, ProjectRoot, Title: String);
+    { Drops unsent pages and the carrier queue. Control frames already queued stay. }
+    Procedure DiscardUnsentBulk;
     { Same conversation's stored epoch and cursor. The ring is empty, so resume snapshots. }
     Procedure RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
     Function MirrorEpoch: String;
@@ -335,6 +337,7 @@ Type
     Function Send(Const Frame: TMonitorFrame; Out ErrorText: String): Boolean;
     Function State: TMonitorCarrierState;
     Procedure SetFrameHandler(Handler: TMonitorFrameHandler);
+    Procedure DiscardUnsent;
     Procedure DeliverJson(Const Json: String);
     Function SentCount: Integer;
     Function SentJson(Index: Integer): String;
@@ -460,6 +463,10 @@ End;
 Procedure TMonitorMemoryCarrier.SetFrameHandler(Handler: TMonitorFrameHandler);
 Begin
   FHandler := Handler;
+End;
+
+Procedure TMonitorMemoryCarrier.DiscardUnsent;
+Begin
 End;
 
 Procedure TMonitorMemoryCarrier.DeliverJson(Const Json: String);
@@ -2102,6 +2109,23 @@ Begin
   End;
 End;
 
+Procedure TMonitorSession.DiscardUnsentBulk;
+Begin
+  LockSession;
+  Try
+    SetLength(FBulkSends, 0);
+    SetLength(FLiveFrames, 0);
+    FHasLivePatch := False;
+    FLiveCursor := 0;
+    If Assigned(FOutbox) Then
+      FOutbox.DiscardBulk;
+  Finally
+    UnlockSession;
+  End;
+  If Assigned(FCarrier) Then
+    FCarrier.DiscardUnsent;
+End;
+
 Procedure TMonitorSession.RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
 Begin
   LockSession;
@@ -2573,7 +2597,9 @@ Begin
           Exit;
         End;
     End;
-  If (Not Assigned(FMirror)) Or (Not FMirror.HasModel) Then
+  { No model yet is an empty conversation. The outline is the whole screen.
+    Waiting for the IDE thread is why a new chat stays on Syncing. }
+  If (Not Assigned(FMirror)) Or (FEpoch = '') Then
     Exit;
   Result := QueueMirrorPagesLocked(Id, True);
 End;

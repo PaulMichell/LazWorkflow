@@ -934,6 +934,16 @@ Begin
             Inc(PageNo);
           End;
       End;
+    { No turn means the outline is the whole conversation. A point page lets the phone leave Syncing. }
+    If (Not FHasLive) And (Length(FTurns) = 0) Then
+      Begin
+        PageBody := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
+          '","seq":' + IntToStr(HeadSeq) + ',"turn":{"live":true,"turn_id":"live","turn_index":-2,"blocks":[]}}';
+        PageBody := MarkPoint(PageBody, True, True);
+        SetLength(Pages, Length(Pages) + 1);
+        Pages[High(Pages)].Page := PageNo;
+        Pages[High(Pages)].Json := PageBody;
+      End;
     For Index := 0 To High(Pages) Do
       Pages[Index].PageCount := Length(Pages);
     Result := True;

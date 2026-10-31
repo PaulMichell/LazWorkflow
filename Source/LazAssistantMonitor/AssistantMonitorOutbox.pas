@@ -94,6 +94,8 @@ Type
     Procedure Acknowledge(UpTo: Int64);
     { Offers every held log entry again from the oldest. }
     Procedure RewindLog;
+    { Drops unsent snapshot pages. Control, state, and the log stay. }
+    Procedure DiscardBulk;
     Procedure Clear;
     Function PendingBytes: Int64;
     Function LaneCount(Lane: TMonitorOutboxLane): Integer;
@@ -414,6 +416,17 @@ Begin
         If LogSent > 0 Then
           Dec(LogSent);
       End;
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+End;
+
+Procedure TMonitorOutbox.DiscardBulk;
+Begin
+  EnterCriticalSection(OutboxLock);
+  Try
+    Rings[molBulk].Clear;
+    LaneBytes[molBulk] := 0;
   Finally
     LeaveCriticalSection(OutboxLock);
   End;

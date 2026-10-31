@@ -79,6 +79,7 @@ Type
     Function Send(Const Frame: TMonitorFrame; Out ErrorText: String): Boolean;
     Function State: TMonitorCarrierState;
     Procedure SetFrameHandler(Handler: TMonitorFrameHandler);
+    Procedure DiscardUnsent;
     Procedure AttachSession(Session: TMonitorSession);
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
@@ -640,6 +641,16 @@ Begin
   LockCarrier;
   Try
     Result := FState;
+  Finally
+    UnlockCarrier;
+  End;
+End;
+
+Procedure TMonitorLanCarrier.DiscardUnsent;
+Begin
+  LockCarrier;
+  Try
+    SetLength(FOutboundQueue, 0);
   Finally
     UnlockCarrier;
   End;

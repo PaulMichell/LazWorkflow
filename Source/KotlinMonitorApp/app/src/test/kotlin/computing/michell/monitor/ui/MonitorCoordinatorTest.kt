@@ -197,6 +197,25 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun anEmptyOutlineFinishesSync() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 0, "conversation-2", "/work", "New", "")
+    ))))
+    assertTrue(coordinator.state.catchingUp)
+    val outline = encodeSnapshotPage(
+      "page-0",
+      """{"conversation_id":"conversation-2","stream_id":"epoch","seq":0,"point_id":"","turns":[]}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
+    assertFalse(coordinator.state.catchingUp)
+    assertTrue(coordinator.state.turns.isEmpty())
+    assertNull(coordinator.state.live)
+    assertEquals("conversation-2", coordinator.state.conversationId)
+    assertTrue(coordinator.acceptsRepository("conversation-2"))
+  }
+
+  @Test
   fun theCurrentTurnArrivesWholeAndACachedTurnIsNotReplayed() {
     val coordinator = open()
     val hello = HelloOkMessage("nonce", "ide", "epoch", 118, "conversation-1", "/work", "Chat", "")

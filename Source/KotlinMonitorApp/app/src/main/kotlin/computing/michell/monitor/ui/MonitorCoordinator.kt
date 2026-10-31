@@ -121,6 +121,8 @@ class MonitorCoordinator(
   private var submittedId = ""
   private var selectedTurn = -1
   private var awaitingConversation = false
+  /** Pages for this id arrived after New. They are the conversation that was just left. */
+  private var closedAwaitId = ""
   private val visibleTurns = HashSet<Int>()
   private val requestedBlocks = HashSet<String>()
   private val blockPieces = HashMap<String, TreeMap<Int, String>>()
@@ -401,6 +403,7 @@ class MonitorCoordinator(
     val seq = snapshotPageSeq(payload)
     val pageConversation = snapshotPageConversationId(payload)
     val pageEpoch = snapshotPageStreamId(payload)
+    if (awaitingConversation && closedAwaitId.isNotEmpty() && pageConversation == closedAwaitId) return emptyList()
     if (pageConversation.isNotEmpty() && (local.conversationId.isEmpty() || desktopMatched)) {
       if (desktopMatched && pageStartsFresh(pageConversation)) resetMatch()
       if (local.conversationId.isEmpty()) local = local.copy(conversationId = pageConversation)
@@ -412,6 +415,10 @@ class MonitorCoordinator(
       val named = snapshotPagePointId(payload)
       pointId = named.ifEmpty { outline.lastOrNull()?.id.orEmpty() }
       if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
+      // No turns means this page is the whole conversation. Waiting for a point page never ends.
+      if (outline.isEmpty() && (local.catchingUp || awaitingConversation)) {
+        finishEmptyConversation(pageConversation, seq)
+      }
       return emptyList()
     }
     val turn = snapshotPageTurn(payload) ?: return emptyList()
@@ -595,7 +602,16 @@ class MonitorCoordinator(
     if (catchup.epoch.isNotEmpty()) local = local.copy(hostEpoch = catchup.epoch)
   }
 
+  private fun finishEmptyConversation(pageConversation: String, seq: Long) {
+    val id = pageConversation.ifEmpty { local.conversationId }
+    content.replace(contentHost, id, emptyList(), null)
+    if (id.isNotEmpty()) local = local.copy(conversationId = id)
+    noteCaughtUp(seq)
+  }
+
   private fun noteCaughtUp(seq: Long) {
+    awaitingConversation = false
+    closedAwaitId = ""
     local = local.copy(
       catchingUp = false,
       reviewingOffline = false,
@@ -734,9 +750,11 @@ class MonitorCoordinator(
 
   private fun applyClosed(closed: WireConversationClosed): List<MonitorEffect> {
     val filed = fileOpenScreen(closed.conversationId, closed.title, closed.epoch, closed.cursor)
+    resetMatch()
+    closedAwaitId = closed.conversationId
     awaitingConversation = true
     content.replace(contentHost, "", emptyList(), null)
-    local = local.copy(conversationId = "", conversationTitle = "", banner = "")
+    local = local.copy(conversationId = "", conversationTitle = "", banner = "", catchingUp = true)
     return filed
   }
 
@@ -780,6 +798,7 @@ class MonitorCoordinator(
     }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
+      closedAwaitId = ""
       local = local.copy(
         pairedElsewhere = false,
         disconnected = true,
