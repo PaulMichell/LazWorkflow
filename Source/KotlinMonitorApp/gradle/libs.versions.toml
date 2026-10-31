@@ -1,7 +1,7 @@
 [versions]
 # Kotlin 2.2 line. Bytecode target is Java 17 in both modules.
 kotlin = "2.2.10"
-agp = "9.4.1"
+agp = "9.5.0"
 junit = "4.13.2"
 serialization = "1.7.3"
 coroutines = "1.9.0"
@@ -10,7 +10,7 @@ composeBom = "2024.12.01"
 activityCompose = "1.9.3"
 lifecycle = "2.8.7"
 room = "3.0.3"
-ksp = "2.2.10-2.0.2"
+ksp = "2.3.6"
 sqlite = "2.7.1"
 java = "17"
 applicationId = "computing.michell.monitor"
