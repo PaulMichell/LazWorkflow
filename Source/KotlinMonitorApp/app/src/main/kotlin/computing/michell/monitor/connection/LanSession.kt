@@ -325,6 +325,7 @@ class SteppableClock : MonotonicClock {
 
 enum class DeliveryResult {
   Queued,
+  Dropped,
   Failed
 }
 
@@ -335,7 +336,6 @@ class InboundDelivery(
   private val pending = ArrayDeque<MonitorMessage>()
   private val gate = Any()
   private val available = Channel<Unit>(Channel.CONFLATED)
-  private val space = Channel<Unit>(Channel.CONFLATED)
   private var queuedBytes = 0L
 
   val messages: Flow<MonitorMessage> = flow {
@@ -345,11 +345,9 @@ class InboundDelivery(
   internal fun isWaiting(): Boolean = false
 
   suspend fun publish(message: MonitorMessage): DeliveryResult {
-    while (!offer(message)) {
-      // A full queue is backpressure, not a dead link. Closing here reconnects into the same dump.
-      space.receive()
-    }
-    return DeliveryResult.Queued
+    // Never wait. A page larger than the budget used to block the reader, the host
+    // then could not read a send, and the reconnect came back stuck on Syncing.
+    return if (offer(message)) DeliveryResult.Queued else DeliveryResult.Dropped
   }
 
   private fun offer(message: MonitorMessage): Boolean {
@@ -390,10 +388,7 @@ class InboundDelivery(
           message
         }
       }
-      if (next != null) {
-        space.trySend(Unit)
-        return next
-      }
+      if (next != null) return next
       available.receive()
     }
   }
@@ -1067,19 +1062,10 @@ class LanSession(
     session.apply(message)
     if (message.typeName == "event") {
       val event = computing.michell.monitor.protocol.decodeMonitorEvent(message.payloadJson)
-      if (event != null && !events.offer(event, message.wireJson.length)) {
-        closeLink()
-        publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
-        noteReadEnd(epoch, ReadEnd.PeerClosed, owned)
-        return
-      }
+      if (event != null) events.offer(event, message.wireJson.length)
+      // A full event window is dropped. Closing the socket here stops the host reading a send.
     }
-    if (inbound.publish(message) == DeliveryResult.Failed) {
-      closeLink()
-      publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, DeliveryFailedDetail)
-      noteReadEnd(epoch, ReadEnd.PeerClosed, owned)
-      return
-    }
+    inbound.publish(message)
     when (message.kind) {
       MessageKind.PairOk -> {
         val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)

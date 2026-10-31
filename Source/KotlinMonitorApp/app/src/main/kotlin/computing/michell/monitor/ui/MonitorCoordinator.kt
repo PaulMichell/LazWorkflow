@@ -471,7 +471,7 @@ class MonitorCoordinator(
 
   /** Older turns after the desktop point. A few at a time, so the link is not filled again. */
   private fun backgroundTurnFetches(): List<MonitorEffect> {
-    if (!desktopMatched) return emptyList()
+    if (!desktopMatched || local.pendingPrompt.isNotEmpty()) return emptyList()
     val board = content.current()
     val have = board.turns.map { turn -> turn.turnIndex }.toMutableSet()
     board.live?.let { live -> have += live.turnIndex }

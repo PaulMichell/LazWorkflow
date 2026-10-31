@@ -2809,11 +2809,12 @@ Begin
   Finally
     UnlockSession;
   End;
-  DrainSends;
+  { Apply the command before flushing bulk. A blocked bulk write must not swallow a send. }
   If RunClose And Assigned(CloseHandler) Then
     CloseHandler(CloseId, CloseReason);
   If RunCommand And Assigned(Handler) Then
     Handler(CommandKind, CommandId, CommandPayload);
+  DrainSends;
 End;
 
 Function TMonitorSession.AllocateHostId: String;

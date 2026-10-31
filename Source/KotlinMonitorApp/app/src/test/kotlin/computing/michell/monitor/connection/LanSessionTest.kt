@@ -666,7 +666,7 @@ class LanSessionTest {
   fun aFullCreditWindowFailsWithoutWaiting() = runBlocking {
     val delivery = InboundDelivery(SteppableClock(), byteBudget = 3)
     assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
-    assertEquals(DeliveryResult.Failed, delivery.publish(inboundMessage(MessageKind.Error, "overflow")))
+    assertEquals(DeliveryResult.Dropped, delivery.publish(inboundMessage(MessageKind.Error, "overflow")))
     assertFalse(delivery.isWaiting())
   }
 
