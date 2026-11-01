@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -61,6 +62,9 @@ import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.ui.ActivityStatus
 import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
+import computing.michell.monitor.ui.MenuSectionKind
+import computing.michell.monitor.ui.MenuSheetWidth
+import computing.michell.monitor.ui.menuFlyoutConsumesBack
 import computing.michell.monitor.ui.ApprovalSheet
 import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.ConversationScreen
@@ -133,6 +137,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   val drawerState = rememberDrawerState(DrawerValue.Closed) { next ->
     next != DrawerValue.Open || menuMayOpenDrawer(model.ui.value.approvalOpen)
   }
+  var menuFlyout by remember { mutableStateOf<MenuSectionKind?>(null) }
   var hostWidthPx by remember { mutableIntStateOf(0) }
   var sheetWidthPx by remember { mutableIntStateOf(0) }
   // A cancelled swipe never settles on the other page, so dictation and plan refresh stay put.
@@ -143,7 +148,13 @@ private fun MonitorShell(model: MonitorViewModel) {
     }
   }
   LaunchedEffect(showSettings) {
-    if (showSettings) closeDrawer(drawerState)
+    if (showSettings) {
+      menuFlyout = null
+      closeDrawer(drawerState)
+    }
+  }
+  LaunchedEffect(drawerState.targetValue) {
+    if (drawerState.targetValue != DrawerValue.Open) menuFlyout = null
   }
   // One request when the sheet is actually open, the link is live, and a list is still empty.
   LaunchedEffect(drawerState.currentValue) {
@@ -159,9 +170,18 @@ private fun MonitorShell(model: MonitorViewModel) {
   }
   // Later than settings, so an open drawer wins back before settings or the activity finishes.
   BackHandler(enabled = drawerConsumesBack(drawerState.isOpen, drawerState.targetValue == DrawerValue.Open)) {
+    menuFlyout = null
     scope.launch { closeDrawer(drawerState) }
   }
-  val dismissDrawer: () -> Unit = { scope.launch { closeDrawer(drawerState) } }
+  // Later than the drawer, so an open flyout wins back and leaves the headings in place.
+  BackHandler(enabled = menuFlyoutConsumesBack(menuFlyout != null)) {
+    menuFlyout = null
+  }
+  val dismissDrawer: () -> Unit = {
+    menuFlyout = null
+    scope.launch { closeDrawer(drawerState) }
+  }
+  val shownFlyout = if (drawerState.currentValue == DrawerValue.Open) menuFlyout else null
   Scaffold { padding ->
     val modifier = Modifier.padding(padding).fillMaxSize()
     if (showSettings) {
@@ -186,11 +206,14 @@ private fun MonitorShell(model: MonitorViewModel) {
         ModalNavigationDrawer(
           drawerContent = {
             ModalDrawerSheet(
-              modifier = Modifier.onSizeChanged { sheetWidthPx = it.width },
+              modifier = Modifier.width(MenuSheetWidth).onSizeChanged { sheetWidthPx = it.width },
               windowInsets = WindowInsets(0, 0, 0, 0)
             ) {
-              AppMenu(ui, dismissDrawer, model::setMode, model::openPlan, model::selectTarget, model::selectConversation,
-                model::selectModel, model::selectReasoning, model::selectPermissions)
+              AppMenu(
+                ui, shownFlyout, { menuFlyout = it }, dismissDrawer,
+                model::setMode, model::openPlan, model::selectTarget, model::selectConversation,
+                model::selectModel, model::selectReasoning, model::selectPermissions
+              )
             }
           },
           drawerState = drawerState,

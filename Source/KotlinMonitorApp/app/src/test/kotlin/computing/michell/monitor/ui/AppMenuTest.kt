@@ -342,6 +342,45 @@ class AppMenuTest {
   }
 
   @Test
+  fun aHeadingTapOpensThatFlyoutAndASecondTapClosesIt() {
+    assertEquals(MenuSectionKind.Model, menuFlyoutAfterTap(null, MenuSectionKind.Model))
+    assertNull(menuFlyoutAfterTap(MenuSectionKind.Model, MenuSectionKind.Model))
+    assertEquals(MenuSectionKind.Plan, menuFlyoutAfterTap(MenuSectionKind.Model, MenuSectionKind.Plan))
+  }
+
+  @Test
+  fun backClosesTheFlyoutBeforeTheDrawer() {
+    assertTrue(menuFlyoutConsumesBack(true))
+    assertFalse(menuFlyoutConsumesBack(false))
+  }
+
+  @Test
+  fun currentCaptionIsTheCheckedRow() {
+    val plan = appMenuSections(sample()).first { it.kind == MenuSectionKind.Plan }
+    assertEquals("Alpha", menuCurrentCaption(plan))
+    assertEquals("", menuCurrentCaption(plan.copy(currentId = "missing")))
+    val modelDefault = MenuSectionModel(
+      MenuSectionKind.Reasoning, "Reasoning Level", listOf(MenuRow("", "Model default")), "", true
+    )
+    assertEquals("Model default", menuCurrentCaption(modelDefault))
+  }
+
+  @Test
+  fun flyoutSitsBesideTheHeadingsAndStaysOnScreen() {
+    assertEquals(280, menuFlyoutWidthPx(16, 800, 164, 280, 8, 160, 48))
+    assertEquals(200, menuFlyoutWidthPx(16, 436, 164, 280, 8, 160, 48))
+    assertEquals(180, menuFlyoutWidthPx(16, 368, 164, 280, 8, 160, 48))
+    assertEquals(280, menuFlyoutWidthPx(0, 320, 200, 280, 8, 160, 48))
+    assertEquals(0, menuFlyoutWidthPx(0, 0, 164, 280, 8, 160, 48))
+    val beside = menuFlyoutOrigin(16, 120, 800, 600, 164, 280, 200, 8)
+    assertEquals(180, beside.x)
+    assertEquals(120, beside.y)
+    val shifted = menuFlyoutOrigin(0, 500, 400, 600, 164, 280, 200, 8)
+    assertEquals(112, shifted.x)
+    assertEquals(392, shifted.y)
+  }
+
+  @Test
   fun currentRowClosesWithoutSending() {
     assertEquals(MenuTap.CloseOnly, menuTap("plan", "plan", true))
     assertEquals(MenuTap.CloseAndSend, menuTap("build", "plan", true))
