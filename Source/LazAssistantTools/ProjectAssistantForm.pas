@@ -619,6 +619,8 @@ Type
     /// Does not open a dialog. An empty stored approval counts as ask.
     Function RemoteSelectPermissions(Const Approval: String; Out ErrorText: String): Boolean;
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
+    /// Clears the active plan view. The file and the available list are kept.
+    Function CloseActivePlan(Out ErrorText: String): Boolean;
     Function RemoteRemovePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
     Function RemoteRunPlan(Out ErrorText: String): Boolean;
@@ -9017,21 +9019,13 @@ Begin
   OpenMarkdownDocument(Resolved);
 End;
 
-Procedure TProjectAssistantForm.RemovePlanActionExecute(Sender: TObject);
-Var
-  Rel, Err: String;
+Function TProjectAssistantForm.CloseActivePlan(Out ErrorText: String): Boolean;
 Begin
-  If FSending Or FReviewInProgress Then
-    Exit;
-  Rel := GetActivePlanRelativePath;
-  If Rel = '' Then
+  Result := False;
+  ErrorText := '';
+  If GetActivePlanRelativePath = '' Then
     Begin
-      RunAssistantModal('Select a plan to remove from the list.', mtInformation, [mbOK], 0);
-      Exit;
-    End;
-  If Not RemoveAvailableAssistantPlan(Rel, Err) Then
-    Begin
-      RunAssistantModal(Err, mtError, [mbOK], 0);
+      ErrorText := 'No active plan to close.';
       Exit;
     End;
   SetActivePlanRelativePath('');
@@ -9039,7 +9033,18 @@ Begin
   RefreshActivePlanChoices(Nil);
   RefreshBuildTodos;
   UpdateWorkActions;
-  SetBuildStatusFeedback('Removed from the available list. The file was kept.');
+  SetBuildStatusFeedback('Closed. The plan stays in the available list.');
+  Result := True;
+End;
+
+Procedure TProjectAssistantForm.RemovePlanActionExecute(Sender: TObject);
+Var
+  Err: String;
+Begin
+  If FSending Or FReviewInProgress Or FPlanAgentRunning Then
+    Exit;
+  If Not CloseActivePlan(Err) And (Err <> '') Then
+    RunAssistantModal(Err, mtInformation, [mbOK], 0);
 End;
 
 Function TProjectAssistantForm.ComposerHasImages: Boolean;
@@ -11073,31 +11078,12 @@ Begin
 End;
 
 Function TProjectAssistantForm.RemoteRemovePlan(Out ErrorText: String): Boolean;
-Var
-  Rel, Err: String;
 Begin
   Result := False;
   ErrorText := '';
   If ThisFormBusy(Self, ErrorText) Then
     Exit;
-  Rel := GetActivePlanRelativePath;
-  If Rel = '' Then
-    Begin
-      ErrorText := 'Select a plan to remove from the list.';
-      Exit;
-    End;
-  If Not RemoveAvailableAssistantPlan(Rel, Err) Then
-    Begin
-      ErrorText := Err;
-      Exit;
-    End;
-  SetActivePlanRelativePath('');
-  PersistShellConfig;
-  RefreshActivePlanChoices(Nil);
-  RefreshBuildTodos;
-  UpdateWorkActions;
-  SetBuildStatusFeedback('Removed from the available list. The file was kept.');
-  Result := True;
+  Result := CloseActivePlan(ErrorText);
 End;
 
 Function TProjectAssistantForm.RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;

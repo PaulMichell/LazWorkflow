@@ -711,8 +711,8 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnExecute = OpenPlanActionExecute
     end
     object RemovePlanAction: TAction
-      Caption = 'Remove'
-      Hint = 'Remove this plan from the available list. The file is kept.'
+      Caption = 'Close'
+      Hint = 'Close the active plan. It stays in the available list.'
       OnExecute = RemovePlanActionExecute
     end
   end
@@ -749,7 +749,7 @@ object ProjectAssistantForm: TProjectAssistantForm
       OnClick = OpenPlanActionExecute
     end
     object RemovePlanMenu: TMenuItem
-      Caption = 'Remove Plan'
+      Caption = 'Close Plan'
       OnClick = RemovePlanActionExecute
     end
   end
