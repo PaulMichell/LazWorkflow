@@ -74,7 +74,7 @@ private val UserCommandKinds = setOf(
   MessageKind.SetReasoning,
   MessageKind.SetPermissions,
   MessageKind.SelectPlan,
-  MessageKind.RemovePlan,
+  MessageKind.ClosePlan,
   MessageKind.NewPlan,
   MessageKind.WorkOnPlan,
   MessageKind.RunTask,
