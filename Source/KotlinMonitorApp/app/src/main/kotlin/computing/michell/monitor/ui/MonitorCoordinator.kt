@@ -143,6 +143,13 @@ class MonitorCoordinator(
   val state: MonitorUi
     get() = synchronized(gate) { published() }
 
+  /** The last name the phone showed. A later frame with a real id replaces it. */
+  fun seedModel(model: String) = synchronized(gate) {
+    val named = shownModel(model)
+    if (named.isEmpty() || shownModel(local.view.model).isNotEmpty()) return
+    local = local.copy(view = local.view.copy(model = named))
+  }
+
   val holdingLink: Boolean get() = false
   val requestedTurnEntries: Set<Int> get() = emptySet()
   val inFlightImageKeys: Set<String> get() = emptySet()
@@ -426,7 +433,7 @@ class MonitorCoordinator(
     local = local.copy(
       catchingUp = false,
       reviewingOffline = false,
-      view = snapshot.view,
+      view = snapshot.view.copy(model = keptModel(local.view.model, snapshot.view.model, snapshot.view.signedIn)),
       planPath = snapshot.planPath,
       planTitle = snapshot.planTitle,
       planRunning = snapshot.planRunning,

@@ -235,6 +235,6 @@ fun applyOfflineCache(state: MonitorUi, document: OfflineCacheDocument, hasAddre
     approval = null,
     approvalOpen = false,
     banner = banner,
-    view = clearRemoteActions(emptyView())
+    view = clearRemoteActions(emptyView()).copy(model = shownModel(state.view.model))
   )
 }

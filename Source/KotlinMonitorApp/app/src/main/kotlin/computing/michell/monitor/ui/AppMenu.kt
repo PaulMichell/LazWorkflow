@@ -122,6 +122,11 @@ fun menuChoicesNeeded(ui: MonitorUi, linkLive: Boolean): Boolean {
   return linkLive && !ui.disconnected && menuListStillEmpty(ui)
 }
 
+/** A live link with no model name still needs the footer list. The drawer is not the only ask. */
+fun statusModelNeeded(ui: MonitorUi, linkLive: Boolean): Boolean {
+  return linkLive && !ui.disconnected && shownModel(ui.view.model).isEmpty()
+}
+
 /** History rows stay put while disconnected or sending. A plan run does not lock them. */
 fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
   return !disconnected && !sending

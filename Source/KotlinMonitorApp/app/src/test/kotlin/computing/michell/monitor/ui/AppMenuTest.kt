@@ -43,6 +43,16 @@ class AppMenuTest {
   }
 
   @Test
+  fun aLiveLinkWithNoModelStillAsks() {
+    val empty = sample()
+    assertTrue(statusModelNeeded(empty, true))
+    assertFalse(statusModelNeeded(empty, false))
+    assertFalse(statusModelNeeded(empty.copy(disconnected = true), true))
+    assertFalse(statusModelNeeded(empty.copy(view = empty.view.copy(model = "grok-4")), true))
+    assertTrue(statusModelNeeded(empty.copy(view = empty.view.copy(model = "Model")), true))
+  }
+
+  @Test
   fun sectionsStayInDrawerOrder() {
     val labels = appMenuSections(sample()).map { it.label }
     assertEquals(

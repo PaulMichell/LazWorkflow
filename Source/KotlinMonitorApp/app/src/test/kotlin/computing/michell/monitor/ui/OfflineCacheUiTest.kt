@@ -40,6 +40,15 @@ class OfflineCacheUiTest {
   }
 
   @Test
+  fun openingTheCacheKeepsTheModelAlreadyShown() {
+    val document = OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, "")
+    val restored = applyOfflineCache(MonitorUi(view = emptyView().copy(model = "grok-4.5")), document, true)
+    assertEquals("grok-4.5", restored.view.model)
+    val placeholder = applyOfflineCache(MonitorUi(view = emptyView().copy(model = "Model")), document, true)
+    assertEquals("", placeholder.view.model)
+  }
+
+  @Test
   fun aMissingImageStaysAPlaceholderWhileDisconnected() {
     assertEquals(ImagePlaceholder, imageTileLabel(false, null, false, false))
     assertEquals(LoadingImageLabel, imageTileLabel(false, null, false, true))

@@ -756,6 +756,7 @@ Begin
               If Assigned(Form) Then
                 Begin
                   PushStatus(Form);
+                  PushModels(Form);
                   PushPlan(Form);
                 End;
               Exit;
@@ -775,8 +776,9 @@ Begin
       SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
       Exit;
     End;
-  { Status and the plan go out before the history pages, or they wait behind the replay. }
+  { Status, the model list, and the plan go out before the history pages, or they wait behind the replay. }
   PushStatus(Form);
+  PushModels(Form);
   PushPlan(Form);
   SendCatchupSnapshot(Form, Id);
 End;

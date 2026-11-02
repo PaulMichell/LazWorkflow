@@ -320,10 +320,18 @@ fun actionCaption(view: WireView): String {
   return "Send"
 }
 
-/** An empty model field means this frame did not carry one. It must not blank the name already shown. */
+/** The footer placeholder is not a model name. An empty field is not one either. */
+fun shownModel(model: String): String {
+  val id = model.trim()
+  if (id.isEmpty() || id == "Model") return ""
+  return id
+}
+
+/** An empty or placeholder model field must not blank the name already shown. */
 internal fun keptModel(previous: String, incoming: String, @Suppress("UNUSED_PARAMETER") incomingSignedIn: Boolean): String {
-  if (incoming.isNotEmpty()) return incoming
-  return previous
+  val named = shownModel(incoming)
+  if (named.isNotEmpty()) return named
+  return shownModel(previous)
 }
 
 /** A progress caption left on a finished turn. Ready and Offline stay as they are. */
@@ -413,7 +421,7 @@ fun idleActivity(statusText: String): String {
 fun runtimeCaption(view: WireView): String = runtimeCaption(view.model)
 
 fun runtimeCaption(model: String, choices: List<ModelChoice> = emptyList()): String {
-  val id = model.trim()
+  val id = shownModel(model)
   if (id.isEmpty()) return ""
   val caption = choices.firstOrNull { choice -> choice.id == id }?.caption?.trim().orEmpty()
   return caption.ifEmpty { id }
@@ -756,7 +764,11 @@ private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
     elapsedMs = patch.elapsedMs
   )
   val view = if (patch.hasView) {
-    flagged.copy(model = patch.model, signedIn = patch.signedIn, statusText = patch.statusText)
+    flagged.copy(
+      model = keptModel(state.view.model, patch.model, patch.signedIn),
+      signedIn = patch.signedIn,
+      statusText = patch.statusText
+    )
   } else {
     flagged
   }
@@ -851,7 +863,11 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val incoming = snapshot.live
   if (incoming == null) {
     val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
-    return overlaySnapshot(cleared, snapshot, state.generation + 1)
+    return overlaySnapshot(
+      cleared.copy(view = cleared.view.copy(model = shownModel(state.view.model))),
+      snapshot,
+      state.generation + 1
+    )
   }
   val previousId = state.live?.id ?: ""
   val acceptedNew = state.hostEpoch.isEmpty() && previousId.isNotEmpty() && previousId != incoming.id
@@ -861,7 +877,7 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     state.transcriptConnection == state.connectionGeneration
   val approval = snapshot.approval
   return state.copy(
-    view = snapshot.view,
+    view = snapshot.view.copy(model = keptModel(state.view.model, snapshot.view.model, snapshot.view.signedIn)),
     turns = snapshot.storedTurns,
     live = live,
     history = retainLoaded(state.history, snapshot.storedTurns),
@@ -909,7 +925,7 @@ internal fun MonitorUi.clearedMenuLists(): MonitorUi {
 fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int): MonitorUi {
   val approval = snapshot.approval
   return cleared.copy(
-    view = snapshot.view,
+    view = snapshot.view.copy(model = keptModel(cleared.view.model, snapshot.view.model, snapshot.view.signedIn)),
     turns = snapshot.storedTurns,
     live = null,
     history = emptyMap(),
@@ -1194,6 +1210,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
   private val content = MemoryConversationStore()
   private val coordinator = MonitorCoordinator(session, SystemMonitorClock, display, content)
+  private var askedStatusModel = false
+  private var rememberedModel = ""
   private val imageCache = ImagePixelCache()
   private var viewWidthPx = 0
   private val bitmapsState = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
@@ -1267,7 +1285,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
-    // 1. The shell is on screen before Room or the socket.
+    // 1. The shell is on screen before Room or the socket. The last model is already on the bar.
+    rememberedModel = shownModel(displayPrefs.getString(LastModelKey, "").orEmpty())
+    coordinator.seedModel(rememberedModel)
     uiState = MutableStateFlow(coordinator.state)
     ui = uiState.asStateFlow()
     viewModelScope.launch(Dispatchers.Default) {
@@ -1995,13 +2015,28 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     execute(effects)
   }
 
+  /** The next open paints this name before the desktop frame arrives. */
+  private fun rememberShownModel(model: String) {
+    val named = shownModel(model)
+    if (named.isEmpty() || named == rememberedModel) return
+    rememberedModel = named
+    displayPrefs.edit().putString(LastModelKey, named).apply()
+  }
+
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
-    if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) saveCacheNow(uiState.value, false)
+    if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) {
+      saveCacheNow(uiState.value, false)
+      askedStatusModel = false
+    }
     if (ideLinkLive(uiState.value.disconnected, status.phase)) {
       cacheListOpenState.value = false
       cacheBackToListState.value = false
+      if (!askedStatusModel && statusModelNeeded(uiState.value, true)) {
+        askedStatusModel = true
+        session.sendCatalogue(encodeMenuChoices(session.nextCommandId()))
+      }
     }
   }
 
@@ -2062,6 +2097,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       }
     }
     uiState.value = coordinator.state
+    rememberShownModel(uiState.value.view.model)
     if (planChromeChanged(before, uiState.value)) rememberPlan(before, uiState.value, false)
     if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value) ||
       planChromeChanged(before, uiState.value)) scheduleCacheSave()
@@ -2321,3 +2357,4 @@ private const val DisplayToolsKey = "tools"
 private const val ConversationCapKey = "conversation-cap"
 private const val ImageBudgetKey = "image-budget-mib"
 private const val DictationPermissionAskedKey = "dictation-asked"
+private const val LastModelKey = "last-model"

@@ -573,6 +573,22 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aSnapshotDoesNotBlankAKnownModel() {
+    val coordinator = open()
+    val choices = listOf(ModelChoice("grok-4", "Grok 4"))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeModels("models", "grok-4", "grok", "", choices)
+    )))
+    val blank = snapshot(null).copy(view = emptyView().copy(model = "Model", canSend = true))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", blank))))
+    assertEquals("grok-4", coordinator.state.view.model)
+    assertEquals("Grok 4", runtimeCaption(coordinator.state.view.model, coordinator.state.modelChoices))
+    assertEquals("grok-4", keptModel("grok-4", "Model", false))
+    assertEquals("", keptModel("Model", "", false))
+    assertEquals("", runtimeCaption("Model"))
+  }
+
+  @Test
   fun aFinishedConversationDoesNotKeepARunningThought() {
     val coordinator = open()
     val thought = WireBlock("thinking", "think-1", "Thinking… 0:04", "", "", "worked it out", true, true, 4_000, emptyList())

@@ -1788,6 +1788,10 @@ Begin
     Show empty chrome, flush it, then bind on a later idle. }
   If Not FOpenBindPending Then
     Exit;
+  { Deferred bind is after the first paint. The footer and a connected phone need the model now. }
+  LoadConnectionSettings;
+  FPublishModelList := True;
+  RefreshFromConfig;
   If HandleAllocated Then
     Begin
       Invalidate;
@@ -5848,6 +5852,8 @@ Begin
   Else
     StatusText := AssistantStatusOffline;
   ModelText := Trim(FActiveModel);
+  If ModelText = '' Then
+    ModelText := Trim(FModelName);
   If ModelText = '' Then
     ModelText := 'Model';
   If (FActiveBackend = 'grok') Or (FActiveBackend = 'codex') Then
