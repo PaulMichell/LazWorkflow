@@ -121,6 +121,8 @@ Type
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
     Function HasModel: Boolean;
+    { Stored turns or the live turn. A plan alone is not the open conversation. }
+    Function HasConversation: Boolean;
     Function CopyTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
     Function CopyPlan(Out PlanPath, PlanTitle: String; Out PlanRunning: Boolean; Out Rows: TMonitorMirrorPlanArray): Boolean;
     Function BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
@@ -756,6 +758,16 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Result := FHasLive Or (Length(FTurns) > 0) Or (FPlanPath <> '') Or (Length(FPlanRows) > 0);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.HasConversation: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FHasLive Or (Length(FTurns) > 0);
   Finally
     LeaveCriticalSection(FLock);
   End;

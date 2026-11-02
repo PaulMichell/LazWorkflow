@@ -2597,9 +2597,9 @@ Begin
           Exit;
         End;
     End;
-  { No model yet is an empty conversation. The outline is the whole screen.
-    Waiting for the IDE thread is why a new chat stays on Syncing. }
-  If (Not Assigned(FMirror)) Or (FEpoch = '') Then
+  { An empty mirror is not the open conversation. The form may already be showing
+    turns this model has not observed. Those pages are filled on the IDE thread. }
+  If (Not Assigned(FMirror)) Or (FEpoch = '') Or (Not FMirror.HasConversation) Then
     Exit;
   Result := QueueMirrorPagesLocked(Id, True);
 End;

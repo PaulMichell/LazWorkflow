@@ -647,6 +647,31 @@ class MonitorCoordinatorTest {
     assertTrue(coordinator.state.turns.none { turn -> turn.blocks.any { block -> block.body == "old answer" } })
   }
 
+  @Test
+  fun aLaterDesktopTurnReplacesTheEmptyCatchup() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello",
+      HelloOkMessage("nonce", "ide", "epoch", 1, "conversation-1", "/work", "Open", "")))))
+    val emptyOutline = encodeSnapshotPage(
+      "empty",
+      """{"conversation_id":"conversation-1","stream_id":"epoch","seq":1,"point_id":"","turns":[]}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(emptyOutline)))
+    val emptyPoint = encodeSnapshotPage(
+      "empty-point",
+      """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":1,"turn":{"live":true,"turn_id":"live","turn_index":-2,"blocks":[]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(emptyPoint)))
+    val real = encodeSnapshotPage(
+      "real",
+      """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":2,"turn":{"live":true,"turn_id":"turn-1","turn_index":0,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"desktop answer"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(real)))
+    val body = coordinator.state.live?.blocks?.firstOrNull()?.body
+      ?: coordinator.state.turns.firstOrNull()?.blocks?.firstOrNull()?.body
+    assertEquals("desktop answer", body)
+  }
+
   private fun showAnswer(coordinator: MonitorCoordinator, conversationId: String, epoch: String, body: String) {
     val hello = HelloOkMessage("nonce", "ide", epoch, 4, conversationId, "/work", "Old", "")
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello))))

@@ -3945,6 +3945,8 @@ Begin
       ClearCurrentTurnDisplay;
       RefreshChatDisplay(True, False);
     End;
+  { Resume may already have answered from an empty mirror. The phone needs this screen. }
+  AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
 End;
 
 Procedure TProjectAssistantForm.RefreshConversationList;

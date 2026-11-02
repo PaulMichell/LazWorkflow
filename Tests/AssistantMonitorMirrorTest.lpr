@@ -74,7 +74,9 @@ Begin
     Check('an ack lets the older patch be folded', Log.DroppedThrough >= 1);
     Check('resume at the kept patch is a tail', Log.TryReplayPatches('ab12cd34', 1, 2, Events, Head) And
       (Length(Events) = 1) And (Events[0].Seq = 2));
+    Check('a new stream is not a conversation yet', Not Log.HasConversation);
     Log.ObserveTurn(SampleTurn('turn-a', StringOfChar('x', MonitorInlineBodyBytes + 1), 0));
+    Check('an observed turn is the open conversation', Log.HasConversation);
     Check('folded events still materialise the turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a') And
       (Length(Turn.Blocks[0].Body) = MonitorInlineBodyBytes + 1) And (Turn.Images[0].Id = 'turn-a-image'));
     Check('snapshot pages start with the turn list', Log.BuildSnapshotPages('ab12cd34', Log.Head, Pages) And
