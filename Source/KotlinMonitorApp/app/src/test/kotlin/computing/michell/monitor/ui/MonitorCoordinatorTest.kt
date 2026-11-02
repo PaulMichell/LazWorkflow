@@ -13,6 +13,7 @@ import computing.michell.monitor.connection.LinkStatus
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MessageKind
+import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
@@ -25,6 +26,7 @@ import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.encodeEnvelope
+import computing.michell.monitor.protocol.encodeModels
 import computing.michell.monitor.protocol.encodePatch
 import computing.michell.monitor.protocol.statusToJson
 import computing.michell.monitor.protocol.encodePlan
@@ -552,6 +554,22 @@ class MonitorCoordinatorTest {
     assertEquals("Send", actionCaption(coordinator.state.view))
     assertEquals("grok-4", coordinator.state.view.model)
     assertEquals("Ready", coordinator.state.view.statusText)
+  }
+
+  @Test
+  fun aModelsFrameFillsTheStatusBarWhenTheViewModelIsEmpty() {
+    val coordinator = open()
+    val choices = listOf(ModelChoice("grok-4", "grok-4"))
+    val frame = encodeModels("models", "grok-4", "grok", "", choices)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(frame)))
+    assertEquals("grok-4", coordinator.state.view.model)
+    assertEquals("grok-4", runtimeCaption(coordinator.state.view.model, coordinator.state.modelChoices))
+    val blank = encodeEnvelope(MessageKind.Status, "status-blank", statusToJson(emptyView().copy(
+      canSend = true, signedIn = false, model = ""
+    )))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(blank)))
+    assertEquals("grok-4", coordinator.state.view.model)
+    assertEquals("grok-4", runtimeCaption(coordinator.state.view))
   }
 
   @Test

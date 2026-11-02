@@ -343,7 +343,7 @@ fun ActivityStatus(
       delay(1000)
     }
   }
-  val runtime = runtimeCaption(ui.view)
+  val runtime = runtimeCaption(ui.view.model, ui.modelChoices)
   val activity = activityCaption(
     ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
   )
@@ -375,15 +375,16 @@ fun ActivityStatus(
       overflow = TextOverflow.Ellipsis,
       style = statusStyle
     )
-    Text(
-      runtime,
-      color = QuietText,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-      textAlign = TextAlign.Center,
-      style = statusStyle,
-      modifier = Modifier.weight(1f)
-    )
+    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+      Text(
+        runtime,
+        color = QuietText,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        style = statusStyle
+      )
+    }
     Text(
       right,
       color = QuietText,

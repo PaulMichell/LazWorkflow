@@ -10556,6 +10556,10 @@ Begin
   Else
     View.StatusText := AssistantStatusOffline;
   View.Model := Trim(FActiveModel);
+  If View.Model = '' Then
+    View.Model := Trim(FModelName);
+  If View.Model = '' Then
+    View.Model := 'Model';
   View.Backend := FActiveBackend;
   View.SignedIn := (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or

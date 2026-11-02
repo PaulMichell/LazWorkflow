@@ -33,6 +33,7 @@ import computing.michell.monitor.protocol.decodeCatchup
 import computing.michell.monitor.protocol.decodeConversationClosed
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
+import computing.michell.monitor.protocol.decodeModels
 import computing.michell.monitor.protocol.decodePatch
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeSnapshot
@@ -389,6 +390,15 @@ class MonitorCoordinator(
         val closed = (message.inbound as? InboundPayload.ConversationClosed)?.value
           ?: decodeConversationClosed(message.payloadJson)
         if (closed != null) effects += applyClosed(closed)
+      }
+      MessageKind.Models -> decodeModels(message.payloadJson)?.let { models ->
+        val named = if (models.current.isNotEmpty()) models.current else local.view.model
+        local = local.copy(
+          modelChoices = models.choices,
+          modelBackend = models.backend,
+          modelNote = models.note,
+          view = local.view.copy(model = named)
+        )
       }
       MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
         val merged = settleFinishedTurn(

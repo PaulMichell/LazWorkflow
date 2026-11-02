@@ -326,10 +326,9 @@ fun actionCaption(view: WireView): String {
   return "Send"
 }
 
-/** An empty model on a still-signed-in frame must not blank the name the phone already has. */
-internal fun keptModel(previous: String, incoming: String, incomingSignedIn: Boolean): String {
+/** An empty model field means this frame did not carry one. It must not blank the name already shown. */
+internal fun keptModel(previous: String, incoming: String, @Suppress("UNUSED_PARAMETER") incomingSignedIn: Boolean): String {
   if (incoming.isNotEmpty()) return incoming
-  if (!incomingSignedIn) return ""
   return previous
 }
 
@@ -410,8 +409,13 @@ fun clearRemoteActions(view: WireView): WireView {
   return view.copy(busy = false, sending = false, canSend = false, canSteer = false, canStop = false, planRunning = false)
 }
 
-fun runtimeCaption(view: WireView): String {
-  return view.model
+fun runtimeCaption(view: WireView): String = runtimeCaption(view.model)
+
+fun runtimeCaption(model: String, choices: List<ModelChoice> = emptyList()): String {
+  val id = model.trim()
+  if (id.isEmpty()) return ""
+  val caption = choices.firstOrNull { choice -> choice.id == id }?.caption?.trim().orEmpty()
+  return caption.ifEmpty { id }
 }
 
 private val ElapsedTail = Regex("""(\d+):(\d{2})(?::(\d{2}))?$""")
@@ -1016,12 +1020,14 @@ private fun applyModels(state: MonitorUi, payloadJson: String): MonitorUi {
   return applyModelsFrame(state, models)
 }
 
-/** Replaces the model list only. The check stays on view.model until a status frame moves it. */
+/** The list and the current id. An empty current must not blank a model the status bar already shows. */
 internal fun applyModelsFrame(state: MonitorUi, models: ModelsMessage): MonitorUi {
+  val named = if (models.current.isNotEmpty()) models.current else state.view.model
   return state.copy(
     modelChoices = models.choices,
     modelBackend = models.backend,
-    modelNote = models.note
+    modelNote = models.note,
+    view = state.view.copy(model = named)
   )
 }
 
