@@ -50,7 +50,7 @@ enum class MessageKind(val wireName: String) {
   Plan("plan"),
   SelectPlan("select_plan"),
   NewPlan("new_plan"),
-  RemovePlan("remove_plan"),
+  ClosePlan("close_plan"),
   WorkOnPlan("work_on_plan"),
   RunPlan("run_plan"),
   StopPlan("stop_plan"),
@@ -770,7 +770,7 @@ fun decodeTarget(obj: JsonValue.Obj): TargetMessage? {
 }
 
 fun encodePath(kind: MessageKind, id: String, path: String): String {
-  if (kind != MessageKind.SelectPlan && kind != MessageKind.RemovePlan && kind != MessageKind.SelectTarget) return ""
+  if (kind != MessageKind.SelectPlan && kind != MessageKind.SelectTarget) return ""
   return encodeOneString(kind, id, "path", path)
 }
 

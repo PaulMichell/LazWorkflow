@@ -1859,8 +1859,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.sendCatalogue(encodeNewPlan(session.nextCommandId(), "", false))
   }
 
-  fun removePlan() {
-    session.sendCatalogue(encodePath(MessageKind.RemovePlan, session.nextCommandId(), uiState.value.planPath))
+  fun closePlan() {
+    session.sendCatalogue(encodeEmpty(MessageKind.ClosePlan, session.nextCommandId()))
   }
 
   fun allowApproval() {

@@ -89,7 +89,7 @@ fun PlanScreen(
   onRun: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
-  onRemove: () -> Unit
+  onClose: () -> Unit
 ) {
   var previewOpen by remember { mutableStateOf(false) }
   val loaded = planLoaded(ui.planPath)
@@ -121,7 +121,7 @@ fun PlanScreen(
       // New does not need a loaded plan. It is how the first plan is created.
       Button(onClick = onNew, enabled = online) { Text("New") }
       Button(onClick = { previewOpen = true }, enabled = loaded) { Text("Open") }
-      Button(onClick = onRemove, enabled = planHostButtonEnabled(loaded, online)) { Text("Close") }
+      Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online)) { Text("Close") }
     }
   }
   if (previewOpen && loaded) {

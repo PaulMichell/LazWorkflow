@@ -269,7 +269,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                     model::retryUndelivered
                   )
                 }
-                AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)
+                AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan)
               }
             }
             // Below the pager, so Conversation and Plan both keep the same status line.
