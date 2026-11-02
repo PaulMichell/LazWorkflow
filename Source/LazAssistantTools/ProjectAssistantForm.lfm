@@ -383,7 +383,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             BorderSpacing.Bottom = 2
             TabOrder = 2
           end
-          object RemovePlanButton: TButton
+          object ClosePlanButton: TButton
             AnchorSideRight.Control = PlanSheet
             AnchorSideRight.Side = asrBottom
             AnchorSideBottom.Control = PlanSheet
@@ -392,7 +392,7 @@ object ProjectAssistantForm: TProjectAssistantForm
             Height = 26
             Top = 540
             Width = 142
-            Action = RemovePlanAction
+            Action = ClosePlanAction
             Anchors = [akRight, akBottom]
             BorderSpacing.Right = 2
             BorderSpacing.Bottom = 2
@@ -710,10 +710,10 @@ object ProjectAssistantForm: TProjectAssistantForm
       Hint = 'Open the active plan in the Markdown viewer'
       OnExecute = OpenPlanActionExecute
     end
-    object RemovePlanAction: TAction
+    object ClosePlanAction: TAction
       Caption = 'Close'
       Hint = 'Close the active plan. It stays in the available list.'
-      OnExecute = RemovePlanActionExecute
+      OnExecute = ClosePlanActionExecute
     end
   end
   object AttachmentPopup: TPopupMenu
@@ -748,9 +748,9 @@ object ProjectAssistantForm: TProjectAssistantForm
       Caption = 'Review Plan'
       OnClick = OpenPlanActionExecute
     end
-    object RemovePlanMenu: TMenuItem
+    object ClosePlanMenu: TMenuItem
       Caption = 'Close Plan'
-      OnClick = RemovePlanActionExecute
+      OnClick = ClosePlanActionExecute
     end
   end
 end

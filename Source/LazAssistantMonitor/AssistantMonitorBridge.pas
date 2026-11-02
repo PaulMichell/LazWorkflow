@@ -1349,7 +1349,7 @@ Begin
         Result := Form.RemoteNewPlan(Plan.Title, ErrorText);
       End;
     Ord(mmkRemovePlan):
-      Result := Form.RemoteRemovePlan(ErrorText);
+      Result := Form.RemoteClosePlan(ErrorText);
     Ord(mmkWorkOnPlan):
       Begin
         ErrorText := 'Use Run Plan. It starts at the first item that is not complete.';

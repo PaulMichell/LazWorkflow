@@ -75,7 +75,7 @@ Type
     ModelPickerAction: TAction;
     SkillsPickerAction: TAction;
     OpenPlanSheetAction: TAction;
-    RemovePlanAction: TAction;
+    ClosePlanAction: TAction;
     ClientPanel: TPanel;
     ModeSidePanel: TPanel;
     SidebarPages: TPageControl;
@@ -103,9 +103,9 @@ Type
     ReviewItemMenu: TMenuItem;
     PlanListSeparator: TMenuItem;
     ReviewPlanMenu: TMenuItem;
-    RemovePlanMenu: TMenuItem;
+    ClosePlanMenu: TMenuItem;
     OpenPlanSheetButton: TButton;
-    RemovePlanButton: TButton;
+    ClosePlanButton: TButton;
     ComposerStack: TPanel;
     BottomBar: TPanel;
     NewConversationButton: TButton;
@@ -184,7 +184,7 @@ Type
     Procedure SessionInfoActionExecute(Sender: TObject);
     Procedure ModelPickerActionExecute(Sender: TObject);
     Procedure SkillsPickerActionExecute(Sender: TObject);
-    Procedure RemovePlanActionExecute(Sender: TObject);
+    Procedure ClosePlanActionExecute(Sender: TObject);
     Procedure OpenPlanActionExecute(Sender: TObject);
     Procedure ComposerStackResize(Sender: TObject);
     Procedure StatusFooterResize(Sender: TObject);
@@ -621,7 +621,7 @@ Type
     Function RemoteNewPlan(Const Title: String; Out ErrorText: String): Boolean;
     /// Clears the active plan view. The file and the available list are kept.
     Function CloseActivePlan(Out ErrorText: String): Boolean;
-    Function RemoteRemovePlan(Out ErrorText: String): Boolean;
+    Function RemoteClosePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
     Function RemoteRunPlan(Out ErrorText: String): Boolean;
     Function RemoteStopPlan(Out ErrorText: String): Boolean;
@@ -1775,7 +1775,7 @@ End;
 
 Procedure TProjectAssistantForm.PlanSheetResize(Sender: TObject);
 Begin
-  SizeSheetBottomButtons(PlanSheet, OpenPlanSheetButton, RemovePlanButton, Scale96ToForm(4));
+  SizeSheetBottomButtons(PlanSheet, OpenPlanSheetButton, ClosePlanButton, Scale96ToForm(4));
 End;
 
 Procedure TProjectAssistantForm.FormShow(Sender: TObject);
@@ -2116,8 +2116,8 @@ Procedure TProjectAssistantForm.UpdateWorkActions;
 Begin
   If Assigned(OpenPlanSheetAction) Then
     OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
-  If Assigned(RemovePlanAction) Then
-    RemovePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
+  If Assigned(ClosePlanAction) Then
+    ClosePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
   If Assigned(NewPlanAction) Then
     NewPlanAction.Enabled := Not FSending;
   If Assigned(RunPlanAction) Then
@@ -3822,8 +3822,8 @@ Begin
     ReviewItemMenu.Enabled := HasItem;
   If Assigned(ReviewPlanMenu) Then
     ReviewPlanMenu.Enabled := HasPlan;
-  If Assigned(RemovePlanMenu) Then
-    RemovePlanMenu.Enabled := HasPlan And (Not FSending) And (Not FReviewInProgress);
+  If Assigned(ClosePlanMenu) Then
+    ClosePlanMenu.Enabled := HasPlan And (Not FSending) And (Not FReviewInProgress);
 End;
 
 Procedure TProjectAssistantForm.ReviewPlanItemClick(Sender: TObject);
@@ -5976,8 +5976,8 @@ Begin
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
   If Assigned(ActivePlanCombo) Then ActivePlanCombo.Enabled := Not IsSending;
   If Assigned(ActivePlanBrowseButton) Then ActivePlanBrowseButton.Enabled := Not IsSending;
-  If Assigned(RemovePlanAction) Then
-    RemovePlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
+  If Assigned(ClosePlanAction) Then
+    ClosePlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
   If Assigned(OpenPlanSheetAction) Then
     OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
   If IsSending And (Not WasSending) Then
@@ -9037,7 +9037,7 @@ Begin
   Result := True;
 End;
 
-Procedure TProjectAssistantForm.RemovePlanActionExecute(Sender: TObject);
+Procedure TProjectAssistantForm.ClosePlanActionExecute(Sender: TObject);
 Var
   Err: String;
 Begin
@@ -11077,7 +11077,7 @@ Begin
   Result := True;
 End;
 
-Function TProjectAssistantForm.RemoteRemovePlan(Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteClosePlan(Out ErrorText: String): Boolean;
 Begin
   Result := False;
   ErrorText := '';
