@@ -41,7 +41,7 @@ Update `PlanScreenTest` so the idle expectation is `Run` and the running expecta
 ## 2. Check
 
 ### 2.1 App unit test
-Status: not started
+Status: complete
 
 Compile and run `PlanScreenTest`. The idle caption is `Run`. The running caption is `Stop`. The enable cases are unchanged.
 
