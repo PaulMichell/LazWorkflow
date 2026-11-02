@@ -276,6 +276,8 @@ class MonitorCoordinator(
         local = local.copy(pendingPrompt = "", pendingKind = "", pendingCommandId = "")
       }
     }
+    val settled = settleFinishedTurn(local.view, displayBlocks(board.live))
+    if (settled != local.view) local = local.copy(view = settled)
     return local.copy(
       selectedTurn = selectedTurn,
       showThinking = display.showThinking,
@@ -373,7 +375,11 @@ class MonitorCoordinator(
         if (closed != null) effects += applyClosed(closed)
       }
       MessageKind.Status -> decodeStatusPayload(message.payloadJson)?.let { view ->
-        local = local.copy(view = view, statusBusy = view.busy, planRunning = view.planRunning)
+        val merged = settleFinishedTurn(
+          local.view.patchStatus(view),
+          displayBlocks(content.current().live)
+        )
+        local = local.copy(view = merged, statusBusy = view.busy, planRunning = view.planRunning)
       }
       MessageKind.Plan -> applyPlan(message)
       MessageKind.InsertResult -> decodeText(message.payloadJson)?.let { text ->
@@ -679,11 +685,16 @@ class MonitorCoordinator(
       elapsedMs = patch.elapsedMs,
       phase = patch.phase
     )
-    val view = if (patch.hasView) {
-      flagged.copy(model = patch.model, signedIn = patch.signedIn, statusText = patch.statusText)
+    val viewed = if (patch.hasView) {
+      flagged.copy(
+        model = keptModel(local.view.model, patch.model, patch.signedIn),
+        signedIn = patch.signedIn,
+        statusText = patch.statusText
+      )
     } else {
       flagged
     }
+    val view = settleFinishedTurn(viewed, merged)
     local = local.copy(
       view = view,
       hostEpoch = patch.epoch.ifEmpty { local.hostEpoch },

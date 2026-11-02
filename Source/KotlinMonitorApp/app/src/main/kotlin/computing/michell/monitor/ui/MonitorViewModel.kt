@@ -321,8 +321,32 @@ fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
 }
 
 fun actionCaption(view: WireView): String {
-  if (view.canSteer) return "Steer"
+  // A finished turn must not keep Steer just because the last running patch said steering was allowed.
+  if (view.canSteer && (view.sending || view.busy)) return "Steer"
   return "Send"
+}
+
+/** An empty model on a still-signed-in frame must not blank the name the phone already has. */
+internal fun keptModel(previous: String, incoming: String, incomingSignedIn: Boolean): String {
+  if (incoming.isNotEmpty()) return incoming
+  if (!incomingSignedIn) return ""
+  return previous
+}
+
+/** A worked footer, or a host that is no longer sending, ends the steer. The next tap is Send. */
+internal fun settleFinishedTurn(view: WireView, blocks: List<WireBlock>): WireView {
+  val finished = hasWorkedFooter(blocks) && blocks.none { block -> block.running }
+  val hostIdle = !view.sending && !view.busy && !view.planRunning
+  if (!finished && !hostIdle) return view
+  val settled = view.copy(
+    sending = false,
+    busy = false,
+    canSteer = false,
+    canStop = false,
+    canSend = !view.planRunning
+  )
+  if (settled == view) return view
+  return settled
 }
 
 fun actionEnabled(view: WireView): Boolean {
@@ -1076,7 +1100,7 @@ private fun applyImageUnavailable(state: MonitorUi, payloadJson: String): Monito
   return state.copy(imageReasons = state.imageReasons + (image.imageId to image.reason))
 }
 
-private fun WireView.patchStatus(status: WireView): WireView {
+internal fun WireView.patchStatus(status: WireView): WireView {
   return copy(
     available = status.available,
     busy = status.busy,
@@ -1085,7 +1109,7 @@ private fun WireView.patchStatus(status: WireView): WireView {
     planRunning = status.planRunning,
     phase = status.phase,
     statusText = status.statusText,
-    model = status.model,
+    model = keptModel(model, status.model, status.signedIn),
     backend = status.backend,
     signedIn = status.signedIn,
     approvalCaption = status.approvalCaption,

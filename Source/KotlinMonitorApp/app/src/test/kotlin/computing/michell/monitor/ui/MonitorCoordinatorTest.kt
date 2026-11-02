@@ -24,7 +24,9 @@ import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.encodeHelloOk
+import computing.michell.monitor.protocol.encodeEnvelope
 import computing.michell.monitor.protocol.encodePatch
+import computing.michell.monitor.protocol.statusToJson
 import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.encodeSnapshotPage
@@ -523,6 +525,33 @@ class MonitorCoordinatorTest {
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p3", idle))))
     assertEquals(0L, coordinator.state.activityStartedMs)
+  }
+
+  @Test
+  fun aFinishedTurnReturnsToSendAndKeepsTheModel() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    val running = WirePatch(
+      "epoch", 1, 1, "turn-1", emptyList(), true, true, false, "Thinking…",
+      false, true, true, 4_000, hasView = true, model = "grok-4", signedIn = true, statusText = "Thinking… 0:04"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("running", running))))
+    assertEquals("Steer", actionCaption(coordinator.state.view))
+    assertEquals("grok-4", coordinator.state.view.model)
+    val worked = WireBlock("worked", "w", "", "", "", "Worked for 0:04", false, true, 4_000, emptyList())
+    val finished = running.copy(cursor = 2, blocks = listOf(worked), model = "", statusText = "Thinking… 0:04")
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("finished", finished))))
+    assertEquals("Send", actionCaption(coordinator.state.view))
+    assertFalse(coordinator.state.view.canSteer)
+    assertTrue(coordinator.state.view.canSend)
+    assertEquals("grok-4", coordinator.state.view.model)
+    val status = encodeEnvelope(MessageKind.Status, "status-idle", statusToJson(emptyView().copy(
+      canSend = true, canSteer = false, signedIn = true, model = "", statusText = "Ready"
+    )))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(status)))
+    assertEquals("Send", actionCaption(coordinator.state.view))
+    assertEquals("grok-4", coordinator.state.view.model)
+    assertEquals("Ready", coordinator.state.view.statusText)
   }
 
   @Test

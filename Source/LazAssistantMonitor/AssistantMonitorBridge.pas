@@ -9,9 +9,8 @@ Unit AssistantMonitorBridge;
   Size note: exceeds the 1000 line preference. The command pump, live patch,
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
-  Reviewed 2026-10-29: snapshot, transcript, and turn_data are no longer sent.
-  Snapshot pages replace them and do not carry plan rows. A plan notice sends the plan
-  frame without taking a patch cursor.
+  Reviewed 2026-11-02: snapshot pages still replace snapshot frames. A status notice
+  sends the view again, because a patch can miss the idle flags or blank the model.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -92,6 +91,8 @@ Type
     FSentCanSend: Boolean;
     FSentCanSteer: Boolean;
     FSentCanStop: Boolean;
+    FSentModel: String;
+    FSentStatusText: String;
     FPumping: Boolean;
     Procedure LockBridge;
     Procedure UnlockBridge;
@@ -850,10 +851,11 @@ Begin
 End;
 
 Function FlagsChanged(Const View: TAssistantMonitorView; Valid, Busy, Sending, PlanRunning, CanSend, CanSteer, CanStop: Boolean;
-  Const Phase: String): Boolean;
+  Const Phase, SentModel, SentStatus: String): Boolean;
 Begin
   Result := (Not Valid) Or (Busy <> View.Busy) Or (Sending <> View.Sending) Or (PlanRunning <> View.PlanRunning) Or
-    (Phase <> View.Phase) Or (CanSend <> View.CanSend) Or (CanSteer <> View.CanSteer) Or (CanStop <> View.CanStop);
+    (Phase <> View.Phase) Or (CanSend <> View.CanSend) Or (CanSteer <> View.CanSteer) Or (CanStop <> View.CanStop) Or
+    (SentModel <> View.Model) Or (SentStatus <> View.StatusText);
 End;
 
 Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64);
@@ -942,11 +944,11 @@ Begin
   Patch.PartCount := 1;
   NeedPatch := (Patch.Epoch <> '') And (FirstPatch Or (Length(Patch.Blocks) > 0) Or
     FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
-    FSentCanStop, FSentPhase));
+    FSentCanStop, FSentPhase, FSentModel, FSentStatusText));
   If NeedPatch Then
     Begin
       Stamp := Patch.Epoch + #1 + Patch.TurnId + #1 + Patch.Phase + #1 + BoolToStr(Patch.Busy, True) +
-        BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True);
+        BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True) + #1 + Patch.Model + #1 + Patch.StatusText;
       For I := 0 To High(Patch.Blocks) Do
         Stamp := Stamp + #1 + Patch.Blocks[I].BlockId + #1 + Patch.Blocks[I].Title + #1 + Patch.Blocks[I].Body + #1 +
           BoolToStr(Patch.Blocks[I].Running, True) + BoolToStr(Patch.Blocks[I].Ok, True);
@@ -969,6 +971,8 @@ Begin
               FSentCanSend := View.CanSend;
               FSentCanSteer := View.CanSteer;
               FSentCanStop := View.CanStop;
+              FSentModel := View.Model;
+              FSentStatusText := View.StatusText;
             End;
         End;
     End;
@@ -1155,15 +1159,8 @@ Begin
           SendJson(EncodeMonitorTasks(HostId, Tasks));
         End;
     asnStatus, asnError, asnSession:
-      Begin
-        If Assigned(Form) Then
-          Begin
-            Form.FillMonitorView(View);
-            ApplyHostFlags(View);
-            PublishSamplingLists(Form);
-          End;
-        FinishStatusPush;
-      End;
+      { The idle flags and the model travel here. A patch alone can miss both. }
+      PushStatus(Form);
     asnSnapshot:
       PushSnapshot(Form, '');
     asnIdentity:
