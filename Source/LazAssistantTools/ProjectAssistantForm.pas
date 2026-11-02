@@ -5670,6 +5670,7 @@ End;
 Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
 Var
   SlotItem, Item: TAccountUsageSnapshot;
+  PreviousCaption, PreviousHint: String;
 Begin
   If Not Assigned(StatusFooter) Then
     Exit;
@@ -5679,9 +5680,14 @@ Begin
   Item := AccountUsageForFooter(FActiveConnectionId, SlotItem);
   If AccountUsageApplies(Item, FActiveConnectionId) Then
     PublishAccountUsageSnapshot(Item);
+  PreviousCaption := FPlanStatusCaption;
+  PreviousHint := FPlanStatusHint;
   FPlanStatusCaption := AccountUsageCaption(Item, FActiveConnectionId);
   FPlanStatusHint := AccountUsageHint(Item, FActiveConnectionId);
   RefreshCentreStatus;
+  { The phone credit popup reads these strings from the next status frame. }
+  If (FPlanStatusCaption <> PreviousCaption) Or (FPlanStatusHint <> PreviousHint) Then
+    AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
 
 Procedure TProjectAssistantForm.SyncCodexUsageIdle;
@@ -10542,6 +10548,7 @@ Procedure TProjectAssistantForm.FillMonitorView(Out View: TAssistantMonitorView)
 Var
   Pct: Integer;
   Title, Err: String;
+  SlotItem, UsageItem: TAccountUsageSnapshot;
 Begin
   View.Available := True;
   View.Busy := FSending Or FPlanAgentRunning;
@@ -10594,6 +10601,13 @@ Begin
       If Pct >= 95 Then
         View.ContextText := View.ContextText + ' ⚠';
     End;
+  { Same caption and hint the desktop Credits click shows. Empty when this connection has no figure. }
+  ClearAccountUsageSnapshot(SlotItem);
+  If Assigned(FAccountUsageSlot) Then
+    SlotItem := FAccountUsageSlot.ReadSnapshot;
+  UsageItem := AccountUsageForFooter(FActiveConnectionId, SlotItem);
+  View.UsageCaption := AccountUsageCaption(UsageItem, FActiveConnectionId);
+  View.UsageHint := AccountUsageHint(UsageItem, FActiveConnectionId);
   View.TargetKind := TargetKindName;
   View.TargetDisplay := AssistantTarget.DisplayName;
   View.TargetRoot := AssistantTarget.Root;

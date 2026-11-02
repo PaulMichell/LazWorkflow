@@ -1144,6 +1144,8 @@ internal fun WireView.patchStatus(status: WireView): WireView {
     effort = status.effort,
     skill = status.skill,
     contextText = status.contextText,
+    usageCaption = status.usageCaption,
+    usageHint = status.usageHint,
     canSend = status.canSend,
     canSteer = status.canSteer,
     canStop = status.canStop,

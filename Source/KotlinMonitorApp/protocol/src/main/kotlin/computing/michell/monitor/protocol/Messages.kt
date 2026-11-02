@@ -11,6 +11,7 @@ package computing.michell.monitor.protocol
    v2 adds resume, patch, catchup, and conversation_closed to that same table.
    JSON text and envelope field checks live in CatalogueJson. The catalogue calls them.
    Reviewed 2026-10-27: models, reasoning, permissions, and their set commands stay in this table. Inbound values are typed once.
+   usage_caption and usage_hint are optional status fields, omitted when empty.
    No socket, TLS, or Android UI in this file. */
 
 const val NoSessionReason = "no_session"
@@ -208,7 +209,9 @@ data class WireView(
   val targetDisplay: String = "",
   val targetRoot: String = "",
   val planPath: String = "",
-  val planTitle: String = ""
+  val planTitle: String = "",
+  val usageCaption: String = "",
+  val usageHint: String = ""
 )
 
 data class WireTurn(
@@ -1225,6 +1228,9 @@ private fun addStatusFields(obj: JsonObjectBuilder, view: WireView) {
   obj.add("can_change_mode", view.canChangeMode)
   obj.add("remote_approval", view.remoteApproval)
   obj.add("error_text", view.errorText)
+  // Absent means this connection has not reported account usage. An empty string is not sent.
+  if (view.usageCaption.isNotEmpty()) obj.add("usage_caption", view.usageCaption)
+  if (view.usageHint.isNotEmpty()) obj.add("usage_hint", view.usageHint)
 }
 
 private fun readStatusFields(obj: JsonValue.Obj): WireView? {
@@ -1249,17 +1255,21 @@ private fun readStatusFields(obj: JsonValue.Obj): WireView? {
   val remoteApproval = obj.readBool("remote_approval", true)
   val errorText = obj.readString("error_text", true)
   val elapsedMs = obj.readInt("elapsed_ms", false)
+  val usageCaption = obj.readString("usage_caption", false)
+  val usageHint = obj.readString("usage_hint", false)
   if (!available.ok || !busy.ok || !sending.ok || !modeLocked.ok || !planRunning.ok || !phase.ok || !statusText.ok ||
     !model.ok || !backend.ok || !signedIn.ok || !approvalCaption.ok || !effort.ok || !skill.ok || !contextText.ok ||
     !canSend.ok || !canSteer.ok || !canStop.ok || !canChangeMode.ok || !remoteApproval.ok || !errorText.ok ||
-    !elapsedMs.ok) {
+    !elapsedMs.ok || !usageCaption.ok || !usageHint.ok) {
     return null
   }
   return WireView(
     available.value, busy.value, sending.value, modeLocked.value, planRunning.value, phase.value, statusText.value,
     model.value, backend.value, signedIn.value, approvalCaption.value, effort.value, skill.value, contextText.value,
     canSend.value, canSteer.value, canStop.value, canChangeMode.value, remoteApproval.value, errorText.value,
-    elapsedMs.value.coerceAtLeast(0)
+    elapsedMs.value.coerceAtLeast(0),
+    usageCaption = usageCaption.value,
+    usageHint = usageHint.value
   )
 }
 

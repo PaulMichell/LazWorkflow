@@ -519,6 +519,30 @@ class ProtocolCodecTest {
     assertEquals(0, session.retainedImageBytes())
   }
 
+  @Test
+  fun statusUsageIsOptionalAndRoundTrips() {
+    val bare = sampleView()
+    val bareJson = statusToJson(bare)
+    assertFalse(bareJson.has("usage_caption"))
+    assertFalse(bareJson.has("usage_hint"))
+    val omitted = statusFromJson(bareJson)
+    assertEquals("", omitted?.usageCaption)
+    assertEquals("", omitted?.usageHint)
+    val used = bare.copy(
+      usageCaption = "Credits used: 42%",
+      usageHint = "Weekly limit: 42%\nNext reset: October 30, 18:00"
+    )
+    val encoded = statusToJson(used)
+    assertTrue(encoded.has("usage_caption"))
+    assertTrue(encoded.has("usage_hint"))
+    val decoded = statusFromJson(encoded)
+    assertEquals(used.usageCaption, decoded?.usageCaption)
+    assertEquals(used.usageHint, decoded?.usageHint)
+    assertEquals(used, viewFromJson(viewToJson(used)))
+    assertNull(decodeStatusPayload(bareJson.toFpJson().dropLast(1) + ",\"usage_caption\":1}"))
+    assertNull(decodeStatusPayload(bareJson.toFpJson().dropLast(1) + ",\"usage_hint\":false}"))
+  }
+
   private fun sampleView(): WireView {
     return WireView(true, false, false, false, false, "idle", "Ready", "grok-test", "native", true, "Ask", "high", "",
       "ctx", true, false, false, true, false, "")

@@ -285,6 +285,7 @@ Begin
   View.Mode := 'build';
   View.Phase := 'idle';
   View.StatusText := 'Ready';
+  View.ElapsedMs := 0;
   View.Model := 'grok-test';
   View.Backend := 'native';
   View.SignedIn := True;
@@ -292,6 +293,8 @@ Begin
   View.Effort := 'high';
   View.Skill := '';
   View.ContextText := 'ctx';
+  View.UsageCaption := '';
+  View.UsageHint := '';
   View.TargetKind := 'project';
   View.TargetDisplay := 'LazWorkflow';
   View.TargetRoot := '/work/LazWorkflow';
@@ -753,7 +756,8 @@ Begin
         Check('status payload', PayloadObject(Sample.Json, Data, Payload));
         If Assigned(Data) Then
           Try
-            Check('status fields', TryMonitorStatusFromJson(Payload, View) And (View.Model = 'grok-test') And View.SignedIn);
+            Check('status fields', TryMonitorStatusFromJson(Payload, View) And (View.Model = 'grok-test') And View.SignedIn And
+              (View.UsageCaption = '') And (View.UsageHint = ''));
           Finally
             Data.Free;
           End;
@@ -1229,6 +1233,47 @@ Begin
   Check('v1 transcript is not a patch', Not DecodeMonitorPatch(Json, Patch));
 End;
 
+Procedure TestUsageFields;
+Var
+  View, Decoded: TAssistantMonitorView;
+  Payload: TJSONObject;
+  Data: TJSONData;
+  Json: String;
+Begin
+  FillView(View);
+  Payload := MonitorStatusToJson(View);
+  Try
+    Json := Payload.AsJSON;
+    Check('empty usage is omitted', (Pos('usage_caption', Json) = 0) And (Pos('usage_hint', Json) = 0));
+    Check('omitted usage decodes empty', TryMonitorStatusFromJson(Payload, Decoded) And (Decoded.UsageCaption = '') And
+      (Decoded.UsageHint = '') And (Decoded.Model = 'grok-test'));
+  Finally
+    Payload.Free;
+  End;
+  View.UsageCaption := 'Credits used: 42%';
+  View.UsageHint := 'Weekly limit: 42%' + LineEnding + 'Next reset: October 30, 18:00';
+  Payload := MonitorStatusToJson(View);
+  Try
+    Check('usage round trip', TryMonitorStatusFromJson(Payload, Decoded) And
+      (Decoded.UsageCaption = 'Credits used: 42%') And (Decoded.UsageHint = View.UsageHint) And
+      (Decoded.Model = 'grok-test'));
+    Check('usage fields are present', (Pos('"usage_caption"', Payload.AsJSON) > 0) And
+      (Pos('"usage_hint"', Payload.AsJSON) > 0));
+  Finally
+    Payload.Free;
+  End;
+  Data := GetJSON('{"available":true,"busy":false,"sending":false,"mode_locked":false,"plan_running":false,' +
+    '"phase":"idle","status_text":"Ready","model":"grok-test","backend":"native","signed_in":true,' +
+    '"approval_caption":"Ask","effort":"high","skill":"","context_text":"ctx","can_send":true,' +
+    '"can_steer":false,"can_stop":false,"can_change_mode":true,"remote_approval":false,"error_text":"",' +
+    '"usage_caption":1}');
+  Try
+    Check('usage caption must be text', (Data Is TJSONObject) And (Not TryMonitorStatusFromJson(TJSONObject(Data), Decoded)));
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestOptionalTitle;
 Var
   Message: TMonitorMessage;
@@ -1427,6 +1472,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestUsageFields;
   TestModelNote;
   TestPermissionsCaptions;
   TestSetReasoningLevel;

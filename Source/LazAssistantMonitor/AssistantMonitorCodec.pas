@@ -15,6 +15,7 @@ Unit AssistantMonitorCodec;
   Reviewed 2026-10-30: snapshot pages and image chunks stay in this table. The old snapshot,
   transcript, and turn_data encoders remain so a catchup can still embed a snapshot object.
   Chunk packing stays one pass: a resume publishes those pages on the IDE thread.
+  usage_caption and usage_hint are optional status fields, omitted when empty.
   No socket, TLS, or form code in this unit.
   v2 adds resume, patch, catchup, and conversation_closed to that same table. }
 
@@ -2108,6 +2109,8 @@ Begin
   View.Effort := '';
   View.Skill := '';
   View.ContextText := '';
+  View.UsageCaption := '';
+  View.UsageHint := '';
   View.TargetKind := '';
   View.TargetDisplay := '';
   View.TargetRoot := '';
@@ -2144,6 +2147,11 @@ Begin
   Obj.Add('can_change_mode', View.CanChangeMode);
   Obj.Add('remote_approval', View.RemoteApproval);
   Obj.Add('error_text', View.ErrorText);
+  { Absent means this connection has not reported account usage. An empty string is not sent. }
+  If View.UsageCaption <> '' Then
+    Obj.Add('usage_caption', View.UsageCaption);
+  If View.UsageHint <> '' Then
+    Obj.Add('usage_hint', View.UsageHint);
 End;
 
 Function ReadStatusFields(Obj: TJSONObject; Var View: TAssistantMonitorView): Boolean;
@@ -2165,6 +2173,10 @@ Begin
         Result := False;
       If View.ElapsedMs < 0 Then
         View.ElapsedMs := 0;
+      If Not ReadString(Obj, 'usage_caption', False, View.UsageCaption) Then
+        Result := False;
+      If Not ReadString(Obj, 'usage_hint', False, View.UsageHint) Then
+        Result := False;
     End;
 End;
 

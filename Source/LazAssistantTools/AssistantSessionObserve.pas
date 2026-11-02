@@ -122,6 +122,10 @@ Type
     CanChangeMode: Boolean;
     RemoteApproval: Boolean;
     ErrorText: String;
+    { Account allowance for the phone credit popup. Empty when this connection has no figure.
+      Status JSON omits the fields when they are empty, so an older frame still decodes. }
+    UsageCaption: String;
+    UsageHint: String;
   End;
 
   TAssistantApprovalNotice = Record

@@ -57,6 +57,18 @@ class PromptStatusTest {
   }
 
   @Test
+  fun creditPopupUsesTheDesktopCreditsBody() {
+    assertEquals(CreditUsageUnknown, creditUsageBody("", ""))
+    assertEquals(CreditUsageUnknown, creditUsageBody("   ", "\n"))
+    assertEquals("Credits used: 42%", creditUsageBody("Credits used: 42%", ""))
+    assertEquals("Weekly limit: 42%", creditUsageBody("", "Weekly limit: 42%"))
+    assertEquals(
+      "Credits used: 42%\n\nWeekly limit: 42%\nNext reset: October 30, 18:00",
+      creditUsageBody("Credits used: 42%", "Weekly limit: 42%\nNext reset: October 30, 18:00")
+    )
+  }
+
+  @Test
   fun microphoneAskDoesNotLoopADeniedDialog() {
     assertEquals(MicrophoneAsk.Start, microphoneAsk(true, false, false))
     assertEquals(MicrophoneAsk.RequestPermission, microphoneAsk(false, false, false))

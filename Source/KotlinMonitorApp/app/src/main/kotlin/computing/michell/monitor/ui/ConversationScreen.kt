@@ -20,7 +20,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -32,6 +35,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +64,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import computing.michell.monitor.R
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.NotDeliveredRetry
@@ -322,6 +327,46 @@ fun foldBlockKey(conversationGeneration: Int, turnId: String, blockId: String, b
   return "$conversationGeneration\u0000$turnId\u0000$identity"
 }
 
+const val CreditUsageUnknown = "Plan usage has not been reported for this connection yet."
+
+/** Same body as the desktop Credits click. An empty pair is the not-reported sentence. */
+fun creditUsageBody(caption: String, hint: String): String {
+  var body = caption
+  if (hint.isNotEmpty()) {
+    if (body.isNotEmpty()) body += "\n\n"
+    body += hint
+  }
+  if (body.trim().isEmpty()) return CreditUsageUnknown
+  return body
+}
+
+@Composable
+fun CreditUsagePopup(model: String, body: String, onDismiss: () -> Unit) {
+  Dialog(onDismissRequest = onDismiss) {
+    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+      Column(
+        modifier = Modifier.padding(20.dp).heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        Text("Credits", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        if (model.isNotEmpty()) {
+          Text(
+            model,
+            color = QuietText,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium
+          )
+        }
+        Text(body, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        TextButton(onClick = onDismiss) { Text("OK") }
+      }
+    }
+  }
+}
+
 @Composable
 fun ActivityStatus(
   ui: MonitorUi,
@@ -331,6 +376,7 @@ fun ActivityStatus(
   modifier: Modifier = Modifier
 ) {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  var usageOpen by remember { mutableStateOf(false) }
   val blocks = displayBlocks(ui.live)
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
   val linkLive = ideLinkLive(ui.disconnected, phase)
@@ -360,7 +406,7 @@ fun ActivityStatus(
     ui.lastSyncMs
   )
   val connectionText = if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) ui.banner else chip.label
-  // The link is plain on the left. The model wears the rounded mark. Progress stays right.
+  // The link is plain on the left. The model wears the rounded mark; a touch opens credit usage. Progress stays right.
   Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
       connectionText,
@@ -370,7 +416,15 @@ fun ActivityStatus(
       overflow = TextOverflow.Ellipsis,
       style = statusStyle
     )
-    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+    Box(
+      Modifier
+        .weight(1f)
+        .clickable(
+          enabled = model.isNotEmpty(),
+          onClickLabel = "Show credit usage"
+        ) { usageOpen = true },
+      contentAlignment = Alignment.Center
+    ) {
       if (model.isNotEmpty()) {
         Text(
           model,
@@ -395,6 +449,11 @@ fun ActivityStatus(
       style = statusStyle,
       modifier = Modifier.weight(1f)
     )
+  }
+  if (usageOpen && model.isNotEmpty()) {
+    CreditUsagePopup(model, creditUsageBody(ui.view.usageCaption, ui.view.usageHint)) {
+      usageOpen = false
+    }
   }
 }
 

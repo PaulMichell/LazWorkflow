@@ -249,6 +249,27 @@ class MonitorReducerTest {
   }
 
   @Test
+  fun statusCarriesCreditUsageAndALaterFrameCanClearIt() {
+    val reported = emptyView().copy(
+      model = "grok-4",
+      usageCaption = "Credits used: 42%",
+      usageHint = "Weekly limit: 42%"
+    )
+    val shown = reduceMonitor(MonitorUi(), message(encodeEnvelope(
+      MessageKind.Status, "status-usage", statusToJson(reported)
+    )))
+    assertEquals("Credits used: 42%", shown.view.usageCaption)
+    assertEquals("Weekly limit: 42%", shown.view.usageHint)
+    assertEquals("grok-4", shown.view.model)
+    val cleared = reduceMonitor(shown, message(encodeEnvelope(
+      MessageKind.Status, "status-clear", statusToJson(emptyView().copy(model = "grok-4"))
+    )))
+    assertEquals("", cleared.view.usageCaption)
+    assertEquals("", cleared.view.usageHint)
+    assertEquals("grok-4", cleared.view.model)
+  }
+
+  @Test
   fun snapshotReplacesTurnsAndKeepsAnUnsentDraft() {
     val kept = listOf(ConversationChoice("", "Current", true))
     val state = MonitorUi(
