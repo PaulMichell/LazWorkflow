@@ -1540,7 +1540,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun enterForeground() {
-    session.enterForeground()
+    // A reconnect resumes from hello. A screen that stayed connected still needs the head and the plan.
+    if (!session.enterForeground()) session.requestLiveSync()
   }
 
   fun leaveForeground() {

@@ -652,7 +652,8 @@ class LanSession(
    * The socket is closed on the reader thread. Closing it here, on the UI thread, kills the
    * process on some phones while SSL_read is still in that socket.
    */
-  fun enterForeground() {
+  /** True when this call is the return from the background. A hello will resume. */
+  fun enterForeground(): Boolean {
     val returning = !inForeground
     inForeground = true
     leftForBackground = false
@@ -665,6 +666,16 @@ class LanSession(
     }
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
+    return returning
+  }
+
+  /**
+   * The socket is still open, so hello will not run. Ask for the desktop point and the plan again.
+   * A return from the background reconnects and resumes there instead.
+   */
+  fun requestLiveSync() {
+    if (!inForeground || link == null) return
+    sendCatalogue(resumeNow("", 0))
   }
 
   /** Activity is no longer visible. Send bye, then wait until it returns. */

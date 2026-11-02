@@ -112,10 +112,11 @@ Type
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure PublishSamplingLists(Form: TProjectAssistantForm);
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
-    Procedure SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+    Procedure SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String; PointOnly: Boolean = False);
     Procedure AnswerResume(Const Id, PayloadJson: String);
     Procedure RetryDeferredResumes;
     Procedure PushStatus(Form: TProjectAssistantForm);
+    Procedure PushLiveState;
     Procedure NoteOpenLogPosition;
     Procedure PublishEpoch;
     Procedure PushPlan(Form: TProjectAssistantForm);
@@ -682,11 +683,12 @@ Begin
     WorkflowLogger.Warning('AssistantMonitor', 'snapshot did not fit');
 End;
 
-Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String; PointOnly: Boolean);
 Var
   Snapshot: TMonitorSnapshot;
   Session: TMonitorSession;
   Id: String;
+  Sent: Boolean;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -703,7 +705,11 @@ Begin
   Id := RefId;
   If Id = '' Then
     Id := HostId;
-  If Not Session.SendMirrorPages(Id) Then
+  If PointOnly Then
+    Sent := Session.SendMirrorPoint(Id)
+  Else
+    Sent := Session.SendMirrorPages(Id);
+  If Not Sent Then
     Begin
       WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
       Exit;
@@ -780,7 +786,8 @@ Begin
   PushStatus(Form);
   PushModels(Form);
   PushPlan(Form);
-  SendCatchupSnapshot(Form, Id);
+  { The head, not the older turns. The phone asks for those after the desktop point is on screen. }
+  SendCatchupSnapshot(Form, Id, True);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
@@ -1464,6 +1471,25 @@ Begin
   End;
 End;
 
+Function LiveRefresh(Const PayloadJson: String): Boolean;
+Var
+  Text: String;
+Begin
+  Result := DecodeMonitorText(PayloadJson, Text) And (Text = 'live');
+End;
+
+Procedure TAssistantMonitorBridge.PushLiveState;
+Var
+  Form: TProjectAssistantForm;
+Begin
+  Form := OpenForm;
+  If Not Assigned(Form) Then
+    Exit;
+  { Status and the plan are not in the head pages. A running plan must not wait for the next row change. }
+  PushStatus(Form);
+  PushPlan(Form);
+End;
+
 Procedure TAssistantMonitorBridge.RunCommand(Command: TMonitorQueuedCommand);
 Var
   Form: TProjectAssistantForm;
@@ -1472,6 +1498,12 @@ Var
 Begin
   If Not Assigned(Command) Then
     Exit;
+  { A screen wake. Not a user command, and a running plan must not refuse it. }
+  If (Command.Kind = Ord(mmkRefresh)) And LiveRefresh(Command.Payload) Then
+    Begin
+      PushLiveState;
+      Exit;
+    End;
   SendBusy := False;
   LockBridge;
   Try

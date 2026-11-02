@@ -2,6 +2,10 @@ package computing.michell.monitor
 
 /* Monitor phone shell (c) 2026 Michell Computing. */
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -87,14 +91,36 @@ private val MonitorQuiet = Color(0xFF666666)
 
 class MainActivity : ComponentActivity() {
   private val model: MonitorViewModel by viewModels()
+  private val screenWatch = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      when (intent?.action) {
+        Intent.ACTION_SCREEN_OFF -> model.leaveForeground()
+        // onStart can be later than the backlight. Resume the head and the plan now.
+        Intent.ACTION_SCREEN_ON -> model.enterForeground()
+      }
+    }
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    val screenFilter = IntentFilter().apply {
+      addAction(Intent.ACTION_SCREEN_OFF)
+      addAction(Intent.ACTION_SCREEN_ON)
+    }
+    if (android.os.Build.VERSION.SDK_INT >= 33)
+      registerReceiver(screenWatch, screenFilter, Context.RECEIVER_NOT_EXPORTED)
+    else
+      registerReceiver(screenWatch, screenFilter)
     setContent {
       MaterialTheme {
         MonitorShell(model)
       }
     }
+  }
+
+  override fun onDestroy() {
+    unregisterReceiver(screenWatch)
+    super.onDestroy()
   }
 
   override fun onStart() {

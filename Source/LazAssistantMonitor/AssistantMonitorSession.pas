@@ -309,6 +309,8 @@ Type
     Procedure SendTurnPage(Const Id: String; Const Turn: TAssistantMonitorTurn);
     { Snapshot pages for the open model. False when the mirror has no stream. }
     Function SendMirrorPages(Const Id: String): Boolean;
+    { Outline and the desktop's current turn only. Older turns stay for a later fetch. }
+    Function SendMirrorPoint(Const Id: String): Boolean;
     Property State: TMonitorSessionState Read FState;
     Property Carrier: IMonitorCarrier Read FCarrier;
     Property OnCommand: TMonitorCommandHandler Read FOnCommand Write FOnCommand;
@@ -1589,7 +1591,12 @@ Begin
     QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
   { The log or the materialised model answers on this thread. An empty model still waits for the IDE thread. }
   If ServeResumeFromMirror(Id, ResumeMsg) Then
-    Exit;
+    Begin
+      { The head pages are already queued. Status and the plan are not in that dump,
+        and a running plan must not wait for the next row change. }
+      QueueCommand(Ord(mmkRefresh), NewHostId, '{"text":"live"}');
+      Exit;
+    End;
   QueueCommand(Ord(mmkResume), Id, PayloadJson);
 End;
 
@@ -2788,6 +2795,18 @@ Begin
   LockSession;
   Try
     Result := QueueMirrorPagesLocked(Id);
+  Finally
+    UnlockSession;
+  End;
+  If Result Then
+    DrainOutbound;
+End;
+
+Function TMonitorSession.SendMirrorPoint(Const Id: String): Boolean;
+Begin
+  LockSession;
+  Try
+    Result := QueueMirrorPagesLocked(Id, True);
   Finally
     UnlockSession;
   End;
