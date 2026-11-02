@@ -1836,7 +1836,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.sendCatalogue(json)
   }
 
-  fun openPlan(path: String) {
+  fun selectPlanPath(path: String) {
     val state = uiState.value
     if (state.disconnected || !state.view.canChangeMode || path == state.planPath ||
       state.planChoices.none { it.path == path }) return

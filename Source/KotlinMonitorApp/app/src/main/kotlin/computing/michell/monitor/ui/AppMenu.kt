@@ -350,7 +350,7 @@ fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
       conversationSelectedId(ui.conversationChoices, ui.conversationCurrent),
       historyEnabled, historyNote
     ),
-    // Captions from planChoices. The check is planPath. A different row calls openPlan.
+    // Captions from planChoices. The check is planPath. A different row calls selectPlanPath.
     MenuSectionModel(
       MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
     ),

@@ -214,7 +214,7 @@ private fun MonitorShell(model: MonitorViewModel) {
             ) {
               AppMenu(
                 ui, shownFlyout, { menuFlyout = it }, dismissDrawer,
-                model::setMode, model::openPlan, model::selectTarget, model::selectConversation,
+                model::setMode, model::selectPlanPath, model::selectTarget, model::selectConversation,
                 model::selectModel, model::selectReasoning, model::selectPermissions
               )
             }
