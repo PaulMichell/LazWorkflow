@@ -2,6 +2,7 @@ package computing.michell.monitor.ui
 
 /* Plan status tags match the assistant plan list (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.protocol.PlanRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -78,5 +79,35 @@ class PlanScreenTest {
     val marker = planMarker("  Complete  ", true)
     assertEquals("Complete", marker?.caption)
     assertEquals(0xFF0D47A1.toInt(), marker?.ink)
+  }
+
+  @Test
+  fun sectionPreviewIncludesChildItems() {
+    val body = """
+      # Plan
+
+      ## One
+      Context.
+
+      ### 1.1 First
+      Status: not started
+      Do the first thing.
+
+      ### 1.2 Second
+      Status: complete
+      Do the second thing.
+
+      ## Two
+      Later.
+    """.trimIndent()
+    val section = PlanRow(0, 2, "One", "", "unknown", false)
+    val item = PlanRow(1, 3, "1.1 First", "One", "not started", true)
+    assertEquals("One", planSectionCaption(section))
+    assertEquals("One — 1.1 First", planSectionCaption(item))
+    assertTrue(planSectionExcerpt(body, section).contains("### 1.2 Second"))
+    assertFalse(planSectionExcerpt(body, section).contains("## Two"))
+    assertTrue(planSectionExcerpt(body, item).contains("Do the first thing."))
+    assertFalse(planSectionExcerpt(body, item).contains("### 1.2 Second"))
+    assertEquals("", planSectionExcerpt("", item))
   }
 }

@@ -78,7 +78,10 @@ import computing.michell.monitor.ui.MainTabs
 import computing.michell.monitor.ui.MonitorViewModel
 import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
+import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.ui.planLoaded
+import computing.michell.monitor.ui.planSectionCaption
+import computing.michell.monitor.ui.planSectionExcerpt
 import computing.michell.monitor.ui.SettingsScreen
 import computing.michell.monitor.ui.pageForTab
 import computing.michell.monitor.ui.tabAfterSwipe
@@ -171,9 +174,13 @@ private fun MonitorShell(model: MonitorViewModel) {
   var hostWidthPx by remember { mutableIntStateOf(0) }
   var sheetWidthPx by remember { mutableIntStateOf(0) }
   var planPreviewOpen by remember { mutableStateOf(false) }
+  var sectionPreview by remember { mutableStateOf<PlanRow?>(null) }
   // A cancelled swipe never settles on the other page, so dictation and plan refresh stay put.
   LaunchedEffect(ui.planPath) {
-    if (!planLoaded(ui.planPath)) planPreviewOpen = false
+    if (!planLoaded(ui.planPath)) {
+      planPreviewOpen = false
+      sectionPreview = null
+    }
   }
   LaunchedEffect(pagerState) {
     snapshotFlow { pagerState.settledPage }.collect { page ->
@@ -264,6 +271,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                 scope.launch {
                   closeDrawer(drawerState)
                   planPreviewOpen = false
+                  sectionPreview = null
                   model.showSettings()
                 }
               },
@@ -273,6 +281,7 @@ private fun MonitorShell(model: MonitorViewModel) {
               Column(Modifier.fillMaxSize()) {
                 MonitorTabs(pagerState.currentPage) { item ->
                   planPreviewOpen = false
+                  sectionPreview = null
                   model.selectTab(item)
                   scope.launch { pagerState.animateScrollToPage(pageForTab(item)) }
                 }
@@ -281,7 +290,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                   state = pagerState,
                   modifier = Modifier.weight(1f).fillMaxWidth(),
                   beyondViewportPageCount = 1,
-                  userScrollEnabled = !ui.approvalOpen && !planPreviewOpen
+                  userScrollEnabled = !ui.approvalOpen && !planPreviewOpen && sectionPreview == null
                 ) { page ->
                   when (tabForPage(page)) {
                     AppTab.Conversation -> Box(
@@ -306,17 +315,37 @@ private fun MonitorShell(model: MonitorViewModel) {
                       )
                     }
                     AppTab.Plan -> PlanScreen(
-                      ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan
-                    ) { planPreviewOpen = true }
+                      ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan,
+                      onPreview = {
+                        planPreviewOpen = true
+                        sectionPreview = null
+                      },
+                      onPreviewSection = { row ->
+                        sectionPreview = row
+                        planPreviewOpen = false
+                      }
+                    )
                   }
                 }
               }
-              if (planPreviewOpen && planLoaded(ui.planPath) && tabForPage(pagerState.currentPage) == AppTab.Plan) {
-                PlanPreviewPanel(
-                  ui.planTitle, ui.planPath, ui.planBody, ui.planRows,
-                  onDismiss = { planPreviewOpen = false },
-                  modifier = Modifier.fillMaxSize()
-                )
+              val shownSection = sectionPreview
+              if ((planPreviewOpen || shownSection != null) && planLoaded(ui.planPath) && tabForPage(pagerState.currentPage) == AppTab.Plan) {
+                if (shownSection == null) {
+                  PlanPreviewPanel(
+                    ui.planTitle, ui.planPath, ui.planBody, ui.planRows,
+                    onDismiss = { planPreviewOpen = false },
+                    modifier = Modifier.fillMaxSize()
+                  )
+                } else {
+                  val excerpt = planSectionExcerpt(ui.planBody, shownSection).ifEmpty {
+                    "This section is not in the loaded plan text yet."
+                  }
+                  PlanPreviewPanel(
+                    planSectionCaption(shownSection), ui.planPath, excerpt, emptyList(),
+                    onDismiss = { sectionPreview = null },
+                    modifier = Modifier.fillMaxSize()
+                  )
+                }
               }
             }
             // Below the pager, so Conversation and Plan both keep the same status line.

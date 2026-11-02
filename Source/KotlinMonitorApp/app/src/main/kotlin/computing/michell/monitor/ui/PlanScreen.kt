@@ -3,11 +3,13 @@ package computing.michell.monitor.ui
 /* Plan list. Status tags match the assistant plan list.
    The title and document name scroll with the rows.
    Headings stay plain. Run becomes Stop while a run is going.
-   Open previews the plan document. (c) 2026 Michell Computing. */
+   Open previews the plan document. A long press previews that section. (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -73,6 +75,89 @@ fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !runn
 
 fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
 
+/** Same caption the desktop uses for a double-clicked row. */
+fun planSectionCaption(row: PlanRow): String {
+  val parent = row.parentTitle.trim()
+  return if (parent.isEmpty()) row.title else "$parent — ${row.title}"
+}
+
+/**
+ * Markdown for one plan row, matching the desktop double-click.
+ * A section includes its items. An item stays that item only.
+ */
+fun planSectionExcerpt(body: String, row: PlanRow): String {
+  if (body.isBlank() || row.title.isBlank()) return ""
+  val lines = body.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+  val sections = planSections(lines)
+  val match = sections.getOrNull(row.index)?.takeIf { it.title == row.title }
+    ?: sections.firstOrNull { it.title == row.title && it.level == row.level && it.parent == row.parentTitle.trim() }
+    ?: return ""
+  val end = planSectionEnd(lines, match.start, if (match.actionable) 3 else match.level)
+  if (end < match.start) return ""
+  return lines.subList(match.start, end + 1).joinToString("\n").trimEnd()
+}
+
+private data class PlanHeadingSlice(
+  val start: Int,
+  val level: Int,
+  val title: String,
+  val parent: String,
+  val actionable: Boolean
+)
+
+private fun planSections(lines: List<String>): List<PlanHeadingSlice> {
+  val sections = mutableListOf<PlanHeadingSlice>()
+  var parent = ""
+  for (index in lines.indices) {
+    val heading = planAtxHeading(lines[index]) ?: continue
+    val level = heading.first
+    val title = heading.second
+    if (level !in 1..3) continue
+    if (level == 2) {
+      parent = title
+      sections += PlanHeadingSlice(index, 2, title, "", false)
+    } else if (level == 3 && planStatusFollows(lines, index)) {
+      sections += PlanHeadingSlice(index, 3, title, parent, true)
+    } else if (level == 1) {
+      parent = ""
+    }
+  }
+  return sections
+}
+
+private fun planAtxHeading(line: String): Pair<Int, String>? {
+  val text = line.trim()
+  if (text.isEmpty() || text[0] != '#') return null
+  var marks = 0
+  while (marks < text.length && text[marks] == '#') marks++
+  if (marks !in 1..6 || marks >= text.length || text[marks] != ' ') return null
+  val title = text.substring(marks + 1).trim()
+  if (title.isEmpty()) return null
+  return marks to title
+}
+
+private fun planStatusFollows(lines: List<String>, heading: Int): Boolean {
+  var index = heading + 1
+  while (index < lines.size) {
+    val level = planAtxHeading(lines[index])?.first ?: 0
+    if (level in 1..3) return false
+    if (lines[index].isBlank()) {
+      index++
+      continue
+    }
+    return lines[index].trim().startsWith("Status:", ignoreCase = true)
+  }
+  return false
+}
+
+private fun planSectionEnd(lines: List<String>, start: Int, stopAtLevel: Int): Int {
+  for (index in start + 1 until lines.size) {
+    val level = planAtxHeading(lines[index])?.first ?: continue
+    if (level in 1..stopAtLevel) return index - 1
+  }
+  return lines.lastIndex
+}
+
 fun planMarker(status: String, actionable: Boolean): PlanMarker? {
   if (!actionable) return null
   return when (status.trim().lowercase(Locale.ROOT)) {
@@ -92,7 +177,8 @@ fun PlanScreen(
   onStop: () -> Unit,
   onNew: () -> Unit,
   onClose: () -> Unit,
-  onPreview: () -> Unit
+  onPreview: () -> Unit,
+  onPreviewSection: (PlanRow) -> Unit
 ) {
   val loaded = planLoaded(ui.planPath)
   val running = ui.planRunning || ui.view.planRunning
@@ -110,8 +196,11 @@ fun PlanScreen(
         }
       }
       items(ui.planRows) { row ->
-        PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan) {
+        PlanRowLine(row.title, row.status, row.actionable, row.level, row.index == ui.selectedPlan, {
           onSelect(row.index)
+        }) {
+          onSelect(row.index)
+          onPreviewSection(row)
         }
       }
     }
@@ -203,19 +292,21 @@ private fun PlanHeading(title: String, path: String) {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun PlanRowLine(
   title: String,
   status: String,
   actionable: Boolean,
   level: Int,
   selected: Boolean,
-  onSelect: () -> Unit
+  onSelect: () -> Unit,
+  onLongPress: () -> Unit
 ) {
   val marker = planMarker(status, actionable)
   Row(
     modifier = Modifier
       .fillMaxWidth()
-      .clickable(onClick = onSelect)
+      .combinedClickable(onClick = onSelect, onLongClick = onLongPress)
       .padding(start = (level * 12).dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp)
