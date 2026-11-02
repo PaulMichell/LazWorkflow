@@ -272,14 +272,14 @@ The phone sends these. Each payload is unchanged from catalogue 2.
 | Type | Payload |
 |---|---|
 | `send`, `steer` | `text` (at most 65 536 characters) |
-| `stop`, `new_conversation`, `run_plan`, `stop_plan` | none |
+| `stop`, `new_conversation`, `run_plan`, `stop_plan`, `close_plan` | none |
 | `set_mode` | `mode` |
 | `select_conversation` | `id` (archive ID, empty for the current conversation) |
 | `select_target` | `path` (empty for the current project) |
 | `set_model` | `model` |
 | `set_reasoning` | `level` (empty for the model default) |
 | `set_permissions` | `approval` |
-| `select_plan`, `remove_plan` | `path` |
+| `select_plan` | `path` |
 | `new_plan` | optional `title` |
 | `work_on_plan` | `index` |
 | `run_task`, `insert_task` | `id, note` |

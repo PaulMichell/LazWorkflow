@@ -611,7 +611,7 @@ Begin
   AddSample('plan', mmkPlan, EncodeMonitorPlan('plan', 'Documents/Plan.md', 'Monitor plan', False, PlanRows));
   AddSample('select-plan', mmkSelectPlan, EncodeMonitorPath(mmkSelectPlan, 'select-plan', 'Documents/Plan.md'));
   AddSample('new-plan', mmkNewPlan, EncodeMonitorNewPlan('new-plan', 'Monitor plan', True));
-  AddSample('remove-plan', mmkRemovePlan, EncodeMonitorPath(mmkRemovePlan, 'remove-plan', 'Documents/Plan.md'));
+  AddSample('close-plan', mmkClosePlan, EncodeMonitorEmpty(mmkClosePlan, 'close-plan'));
   AddSample('work-on-plan', mmkWorkOnPlan, EncodeMonitorWorkOnPlan('work-on-plan', 2));
   AddSample('run-plan', mmkRunPlan, EncodeMonitorEmpty(mmkRunPlan, 'run-plan'));
   AddSample('stop-plan', mmkStopPlan, EncodeMonitorEmpty(mmkStopPlan, 'stop-plan'));
@@ -731,7 +731,7 @@ Begin
       Check('snapshot fields', DecodeMonitorSnapshot(Message.PayloadJson, Snapshot) And (Snapshot.View.Model = 'grok-test') And
         (Snapshot.View.SignedIn) And Snapshot.HasLive And (Snapshot.Live.Id = 'turn-3') And
         (Snapshot.PlanTitle = 'Monitor plan') And (Length(Snapshot.TaskRows) = 1));
-    mmkRefresh, mmkStop, mmkRunPlan, mmkStopPlan, mmkNewConversation:
+    mmkRefresh, mmkStop, mmkRunPlan, mmkStopPlan, mmkNewConversation, mmkClosePlan:
       Check(Sample.Name + ' empty payload', PayloadIsEmpty(Sample.Json));
     mmkTranscript:
       Check('transcript fields', DecodeMonitorTranscript(Message.PayloadJson, Transcript) And (Transcript.Phase = 'streaming') And
@@ -768,7 +768,7 @@ Begin
     mmkPlan:
       Check('plan fields', DecodeMonitorPlan(Message.PayloadJson, Path, Text, Running, Rows) And (Text = 'Monitor plan') And
         (Length(Rows.PlanRows) = 1) And (Rows.PlanRows[0].Title = 'Codec tests'));
-    mmkSelectPlan, mmkRemovePlan:
+    mmkSelectPlan:
       Check(Sample.Name + ' path', DecodeMonitorPath(Message.PayloadJson, Path) And (Path = 'Documents/Plan.md'));
     mmkTargets:
       Check('targets fields', DecodeMonitorTargets(Message.PayloadJson, Targets) And (Targets.Current = '') And

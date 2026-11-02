@@ -144,7 +144,7 @@
     "set_reasoning": {"direction": "phone", "lane": "none", "required": {"level": "string"}, "optional": {}},
     "set_permissions": {"direction": "phone", "lane": "none", "required": {"approval": "string"}, "optional": {}},
     "select_plan": {"direction": "phone", "lane": "none", "required": {"path": "string"}, "optional": {}},
-    "remove_plan": {"direction": "phone", "lane": "none", "required": {"path": "string"}, "optional": {}},
+    "close_plan": {"direction": "phone", "lane": "none", "required": {}, "optional": {}},
     "new_plan": {"direction": "phone", "lane": "none", "required": {}, "optional": {"title": "string"}},
     "work_on_plan": {"direction": "phone", "lane": "none", "required": {"index": "integer"}, "optional": {}},
     "run_task": {"direction": "phone", "lane": "none", "required": {"id": "string", "note": "string"}, "optional": {}},
