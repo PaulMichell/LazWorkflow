@@ -69,7 +69,13 @@ fun planRunEnabled(loaded: Boolean, online: Boolean, running: Boolean, sending: 
   return !sending
 }
 
-fun planHostButtonEnabled(loaded: Boolean, online: Boolean): Boolean = loaded && online
+/** New, Open, and Close wait until the run ends. Stop stays on the Run button. */
+fun planHostButtonEnabled(loaded: Boolean, online: Boolean, running: Boolean): Boolean =
+  loaded && online && !running
+
+fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !running
+
+fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
 
 fun planMarker(status: String, actionable: Boolean): PlanMarker? {
   if (!actionable) return null
@@ -119,9 +125,9 @@ fun PlanScreen(
         enabled = planRunEnabled(loaded, online, running, ui.view.sending || ui.view.busy)
       ) { Text(planRunCaption(running)) }
       // New does not need a loaded plan. It is how the first plan is created.
-      Button(onClick = onNew, enabled = online) { Text("New") }
-      Button(onClick = { previewOpen = true }, enabled = loaded) { Text("Open") }
-      Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online)) { Text("Close") }
+      Button(onClick = onNew, enabled = planNewEnabled(online, running)) { Text("New") }
+      Button(onClick = { previewOpen = true }, enabled = planOpenEnabled(loaded, running)) { Text("Open") }
+      Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online, running)) { Text("Close") }
     }
   }
   if (previewOpen && loaded) {

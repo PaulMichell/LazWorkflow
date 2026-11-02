@@ -2113,15 +2113,24 @@ Begin
 End;
 
 Procedure TProjectAssistantForm.UpdateWorkActions;
+Var
+  HasPlan, Running: Boolean;
 Begin
+  HasPlan := GetActivePlanRelativePath <> '';
+  Running := FPlanAgentRunning;
+  { Stop stays on Run Plan. The other plan-view controls wait until the run ends. }
   If Assigned(OpenPlanSheetAction) Then
-    OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
+    OpenPlanSheetAction.Enabled := HasPlan And (Not Running);
   If Assigned(ClosePlanAction) Then
-    ClosePlanAction.Enabled := (Not FSending) And (GetActivePlanRelativePath <> '');
+    ClosePlanAction.Enabled := HasPlan And (Not FSending) And (Not Running);
   If Assigned(NewPlanAction) Then
-    NewPlanAction.Enabled := Not FSending;
+    NewPlanAction.Enabled := (Not FSending) And (Not Running);
   If Assigned(RunPlanAction) Then
     RunPlanAction.Enabled := RunPlanIsAvailable;
+  If Assigned(ActivePlanCombo) Then
+    ActivePlanCombo.Enabled := (Not FSending) And (Not Running);
+  If Assigned(ActivePlanBrowseButton) Then
+    ActivePlanBrowseButton.Enabled := (Not FSending) And (Not Running);
 End;
 
 Procedure TProjectAssistantForm.SidebarPagesChanging(Sender: TObject; Var AllowChange: Boolean);
@@ -3236,6 +3245,7 @@ Begin
   If Not FPlanAgentRunning Then
     Exit;
   FPlanAgentRunning := False;
+  UpdateWorkActions;
   ReleasePlanStallWatch;
   SetAssistantPlanViewerQuiet(False);
   Application.RemoveAsyncCalls(Self);
@@ -3352,6 +3362,7 @@ Begin
       Exit;
     End;
   FPlanAgentRunning := True;
+  UpdateWorkActions;
   AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   SyncCodexUsageIdle;
   SetAssistantPlanViewerQuiet(True);
@@ -3817,13 +3828,13 @@ Var
   HasPlan, HasItem: Boolean;
 Begin
   HasPlan := GetActivePlanRelativePath <> '';
-  HasItem := HasPlan And (SelectedPlanListIndex >= 0);
+  HasItem := HasPlan And (SelectedPlanListIndex >= 0) And (Not FPlanAgentRunning);
   If Assigned(ReviewItemMenu) Then
     ReviewItemMenu.Enabled := HasItem;
   If Assigned(ReviewPlanMenu) Then
-    ReviewPlanMenu.Enabled := HasPlan;
+    ReviewPlanMenu.Enabled := HasPlan And (Not FPlanAgentRunning);
   If Assigned(ClosePlanMenu) Then
-    ClosePlanMenu.Enabled := HasPlan And (Not FSending) And (Not FReviewInProgress);
+    ClosePlanMenu.Enabled := HasPlan And (Not FSending) And (Not FReviewInProgress) And (Not FPlanAgentRunning);
 End;
 
 Procedure TProjectAssistantForm.ReviewPlanItemClick(Sender: TObject);
@@ -5974,12 +5985,6 @@ Begin
   SyncCodexUsageIdle;
   If Assigned(TargetCombo) Then TargetCombo.Enabled := Not IsSending;
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
-  If Assigned(ActivePlanCombo) Then ActivePlanCombo.Enabled := Not IsSending;
-  If Assigned(ActivePlanBrowseButton) Then ActivePlanBrowseButton.Enabled := Not IsSending;
-  If Assigned(ClosePlanAction) Then
-    ClosePlanAction.Enabled := (Not IsSending) And (GetActivePlanRelativePath <> '');
-  If Assigned(OpenPlanSheetAction) Then
-    OpenPlanSheetAction.Enabled := GetActivePlanRelativePath <> '';
   If IsSending And (Not WasSending) Then
     Begin
       FPlanNewChatThisStep := False;
@@ -6011,10 +6016,7 @@ Begin
     SendAction.Caption := 'Send';
   StopAction.Enabled := IsSending;
   NewConversationAction.Enabled := Not IsSending;
-  If Assigned(NewPlanAction) Then
-    NewPlanAction.Enabled := Not IsSending;
-  If Assigned(RunPlanAction) Then
-    RunPlanAction.Enabled := RunPlanIsAvailable;
+  UpdateWorkActions;
   { Prompt stays live so the user can Steer without aborting the turn. }
   If Assigned(InputMemo) Then
     InputMemo.ReadOnly := False;
