@@ -2,7 +2,7 @@ package computing.michell.monitor.ui
 
 /* Plan list. Status tags match the assistant plan list.
    The title and document name scroll with the rows.
-   Headings stay plain. Send becomes Stop while a run is going.
+   Headings stay plain. Run becomes Stop while a run is going.
    Open previews the plan document. (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.background
@@ -60,9 +60,9 @@ data class PlanMarker(
  */
 fun planLoaded(path: String): Boolean = path.isNotEmpty()
 
-fun planSendCaption(running: Boolean): String = if (running) "Stop" else "Send"
+fun planSendCaption(running: Boolean): String = if (running) "Stop" else "Run"
 
-/** Stop stays available during a run. Send waits until the current reply has finished. */
+/** Stop stays available during a run. Run waits until the current reply has finished. */
 fun planSendEnabled(loaded: Boolean, online: Boolean, running: Boolean, sending: Boolean): Boolean {
   if (!online || !loaded) return false
   if (running) return true

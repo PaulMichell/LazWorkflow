@@ -50,7 +50,7 @@ class PlanScreenTest {
   fun sendTogglesToStopAndStaysOffWithoutAPlan() {
     assertFalse(planLoaded(""))
     assertTrue(planLoaded("Documents/Plan.md"))
-    assertEquals("Send", planSendCaption(false))
+    assertEquals("Run", planSendCaption(false))
     assertEquals("Stop", planSendCaption(true))
     assertFalse(planSendEnabled(false, true, false, false))
     assertFalse(planSendEnabled(true, false, true, false))
