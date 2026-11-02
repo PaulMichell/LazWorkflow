@@ -553,7 +553,8 @@ class MonitorReducerTest {
     assertEquals("grok-4", runtimeCaption(next.view))
     assertEquals("Waiting… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
     assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
-    assertEquals("Offline", activityCaption(emptyView().copy(signedIn = false, statusText = "Not signed in"), false, "", 0L, 3_000L))
+    assertEquals("", activityCaption(emptyView().copy(signedIn = false, statusText = "Not signed in"), false, "", 0L, 3_000L))
+    assertEquals("", activityCaption(emptyView().copy(signedIn = true, statusText = "Offline"), false, "", 0L, 3_000L))
     val thought = WireBlock("thinking", "t", "", "", "", "hmm", true, true, 0, emptyList())
     val live = WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(thought))
     assertEquals("Thinking… 0:04", activityCaption(

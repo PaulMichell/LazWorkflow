@@ -554,8 +554,8 @@ fun activityCaption(
   if (!linkLive) return ""
   if (!turnStillRunning(view, pending, blocks, live)) {
     val text = view.statusText.trim()
-    if (text == "Not signed in" || text == "Offline") return "Offline"
-    if (!view.signedIn && text.isNotEmpty()) return "Offline"
+    // The left chip owns Offline. Do not repeat it on the right.
+    if (text == "Not signed in" || text == "Offline" || !view.signedIn) return ""
     if (text.isEmpty() || hostHasElapsed(text)) return "Ready"
     return text
   }
