@@ -584,6 +584,8 @@ Type
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     /// Copies BuildSections. Does not write the plan file.
     Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
+    /// Capped Markdown of the active plan. Empty when none is loaded or the file cannot be read.
+    Function ReadMonitorPlanPreview: String;
     /// Copies the visible plan combobox captions and their registered paths without scanning files.
     Procedure FillMonitorPlanChoices(Paths, Captions: TStrings);
     /// Same rows and limit as RefreshTargetChoices. No package row and no browse action.
@@ -10846,6 +10848,15 @@ Begin
         Rows[I].Status := PlanSectionStatusToStr(Section.Status);
       Rows[I].Actionable := Section.Actionable;
     End;
+End;
+
+Function TProjectAssistantForm.ReadMonitorPlanPreview: String;
+Var
+  Truncated: Boolean;
+Begin
+  Result := ReadAssistantPlanPreview(GetActivePlanRelativePath, Truncated);
+  If Truncated And (Result <> '') Then
+    Result := Result + LineEnding + LineEnding + 'The rest of the plan is on the desktop.';
 End;
 
 Procedure TProjectAssistantForm.FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);

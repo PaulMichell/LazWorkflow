@@ -543,6 +543,18 @@ class ProtocolCodecTest {
     assertNull(decodeStatusPayload(bareJson.toFpJson().dropLast(1) + ",\"usage_hint\":false}"))
   }
 
+  @Test
+  fun planBodyIsOptionalAndRoundTrips() {
+    val bare = """{"path":"Documents/Plan.md","title":"Plan","running":false,"rows":[]}"""
+    assertEquals("", decodePlan(bare)?.body)
+    val encoded = encodePlan("plan-body", "Documents/Plan.md", "Plan", false, emptyList(), "# Plan\n\nHello")
+    val decoded = decodePlan(tryDecodeEnvelope(encoded).message.payloadJson)
+    assertEquals("# Plan\n\nHello", decoded?.body)
+    assertEquals("Documents/Plan.md", decoded?.path)
+    assertNull(decodePlan(bare.dropLast(1) + ",\"body\":1}"))
+    assertFalse(encodePlan("plan", "Documents/Plan.md", "Plan", false, emptyList()).contains("\"body\""))
+  }
+
   private fun sampleView(): WireView {
     return WireView(true, false, false, false, false, "idle", "Ready", "grok-test", "native", true, "Ask", "high", "",
       "ctx", true, false, false, true, false, "")

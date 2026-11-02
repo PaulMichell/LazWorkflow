@@ -438,6 +438,7 @@ class MonitorCoordinator(
       planTitle = snapshot.planTitle,
       planRunning = snapshot.planRunning,
       planRows = snapshot.planRows,
+      planBody = keptPlanBody(local.planPath, local.planBody, snapshot.planPath, ""),
       disconnected = false,
       reachedLive = true,
       banner = if (linkBanner(local.banner)) "" else local.banner
@@ -680,6 +681,7 @@ class MonitorCoordinator(
       planRunning = plan.running,
       planRows = plan.rows,
       planChoices = plan.choices.orEmpty(),
+      planBody = keptPlanBody(local.planPath, local.planBody, plan.path, plan.body),
       selectedPlan = if (samePath) local.selectedPlan else -1,
       view = local.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
     )

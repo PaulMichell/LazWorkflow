@@ -232,7 +232,8 @@ data class MonitorUi(
   val pairedElsewhere: Boolean = false,
   val lastSyncMs: Long = 0,
   val syncHead: Long = 0,
-  val desktopPoint: Int = 0
+  val desktopPoint: Int = 0,
+  val planBody: String = ""
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -832,6 +833,7 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
       planRunning = inbound.value.running,
       planRows = inbound.value.rows,
       planChoices = inbound.value.choices.orEmpty(),
+      planBody = keptPlanBody(state.planPath, state.planBody, inbound.value.path, inbound.value.body),
       selectedPlan = if (state.planPath == inbound.value.path) state.selectedPlan else -1,
       view = state.view.copy(planPath = inbound.value.path, planTitle = inbound.value.title, planRunning = inbound.value.running)
     )
@@ -885,6 +887,7 @@ private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
     planTitle = snapshot.planTitle,
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
+    planBody = keptPlanBody(state.planPath, state.planBody, snapshot.planPath, ""),
     selectedPlan = -1,
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
@@ -933,6 +936,7 @@ fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int)
     planTitle = snapshot.planTitle,
     planRunning = snapshot.planRunning,
     planRows = snapshot.planRows,
+    planBody = keptPlanBody(cleared.planPath, cleared.planBody, snapshot.planPath, ""),
     selectedPlan = -1,
     approval = if (approval.active) approval else null,
     approvalOpen = approval.active,
@@ -993,6 +997,7 @@ internal fun applyTargetFrame(state: MonitorUi, kind: String, display: String, r
   val sameFolder = state.view.targetRoot == root
   return state.copy(
     planChoices = if (sameFolder) state.planChoices else emptyList(),
+    planBody = if (sameFolder) state.planBody else "",
     selectedPlan = if (sameFolder) state.selectedPlan else -1,
     targetChoices = if (sameFolder) state.targetChoices else emptyList(),
     targetCurrent = if (sameFolder) state.targetCurrent else "",
@@ -1070,6 +1075,13 @@ internal fun applyPermissionsFrame(state: MonitorUi, permissions: PermissionsMes
   )
 }
 
+/** A later frame without a document keeps the text already shown for that path. */
+internal fun keptPlanBody(previousPath: String, previousBody: String, nextPath: String, nextBody: String): String {
+  if (nextBody.isNotEmpty()) return nextBody
+  if (nextPath.isNotEmpty() && nextPath == previousPath) return previousBody
+  return ""
+}
+
 private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
   val plan = decodePlan(payloadJson) ?: return state
   return state.copy(
@@ -1078,6 +1090,7 @@ private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
     planRunning = plan.running,
     planRows = plan.rows,
     planChoices = plan.choices.orEmpty(),
+    planBody = keptPlanBody(state.planPath, state.planBody, plan.path, plan.body),
     selectedPlan = if (state.planPath == plan.path) state.selectedPlan else -1,
     view = state.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
   )

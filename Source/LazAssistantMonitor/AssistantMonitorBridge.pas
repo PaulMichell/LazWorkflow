@@ -1015,7 +1015,8 @@ Begin
     Form.FillMonitorPlanChoices(Paths, Captions);
     Form.FillMonitorView(View);
     Form.FillMonitorPlan(Rows);
-    SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions));
+    SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, '', 0,
+      Form.ReadMonitorPlanPreview));
     If Assigned(Session) Then
       FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
   Finally

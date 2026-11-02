@@ -3,7 +3,9 @@ package computing.michell.monitor.ui
 /* Plan status tags match the assistant plan list (c) 2026 Michell Computing. */
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlanScreenTest {
@@ -42,6 +44,25 @@ class PlanScreenTest {
     assertNull(planMarker("pending", true))
     assertNull(planMarker("", true))
     assertNull(planMarker("   ", true))
+  }
+
+  @Test
+  fun sendTogglesToStopAndStaysOffWithoutAPlan() {
+    assertFalse(planLoaded(""))
+    assertTrue(planLoaded("Documents/Plan.md"))
+    assertEquals("Send", planSendCaption(false))
+    assertEquals("Stop", planSendCaption(true))
+    assertFalse(planSendEnabled(false, true, false, false))
+    assertFalse(planSendEnabled(true, false, true, false))
+    assertFalse(planSendEnabled(true, true, false, true))
+    assertTrue(planSendEnabled(true, true, false, false))
+    assertTrue(planSendEnabled(true, true, true, true))
+    assertFalse(planHostButtonEnabled(false, true))
+    assertFalse(planHostButtonEnabled(true, false))
+    assertTrue(planHostButtonEnabled(true, true))
+    assertEquals("Weekly limit", keptPlanBody("Documents/Plan.md", "Weekly limit", "Documents/Plan.md", ""))
+    assertEquals("# Plan", keptPlanBody("Documents/Plan.md", "old", "Documents/Plan.md", "# Plan"))
+    assertEquals("", keptPlanBody("Documents/Plan.md", "old", "Documents/Other.md", ""))
   }
 
   @Test

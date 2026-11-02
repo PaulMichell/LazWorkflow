@@ -324,6 +324,8 @@ Type
     PlanPath: String;
     PlanTitle: String;
     PlanRunning: Boolean;
+    { Optional plan-frame body. Not written into a snapshot. }
+    PlanBody: String;
     PlanRows: Array Of TAssistantMonitorPlanRow;
     TaskRows: Array Of TAssistantMonitorTaskRow;
     Approval: TAssistantApprovalNotice;
@@ -493,7 +495,7 @@ Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTu
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
-  Const Epoch: String = ''; Cursor: Int64 = 0): String;
+  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''): String;
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
@@ -2437,7 +2439,7 @@ End;
 
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings;
-  Const Epoch: String; Cursor: Int64): String;
+  Const Epoch: String; Cursor: Int64; Const Body: String): String;
 Var
   Payload, Choice: TJSONObject;
   Choices: TJSONArray;
@@ -2448,6 +2450,9 @@ Begin
   Payload.Add('title', Title);
   Payload.Add('running', Running);
   Payload.Add('rows', PlanRowsToJson(Rows));
+  { Absent means this frame has no document text. An empty string is not sent. }
+  If Body <> '' Then
+    Payload.Add('body', Body);
   If Epoch <> '' Then
     Begin
       Payload.Add('epoch', Epoch);
@@ -2486,6 +2491,7 @@ Begin
   Rows.PlanPath := '';
   Rows.PlanTitle := '';
   Rows.PlanRunning := False;
+  Rows.PlanBody := '';
   SetLength(Rows.PlanRows, 0);
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
@@ -2508,6 +2514,8 @@ Begin
     Rows.PlanPath := Path;
     Rows.PlanTitle := Title;
     Rows.PlanRunning := Running;
+    If Not ReadString(Obj, 'body', False, Rows.PlanBody) Then
+      Exit;
     Result := True;
   Finally
     Data.Free;
@@ -2626,6 +2634,7 @@ Begin
   Snapshot.PlanPath := '';
   Snapshot.PlanTitle := '';
   Snapshot.PlanRunning := False;
+  Snapshot.PlanBody := '';
   SetLength(Snapshot.PlanRows, 0);
   SetLength(Snapshot.TaskRows, 0);
   Snapshot.Approval.Active := False;

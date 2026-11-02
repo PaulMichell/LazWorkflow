@@ -270,6 +270,25 @@ class MonitorReducerTest {
   }
 
   @Test
+  fun planFrameKeepsTheDocumentForTheSamePath() {
+    val first = reduceMonitor(MonitorUi(), message(encodePlan(
+      "plan-body", "Documents/Plan.md", "Plan", false, emptyList(), "# Plan"
+    )))
+    assertEquals("# Plan", first.planBody)
+    assertEquals("Documents/Plan.md", first.planPath)
+    val kept = reduceMonitor(first, message(encodePlan(
+      "plan-again", "Documents/Plan.md", "Plan", true, emptyList()
+    )))
+    assertEquals("# Plan", kept.planBody)
+    assertTrue(kept.planRunning)
+    val cleared = reduceMonitor(kept, message(encodePlan(
+      "plan-other", "Documents/Other.md", "Other", false, emptyList()
+    )))
+    assertEquals("", cleared.planBody)
+    assertEquals("Documents/Other.md", cleared.planPath)
+  }
+
+  @Test
   fun snapshotReplacesTurnsAndKeepsAnUnsentDraft() {
     val kept = listOf(ConversationChoice("", "Current", true))
     val state = MonitorUi(

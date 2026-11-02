@@ -1233,6 +1233,37 @@ Begin
   Check('v1 transcript is not a patch', Not DecodeMonitorPatch(Json, Patch));
 End;
 
+Procedure TestPlanBody;
+Var
+  Json: String;
+  Data: TJSONData;
+  Payload: TJSONObject;
+  Path, Title: String;
+  Running: Boolean;
+  Rows: TMonitorSnapshot;
+Begin
+  Json := EncodeMonitorPlan('plan-empty-body', 'Documents/Plan.md', 'Monitor plan', False, []);
+  Check('empty plan body is omitted', Pos('"body"', Json) = 0);
+  Json := EncodeMonitorPlan('plan-body', 'Documents/Plan.md', 'Monitor plan', False, [], Nil, Nil, '', 0, '# Plan');
+  Check('plan body encodes', Json <> '');
+  Data := GetJSON(Json);
+  Try
+    Check('plan body envelope', Data Is TJSONObject);
+    Payload := TJSONObject(TJSONObject(Data).Find('payload'));
+    Check('plan body field', DecodeMonitorPlan(Payload.AsJSON, Path, Title, Running, Rows) And (Rows.PlanBody = '# Plan') And
+      (Path = 'Documents/Plan.md') And (Not Running));
+  Finally
+    Data.Free;
+  End;
+  Data := GetJSON('{"path":"Documents/Plan.md","title":"Plan","running":false,"rows":[],"body":1}');
+  Try
+    Check('plan body must be text', (Data Is TJSONObject) And
+      (Not DecodeMonitorPlan(TJSONObject(Data).AsJSON, Path, Title, Running, Rows)));
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestUsageFields;
 Var
   View, Decoded: TAssistantMonitorView;
@@ -1472,6 +1503,7 @@ Begin
       Halt(1);
     End;
   TestRoundTrips;
+  TestPlanBody;
   TestUsageFields;
   TestModelNote;
   TestPermissionsCaptions;

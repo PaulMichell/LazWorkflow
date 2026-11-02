@@ -287,7 +287,14 @@ data class PermissionsMessage(
   val note: String
 )
 
-data class PlanMessage(val path: String, val title: String, val running: Boolean, val rows: List<PlanRow>, val choices: List<PlanChoice>? = null)
+data class PlanMessage(
+  val path: String,
+  val title: String,
+  val running: Boolean,
+  val rows: List<PlanRow>,
+  val choices: List<PlanChoice>? = null,
+  val body: String = ""
+)
 
 data class WireSnapshot(
   val view: WireView,
@@ -1438,12 +1445,20 @@ private fun <T> rowsFrom(node: JsonValue?, reader: (JsonValue.Obj) -> T?): List<
   }
 }
 
-fun encodePlan(id: String, path: String, title: String, running: Boolean, rows: List<PlanRow>): String {
+fun encodePlan(
+  id: String,
+  path: String,
+  title: String,
+  running: Boolean,
+  rows: List<PlanRow>,
+  body: String = ""
+): String {
   val payload = JsonObjectBuilder()
   payload.add("path", path)
   payload.add("title", title)
   payload.add("running", running)
   payload.add("rows", JsonValue.Arr(rows.map { planRowToJson(it) }))
+  if (body.isNotEmpty()) payload.add("body", body)
   return encodeEnvelope(MessageKind.Plan, id, payload.build())
 }
 
@@ -1465,7 +1480,9 @@ fun decodePlan(obj: JsonValue.Obj): PlanMessage? {
       if (!choicePath.ok || !caption.ok || choicePath.value.isEmpty()) null else PlanChoice(choicePath.value, caption.value)
     } ?: return null
   }
-  return PlanMessage(path.value, title.value, running.value, rows, choices)
+  val body = obj.readString("body", false)
+  if (!body.ok) return null
+  return PlanMessage(path.value, title.value, running.value, rows, choices, body.value)
 }
 
 fun encodeTasks(id: String, rows: List<TaskRow>): String {
