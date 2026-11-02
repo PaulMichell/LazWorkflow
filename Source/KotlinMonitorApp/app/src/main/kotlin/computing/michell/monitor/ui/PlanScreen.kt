@@ -27,7 +27,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -148,6 +147,7 @@ fun PlanPreviewPanel(
     color = MaterialTheme.colorScheme.surface
   ) {
     Column(Modifier.fillMaxSize()) {
+      HorizontalDivider()
       Column(
         modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -181,10 +181,12 @@ fun PlanPreviewPanel(
         }
       }
       HorizontalDivider()
-      TextButton(
-        onClick = onDismiss,
-        modifier = Modifier.align(Alignment.End).padding(horizontal = 8.dp, vertical = 4.dp)
-      ) { Text("Close") }
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Button(onClick = onDismiss) { Text("Close") }
+      }
     }
   }
 }
