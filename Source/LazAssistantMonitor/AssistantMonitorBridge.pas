@@ -1348,7 +1348,7 @@ Begin
           Plan.Title := '';
         Result := Form.RemoteNewPlan(Plan.Title, ErrorText);
       End;
-    Ord(mmkRemovePlan):
+    Ord(mmkClosePlan):
       Result := Form.RemoteClosePlan(ErrorText);
     Ord(mmkWorkOnPlan):
       Begin

@@ -79,7 +79,7 @@ Type
     mmkPlan,
     mmkSelectPlan,
     mmkNewPlan,
-    mmkRemovePlan,
+    mmkClosePlan,
     mmkWorkOnPlan,
     mmkRunPlan,
     mmkStopPlan,
@@ -593,7 +593,7 @@ Begin
     mmkPlan: Result := 'plan';
     mmkSelectPlan: Result := 'select_plan';
     mmkNewPlan: Result := 'new_plan';
-    mmkRemovePlan: Result := 'remove_plan';
+    mmkClosePlan: Result := 'close_plan';
     mmkWorkOnPlan: Result := 'work_on_plan';
     mmkRunPlan: Result := 'run_plan';
     mmkStopPlan: Result := 'stop_plan';
@@ -1688,7 +1688,7 @@ End;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
 Begin
   Result := '';
-  If (Kind <> mmkSelectPlan) And (Kind <> mmkRemovePlan) And (Kind <> mmkSelectTarget) Then
+  If (Kind <> mmkSelectPlan) And (Kind <> mmkSelectTarget) Then
     Exit;
   Result := EncodeOneString(Kind, Id, 'path', Path);
 End;

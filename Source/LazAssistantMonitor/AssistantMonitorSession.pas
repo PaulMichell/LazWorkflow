@@ -1450,7 +1450,7 @@ Begin
     Result := FHostFlags.Sending
   Else If Kind = Ord(mmkRunTask) Then
     Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
-  Else If (Kind = Ord(mmkRemovePlan)) Or (Kind = Ord(mmkInsertTask)) Then
+  Else If (Kind = Ord(mmkClosePlan)) Or (Kind = Ord(mmkInsertTask)) Then
     Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
   Else If (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkNewPlan)) Then
     Result := FHostFlags.Sending
@@ -1505,7 +1505,7 @@ Function RecordedCommand(Kind: Integer): Boolean;
 Begin
   Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkSteer)) Or (Kind = Ord(mmkStop)) Or (Kind = Ord(mmkSetMode)) Or
     (Kind = Ord(mmkNewConversation)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkStopPlan)) Or
-    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Or (Kind = Ord(mmkRemovePlan)) Or
+    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Or (Kind = Ord(mmkClosePlan)) Or
     (Kind = Ord(mmkInsertTask)) Or (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkSelectTarget)) Or
     (Kind = Ord(mmkSelectConversation)) Or (Kind = Ord(mmkSetModel)) Or (Kind = Ord(mmkSetReasoning)) Or
     (Kind = Ord(mmkSetPermissions)) Or (Kind = Ord(mmkNewPlan));
@@ -1701,7 +1701,7 @@ Begin
     mmkResume:
       HandleResume(Message.Id, Message.PayloadJson);
     mmkSend, mmkSteer, mmkStop, mmkSetMode, mmkNewConversation, mmkRunPlan, mmkStopPlan, mmkWorkOnPlan, mmkRunTask,
-    mmkRemovePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkSelectConversation, mmkSetModel, mmkSetReasoning,
+    mmkClosePlan, mmkInsertTask, mmkSelectPlan, mmkSelectTarget, mmkSelectConversation, mmkSetModel, mmkSetReasoning,
     mmkSetPermissions, mmkNewPlan, mmkRefresh, mmkTurn, mmkImageGet:
       HandleCommand(Ord(Message.Kind), Message.Id, Message.PayloadJson);
   Else
