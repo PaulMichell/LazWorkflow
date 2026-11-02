@@ -511,8 +511,8 @@ fun activityCaption(
   live: WireTurn? = null,
   linkLive: Boolean = true
 ): String {
-  // An invalid IDE link is Offline. Do not keep Ready, a progress word, or a reconnect clock.
-  if (!linkLive) return "Offline"
+  // The left chip already says Offline. Do not repeat it, or keep Ready, a progress word, or a clock.
+  if (!linkLive) return ""
   if (!turnStillRunning(view, pending, blocks, live)) {
     val text = view.statusText.trim()
     if (text == "Not signed in" || text == "Offline") return "Offline"

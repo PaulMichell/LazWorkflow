@@ -569,11 +569,11 @@ class MonitorReducerTest {
     )
     assertTrue(displayInterrupted(running, LinkPhase.Disconnected))
     assertFalse(displayInterrupted(running.copy(disconnected = false), LinkPhase.Live))
-    assertEquals("Offline", activityCaption(
+    assertEquals("", activityCaption(
       running.view, false, "", now - 12_000L, now, listOf(thought), live,
       ideLinkLive(running.disconnected, LinkPhase.Disconnected)
     ))
-    assertEquals("Offline", activityCaption(
+    assertEquals("", activityCaption(
       emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, now, emptyList(), null,
       ideLinkLive(true, LinkPhase.Live)
     ))
