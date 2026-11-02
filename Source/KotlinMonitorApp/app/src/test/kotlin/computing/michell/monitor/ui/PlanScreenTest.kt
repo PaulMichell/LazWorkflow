@@ -46,6 +46,7 @@ class PlanScreenTest {
     assertNull(planMarker("   ", true))
   }
 
+  /** Idle caption is Run. Running caption is Stop. Enable cases stay as written. */
   @Test
   fun runTogglesToStopAndStaysOffWithoutAPlan() {
     assertFalse(planLoaded(""))
