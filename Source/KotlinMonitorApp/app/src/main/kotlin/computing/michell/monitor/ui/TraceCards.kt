@@ -31,7 +31,8 @@ fun displayKind(block: WireBlock): String {
 }
 
 fun thinkingCardTitle(title: String, running: Boolean, durationMs: Int): String {
-  if (title.isNotEmpty()) return title
+  val runningCaption = title.startsWith("Thinking…")
+  if (title.isNotEmpty() && (running || !runningCaption)) return title
   if (running) return "Thinking… ${formatThinkingClock(durationMs)}"
   return "Thinking"
 }

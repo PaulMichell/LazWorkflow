@@ -1903,7 +1903,12 @@ fun mergeTurnBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): List<
   val merged = ArrayList<WireBlock>(existing.size + incoming.size)
   for (block in existing) {
     val next = if (block.blockId.isNotEmpty()) incomingById[block.blockId] else null
-    merged += if (next != null && (next.body.isNotEmpty() || next.title.isNotEmpty())) next else block
+    merged += when {
+      next == null -> block
+      next.body.isNotEmpty() || next.title.isNotEmpty() -> next.copy(body = next.body.ifEmpty { block.body })
+      !next.running && block.running -> block.copy(running = false, ok = next.ok)
+      else -> block
+    }
     if (block.blockId.isNotEmpty()) seen += block.blockId
   }
   for (block in incoming) {

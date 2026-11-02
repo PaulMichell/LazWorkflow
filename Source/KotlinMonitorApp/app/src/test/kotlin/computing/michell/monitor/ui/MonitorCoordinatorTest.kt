@@ -555,6 +555,29 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aFinishedConversationDoesNotKeepARunningThought() {
+    val coordinator = open()
+    val thought = WireBlock("thinking", "think-1", "Thinking… 0:04", "", "", "worked it out", true, true, 4_000, emptyList())
+    val running = WirePatch(
+      "epoch", 1, 1, "turn-1", listOf(thought), true, true, false, "Thinking…",
+      false, true, true, 4_000, hasView = true, model = "grok-4", signedIn = true, statusText = "Thinking… 0:04"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("running", running))))
+    assertTrue(coordinator.state.live?.blocks?.single()?.running == true)
+    val idle = running.copy(
+      cursor = 2, busy = false, sending = false, canSend = true, canSteer = false, canStop = false,
+      phase = "", statusText = "Ready"
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("idle", idle))))
+    val shown = coordinator.state
+    assertFalse(shown.live?.blocks?.any { block -> block.running } == true)
+    assertEquals("Ready", activityCaption(
+      shown.view, false, "", 0L, 8_000L, displayBlocks(shown.live), shown.live
+    ))
+    assertEquals("Thinking", thinkingCardTitle(shown.live?.blocks?.single()?.title.orEmpty(), false, 4_000))
+  }
+
+  @Test
   fun newConversationFilesTheScreenAndTheNextPageDoesNotKeepIt() {
     val coordinator = open()
     showAnswer(coordinator, "conversation-1", "epoch", "old answer")

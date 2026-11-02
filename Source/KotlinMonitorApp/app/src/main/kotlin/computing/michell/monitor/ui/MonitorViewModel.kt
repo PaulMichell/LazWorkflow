@@ -333,9 +333,17 @@ internal fun keptModel(previous: String, incoming: String, incomingSignedIn: Boo
   return previous
 }
 
+/** A progress caption left on a finished turn. Ready and Offline stay as they are. */
+internal fun finishedStatusText(text: String): String {
+  val trimmed = text.trim()
+  if (trimmed == "Offline" || trimmed == "Not signed in" || trimmed == "Ready" || trimmed.isEmpty()) return trimmed
+  if (hostHasElapsed(trimmed) || trimmed.endsWith("…")) return "Ready"
+  return trimmed
+}
+
 /** A worked footer, or a host that is no longer sending, ends the steer. The next tap is Send. */
 internal fun settleFinishedTurn(view: WireView, blocks: List<WireBlock>): WireView {
-  val finished = hasWorkedFooter(blocks) && blocks.none { block -> block.running }
+  val finished = hasWorkedFooter(blocks)
   val hostIdle = !view.sending && !view.busy && !view.planRunning
   if (!finished && !hostIdle) return view
   val settled = view.copy(
@@ -343,10 +351,18 @@ internal fun settleFinishedTurn(view: WireView, blocks: List<WireBlock>): WireVi
     busy = false,
     canSteer = false,
     canStop = false,
-    canSend = !view.planRunning
+    canSend = !view.planRunning,
+    phase = if (view.phase.endsWith("…")) "" else view.phase,
+    statusText = finishedStatusText(view.statusText)
   )
   if (settled == view) return view
   return settled
+}
+
+/** The host has stopped. A thought left marked running must not stay on screen. */
+internal fun closeFinishedRunning(blocks: List<WireBlock>): List<WireBlock> {
+  if (blocks.none { block -> block.running }) return blocks
+  return blocks.map { block -> if (block.running) block.copy(running = false) else block }
 }
 
 fun actionEnabled(view: WireView): Boolean {
@@ -439,15 +455,10 @@ fun notePatchClock(state: MonitorUi, elapsedMs: Int, idle: Boolean, nowMs: Long)
   )
 }
 
-fun turnStillRunning(view: WireView, pending: Boolean, blocks: List<WireBlock>, live: WireTurn? = null): Boolean {
+fun turnStillRunning(view: WireView, pending: Boolean, blocks: List<WireBlock>, @Suppress("UNUSED_PARAMETER") live: WireTurn? = null): Boolean {
   if (hasWorkedFooter(blocks)) return false
   if (pending || view.sending || view.busy || view.planRunning) return true
-  if (blocks.any { block -> block.running }) return true
-  if (view.phase.isEmpty() && view.elapsedMs == 0) return false
-  if (live != null && live.turnIndex < 0) {
-    if (live.durationMs > 0) return true
-    if (blocks.any { block -> block.kind in WorkKinds }) return true
-  }
+  // The host has stopped. A thought left marked running must not keep Thinking… on a finished turn.
   return false
 }
 

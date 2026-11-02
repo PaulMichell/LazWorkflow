@@ -268,7 +268,23 @@ class MonitorCoordinator(
 
   fun noteAckSent(nowMs: Long, seq: Long) {}
 
+  private fun quietFinishedBlocks() {
+    if (local.view.sending || local.view.busy || local.view.planRunning || local.planRunning) return
+    val board = content.current()
+    val live = board.live?.let { turn ->
+      val closed = closeFinishedRunning(turn.blocks)
+      if (closed === turn.blocks) turn else turn.copy(blocks = closed)
+    }
+    val turns = board.turns.map { turn ->
+      val closed = closeFinishedRunning(turn.blocks)
+      if (closed === turn.blocks) turn else turn.copy(blocks = closed)
+    }
+    if (live == board.live && turns == board.turns) return
+    content.replace(contentHost, board.conversationId, turns, live)
+  }
+
   private fun published(): MonitorUi {
+    quietFinishedBlocks()
     val board = content.current()
     if (local.pendingPrompt.isNotEmpty()) {
       val shown = local.withBoard(board)

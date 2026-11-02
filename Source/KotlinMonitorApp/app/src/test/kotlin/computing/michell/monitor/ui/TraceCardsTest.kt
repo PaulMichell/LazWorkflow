@@ -14,6 +14,7 @@ class TraceCardsTest {
     assertEquals("Thinking", thinkingCardTitle("", false, 0))
     assertEquals("Thinking… 0:04", thinkingCardTitle("", true, 4000))
     assertEquals("Thinking… 1:02", thinkingCardTitle("Thinking… 1:02", true, 90000))
+    assertEquals("Thinking", thinkingCardTitle("Thinking… 0:04", false, 4000))
     assertEquals("Thought for 0:12", thoughtFooter(false, 12000))
     assertEquals("", thoughtFooter(true, 12000))
     assertEquals("", thoughtFooter(false, 0))
