@@ -47,16 +47,16 @@ class PlanScreenTest {
   }
 
   @Test
-  fun sendTogglesToStopAndStaysOffWithoutAPlan() {
+  fun runTogglesToStopAndStaysOffWithoutAPlan() {
     assertFalse(planLoaded(""))
     assertTrue(planLoaded("Documents/Plan.md"))
-    assertEquals("Run", planSendCaption(false))
-    assertEquals("Stop", planSendCaption(true))
-    assertFalse(planSendEnabled(false, true, false, false))
-    assertFalse(planSendEnabled(true, false, true, false))
-    assertFalse(planSendEnabled(true, true, false, true))
-    assertTrue(planSendEnabled(true, true, false, false))
-    assertTrue(planSendEnabled(true, true, true, true))
+    assertEquals("Run", planRunCaption(false))
+    assertEquals("Stop", planRunCaption(true))
+    assertFalse(planRunEnabled(false, true, false, false))
+    assertFalse(planRunEnabled(true, false, true, false))
+    assertFalse(planRunEnabled(true, true, false, true))
+    assertTrue(planRunEnabled(true, true, false, false))
+    assertTrue(planRunEnabled(true, true, true, true))
     assertFalse(planHostButtonEnabled(false, true))
     assertFalse(planHostButtonEnabled(true, false))
     assertTrue(planHostButtonEnabled(true, true))

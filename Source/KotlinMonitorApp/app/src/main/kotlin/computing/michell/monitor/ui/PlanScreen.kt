@@ -60,10 +60,10 @@ data class PlanMarker(
  */
 fun planLoaded(path: String): Boolean = path.isNotEmpty()
 
-fun planSendCaption(running: Boolean): String = if (running) "Stop" else "Run"
+fun planRunCaption(running: Boolean): String = if (running) "Stop" else "Run"
 
 /** Stop stays available during a run. Run waits until the current reply has finished. */
-fun planSendEnabled(loaded: Boolean, online: Boolean, running: Boolean, sending: Boolean): Boolean {
+fun planRunEnabled(loaded: Boolean, online: Boolean, running: Boolean, sending: Boolean): Boolean {
   if (!online || !loaded) return false
   if (running) return true
   return !sending
@@ -116,8 +116,8 @@ fun PlanScreen(
     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       Button(
         onClick = { if (running) onStop() else onRun() },
-        enabled = planSendEnabled(loaded, online, running, ui.view.sending || ui.view.busy)
-      ) { Text(planSendCaption(running)) }
+        enabled = planRunEnabled(loaded, online, running, ui.view.sending || ui.view.busy)
+      ) { Text(planRunCaption(running)) }
       // New does not need a loaded plan. It is how the first plan is created.
       Button(onClick = onNew, enabled = online) { Text("New") }
       Button(onClick = { previewOpen = true }, enabled = loaded) { Text("Open") }
