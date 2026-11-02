@@ -22,7 +22,7 @@ Leave the enable rule as it is. Stop stays available during a run. Run waits unt
 The file comment still says Send becomes Stop. Change that sentence to Run.
 
 ### 1.2 Code names say Run
-Status: not started
+Status: complete
 
 Rename the plan-page names that still say Send. Do not rename the conversation Send button, `onSend`, or `actionCaption`.
 
