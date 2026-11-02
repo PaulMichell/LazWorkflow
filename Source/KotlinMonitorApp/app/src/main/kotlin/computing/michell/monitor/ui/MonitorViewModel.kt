@@ -1489,13 +1489,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val clientId = if (endpointChanged) "" else record.clientId
     val effects = coordinator.onEvent(MonitorEvent.HostChanged(uiState.value, address, port, clientId))
     if (effects != null) applyUiEffects(effects)
-    uiState.update { it.copy(pairHold = false, settingsOpen = false, disconnected = true, banner = ConnectingBanner) }
+    uiState.update { it.copy(pairHold = false, disconnected = true, banner = ConnectingBanner) }
     session.connect(address, port)
   }
 
   fun showCachedList() {
     leaveDictation()
-    uiState.update { it.copy(settingsOpen = false) }
     cacheBackToListState.value = false
     viewModelScope.launch(Dispatchers.IO) {
       val record = store.load()
@@ -1528,6 +1527,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       withContext(Dispatchers.Main) {
         val seeded = if (live) syncingCacheState(uiState.value, document, row)
           else reviewedCacheState(uiState.value, document, row, store.load().address.isNotEmpty())
+        coordinator.setSettingsOpen(false)
         coordinator.showStored(seeded, live)
         uiState.value = coordinator.state
         cacheListOpenState.value = false
@@ -1570,12 +1570,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun showSettings() {
+    coordinator.setSettingsOpen(true)
     leaveDictation()
-    uiState.update { it.copy(settingsOpen = true, banner = "") }
+    uiState.value = coordinator.state
   }
 
   fun closeSettings() {
-    uiState.update { it.copy(settingsOpen = false) }
+    coordinator.setSettingsOpen(false)
+    uiState.value = coordinator.state
   }
 
   fun forgetPairing() {

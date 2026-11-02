@@ -116,6 +116,8 @@ class MonitorCoordinator(
 ) {
   private val gate = Any()
   private var local = MonitorUi()
+  /** User sheet. Incoming frames must not clear it. */
+  private var settingsHeld = false
   private var contentHost = ""
   private var submittedText = ""
   private var submittedId = ""
@@ -238,6 +240,12 @@ class MonitorCoordinator(
     published()
   }
 
+  /** Open or close stays until the user dismisses it. A frame, a switch, or Connect must not clear it. */
+  fun setSettingsOpen(open: Boolean) = synchronized(gate) {
+    settingsHeld = open
+    local = local.copy(settingsOpen = open, banner = if (open) "" else local.banner)
+  }
+
   fun noteVisibleTurns(current: MonitorUi, indices: Set<Int>): List<MonitorEffect> = synchronized(gate) {
     visibleTurns.clear()
     visibleTurns.addAll(indices)
@@ -271,7 +279,8 @@ class MonitorCoordinator(
     return local.copy(
       selectedTurn = selectedTurn,
       showThinking = display.showThinking,
-      showTools = display.showTools
+      showTools = display.showTools,
+      settingsOpen = settingsHeld
     ).withBoard(board)
   }
 

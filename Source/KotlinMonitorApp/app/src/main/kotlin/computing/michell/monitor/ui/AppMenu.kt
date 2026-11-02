@@ -180,6 +180,19 @@ fun menuFlyoutAfterTap(open: MenuSectionKind?, tapped: MenuSectionKind): MenuSec
 /** Back closes the flyout before the drawer. */
 fun menuFlyoutConsumesBack(flyoutOpen: Boolean): Boolean = flyoutOpen
 
+/** Left-edge swipe opens the menu on Conversation only. Plan keeps the pager swipe. */
+fun menuEdgeSwipeEnabled(tab: AppTab, approvalOpen: Boolean): Boolean {
+  return tab == AppTab.Conversation && !approvalOpen
+}
+
+/** A rightward drag that started inside the left edge. Values are pixels. */
+fun menuOpensOnRightEdgeSwipe(startX: Float, edgePx: Float, totalDx: Float, minPx: Float): Boolean {
+  return edgePx > 0f && startX >= 0f && startX <= edgePx && minPx > 0f && totalDx >= minPx
+}
+
+/** Hit width for the conversation edge. The Plan page has no strip, so its swipe still changes page. */
+val MenuEdgeSwipeWidth = 32.dp
+
 /**
  * Width of the flyout in pixels. Prefer the room beside the headings, and keep a scrim strip when that
  * still leaves a usable menu. Values are pixels, not dp.
@@ -232,6 +245,37 @@ fun menuFlyoutOrigin(
 
 /** A left swipe closes. A short or rightward drag does not. */
 fun menuClosesOnLeftSwipe(totalDx: Float, minPx: Float): Boolean = minPx > 0f && totalDx <= -minPx
+
+/** Claims a rightward drag that starts in the left edge. A tap or a vertical drag is left alone. */
+fun Modifier.menuEdgeSwipeToOpen(onOpen: () -> Unit): Modifier = pointerInput(onOpen) {
+  val edge = MenuEdgeSwipeWidth.toPx()
+  val threshold = 48.dp.toPx()
+  val slop = viewConfiguration.touchSlop
+  awaitEachGesture {
+    val down = awaitFirstDown(pass = PointerEventPass.Initial, requireUnconsumed = false)
+    if (down.position.x > edge) return@awaitEachGesture
+    var total = 0f
+    var tracking = false
+    while (true) {
+      val event = awaitPointerEvent(PointerEventPass.Initial)
+      val change = event.changes.firstOrNull { pointer -> pointer.id == down.id } ?: break
+      if (!change.pressed) {
+        if (tracking && menuOpensOnRightEdgeSwipe(down.position.x, edge, total, threshold)) onOpen()
+        break
+      }
+      val dx = change.position.x - change.previousPosition.x
+      val dy = change.position.y - change.previousPosition.y
+      if (!tracking) {
+        if (kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) tracking = true
+        else if (kotlin.math.abs(dy) > slop) break
+      }
+      if (tracking) {
+        total += dx
+        change.consume()
+      }
+    }
+  }
+}
 
 /** Sees the swipe before the menu's vertical scroller, so a list drag still scrolls. */
 fun Modifier.menuLeftSwipeToClose(onClose: () -> Unit): Modifier = pointerInput(onClose) {

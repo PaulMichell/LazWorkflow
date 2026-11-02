@@ -119,6 +119,24 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun settingsStaysOpenUntilTheUserClosesIt() {
+    val coordinator = open()
+    coordinator.setSettingsOpen(true)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("answer"))))))
+    assertTrue(coordinator.state.settingsOpen)
+    coordinator.noteDisplay(coordinator.state)
+    assertTrue(coordinator.state.settingsOpen)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, "down")))
+    assertTrue(coordinator.state.settingsOpen)
+    coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.9", 56122, "other"))
+    assertTrue(coordinator.state.settingsOpen)
+    coordinator.setSettingsOpen(false)
+    assertFalse(coordinator.state.settingsOpen)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("later"))))))
+    assertFalse(coordinator.state.settingsOpen)
+  }
+
+  @Test
   fun hostChangeDropsThePreviousConversation() {
     val coordinator = open()
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("one"))))))

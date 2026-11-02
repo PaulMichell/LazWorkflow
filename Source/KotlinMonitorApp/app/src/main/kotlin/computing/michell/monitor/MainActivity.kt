@@ -64,6 +64,8 @@ import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
 import computing.michell.monitor.ui.MenuSectionKind
 import computing.michell.monitor.ui.MenuSheetWidth
+import computing.michell.monitor.ui.menuEdgeSwipeEnabled
+import computing.michell.monitor.ui.menuEdgeSwipeToOpen
 import computing.michell.monitor.ui.menuFlyoutConsumesBack
 import computing.michell.monitor.ui.ApprovalSheet
 import computing.michell.monitor.ui.CachedListDialog
@@ -162,10 +164,11 @@ private fun MonitorShell(model: MonitorViewModel) {
       model.requestMenuChoices(link.phase == LinkPhase.Live)
   }
   BackHandler(enabled = showSettings || cacheListOpen || cacheBackToList) {
-    when {
-      showSettings -> model.closeSettings()
-      cacheListOpen -> model.closeCachedList()
-      cacheBackToList -> model.showCachedList()
+    when (settingsBackTarget(cacheListOpen, showSettings, cacheBackToList)) {
+      SettingsBack.CacheList -> model.closeCachedList()
+      SettingsBack.Settings -> model.closeSettings()
+      SettingsBack.CacheReturn -> model.showCachedList()
+      SettingsBack.None -> {}
     }
   }
   // Later than settings, so an open drawer wins back before settings or the activity finishes.
@@ -217,6 +220,7 @@ private fun MonitorShell(model: MonitorViewModel) {
             }
           },
           drawerState = drawerState,
+          // The pager owns horizontal swipes. Conversation adds its own left-edge opener below.
           gesturesEnabled = false
         ) {
           Column(Modifier.fillMaxSize()) {
@@ -244,13 +248,27 @@ private fun MonitorShell(model: MonitorViewModel) {
               userScrollEnabled = !ui.approvalOpen
             ) { page ->
               when (tabForPage(page)) {
-                AppTab.Conversation -> ConversationScreen(
-                  ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
-                  model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
-                  dictation, model::toggleDictationOn, model::toggleDictationOff,
-                  permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
-                  model::retryUndelivered
-                )
+                AppTab.Conversation -> Box(
+                  Modifier
+                    .fillMaxSize()
+                    .then(
+                      if (menuEdgeSwipeEnabled(AppTab.Conversation, ui.approvalOpen)) {
+                        Modifier.menuEdgeSwipeToOpen {
+                          if (menuMayOpenDrawer(model.ui.value.approvalOpen)) scope.launch { drawerState.open() }
+                        }
+                      } else {
+                        Modifier
+                      }
+                    )
+                ) {
+                  ConversationScreen(
+                    ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
+                    model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
+                    dictation, model::toggleDictationOn, model::toggleDictationOff,
+                    permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
+                    model::retryUndelivered
+                  )
+                }
                 AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::removePlan)
               }
             }
@@ -270,7 +288,7 @@ private fun MonitorShell(model: MonitorViewModel) {
     }
   }
   val notice = ui.approval
-  if (!showSettings && cacheListOpen) {
+  if (cacheListOpen) {
     CachedListDialog(cacheRows, model::openCachedRow, model::pinCached, model::deleteCached, model::closeCachedList)
   }
   if (!showSettings && ui.approvalOpen && notice != null) {
@@ -280,6 +298,16 @@ private fun MonitorShell(model: MonitorViewModel) {
 
 /** An approval sheet sits above the pages, so the menu button must not open the drawer. */
 internal fun menuMayOpenDrawer(approvalOpen: Boolean): Boolean = !approvalOpen
+
+/** The cache list sits on Settings, so back closes that list before the form. */
+internal enum class SettingsBack { CacheList, Settings, CacheReturn, None }
+
+internal fun settingsBackTarget(cacheListOpen: Boolean, settingsOpen: Boolean, cacheBackToList: Boolean): SettingsBack {
+  if (cacheListOpen) return SettingsBack.CacheList
+  if (settingsOpen) return SettingsBack.Settings
+  if (cacheBackToList) return SettingsBack.CacheReturn
+  return SettingsBack.None
+}
 
 /** Back closes the drawer before settings or the activity, including while the sheet is still sliding. */
 internal fun drawerConsumesBack(isOpen: Boolean, targetOpen: Boolean): Boolean = isOpen || targetOpen
