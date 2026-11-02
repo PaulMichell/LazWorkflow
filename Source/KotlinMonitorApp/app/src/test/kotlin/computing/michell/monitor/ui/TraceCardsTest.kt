@@ -29,12 +29,13 @@ class TraceCardsTest {
   }
 
   @Test
-  fun aNamedToolIsStillAToolAndThinkingStartsClosed() {
+  fun aNamedToolIsStillAToolAndThinkingStartsOpenWhenShown() {
     val lost = WireBlock("", "id", "", "read_file", "call-1", "body", false, true, 0, emptyList())
     assertEquals("tool", displayKind(lost))
     assertFalse(cardStartsOpen("thinking"))
-    assertFalse(cardStartsOpen("tool"))
-    assertFalse(cardStartsOpen("subagent"))
+    assertTrue(cardStartsOpen("thinking", true))
+    assertFalse(cardStartsOpen("tool", true))
+    assertFalse(cardStartsOpen("subagent", true))
     assertTrue(blockShown(lost, true, true))
     assertFalse(blockShown(lost, true, false))
   }

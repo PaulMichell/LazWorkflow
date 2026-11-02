@@ -243,7 +243,8 @@ private fun ConversationPane(
           ui.imageReasons,
           ui.hostGeneration,
           foldBlockKey(ui.conversationGeneration, row.turnId, row.block.blockId, 0),
-          !ui.disconnected
+          !ui.disconnected,
+          ui.showThinking
         )
       }
     }
@@ -258,7 +259,8 @@ private fun ConversationPane(
           ui.imageReasons,
           ui.hostGeneration,
           foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0),
-          !ui.disconnected
+          !ui.disconnected,
+          ui.showThinking
         )
       }
     }
@@ -308,7 +310,7 @@ private fun SlotBody(
     shown.forEach { (index, block) ->
       val foldKey = foldBlockKey(conversationGeneration, turnId, block.blockId, index)
       key(foldKey) {
-        RoleBlock(block, bitmaps, reasons, hostGeneration, foldKey, fetchImages)
+        RoleBlock(block, bitmaps, reasons, hostGeneration, foldKey, fetchImages, showThinking)
       }
     }
   }
@@ -454,12 +456,13 @@ private fun RoleBlock(
   reasons: Map<String, String>,
   hostGeneration: Int,
   foldKey: String,
-  fetchImages: Boolean
+  fetchImages: Boolean,
+  showThinking: Boolean
 ) {
   when (displayKind(block)) {
     "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons, fetchImages)
     "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons, fetchImages)
-    "thinking" -> ThinkingCard(foldKey, block)
+    "thinking" -> ThinkingCard(foldKey, block, showThinking)
     "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration, fetchImages)
     "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
     "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false, fetchImages)
@@ -518,8 +521,8 @@ private fun BubbleBlock(
 }
 
 @Composable
-private fun ThinkingCard(foldKey: String, block: WireBlock) {
-  var open by remember(foldKey) { mutableStateOf(cardStartsOpen("thinking")) }
+private fun ThinkingCard(foldKey: String, block: WireBlock, showThinking: Boolean) {
+  var open by remember(foldKey) { mutableStateOf(cardStartsOpen("thinking", showThinking)) }
   val body = thinkingDisplayBody(block.body)
   Column(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 4.dp)) {
     Text(

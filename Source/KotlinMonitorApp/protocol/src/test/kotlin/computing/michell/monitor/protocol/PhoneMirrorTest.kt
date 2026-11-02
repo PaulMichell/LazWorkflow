@@ -35,6 +35,16 @@ class PhoneMirrorTest {
   }
 
   @Test
+  fun aThinkingAppendGrowsTheOpenThought() {
+    val start = PhoneScreen(epoch = "aa", live = turn("Shown", listOf(block("thinking", "think-1", "The ").copy(running = true))))
+    val grown = applyPhonePatch(start, patch("aa", 1, listOf(block("thinking", "think-1", "request.").copy(running = true, appendOffset = 4)), 1, 1))
+    val thought = grown.live?.blocks?.single()
+    assertEquals("The request.", thought?.body)
+    assertEquals(true, thought?.running)
+    assertEquals(emptyList<String>(), grown.blockFetchIds)
+  }
+
+  @Test
   fun anAppendOffsetMustMatchTheStoredUtf8Length() {
     val start = PhoneScreen(epoch = "aa", live = turn("Shown", listOf(block("answer", "answer-1", "Größe → "))))
     val grown = applyPhonePatch(start, patch("aa", 1, listOf(block("answer", "answer-1", "10 s.").copy(appendOffset = 12)), 1, 1))

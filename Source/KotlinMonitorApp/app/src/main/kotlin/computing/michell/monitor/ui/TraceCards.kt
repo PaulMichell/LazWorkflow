@@ -2,9 +2,9 @@ package computing.michell.monitor.ui
 
 /* Card captions follow the assistant trace layout (c) 2026 Michell Computing.
 
-   Thinking stays a grey chevron title. The body stays closed until the row is
-   opened, the same as the assistant. A tool or subagent is a grey header.
-   The assistant answer stays in its own bubble. */
+   When Show thinking is on, a thought starts open so each partial is visible,
+   the same as the desktop trace. Tools and subagents stay closed. A tool or
+   subagent is a grey header. The assistant answer stays in its own bubble. */
 
 import computing.michell.monitor.protocol.WireBlock
 import java.util.Locale
@@ -57,5 +57,7 @@ fun toolCardCaption(block: WireBlock): String {
   return toolCardCaption(block.title, block.toolName, block.running, block.ok, block.durationMs)
 }
 
-/** Thinking, tools, and subagents start closed, matching the assistant. */
-fun cardStartsOpen(kind: String): Boolean = false
+/** A thought starts open when the user asked to see it. Tools stay closed. */
+fun cardStartsOpen(kind: String, showThinking: Boolean = false): Boolean {
+  return kind == "thinking" && showThinking
+}
