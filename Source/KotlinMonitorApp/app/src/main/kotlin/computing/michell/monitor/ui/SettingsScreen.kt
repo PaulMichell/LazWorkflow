@@ -3,7 +3,6 @@ package computing.michell.monitor.ui
 /* Settings form. Connection first, then view switches (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,13 +29,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
@@ -71,7 +65,6 @@ fun SettingsScreen(
   onBack: () -> Unit
 ) {
   val shownError = settingsErrorText(errorText)
-  var helpOpen by remember { mutableStateOf(false) }
   Column(modifier = Modifier.fillMaxSize()) {
     SettingsBar(canLeave, onBack)
     Column(
@@ -139,11 +132,6 @@ fun SettingsScreen(
         )
       }
       Button(onClick = onCached, modifier = Modifier.fillMaxWidth()) { Text("Cached conversations") }
-      HorizontalDivider()
-      HelpRow(helpOpen) { helpOpen = !helpOpen }
-      if (helpOpen) {
-        Text(connectionHelpText(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-      }
     }
   }
 }
@@ -201,24 +189,3 @@ private fun SwitchRow(label: String, checked: Boolean, onChecked: (Boolean) -> U
   }
 }
 
-@Composable
-private fun HelpRow(open: Boolean, onToggle: () -> Unit) {
-  Row(
-    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp).clickable(onClick = onToggle),
-    verticalAlignment = Alignment.CenterVertically
-  ) {
-    Text("Connection help", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-    Icon(
-      painterResource(R.drawable.ic_expand),
-      contentDescription = if (open) "Collapse connection help" else "Expand connection help",
-      modifier = Modifier.rotate(if (open) 180f else 0f)
-    )
-  }
-}
-
-private fun connectionHelpText(): String {
-  val port = MonitorLimits.ListenPort
-  return "Same Wi-Fi uses that IPv4 and port $port. An emulator uses 127.0.0.1 after " +
-    "adb reverse tcp:$port tcp:$port, with the IDE bound to 127.0.0.1 or all interfaces. " +
-    "No fingerprint and no pairing code."
-}
