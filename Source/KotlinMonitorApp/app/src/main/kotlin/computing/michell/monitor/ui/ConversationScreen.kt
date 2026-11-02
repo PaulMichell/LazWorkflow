@@ -343,12 +343,11 @@ fun ActivityStatus(
       delay(1000)
     }
   }
-  val runtime = runtimeCaption(ui.view.model, ui.modelChoices)
+  val model = runtimeCaption(ui.view.model, ui.modelChoices)
   val activity = activityCaption(
     ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
   )
-  // displayInterrupted must not replace this slot, and must not start a reconnect clock.
-  val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else activity
+  val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else ""
   val statusStyle = MaterialTheme.typography.bodySmall
   val chip = connectionChip(
     phase,
@@ -361,34 +360,36 @@ fun ActivityStatus(
     ui.lastSyncMs
   )
   val connectionText = if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) ui.banner else chip.label
-  // Equal side columns keep the model on the screen centre. The chip stays left; progress stays right.
+  // The link is plain on the left. The model wears the rounded mark. Progress stays right.
   Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
       connectionText,
-      modifier = Modifier
-        .weight(1f)
-        .clip(RoundedCornerShape(12.dp))
-        .background(MaterialTheme.colorScheme.surfaceVariant)
-        .padding(horizontal = 8.dp, vertical = 2.dp),
+      modifier = Modifier.weight(1f),
       color = QuietText,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       style = statusStyle
     )
     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-      Text(
-        runtime,
-        color = QuietText,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        textAlign = TextAlign.Center,
-        style = statusStyle
-      )
+      if (model.isNotEmpty()) {
+        Text(
+          model,
+          color = QuietText,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          textAlign = TextAlign.Center,
+          style = statusStyle,
+          modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+      }
     }
     Text(
       right,
       color = QuietText,
-      maxLines = 2,
+      maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.End,
       style = statusStyle,

@@ -270,12 +270,6 @@ fun emptyView(): WireView {
   )
 }
 
-fun statusCaption(ui: MonitorUi, phase: LinkPhase): String {
-  if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) return ui.banner
-  if (ui.banner.isNotEmpty() && phase != LinkPhase.Live && phase != LinkPhase.Idle) return ui.banner
-  return connectionLabel(ui, phase)
-}
-
 fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
   // Patch flags are authoritative. A lost status frame must not leave the label on busy.
   if (phase == LinkPhase.Live && !ui.disconnected) {
@@ -407,6 +401,13 @@ const val NothingRunningToSteer = "Nothing is running to steer."
 
 fun clearRemoteActions(view: WireView): WireView {
   return view.copy(busy = false, sending = false, canSend = false, canSteer = false, canStop = false, planRunning = false)
+}
+
+/** A live idle host. Offline and a missing sign-in flag are not a second status. */
+fun idleActivity(statusText: String): String {
+  val text = statusText.trim()
+  if (text.isEmpty() || text == "Ready" || text == "Offline" || text == "Not signed in" || hostHasElapsed(text)) return "Ready"
+  return text
 }
 
 fun runtimeCaption(view: WireView): String = runtimeCaption(view.model)
@@ -550,15 +551,9 @@ fun activityCaption(
   live: WireTurn? = null,
   linkLive: Boolean = true
 ): String {
-  // The left chip already says Offline. Do not repeat it, or keep Ready, a progress word, or a clock.
+  // The left label owns the link. A live idle host is Ready. Offline is not repeated on the right.
   if (!linkLive) return ""
-  if (!turnStillRunning(view, pending, blocks, live)) {
-    val text = view.statusText.trim()
-    // The left chip owns Offline. Do not repeat it on the right.
-    if (text == "Not signed in" || text == "Offline" || !view.signedIn) return ""
-    if (text.isEmpty() || hostHasElapsed(text)) return "Ready"
-    return text
-  }
+  if (!turnStillRunning(view, pending, blocks, live)) return idleActivity(view.statusText)
   val phase = activityPhase(view, pending, pendingKind, blocks)
   // A missing start must not be replaced with now. That freezes the caption at 0:00.
   val elapsed = observedElapsedMs(view, live, blocks).toLong()
