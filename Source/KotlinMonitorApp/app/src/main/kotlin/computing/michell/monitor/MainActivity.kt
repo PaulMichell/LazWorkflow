@@ -76,7 +76,9 @@ import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.ConversationScreen
 import computing.michell.monitor.ui.MainTabs
 import computing.michell.monitor.ui.MonitorViewModel
+import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
+import computing.michell.monitor.ui.planLoaded
 import computing.michell.monitor.ui.SettingsScreen
 import computing.michell.monitor.ui.pageForTab
 import computing.michell.monitor.ui.tabAfterSwipe
@@ -168,7 +170,11 @@ private fun MonitorShell(model: MonitorViewModel) {
   var menuFlyout by remember { mutableStateOf<MenuSectionKind?>(null) }
   var hostWidthPx by remember { mutableIntStateOf(0) }
   var sheetWidthPx by remember { mutableIntStateOf(0) }
+  var planPreviewOpen by remember { mutableStateOf(false) }
   // A cancelled swipe never settles on the other page, so dictation and plan refresh stay put.
+  LaunchedEffect(ui.planPath) {
+    if (!planLoaded(ui.planPath)) planPreviewOpen = false
+  }
   LaunchedEffect(pagerState) {
     snapshotFlow { pagerState.settledPage }.collect { page ->
       val next = tabAfterSwipe(page, model.tab.value)
@@ -257,45 +263,60 @@ private fun MonitorShell(model: MonitorViewModel) {
               onSettings = {
                 scope.launch {
                   closeDrawer(drawerState)
+                  planPreviewOpen = false
                   model.showSettings()
                 }
               },
               menuEnabled = menuMayOpenDrawer(ui.approvalOpen)
             )
-            MonitorTabs(pagerState.currentPage) { item ->
-              model.selectTab(item)
-              scope.launch { pagerState.animateScrollToPage(pageForTab(item)) }
-            }
-            // The other page stays composed, so a swipe shows the cached plan at once.
-            HorizontalPager(
-              state = pagerState,
-              modifier = Modifier.weight(1f).fillMaxWidth(),
-              beyondViewportPageCount = 1,
-              userScrollEnabled = !ui.approvalOpen
-            ) { page ->
-              when (tabForPage(page)) {
-                AppTab.Conversation -> Box(
-                  Modifier
-                    .fillMaxSize()
-                    .then(
-                      if (menuEdgeSwipeEnabled(AppTab.Conversation, ui.approvalOpen)) {
-                        Modifier.menuEdgeSwipeToOpen {
-                          if (menuMayOpenDrawer(model.ui.value.approvalOpen)) scope.launch { drawerState.open() }
-                        }
-                      } else {
-                        Modifier
-                      }
-                    )
-                ) {
-                  ConversationScreen(
-                    ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
-                    model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
-                    dictation, model::toggleDictationOn, model::toggleDictationOff,
-                    permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
-                    model::retryUndelivered
-                  )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+              Column(Modifier.fillMaxSize()) {
+                MonitorTabs(pagerState.currentPage) { item ->
+                  planPreviewOpen = false
+                  model.selectTab(item)
+                  scope.launch { pagerState.animateScrollToPage(pageForTab(item)) }
                 }
-                AppTab.Plan -> PlanScreen(ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan)
+                // The other page stays composed, so a swipe shows the cached plan at once.
+                HorizontalPager(
+                  state = pagerState,
+                  modifier = Modifier.weight(1f).fillMaxWidth(),
+                  beyondViewportPageCount = 1,
+                  userScrollEnabled = !ui.approvalOpen && !planPreviewOpen
+                ) { page ->
+                  when (tabForPage(page)) {
+                    AppTab.Conversation -> Box(
+                      Modifier
+                        .fillMaxSize()
+                        .then(
+                          if (menuEdgeSwipeEnabled(AppTab.Conversation, ui.approvalOpen)) {
+                            Modifier.menuEdgeSwipeToOpen {
+                              if (menuMayOpenDrawer(model.ui.value.approvalOpen)) scope.launch { drawerState.open() }
+                            }
+                          } else {
+                            Modifier
+                          }
+                        )
+                    ) {
+                      ConversationScreen(
+                        ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
+                        model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
+                        dictation, model::toggleDictationOn, model::toggleDictationOff,
+                        permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
+                        model::retryUndelivered
+                      )
+                    }
+                    AppTab.Plan -> PlanScreen(
+                      ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan
+                    ) { planPreviewOpen = true }
+                  }
+                }
+              }
+              if (planPreviewOpen && planLoaded(ui.planPath) && tabForPage(pagerState.currentPage) == AppTab.Plan) {
+                PlanPreviewPanel(
+                  ui.planTitle, ui.planPath, ui.planBody, ui.planRows,
+                  onDismiss = { planPreviewOpen = false },
+                  modifier = Modifier.fillMaxSize()
+                )
               }
             }
             // Below the pager, so Conversation and Plan both keep the same status line.

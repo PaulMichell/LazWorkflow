@@ -14,32 +14,29 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import computing.michell.monitor.protocol.PlanRow
 import java.util.Locale
 
@@ -95,9 +92,9 @@ fun PlanScreen(
   onRun: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
-  onClose: () -> Unit
+  onClose: () -> Unit,
+  onPreview: () -> Unit
 ) {
-  var previewOpen by remember { mutableStateOf(false) }
   val loaded = planLoaded(ui.planPath)
   val running = ui.planRunning || ui.view.planRunning
   val online = !ui.disconnected
@@ -126,38 +123,41 @@ fun PlanScreen(
       ) { Text(planRunCaption(running)) }
       // New does not need a loaded plan. It is how the first plan is created.
       Button(onClick = onNew, enabled = planNewEnabled(online, running)) { Text("New") }
-      Button(onClick = { previewOpen = true }, enabled = planOpenEnabled(loaded, running)) { Text("Open") }
+      Button(onClick = onPreview, enabled = planOpenEnabled(loaded, running)) { Text("Open") }
       Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online, running)) { Text("Close") }
     }
   }
-  if (previewOpen && loaded) {
-    PlanPreviewDialog(ui.planTitle, ui.planPath, ui.planBody, ui.planRows) { previewOpen = false }
-  }
 }
 
+/** Fills the slot under the title header and above the status line. Full screen width. */
 @Composable
-fun PlanPreviewDialog(
+fun PlanPreviewPanel(
   title: String,
   path: String,
   body: String,
   rows: List<PlanRow>,
-  onDismiss: () -> Unit
+  onDismiss: () -> Unit,
+  modifier: Modifier = Modifier
 ) {
+  BackHandler(onBack = onDismiss)
   val heading = title.ifEmpty { "Plan" }
-  Dialog(onDismissRequest = onDismiss) {
-    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+  Surface(
+    modifier = modifier
+      .fillMaxSize()
+      .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+    color = MaterialTheme.colorScheme.surface
+  ) {
+    Column(Modifier.fillMaxSize()) {
       Column(
-        modifier = Modifier.padding(16.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
-        Text(heading, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Text(heading, style = MaterialTheme.typography.titleMedium)
         if (path.isNotEmpty()) {
           Text(
             path,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
           )
@@ -168,7 +168,6 @@ fun PlanPreviewDialog(
           Text(
             "The plan text has not arrived yet.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
           )
           rows.forEach { row ->
@@ -180,8 +179,12 @@ fun PlanPreviewDialog(
             )
           }
         }
-        TextButton(onClick = onDismiss) { Text("Close") }
       }
+      HorizontalDivider()
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.align(Alignment.End).padding(horizontal = 8.dp, vertical = 4.dp)
+      ) { Text("Close") }
     }
   }
 }
