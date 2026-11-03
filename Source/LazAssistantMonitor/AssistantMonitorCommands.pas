@@ -2,8 +2,9 @@ Unit AssistantMonitorCommands;
 
 { Command codecs for the monitor catalogue (c) 2026 Michell Computing.
 
-  Handshake, send, and command-state frames. Framing stays in
-  AssistantMonitorCodec. This unit does not read the assistant form. }
+  Handshake, send, mode, plan commands, task commands, resume, and command-state
+  frames. Framing stays in AssistantMonitorCodec. This unit does not read the
+  assistant form. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -39,6 +40,31 @@ Function EncodeCommandMode(Const Id, Mode: String; Locked: Boolean): String;
 Function DecodeCommandMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
 Function EncodeCommandTurnRequest(Const Id: String; TurnIndex: Integer): String;
 Function DecodeCommandTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+
+Function EncodeCommandSelectConversation(Const Id, ArchiveId: String): String;
+Function DecodeCommandSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function EncodeCommandSetModel(Const Id, ModelId: String): String;
+Function DecodeCommandSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function EncodeCommandSetReasoning(Const Id, Level: String): String;
+Function DecodeCommandSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function EncodeCommandSetPermissions(Const Id, Approval: String): String;
+Function DecodeCommandSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Function EncodeCommandPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
+Function DecodeCommandPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function EncodeCommandNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
+Function DecodeCommandNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function EncodeCommandWorkOnPlan(Const Id: String; Index: Integer): String;
+Function DecodeCommandWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Function DecodeCommandTask(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function EncodeCommandInsertResult(Const Id, Text: String): String;
+Function EncodeCommandTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
+Function DecodeCommandTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Function ReadCommandIds(Obj: TJSONObject; Out Ids: TStringArray): Boolean;
+Function EncodeCommandResume(Const Id, Epoch: String; Cursor: Int64): String;
+Function DecodeCommandResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function EncodeCommandStateFrame(Const Id, Ref, State, Reason: String; Const DoneText: String): String;
+Function EncodeCommandStateFrames(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 
 Implementation
 
@@ -353,5 +379,285 @@ Begin
     Data.Free;
   End;
 End;
+
+Function EncodeCommandSelectConversation(Const Id, ArchiveId: String): String;
+Begin
+  Result := EncodeMonitorOneString(mmkSelectConversation, Id, 'id', ArchiveId);
+End;
+
+Function DecodeCommandSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Begin
+  Result := DecodeMonitorOneString(PayloadJson, 'id', ArchiveId);
+End;
+
+Function EncodeCommandSetModel(Const Id, ModelId: String): String;
+Begin
+  Result := EncodeMonitorOneString(mmkSetModel, Id, 'model', ModelId);
+End;
+
+Function DecodeCommandSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Begin
+  Result := DecodeMonitorOneString(PayloadJson, 'model', ModelId);
+End;
+
+Function EncodeCommandSetReasoning(Const Id, Level: String): String;
+Begin
+  Result := EncodeMonitorOneString(mmkSetReasoning, Id, 'level', Level);
+End;
+
+Function DecodeCommandSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Begin
+  { Missing level is a decode failure. An empty level is model default, not that failure. }
+  Result := DecodeMonitorOneString(PayloadJson, 'level', Level);
+End;
+
+Function EncodeCommandSetPermissions(Const Id, Approval: String): String;
+Begin
+  Result := EncodeMonitorOneString(mmkSetPermissions, Id, 'approval', Approval);
+End;
+
+Function DecodeCommandSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Begin
+  { Missing approval is a decode failure. It is not ask. }
+  Result := DecodeMonitorOneString(PayloadJson, 'approval', Approval);
+End;
+
+Function EncodeCommandPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
+Begin
+  Result := '';
+  If (Kind <> mmkSelectPlan) And (Kind <> mmkSelectTarget) Then
+    Exit;
+  Result := EncodeMonitorOneString(Kind, Id, 'path', Path);
+End;
+
+Function DecodeCommandPath(Const PayloadJson: String; Out Path: String): Boolean;
+Begin
+  Result := DecodeMonitorOneString(PayloadJson, 'path', Path);
+End;
+
+Function EncodeCommandNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  If HasTitle Then
+    Payload.Add('title', Title);
+  Result := EncodeMonitorWith(mmkNewPlan, Id, Payload);
+End;
+
+Function DecodeCommandNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Plan.Path := '';
+  Plan.Title := '';
+  Plan.HasTitle := False;
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Plan.HasTitle := Assigned(Obj.Find('title'));
+    Result := True;
+    If Plan.HasTitle Then
+      Result := ReadMonitorString(Obj, 'title', True, Plan.Title);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeCommandWorkOnPlan(Const Id: String; Index: Integer): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('index', Index);
+  Result := EncodeMonitorWith(mmkWorkOnPlan, Id, Payload);
+End;
+
+Function DecodeCommandWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Index := 0;
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadMonitorInt(Obj, 'index', True, Index);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If (Kind <> mmkRunTask) And (Kind <> mmkInsertTask) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('id', TaskId);
+  Payload.Add('note', Note);
+  Result := EncodeMonitorWith(Kind, Id, Payload);
+End;
+
+Function DecodeCommandTask(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Command.Id := '';
+  Command.Note := '';
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadMonitorString(Obj, 'id', True, Command.Id) And ReadMonitorString(Obj, 'note', True, Command.Note);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeCommandInsertResult(Const Id, Text: String): String;
+Begin
+  Result := EncodeMonitorOneString(mmkInsertResult, Id, 'text', Text);
+End;
+
+Function EncodeCommandTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If (Kind <> mmkPing) And (Kind <> mmkPong) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Payload.Add('ticks', Ticks);
+  Result := EncodeMonitorWith(Kind, Id, Payload);
+End;
+
+Function DecodeCommandTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  Ticks.Ticks := 0;
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    Result := ReadMonitorInt64(Obj, 'ticks', Ticks.Ticks);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ReadCommandIds(Obj: TJSONObject; Out Ids: TStringArray): Boolean;
+Var
+  Node: TJSONData;
+  Arr: TJSONArray;
+  Index: Integer;
+Begin
+  Result := True;
+  Ids := Nil;
+  SetLength(Ids, 0);
+  If Obj.IndexOfName('commands') < 0 Then
+    Exit;
+  Node := Obj.Find('commands');
+  If Not (Node Is TJSONArray) Then
+    Exit(False);
+  Arr := TJSONArray(Node);
+  SetLength(Ids, Arr.Count);
+  For Index := 0 To Arr.Count - 1 Do
+    Begin
+      If Arr.Items[Index].JSONType <> jtString Then
+        Exit(False);
+      Ids[Index] := Arr.Items[Index].AsString;
+      If Not MonitorMessageIdIsSafe(Ids[Index]) Then
+        Exit(False);
+    End;
+End;
+
+Function EncodeCommandResume(Const Id, Epoch: String; Cursor: Int64): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('epoch', Epoch);
+  Payload.Add('cursor', Cursor);
+  Result := EncodeMonitorWith(mmkResume, Id, Payload);
+End;
+
+Function DecodeCommandResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  HasCursor, HasEpoch: Boolean;
+Begin
+  Result := False;
+  ResumeMsg.Epoch := '';
+  ResumeMsg.Cursor := 0;
+  ResumeMsg.ConversationId := '';
+  SetLength(ResumeMsg.Commands, 0);
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    HasCursor := ReadMonitorInt64(Obj, 'cursor', ResumeMsg.Cursor);
+    If Not HasCursor Then
+      HasCursor := ReadMonitorInt64(Obj, 'seq', ResumeMsg.Cursor);
+    HasEpoch := Obj.IndexOfName('epoch') >= 0;
+    If HasEpoch Then
+      ReadMonitorString(Obj, 'epoch', False, ResumeMsg.Epoch)
+    Else If Obj.IndexOfName('stream_id') >= 0 Then
+      Begin
+        ReadMonitorString(Obj, 'stream_id', False, ResumeMsg.Epoch);
+        HasEpoch := True;
+      End;
+    ReadMonitorString(Obj, 'conversation_id', False, ResumeMsg.ConversationId);
+    Result := HasEpoch And HasCursor And ReadCommandIds(Obj, ResumeMsg.Commands);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeCommandStateFrame(Const Id, Ref, State, Reason: String; Const DoneText: String): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Payload := TJSONObject.Create;
+  Payload.Add('ref', Ref);
+  Payload.Add('state', State);
+  If Reason <> '' Then
+    Payload.Add('reason', Reason);
+  If DoneText <> '' Then
+    Payload.Add('text', DoneText);
+  Result := EncodeMonitorWith(mmkCommandState, Id, Payload);
+End;
+
+Function EncodeCommandStateFrames(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
+Var
+  Payload, Item: TJSONObject;
+  States: TJSONArray;
+  Index: Integer;
+Begin
+  Payload := TJSONObject.Create;
+  States := TJSONArray.Create;
+  For Index := 0 To High(Replies) Do
+    Begin
+      Item := TJSONObject.Create;
+      Item.Add('ref', Replies[Index].Ref);
+      Item.Add('state', Replies[Index].State);
+      If Replies[Index].Reason <> '' Then
+        Item.Add('reason', Replies[Index].Reason);
+      If Replies[Index].Text <> '' Then
+        Item.Add('text', Replies[Index].Text);
+      States.Add(Item);
+    End;
+  Payload.Add('states', States);
+  Result := EncodeMonitorWith(mmkCommandStates, Id, Payload);
+End;
+
 
 End.

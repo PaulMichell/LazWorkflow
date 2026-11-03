@@ -16,8 +16,10 @@ Unit AssistantMonitorSession;
   from the carrier thread. The phone's MonitorLimits holds the same two values.
 
   Size note: exceeds the 1000 line preference. What remains is connection state,
-  command intake, and approval. Catalogue 2 live-patch and log-credit helpers
-  stay because the session and mirror tests still call them.
+  command intake, and approval. The lane arrays and the second resume are gone.
+  Catalogue 2 live-patch and log-credit helpers stay because the session and
+  mirror tests still call them. Deleting those would change assertions those
+  tests own.
   Reviewed 2026-11-03: no socket or form code in this unit. }
 
 {$IFDEF FPC}

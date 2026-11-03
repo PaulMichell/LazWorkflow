@@ -14,9 +14,8 @@ Unit AssistantMonitorMirror;
   Resume behind a dropped record needs a snapshot.
 
   Size note: exceeds the 1000 line preference. What remains is the log, the
-  materialised model, and the slice split. Page writers that still have a caller
-  stay with that model. The log-credit class stays because the mirror test
-  still constructs it.
+  materialised model, and the slice split. Page JSON writers with no caller are
+  gone. The log-credit class stays because the mirror test still constructs it.
   Reviewed 2026-11-03: JSON escaping is one pass because those pages are built
   on the IDE thread. }
 
