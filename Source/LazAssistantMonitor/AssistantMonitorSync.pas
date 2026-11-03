@@ -54,6 +54,17 @@ Type
     ApprovalToolId: String;
   End;
 
+Type
+  TMonitorSyncLane = (mslControl, mslState, mslLog, mslBulk, mslBarrier);
+
+{ Control and approval stay on control. Other state names its key. Slices are the log.
+  Fetch answers and turn pages are bulk. snapshot_end is the barrier. }
+Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String): Boolean;
+Function MonitorSyncStateFrame(Const Id, Key, ValueJson: String): String;
+{ One state frame, or chunk frames of that value when the envelope exceeds 32 KiB. }
+Function MonitorSyncEventSeq(Const Json: String): Int64;
+Function MonitorSyncStateFrames(Const Id, Key, ValueJson: String): TStringArray;
+
 { One resume answer. State frames are not included; the caller queues those first. }
 Function MonitorSyncResumeAnswer(Const Source: TMonitorResumeSource; Const RequestedId, PhoneStream, ResumeId: String;
   PhoneSeq: Int64; Const Status: TMonitorSyncStatus): TMonitorSyncAnswer;
@@ -277,16 +288,6 @@ Begin
   Result := Default(TMonitorSyncAnswer);
   Result.Head := Source.Head;
   Result.Generation := Source.Head + 1;
-  AddFrame(Result, mskControl, Envelope(ResumeId + '-status', 'state', '{"key":"status","value":{"busy":' +
-    YesNo(Status.Busy) + ',"sending":' + YesNo(Status.Sending) + ',"plan_running":' + YesNo(Status.PlanRunning) +
-    ',"phase":"' + JsonEscape(Status.Phase) + '","status_text":"' + JsonEscape(Status.StatusText) +
-    '","can_send":' + YesNo(Status.CanSend) + ',"can_steer":' + YesNo(Status.CanSteer) + ',"can_stop":' +
-    YesNo(Status.CanStop) + ',"can_change_mode":' + YesNo(Status.CanChangeMode) + '}}'));
-  If Status.ApprovalActive Then
-    AddFrame(Result, mskControl, Envelope(ResumeId + '-approval', 'state', '{"key":"approval","value":{"active":true,"tool_id":"' +
-      JsonEscape(Status.ApprovalToolId) + '"}}'))
-  Else
-    AddFrame(Result, mskControl, Envelope(ResumeId + '-approval', 'state', '{"key":"approval","value":{"active":false}}'));
   If (Not Source.Found) Or (Not Source.Observed) Then
     Begin
       Result.NotReady := True;
@@ -342,6 +343,128 @@ Begin
   AddFrame(Result, mskBarrier, Envelope(ResumeId + '-end', 'snapshot_end', '{"conversation_id":"' +
     JsonEscape(Source.ConversationId) + '","stream_id":"' + JsonEscape(Source.StreamId) + '","seq":' +
     IntToStr(Source.Head) + '}'));
+End;
+
+Function QuotedField(Const Json, Name: String): String;
+Var
+  Token, Tail: String;
+  At: Integer;
+Begin
+  Result := '';
+  Token := '"' + Name + '":"';
+  At := Pos(Token, Json);
+  If At = 0 Then
+    Exit;
+  Tail := Copy(Json, At + Length(Token), MaxInt);
+  At := Pos('"', Tail);
+  If At = 0 Then
+    Exit;
+  Result := Copy(Tail, 1, At - 1);
+End;
+
+Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String): Boolean;
+Var
+  TypeName, Key, ItemType: String;
+Begin
+  Lane := mslControl;
+  StateKey := '';
+  Result := False;
+  TypeName := QuotedField(Json, 'type');
+  If TypeName = 'state' Then
+    Begin
+      Key := QuotedField(Json, 'key');
+      StateKey := Key;
+      If Key = 'approval' Then
+        Lane := mslControl
+      Else
+        Lane := mslState;
+      Result := True;
+    End
+  Else If TypeName = 'event' Then
+    Begin
+      Lane := mslLog;
+      Result := True;
+    End
+  Else If (TypeName = 'block_data') Or (TypeName = 'image_data') Or (TypeName = 'plan_data') Or
+    (TypeName = 'snapshot_page') Then
+    Begin
+      Lane := mslBulk;
+      Result := True;
+    End
+  Else If TypeName = 'snapshot_end' Then
+    Begin
+      Lane := mslBarrier;
+      Result := True;
+    End
+  Else If TypeName = 'chunk' Then
+    Begin
+      ItemType := QuotedField(Json, 'item_type');
+      If ItemType = 'state' Then
+        Begin
+          Lane := mslState;
+          StateKey := QuotedField(Json, 'item_id');
+          If StateKey = 'approval' Then
+            Lane := mslControl;
+          Result := True;
+        End
+      Else If (ItemType = 'block_data') Or (ItemType = 'image_data') Or (ItemType = 'plan_data') Or
+        (ItemType = 'snapshot_page') Then
+        Begin
+          Lane := mslBulk;
+          Result := True;
+        End;
+    End;
+End;
+
+Function MonitorSyncStateFrame(Const Id, Key, ValueJson: String): String;
+Begin
+  Result := Envelope(Id, 'state', '{"key":"' + JsonEscape(Key) + '","value":' + ValueJson + '}');
+End;
+
+Function MonitorSyncEventSeq(Const Json: String): Int64;
+Var
+  Token, Tail: String;
+  At, EndAt: Integer;
+Begin
+  Result := 0;
+  Token := '"seq":';
+  At := Pos(Token, Json);
+  If At = 0 Then
+    Exit;
+  Tail := Copy(Json, At + Length(Token), 24);
+  EndAt := 1;
+  While (EndAt <= Length(Tail)) And (Tail[EndAt] In ['0'..'9', '-']) Do
+    Inc(EndAt);
+  Result := StrToInt64Def(Copy(Tail, 1, EndAt - 1), 0);
+End;
+
+Function MonitorSyncStateFrames(Const Id, Key, ValueJson: String): TStringArray;
+Var
+  Whole, Piece: String;
+  Part, PartCount, At, Step: Integer;
+Begin
+  SetLength(Result, 0);
+  Whole := MonitorSyncStateFrame(Id, Key, ValueJson);
+  If Length(Whole) <= MonitorOutboxChunkBytes Then
+    Begin
+      SetLength(Result, 1);
+      Result[0] := Whole;
+      Exit;
+    End;
+  PartCount := (Length(ValueJson) Div 20000) + 1;
+  SetLength(Result, PartCount);
+  At := 1;
+  For Part := 1 To PartCount Do
+    Begin
+      Step := Length(ValueJson) - At + 1;
+      If Step > 20000 Then
+        Step := 20000;
+      Piece := Copy(ValueJson, At, Step);
+      Result[Part - 1] := Envelope(Id + '-c' + IntToStr(Part), 'chunk', '{"item_id":"' + JsonEscape(Key) +
+        '","part":' + IntToStr(Part) + ',"part_count":' + IntToStr(PartCount) + ',"item_type":"state","data":"' +
+        JsonEscape(Piece) + '"}');
+      Inc(At, Step);
+    End;
 End;
 
 End.

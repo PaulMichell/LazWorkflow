@@ -81,6 +81,22 @@ Begin
   End;
 End;
 
+Function PlanFileRevision(Const Text: String): String;
+Var
+  Hash: UInt64;
+  Index: Integer;
+Begin
+  {$PUSH}{$Q-}{$R-}
+  Hash := UInt64(14695981039346656037);
+  For Index := 1 To Length(Text) Do
+    Begin
+      Hash := Hash Xor Ord(Text[Index]);
+      Hash := Hash * UInt64(1099511628211);
+    End;
+  {$POP}
+  Result := LowerCase(IntToHex(Hash, 16));
+End;
+
 Function PlanTextFingerprint(Const Text: String): String;
 Var
   Index: Integer;
@@ -118,9 +134,7 @@ Begin
   If Not FileExistsUTF8(Resolved) Then
     Exit;
   Body := ReadCappedUtf8File(Resolved, AssistantPlanDocumentMaxBytes, Truncated);
-  Result := PlanTextFingerprint(Body);
-  If Truncated Then
-    Result := Result + ':cut';
+  Result := PlanFileRevision(Body);
 End;
 
 Function AssistantPlanFileStamp(Const RelativeOrAbsolute: String; Out Age: LongInt; Out Bytes: Int64): Boolean;

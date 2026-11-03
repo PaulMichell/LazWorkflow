@@ -121,6 +121,7 @@ Type
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
 
     Procedure RetryDeferredResumes;
+    Procedure PublishStateKeys(Form: TProjectAssistantForm);
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PushLiveState;
     Procedure NoteOpenLogPosition;
@@ -610,24 +611,136 @@ Begin
   FSentFlagsValid := False;
 End;
 
-Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
+Function JsonBool(Condition: Boolean): String;
+Begin
+  If Condition Then
+    Result := 'true'
+  Else
+    Result := 'false';
+End;
+
+Function ChoiceArray(Paths, Captions: TStrings): String;
 Var
+  Index: Integer;
+  One: String;
+Begin
+  Result := '';
+  If (Not Assigned(Paths)) Or (Not Assigned(Captions)) Then
+    Exit;
+  For Index := 0 To Paths.Count - 1 Do
+    Begin
+      If Index >= Captions.Count Then
+        Break;
+      One := '{"path":"' + Paths[Index] + '","caption":"' + Captions[Index] + '"}';
+      If Result <> '' Then
+        Result := Result + ',';
+      Result := Result + One;
+    End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishStateKeys(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
   View: TAssistantMonitorView;
-  Payload: TJSONObject;
+  Rows: TAssistantMonitorPlanRows;
+  Tasks: TAssistantMonitorTaskRows;
+  Paths, Captions, Ids, Titles: TStringList;
+  Current, Backend, Note, PlanRows, TaskRows: String;
+  Index: Integer;
+  Truncated: Boolean;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If Not Assigned(Session) Then
+    Exit;
+  Form.FillMonitorView(View);
+  View.RemoteApproval := MonitorRemoteApprovalEnabled;
+  ApplyHostFlags(View);
+  Session.PublishState('status', '{"busy":' + JsonBool(View.Sending Or View.PlanRunning) + ',"sending":' +
+    JsonBool(View.Sending) + ',"plan_running":' + JsonBool(View.PlanRunning) + ',"phase":"' + View.Phase +
+    '","status_text":"' + View.StatusText + '","started_at":"' + View.StartedAt + '","can_send":' +
+    JsonBool(View.CanSend) + ',"can_steer":' + JsonBool(View.CanSteer) + ',"can_stop":' + JsonBool(View.CanStop) +
+    ',"can_change_mode":' + JsonBool(View.CanChangeMode) + ',"error_text":"' + View.ErrorText + '"}');
+  Session.PublishState('session', '{"model":"' + View.Model + '","backend":"' + View.Backend + '","signed_in":' +
+    JsonBool(View.SignedIn) + ',"effort":"' + View.Effort + '","skill":"' + View.Skill + '","context_text":"' +
+    View.ContextText + '","remote_approval":' + JsonBool(View.RemoteApproval) + ',"approval_caption":"' +
+    View.ApprovalCaption + '"}');
+  Session.PublishState('mode', '{"mode":"' + View.Mode + '","locked":' + JsonBool(View.ModeLocked) + '}');
+  Session.PublishState('target', '{"kind":"' + View.TargetKind + '","display":"' + View.TargetDisplay + '","root":"' +
+    View.TargetRoot + '"}');
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
+  Ids := TStringList.Create;
+  Titles := TStringList.Create;
+  Try
+    Form.FillMonitorTargetChoices(Paths, Captions, Current);
+    Session.PublishState('targets', '{"current":"' + Current + '","choices":[' + ChoiceArray(Paths, Captions) + ']}');
+    Paths.Clear;
+    Captions.Clear;
+    Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
+    Session.PublishState('conversations', '{"current":"' + Current + '","truncated":' + JsonBool(Truncated) +
+      ',"choices":[' + ChoiceArray(Ids, Titles) + ']}');
+    Ids.Clear;
+    Titles.Clear;
+    Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
+    Session.PublishState('models', '{"current":"' + Current + '","backend":"' + Backend + '","note":"' + Note +
+      '","choices":[' + ChoiceArray(Ids, Captions) + ']}');
+    Ids.Clear;
+    Captions.Clear;
+    Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
+    Session.PublishState('reasoning', '{"current":"' + Current + '","note":"' + Note + '","choices":[' +
+      ChoiceArray(Ids, Captions) + ']}');
+    Ids.Clear;
+    Captions.Clear;
+    Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
+    Session.PublishState('permissions', '{"current":"' + Current + '","backend":"' + Backend + '","note":"' + Note +
+      '","choices":[' + ChoiceArray(Ids, Captions) + ']}');
+    Paths.Clear;
+    Captions.Clear;
+    Form.FillMonitorPlanChoices(Paths, Captions);
+    Session.PublishState('plan_choices', '{"choices":[' + ChoiceArray(Paths, Captions) + ']}');
+    Form.FillMonitorPlan(Rows);
+    PlanRows := '';
+    For Index := 0 To High(Rows) Do
+      Begin
+        If PlanRows <> '' Then
+          PlanRows := PlanRows + ',';
+        PlanRows := PlanRows + '{"index":' + IntToStr(Rows[Index].Index) + ',"level":' + IntToStr(Rows[Index].Level) +
+          ',"title":"' + Rows[Index].Title + '","parent_title":"' + Rows[Index].ParentTitle + '","status":"' +
+          Rows[Index].Status + '","actionable":' + JsonBool(Rows[Index].Actionable) + '}';
+      End;
+    Session.PublishState('plan', '{"path":"' + View.PlanPath + '","title":"' + View.PlanTitle + '","running":' +
+      JsonBool(View.PlanRunning) + ',"revision":"' + Form.PlanDocumentRevision + '","rows":[' + PlanRows + ']}');
+    Form.FillMonitorTasks(Tasks);
+    TaskRows := '';
+    For Index := 0 To High(Tasks) Do
+      Begin
+        If TaskRows <> '' Then
+          TaskRows := TaskRows + ',';
+        TaskRows := TaskRows + '{"id":"' + Tasks[Index].Id + '","title":"' + Tasks[Index].Title + '","summary":"' +
+          Tasks[Index].Summary + '","mode":"' + Tasks[Index].Mode + '"}';
+      End;
+    Session.PublishState('tasks', '{"rows":[' + TaskRows + ']}');
+  Finally
+    Titles.Free;
+    Ids.Free;
+    Captions.Free;
+    Paths.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
 Begin
   Try
     If Not Assigned(Form) Then
       Exit;
-    Form.FillMonitorView(View);
-    View.RemoteApproval := MonitorRemoteApprovalEnabled;
-    ApplyHostFlags(View);
-    { The phone rejects a partial status. This is the same object the snapshot view uses. }
-    Payload := MonitorStatusToJson(View);
-    Try
-      SendJson(EncodeMonitorEnvelope(mmkStatus, HostId, Payload));
-    Finally
-      Payload.Free;
-    End;
+    PublishStateKeys(Form);
     { A connection reload sets the flags. The requested lists follow this status frame. }
     PublishSamplingLists(Form);
   Finally
@@ -977,77 +1090,22 @@ Begin
 End;
 
 Procedure TAssistantMonitorBridge.PublishPlanRows(Form: TProjectAssistantForm);
-Var
-  Paths, Captions: TStringList;
-  View: TAssistantMonitorView;
-  Rows: TAssistantMonitorPlanRows;
-  Session: TMonitorSession;
-  Frames: TStringArray;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  Paths := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    Form.FillMonitorPlanChoices(Paths, Captions);
-    Form.FillMonitorView(View);
-    Form.FillMonitorPlan(Rows);
-    PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, '', True,
-      Frames);
-    If Assigned(Session) And (Length(Frames) > 0) Then
-      Session.ReplacePlanFrames(Frames);
-  Finally
-    Captions.Free;
-    Paths.Free;
-  End;
+  PublishStateKeys(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushPlan(Form: TProjectAssistantForm);
 Var
-  Paths, Captions: TStringList;
   View: TAssistantMonitorView;
   Rows: TAssistantMonitorPlanRows;
-  Session: TMonitorSession;
-  Frames: TStringArray;
-  Body, Note: String;
 Begin
   If Not Assigned(Form) Then
     Exit;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  Paths := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    { Not a log event. A cursor here skips a patch, and the phone stops applying the turn. }
-    Form.NoteMonitorPlanRevision;
-    Form.FillMonitorPlanChoices(Paths, Captions);
-    Form.FillMonitorView(View);
-    Form.FillMonitorPlan(Rows);
-    Body := Form.ReadMonitorPlanPreview;
-    Note := 'The plan is too large to cache on the phone.';
-    If Not PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, Body,
-      True, Frames) Then
-      PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, Note, True,
-        Frames);
-    If Assigned(Session) And (Length(Frames) > 0) Then
-      Begin
-        Session.ReplacePlanFrames(Frames);
-        FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
-      End;
-  Finally
-    Captions.Free;
-    Paths.Free;
-  End;
+  Form.NoteMonitorPlanRevision;
+  PublishStateKeys(Form);
+  Form.FillMonitorPlan(Rows);
+  Form.FillMonitorView(View);
+  FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
 End;
 
 Procedure TAssistantMonitorBridge.PushMenuLists(Form: TProjectAssistantForm);
@@ -1060,21 +1118,8 @@ Begin
 End;
 
 Procedure TAssistantMonitorBridge.PushTargets(Form: TProjectAssistantForm);
-Var
-  Paths, Captions: TStringList;
-  Current: String;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Paths := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    Form.FillMonitorTargetChoices(Paths, Captions, Current);
-    SendJson(EncodeMonitorTargets(HostId, Current, Paths, Captions));
-  Finally
-    Captions.Free;
-    Paths.Free;
-  End;
+  PublishStateKeys(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushModels(Form: TProjectAssistantForm);
@@ -1087,8 +1132,7 @@ Begin
   Ids := TStringList.Create;
   Captions := TStringList.Create;
   Try
-    Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
-    SendJson(EncodeMonitorModels(HostId, Current, Backend, Note, Ids, Captions));
+    PublishStateKeys(Form);
   Finally
     Captions.Free;
     Ids.Free;
@@ -1105,8 +1149,7 @@ Begin
   Ids := TStringList.Create;
   Captions := TStringList.Create;
   Try
-    Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
-    SendJson(EncodeMonitorReasoning(HostId, Current, Note, Ids, Captions));
+    PublishStateKeys(Form);
   Finally
     Captions.Free;
     Ids.Free;
@@ -1123,8 +1166,7 @@ Begin
   Ids := TStringList.Create;
   Captions := TStringList.Create;
   Try
-    Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
-    SendJson(EncodeMonitorPermissions(HostId, Current, Backend, Note, Ids, Captions));
+    PublishStateKeys(Form);
   Finally
     Captions.Free;
     Ids.Free;
@@ -1142,8 +1184,7 @@ Begin
   Ids := TStringList.Create;
   Titles := TStringList.Create;
   Try
-    Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
-    SendJson(EncodeMonitorConversations(HostId, Current, Ids, Titles, Truncated));
+    PublishStateKeys(Form);
   Finally
     Titles.Free;
     Ids.Free;
@@ -1166,16 +1207,12 @@ Begin
     asnMode:
       If Assigned(Form) Then
         Begin
-          Form.FillMonitorView(View);
-          ApplyHostFlags(View);
-          SendJson(EncodeMonitorMode(HostId, View.Mode, View.ModeLocked));
+          PublishStateKeys(Form);
         End;
     asnTarget:
       If Assigned(Form) Then
         Begin
-          Form.FillMonitorView(View);
-          SendJson(EncodeMonitorTarget(HostId, View.TargetKind, View.TargetDisplay, View.TargetRoot));
-          PushTargets(Form);
+          PublishStateKeys(Form);
         End;
     asnPlan:
       If Assigned(Form) Then
@@ -1183,8 +1220,7 @@ Begin
     asnTasks:
       If Assigned(Form) Then
         Begin
-          Form.FillMonitorTasks(Tasks);
-          SendJson(EncodeMonitorTasks(HostId, Tasks));
+          PublishStateKeys(Form);
         End;
     asnStatus, asnError, asnSession:
       { The idle flags and the model travel here. A patch alone can miss both. }

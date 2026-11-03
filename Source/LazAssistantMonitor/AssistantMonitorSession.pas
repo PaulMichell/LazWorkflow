@@ -144,6 +144,8 @@ Type
     FLogResume: Boolean;
     { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
     FAwaitingObservation: Boolean;
+    FStateKeys: TStringArray;
+    FStateValues: TStringArray;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -234,6 +236,8 @@ Type
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure FillLogLane;
     Procedure QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
+    Procedure RememberState(Const Key, ValueJson: String);
+    Procedure PublishRememberedState;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -308,6 +312,7 @@ Type
     Procedure NoteCommandAccepted(Const Id: String);
     Procedure NoteCommandRejected(Const Id, Reason: String);
     Procedure NoteCommandDone(Const Id: String; Const DoneText: String = '');
+    Procedure PublishState(Const Key, ValueJson: String);
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
     Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
@@ -873,6 +878,8 @@ End;
 Function TMonitorSession.QueueSend(Const Json: String): Boolean;
 Var
   Lane: THostLane;
+  SyncLane: TMonitorSyncLane;
+  StateKey: String;
   Seq: Int64;
   Bytes: RawByteString;
   One: Array Of RawByteString;
@@ -892,6 +899,45 @@ Begin
           Exit;
         End;
       FCredit.NoteSent(Seq, Length(Json));
+    End;
+  If MonitorSyncClassify(Json, SyncLane, StateKey) Then
+    Begin
+      If Not EncodeHostFrame(Json, Bytes) Then
+        Begin
+          CloseForQueueFailure(Json);
+          Exit;
+        End;
+      SetLength(One, 1);
+      One[0] := Bytes;
+      Case SyncLane Of
+        mslState:
+          Begin
+            If FOutbox.ReplaceState(StateKey, One, Replaced) Then
+              Result := True
+            Else
+              CloseForQueueFailure(Json);
+          End;
+        mslLog:
+          Result := FOutbox.AppendLog(MonitorSyncEventSeq(Json), Bytes);
+        mslBulk:
+          Begin
+            If FOutbox.AddBulk(One) Then
+              Result := True
+            Else
+              QueueOverload(Json);
+          End;
+        mslBarrier:
+          Begin
+            FOutbox.HoldBarrier(Bytes, 1);
+            Result := True;
+          End;
+      Else
+        If FOutbox.AddControl(Bytes) Then
+          Result := True
+        Else
+          CloseForQueueFailure(Json);
+      End;
+      Exit;
     End;
   If Not EncodeHostFrame(Json, Bytes) Then
     Begin
@@ -1641,6 +1687,16 @@ Begin
   Status.CanChangeMode := FHostFlags.CanChangeMode;
   Status.ApprovalActive := FRemoteApproval And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
   Status.ApprovalToolId := FPendingApprovalId;
+  PublishRememberedState;
+  PublishState('status', '{"busy":' + LowerCase(BoolToStr(Status.Busy, True)) + ',"sending":' +
+    LowerCase(BoolToStr(Status.Sending, True)) + ',"plan_running":' + LowerCase(BoolToStr(Status.PlanRunning, True)) +
+    ',"phase":"","status_text":"","can_send":' + LowerCase(BoolToStr(Status.CanSend, True)) + ',"can_steer":' +
+    LowerCase(BoolToStr(Status.CanSteer, True)) + ',"can_stop":' + LowerCase(BoolToStr(Status.CanStop, True)) +
+    ',"can_change_mode":' + LowerCase(BoolToStr(Status.CanChangeMode, True)) + ',"started_at":"","error_text":""}');
+  If Status.ApprovalActive Then
+    PublishState('approval', '{"active":true,"tool_id":"' + Status.ApprovalToolId + '"}')
+  Else
+    PublishState('approval', '{"active":false}');
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
   FPhoneAcked := ResumeMsg.Cursor;
@@ -2451,6 +2507,56 @@ Begin
     FMirror.ObserveTurn(Turn);
   If Assigned(FOutbox) Then
     FOutbox.Notify;
+End;
+
+Procedure TMonitorSession.RememberState(Const Key, ValueJson: String);
+Var
+  Index: Integer;
+Begin
+  For Index := 0 To High(FStateKeys) Do
+    If FStateKeys[Index] = Key Then
+      Begin
+        FStateValues[Index] := ValueJson;
+        Exit;
+      End;
+  SetLength(FStateKeys, Length(FStateKeys) + 1);
+  SetLength(FStateValues, Length(FStateValues) + 1);
+  FStateKeys[High(FStateKeys)] := Key;
+  FStateValues[High(FStateValues)] := ValueJson;
+End;
+
+Procedure TMonitorSession.PublishState(Const Key, ValueJson: String);
+Var
+  Frames: TStringArray;
+  Encoded: Array Of RawByteString;
+  Index, Replaced: Integer;
+Begin
+  If (Key = '') Or (Not Assigned(FOutbox)) Then
+    Exit;
+  RememberState(Key, ValueJson);
+  Frames := MonitorSyncStateFrames(NewHostId, Key, ValueJson);
+  SetLength(Encoded, 0);
+  For Index := 0 To High(Frames) Do
+    Begin
+      SetLength(Encoded, Length(Encoded) + 1);
+      If Not EncodeHostFrame(Frames[Index], Encoded[High(Encoded)]) Then
+        Exit;
+    End;
+  If Key = 'approval' Then
+    Begin
+      For Index := 0 To High(Encoded) Do
+        FOutbox.AddControl(Encoded[Index]);
+    End
+  Else If Not FOutbox.ReplaceState(Key, Encoded, Replaced) Then
+    CloseForQueueFailure(Frames[0]);
+End;
+
+Procedure TMonitorSession.PublishRememberedState;
+Var
+  Index: Integer;
+Begin
+  For Index := 0 To High(FStateKeys) Do
+    PublishState(FStateKeys[Index], FStateValues[Index]);
 End;
 
 Procedure TMonitorSession.QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
