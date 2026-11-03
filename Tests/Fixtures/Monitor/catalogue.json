@@ -24,6 +24,7 @@
     "log_budget_bytes": 8388608,
     "inline_body_bytes": 262144,
     "block_data_bytes": 24576,
+    "max_append_bytes": 4096,
     "max_image_fetch_bytes": 1048576
   },
   "kinds": "string, integer, boolean, object, array, id, hex32, enum:<enum>, object:<object>, array:<object|string|id>, event_data, state_value, state_map",
@@ -39,12 +40,21 @@
     "approval_closed_reason": ["allowed", "denied", "finished", "timeout", "desktop", "disabled", "stopped"],
     "image_unavailable_reason": ["missing", "too_large", "refused"],
     "error_reason": ["unknown_type", "protocol", "payload_too_large", "host_busy", "no_session", "not_found",
-      "snapshot_too_large", "cancelled", "failed"]
+      "revision_changed", "overloaded", "snapshot_too_large", "cancelled", "failed"]
   },
   "objects": {
+    "outline_block": {
+      "required": {"block_id": "id", "kind": "enum:block_kind", "state": "enum:block_state", "revision": "integer",
+        "body_bytes": "integer", "hash": "string"},
+      "optional": {}
+    },
     "outline_turn": {
       "required": {"turn_id": "id", "turn_index": "integer", "prompt_preview": "string", "created_at": "string",
-        "block_count": "integer"},
+        "block_count": "integer", "blocks": "array:outline_block"},
+      "optional": {}
+    },
+    "open_block": {
+      "required": {"block_id": "id", "revision": "integer", "body": "string", "body_bytes": "integer", "hash": "string"},
       "optional": {}
     },
     "turn": {
@@ -76,7 +86,7 @@
         "compile_first": "boolean", "enabled": "boolean", "needs_note": "boolean"},
       "optional": {}
     },
-    "command_state": {"required": {"ref": "id", "state": "enum:command_state"}, "optional": {"reason": "string"}}
+    "command_state": {"required": {"ref": "id", "state": "enum:command_state"}, "optional": {"reason": "string", "text": "string"}}
   },
   "types": {
     "hello": {"direction": "phone", "lane": "none", "required": {"client_name": "string", "client_version": "string"},
@@ -98,14 +108,14 @@
       "required": {"conversation_id": "string", "stream_id": "string", "seq": "integer", "commands": "array:id"}, "optional": {}},
     "resume_ok": {"direction": "host", "lane": "control",
       "required": {"conversation_id": "id", "stream_id": "hex32", "from_seq": "integer", "to_seq": "integer"}, "optional": {}},
+    "not_ready": {"direction": "host", "lane": "control", "required": {"conversation_id": "string"}, "optional": {}},
     "snapshot_begin": {"direction": "host", "lane": "control",
       "required": {"conversation_id": "id", "stream_id": "hex32", "seq": "integer", "title": "string", "project_root": "string",
         "turn_count": "integer", "page_count": "integer", "turns": "array:outline_turn", "state": "state_map"},
-      "optional": {}},
+      "optional": {"open_block": "object:open_block"}},
     "snapshot_page": {"direction": "host", "lane": "bulk",
-      "required": {"conversation_id": "id", "stream_id": "hex32", "seq": "integer", "page": "integer", "page_count": "integer",
-        "turns": "array:turn"},
-      "optional": {}},
+      "required": {"conversation_id": "id", "stream_id": "hex32", "seq": "integer", "page": "integer", "page_count": "integer"},
+      "optional": {"turns": "array:outline_turn", "turn": "object:turn"}},
     "snapshot_end": {"direction": "host", "lane": "control",
       "required": {"conversation_id": "id", "stream_id": "hex32", "seq": "integer"}, "optional": {}},
     "event": {"direction": "host", "lane": "log",
@@ -115,11 +125,18 @@
       "required": {"conversation_id": "id", "stream_id": "hex32", "seq": "integer"}, "optional": {}},
     "state": {"direction": "host", "lane": "state", "required": {"key": "string", "value": "state_value"}, "optional": {}},
     "block_get": {"direction": "phone", "lane": "none",
-      "required": {"conversation_id": "id", "block_id": "id", "offset": "integer"}, "optional": {}},
+      "required": {"conversation_id": "id", "block_id": "id", "offset": "integer", "prefix_hash": "string"}, "optional": {}},
     "block_data": {"direction": "host", "lane": "bulk",
-      "required": {"conversation_id": "id", "block_id": "id", "offset": "integer", "text": "string", "total_bytes": "integer",
-        "last": "boolean"},
+      "required": {"conversation_id": "id", "block_id": "id", "ref": "id", "revision": "integer", "offset": "integer",
+        "text": "string", "total_bytes": "integer", "last": "boolean"},
       "optional": {}},
+    "plan_get": {"direction": "phone", "lane": "none",
+      "required": {"path": "string", "offset": "integer", "revision": "string"}, "optional": {}},
+    "plan_data": {"direction": "host", "lane": "bulk",
+      "required": {"path": "string", "revision": "string", "offset": "integer", "text": "string", "total_bytes": "integer",
+        "last": "boolean", "ref": "id"},
+      "optional": {}},
+    "turn": {"direction": "phone", "lane": "none", "required": {"conversation_id": "id", "turn_index": "integer"}, "optional": {}},
     "image_get": {"direction": "phone", "lane": "none", "required": {"conversation_id": "id", "image_id": "id"}, "optional": {}},
     "image_data": {"direction": "host", "lane": "bulk",
       "required": {"image_id": "id", "mime": "string", "width": "integer", "height": "integer", "revision": "integer",
@@ -149,11 +166,8 @@
     "work_on_plan": {"direction": "phone", "lane": "none", "required": {"index": "integer"}, "optional": {}},
     "run_task": {"direction": "phone", "lane": "none", "required": {"id": "string", "note": "string"}, "optional": {}},
     "insert_task": {"direction": "phone", "lane": "none", "required": {"id": "string", "note": "string"}, "optional": {}},
-    "queued": {"direction": "host", "lane": "control", "required": {"ref": "id"}, "optional": {}},
-    "accepted": {"direction": "host", "lane": "control", "required": {"ref": "id"}, "optional": {}},
-    "done": {"direction": "host", "lane": "control", "required": {"ref": "id"}, "optional": {"text": "string"}},
     "command_state": {"direction": "host", "lane": "control", "required": {"ref": "id", "state": "enum:command_state"},
-      "optional": {"reason": "string"}},
+      "optional": {"reason": "string", "text": "string"}},
     "command_states": {"direction": "host", "lane": "control", "required": {"states": "array:command_state"}, "optional": {}},
     "error": {"direction": "host", "lane": "control",
       "required": {"reason": "enum:error_reason", "message": "string", "ref": "string"}, "optional": {}}
@@ -164,7 +178,8 @@
     "block_open": {"required": {"turn_id": "id", "block_id": "id", "ordinal": "integer", "kind": "enum:block_kind", "title": "string"},
       "optional": {"tool_name": "string", "tool_id": "string"}},
     "block_append": {"required": {"block_id": "id", "offset": "integer", "text": "string"}, "optional": {}},
-    "block_replace": {"required": {"block_id": "id", "body": "string"}, "optional": {}},
+    "block_replace": {"required": {"block_id": "id"}, "optional": {"body": "string", "deferred": "boolean", "revision": "integer",
+      "body_bytes": "integer"}},
     "block_close": {"required": {"block_id": "id", "state": "enum:block_state", "duration_ms": "integer"}, "optional": {}},
     "image_added": {"required": {"turn_id": "id", "image_id": "id", "name": "string", "mime": "string", "width": "integer",
       "height": "integer", "bytes": "integer"}, "optional": {"block_id": "id"}},
@@ -174,7 +189,7 @@
   },
   "state": {
     "status": {"required": {"busy": "boolean", "sending": "boolean", "plan_running": "boolean", "phase": "string",
-      "status_text": "string", "elapsed_ms": "integer", "can_send": "boolean", "can_steer": "boolean", "can_stop": "boolean",
+      "status_text": "string", "started_at": "string", "can_send": "boolean", "can_steer": "boolean", "can_stop": "boolean",
       "can_change_mode": "boolean", "error_text": "string"}, "optional": {}},
     "session": {"required": {"model": "string", "backend": "string", "signed_in": "boolean", "effort": "string", "skill": "string",
       "context_text": "string", "remote_approval": "boolean", "approval_caption": "string"}, "optional": {}},
@@ -188,7 +203,8 @@
     "reasoning": {"required": {"current": "string", "choices": "array:id_choice", "note": "string"}, "optional": {}},
     "permissions": {"required": {"current": "string", "backend": "string", "choices": "array:id_choice", "note": "string"},
       "optional": {}},
-    "plan": {"required": {"path": "string", "title": "string", "running": "boolean", "rows": "array:plan_row"}, "optional": {}},
+    "plan": {"required": {"path": "string", "title": "string", "running": "boolean", "revision": "string", "rows": "array:plan_row"},
+      "optional": {}},
     "plan_choices": {"required": {"choices": "array:target_choice"}, "optional": {}},
     "tasks": {"required": {"rows": "array:task_row"}, "optional": {}},
     "approval": {"required": {"active": "boolean"}, "optional": {"tool_id": "string", "tool_name": "string", "summary": "string",

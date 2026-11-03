@@ -183,7 +183,12 @@ class ProtocolV3FixtureTest {
       kind.startsWith("object:") -> return validateNamed(path, value, "objects", kind.removePrefix("object:"))
       kind.startsWith("array:") -> {
         val items = value as? JsonValue.Arr ?: return fail("$path is not an array")
-        val itemKind = kind.removePrefix("array:")
+        var itemKind = kind.removePrefix("array:")
+        // README: array:<name|string|id>. A bare name is an object in the catalogue.
+        if (itemKind != "string" && itemKind != "integer" && itemKind != "boolean" && itemKind != "id" &&
+          itemKind != "hex32" && !itemKind.startsWith("enum:") && !itemKind.startsWith("object:")) {
+          itemKind = "object:$itemKind"
+        }
         return items.items.withIndex().all { (index, item) -> checkKind("$path[$index]", item, itemKind, null) }
       }
       else -> return fail("$path: unknown kind $kind")

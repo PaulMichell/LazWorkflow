@@ -1,7 +1,8 @@
 # Monitor protocol catalogue 3 fixtures
 
-The golden data for `Documents/MonitorProtocolV3.md`. Both code bases read these files straight from this
-directory: the Pascal `Tests/AssistantMonitorProtocolV3Test.lpr` and the Kotlin
+Golden data for `Documents/MonitorProtocolV3.md`. Status of that note: target; the live wire is still catalogue 2
+until item 7.1. Both code bases read these files straight from this directory: the Pascal
+`Tests/AssistantMonitorProtocolV3Test.lpr` and the Kotlin
 `Source/KotlinMonitorApp/protocol/src/test/.../ProtocolV3FixtureTest.kt`. Neither test writes them.
 
 - `catalogue.json` is the machine-readable catalogue. It holds limits, closed value sets (`enums`), shared objects,

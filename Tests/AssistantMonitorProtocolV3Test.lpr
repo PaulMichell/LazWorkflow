@@ -214,6 +214,10 @@ Begin
       If Value.JSONType <> jtArray Then
         Exit(Fail(Path + ' is not an array'));
       Rest := Copy(Kind, 7, MaxInt);
+      { README: array:<name|string|id>. A bare name is an object in the catalogue. }
+      If (Rest <> 'string') And (Rest <> 'integer') And (Rest <> 'boolean') And (Rest <> 'id') And
+        (Rest <> 'hex32') And (Copy(Rest, 1, 5) <> 'enum:') And (Copy(Rest, 1, 7) <> 'object:') Then
+        Rest := 'object:' + Rest;
       For I := 0 To TJSONArray(Value).Count - 1 Do
         If Not CheckKind(Path + '[' + IntToStr(I) + ']', TJSONArray(Value).Items[I], Rest, Nil) Then
           Exit(False);
