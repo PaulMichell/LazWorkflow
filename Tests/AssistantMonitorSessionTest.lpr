@@ -134,6 +134,40 @@ Begin
   Result := TryDecodeMonitorEnvelope(LastJson, Message, ErrorText);
 End;
 
+Function PayloadField(Const PayloadJson, Name: String): String;
+Var
+  Data: TJSONData;
+Begin
+  Result := '';
+  Data := GetJSON(PayloadJson);
+  Try
+    If Data Is TJSONObject Then
+      Result := TJSONObject(Data).Get(Name, '');
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function QueuedOnce(Const Ref: String): Boolean;
+Var
+  Index, Count: Integer;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  Count := 0;
+  For Index := 0 To Carrier.SentCount - 1 Do
+    Begin
+      If Not TryDecodeMonitorEnvelope(Carrier.SentJson(Index), Message, ErrorText) Then
+        Continue;
+      If Message.Kind = mmkError Then
+        Exit(False);
+      If (Message.Kind = mmkCommandState) And (PayloadField(Message.PayloadJson, 'state') = 'queued') And
+        (PayloadField(Message.PayloadJson, 'ref') = Ref) Then
+        Inc(Count);
+    End;
+  Result := Count = 1;
+End;
+
 Procedure ExpectRejected(Const Title, Reason: String; ShouldClose: Boolean);
 Var
   Message: TMonitorMessage;
@@ -401,8 +435,8 @@ Begin
     Carrier.DeliverJson(Json);
     Check('idle steer is submitted', Sink.Calls = 1);
     Check('idle steer becomes send', Sink.Kind = Ord(mmkSend));
-    Check('idle steer is busy', Session.State = mssBusy);
-    Check('idle steer sends no error', Carrier.SentCount = 0);
+    Check('idle steer stays live until the form is sending', Session.State = mssLive);
+    Check('idle steer is answered queued once', QueuedOnce('steer-idle'));
     Flags.Sending := True;
     Flags.CanSteer := True;
     Flags.CanSend := False;
@@ -676,14 +710,6 @@ Begin
     (Message.Kind = mmkCatchup) And DecodeMonitorCatchup(Message.PayloadJson, Decoded) And (Decoded.Mode = mcmSnapshot) And
     Decoded.HasSnapshot);
   Check('resume of a discarded cursor returns the snapshot cursor', Decoded.Cursor = Cursor);
-  Check('resume is not completed with host_busy when the IDE thread has not yet claimed it',
-    Not MonitorCommandSweepSendsBusy(Ord(mmkResume), False, False, MonitorCommandWaitMs + 1));
-  Check('a claimed resume is not host_busy', Not MonitorCommandSweepSendsBusy(Ord(mmkResume), True, False, MonitorCommandWaitMs));
-  Check('a user send that is still unclaimed at 5 s still returns host_busy',
-    MonitorCommandSweepSendsBusy(Ord(mmkSend), False, False, MonitorCommandWaitMs));
-  Check('a user send under 5 s is not host_busy',
-    Not MonitorCommandSweepSendsBusy(Ord(mmkSend), False, False, MonitorCommandWaitMs - 1));
-  Check('a claimed user send is not host_busy', Not MonitorCommandSweepSendsBusy(Ord(mmkSend), True, False, MonitorCommandWaitMs));
 End;
 
 Procedure TestMirrorCursor;
@@ -713,6 +739,107 @@ Begin
   ExpectRejected('old catalogue', 'protocol', True);
 End;
 
+Procedure TestCommandLifecycle;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Json, ErrorJson: String;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+  Data: TJSONData;
+  States: TJSONArray;
+  Item: TJSONObject;
+  Index: Integer;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Check('lifecycle send encodes', TryEncodeMonitorSend('send-live', 'hello', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('send stays live until the form reports sending', Session.State = mssLive);
+    Check('send is answered queued once', QueuedOnce('send-live'));
+    Check('send reached the bridge hook once', Sink.Calls = 1);
+    Carrier.ClearSent;
+    Check('pending steer encodes', TryEncodeMonitorSteer('steer-pending', 'not yet', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('steer during the pending gap is not a second prompt', Sink.Calls = 1);
+    Check('steer during the pending gap is refused', DecodeLast(Message) And (Message.Kind = mmkError) And
+      (Message.Reason = 'host_busy'));
+    Check('pending send is still live', Session.State = mssLive);
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Check('sending flag is what makes the session busy', Session.State = mssBusy);
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('finished send returns to live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Check('repeat send encodes', TryEncodeMonitorSend('send-live', 'again', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('repeated id does not reach the hook again', Sink.Calls = 0);
+    Check('repeated id is command_state', DecodeLast(Message) And (Message.Kind = mmkCommandState) And
+      (PayloadField(Message.PayloadJson, 'state') = 'done'));
+    Carrier.ClearSent;
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Check('blocked send encodes', TryEncodeMonitorSend('send-blocked', 'no', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('blocked send does not reach the hook', Sink.Calls = 0);
+    Check('blocked send is an error', DecodeLast(Message) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And (ErrorBody.Reason = 'host_busy'));
+    Carrier.ClearSent;
+    Carrier.DeliverJson('{"v":2,"id":"resume-states","type":"resume","payload":{"epoch":"","cursor":0,"commands":["send-blocked"]}}');
+    Message.Kind := mmkUnknown;
+    Message.PayloadJson := '';
+    For Index := 0 To Carrier.SentCount - 1 Do
+      If TryDecodeMonitorEnvelope(Carrier.SentJson(Index), Message, ErrorJson) And (Message.Kind = mmkCommandStates) Then
+        Break;
+    Check('blocked command is answered with command_states', Message.Kind = mmkCommandStates);
+    If Message.Kind = mmkCommandStates Then
+      Data := GetJSON(Message.PayloadJson)
+    Else
+      Data := Nil;
+    Try
+      Check('command_states has a states array', Assigned(Data) And (Data Is TJSONObject) And
+        (TJSONObject(Data).Find('states') Is TJSONArray));
+      If Assigned(Data) And (Data Is TJSONObject) And (TJSONObject(Data).Find('states') Is TJSONArray) Then
+        Begin
+          States := TJSONArray(TJSONObject(Data).Find('states'));
+          Item := States.Objects[0];
+          Check('rejected state is in command_states', (Item.Get('ref', '') = 'send-blocked') And
+            (Item.Get('state', '') = 'rejected') And (Item.Get('reason', '') = 'host_busy'));
+        End;
+    Finally
+      Data.Free;
+    End;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Check('later send encodes', TryEncodeMonitorSend('send-wait', 'still here', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('an accepted send is not host_busy', QueuedOnce('send-wait'));
+    Check('an accepted send reaches the hook once', Sink.Calls = 1);
+    Check('an accepted send leaves the session live', Session.State = mssLive);
+  Finally
+    Flags := Default(TMonitorHostFlags);
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Flags.Sending := False;
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestSelectTarget;
 Var
   Sink: TCommandSink;
@@ -732,7 +859,7 @@ Begin
     Sink.Calls := 0;
     Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target', ''));
     Check('empty path select_target is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectTarget)));
-    Check('empty path select_target sends no error', Carrier.SentCount = 0);
+    Check('empty path select_target is answered queued once', QueuedOnce('select-target'));
     Flags.Sending := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
@@ -779,14 +906,14 @@ Begin
     Sink.Calls := 0;
     Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation', ''));
     Check('empty id select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
-    Check('empty id select_conversation sends no error', Carrier.SentCount = 0);
+    Check('empty id select_conversation is answered queued once', QueuedOnce('select-conversation'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
     Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation-plan', '20261019T120000000'));
     Check('plan-running select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
-    Check('plan-running select_conversation sends no error', Carrier.SentCount = 0);
+    Check('plan-running select_conversation is answered queued once', QueuedOnce('select-conversation-plan'));
     Flags.PlanAgentRunning := False;
     Flags.Sending := True;
     Session.SetHostFlags(Flags);
@@ -825,7 +952,7 @@ Begin
     Sink.Calls := 0;
     Carrier.DeliverJson(EncodeMonitorSetModel('set-model', 'grok-4'));
     Check('set_model is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetModel)));
-    Check('set_model sends no error', Carrier.SentCount = 0);
+    Check('set_model is answered queued once', QueuedOnce('set-model'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
@@ -873,7 +1000,7 @@ Begin
     Sink.Calls := 0;
     Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning', ''));
     Check('empty set_reasoning is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetReasoning)));
-    Check('empty set_reasoning sends no error', Carrier.SentCount = 0);
+    Check('empty set_reasoning is answered queued once', QueuedOnce('set-reasoning'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
@@ -923,7 +1050,7 @@ Begin
     Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions', 'ask'));
     Check('set_permissions is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetPermissions)));
     Check('set_permissions is not an approval decision', Sink.Kind <> Ord(mmkApprovalDecision));
-    Check('set_permissions sends no error', Carrier.SentCount = 0);
+    Check('set_permissions is answered queued once', QueuedOnce('set-permissions'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
@@ -1225,6 +1352,7 @@ Begin
       TestHmac;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
+      TestCommandLifecycle;
       TestSelectTarget;
       TestSelectConversation;
       TestSetModel;

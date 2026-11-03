@@ -345,6 +345,7 @@ Type
     Ref: String;
     State: String;
     Reason: String;
+    Text: String;
   End;
 
   { One committed live change. Part and PartCount are 1 until the body exceeds the frame cap. }
@@ -516,7 +517,7 @@ Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMon
 
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
 Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
-Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String): String;
+Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String; Const DoneText: String = ''): String;
 Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
 { Payload object only. The ring stores this, not the frame envelope. }
@@ -3733,7 +3734,7 @@ Begin
   End;
 End;
 
-Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String): String;
+Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String; Const DoneText: String): String;
 Var
   Payload: TJSONObject;
 Begin
@@ -3742,6 +3743,8 @@ Begin
   Payload.Add('state', State);
   If Reason <> '' Then
     Payload.Add('reason', Reason);
+  If DoneText <> '' Then
+    Payload.Add('text', DoneText);
   Result := EncodeWith(mmkCommandState, Id, Payload);
 End;
 
@@ -3760,6 +3763,8 @@ Begin
       Item.Add('state', Replies[Index].State);
       If Replies[Index].Reason <> '' Then
         Item.Add('reason', Replies[Index].Reason);
+      If Replies[Index].Text <> '' Then
+        Item.Add('text', Replies[Index].Text);
       States.Add(Item);
     End;
   Payload.Add('states', States);

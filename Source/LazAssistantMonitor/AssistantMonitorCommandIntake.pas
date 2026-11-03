@@ -39,6 +39,8 @@ Type
     Kind: Integer;
     State: TMonitorCommandState;
     Reason: String;
+    { insert_task text, kept for a later command_states reply. Empty otherwise. }
+    Text: String;
   End;
 
   TMonitorIntakeResult = (mirQueued, mirDuplicate, mirInvalid);
@@ -51,7 +53,7 @@ Type
     Head: Integer;
     Used: Integer;
     Function FindLocked(Const Id: String): Integer;
-    Function Move(Const Id: String; State: TMonitorCommandState; Const Reason: String): Boolean;
+    Function Move(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -61,7 +63,7 @@ Type
     { Each returns False, and changes nothing, for an unknown ID or a move the state does not allow. }
     Function NoteAccepted(Const Id: String): Boolean;
     Function NoteRejected(Const Id, Reason: String): Boolean;
-    Function NoteDone(Const Id: String): Boolean;
+    Function NoteDone(Const Id: String; Const DoneText: String = ''): Boolean;
     { False, with State mcsUnknown, for an ID never seen or already forgotten. }
     Function Lookup(Const Id: String; Out Found: TMonitorCommandRecord): Boolean;
     Procedure Clear;
@@ -164,6 +166,7 @@ Begin
     Records[Slot].Kind := Kind;
     Records[Slot].State := mcsQueued;
     Records[Slot].Reason := '';
+    Records[Slot].Text := '';
     Prior := Records[Slot];
     Result := mirQueued;
   Finally
@@ -171,7 +174,7 @@ Begin
   End;
 End;
 
-Function TMonitorCommandIntake.Move(Const Id: String; State: TMonitorCommandState; Const Reason: String): Boolean;
+Function TMonitorCommandIntake.Move(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
 Var
   Slot: Integer;
 Begin
@@ -185,6 +188,8 @@ Begin
       Exit;
     Records[Slot].State := State;
     Records[Slot].Reason := Reason;
+    If State = mcsDone Then
+      Records[Slot].Text := DoneText;
     Result := True;
   Finally
     LeaveCriticalSection(IntakeLock);
@@ -193,17 +198,17 @@ End;
 
 Function TMonitorCommandIntake.NoteAccepted(Const Id: String): Boolean;
 Begin
-  Result := Move(Id, mcsAccepted, '');
+  Result := Move(Id, mcsAccepted, '', '');
 End;
 
 Function TMonitorCommandIntake.NoteRejected(Const Id, Reason: String): Boolean;
 Begin
-  Result := Move(Id, mcsRejected, Reason);
+  Result := Move(Id, mcsRejected, Reason, '');
 End;
 
-Function TMonitorCommandIntake.NoteDone(Const Id: String): Boolean;
+Function TMonitorCommandIntake.NoteDone(Const Id: String; Const DoneText: String): Boolean;
 Begin
-  Result := Move(Id, mcsDone, '');
+  Result := Move(Id, mcsDone, '', DoneText);
 End;
 
 Function TMonitorCommandIntake.Lookup(Const Id: String; Out Found: TMonitorCommandRecord): Boolean;

@@ -144,7 +144,7 @@ Type
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
     Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id, PayloadJson: String;
-      Out ErrorText: String): Boolean;
+      Out ErrorText, DoneText: String): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -290,55 +290,9 @@ Begin
 End;
 
 Procedure TAssistantMonitorBridge.SweepCommands;
-Var
-  Index, Count: Integer;
-  NowMs, AgeMs: QWord;
-  Command: TMonitorQueuedCommand;
-  Expired: Array Of TMonitorQueuedCommand;
-  Notify: Array Of Boolean;
 Begin
-  If Not Assigned(FOutstanding) Then
-    Exit;
-  NowMs := GetTickCount64;
-  Count := 0;
-  LockBridge;
-  Try
-    Index := 0;
-    While Index < FOutstanding.Count Do
-      Begin
-        Command := TMonitorQueuedCommand(FOutstanding[Index]);
-        AgeMs := 0;
-        If NowMs >= Command.QueuedAt Then
-          AgeMs := NowMs - Command.QueuedAt;
-        { Resume stays queued. A user command still unclaimed at 5 s answers host_busy. }
-        If Not MonitorCommandSweepSendsBusy(Command.Kind, Command.Claimed, Command.Finished, AgeMs) Then
-          Begin
-            Inc(Index);
-            Continue;
-          End;
-        Command.Cancelled := True;
-        SetLength(Expired, Count + 1);
-        SetLength(Notify, Count + 1);
-        Expired[Count] := Command;
-        Notify[Count] := Not Command.BusySent;
-        Command.BusySent := True;
-        FOutstanding.Delete(Index);
-        Inc(Count);
-      End;
-  Finally
-    UnlockBridge;
-  End;
-  For Index := 0 To Count - 1 Do
-    Begin
-      Try
-        If Notify[Index] Then
-          SendError(Expired[Index].ClientId, MonitorHostBusyReason, 'The Project Assistant is busy.');
-      Except
-        On E: Exception Do
-          ReportPluginException('AssistantMonitorBridge.Sweep', E);
-      End;
-      Expired[Index].Release;
-    End;
+  { A slow IDE is not a refusal. The command stays outstanding and was already answered queued. }
+  RetryDeferredResumes;
 End;
 
 Procedure TAssistantMonitorBridge.LockBridge;
@@ -444,8 +398,10 @@ End;
 
 Function LongRunningCommand(Kind: Integer): Boolean;
 Begin
-  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkSteer)) Or (Kind = Ord(mmkRunPlan)) Or
-    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask));
+  { send is done when the turn ends. run_plan and run_task are done when the plan flag drops.
+    A steer finishes when the form accepts it. }
+  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or
+    (Kind = Ord(mmkRunTask));
 End;
 
 Function TAssistantMonitorBridge.OpenForm: TProjectAssistantForm;
@@ -870,8 +826,7 @@ Begin
     For Index := 0 To FOutstanding.Count - 1 Do
       Begin
         Command := TMonitorQueuedCommand(FOutstanding[Index]);
-        If (Command.Kind <> Ord(mmkResume)) Or Command.Finished Or Command.Claimed Or Command.Cancelled Or
-          Command.ExecuteQueued Then
+        If Command.Finished Or Command.Claimed Or Command.Cancelled Or Command.ExecuteQueued Then
           Continue;
         Command.ExecuteQueued := True;
         InterlockedIncrement(Command.RefCount);
@@ -1507,7 +1462,7 @@ Begin
 End;
 
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
-  Const Id, PayloadJson: String; Out ErrorText: String): Boolean;
+  Const Id, PayloadJson: String; Out ErrorText, DoneText: String): Boolean;
 Var
   Text, ModeText, Path, ArchiveId, ApiText, Level, Approval: String;
   Plan: TMonitorPathMessage;
@@ -1523,6 +1478,7 @@ Var
 Begin
   Result := False;
   ErrorText := '';
+  DoneText := '';
   Case Kind Of
     Ord(mmkSend):
       Begin
@@ -1622,7 +1578,7 @@ Begin
         DecodeMonitorTaskCommand(PayloadJson, Task);
         Result := Form.RemoteInsertTask(Task.Id, Task.Note, ApiText, ErrorText);
         If Result Then
-          SendJson(EncodeMonitorInsertResult(Id, ApiText));
+          DoneText := ApiText;
       End;
     Ord(mmkRefresh):
       Begin
@@ -1734,8 +1690,8 @@ End;
 Procedure TAssistantMonitorBridge.RunCommand(Command: TMonitorQueuedCommand);
 Var
   Form: TProjectAssistantForm;
-  ErrorText: String;
-  Ok, SendBusy: Boolean;
+  ErrorText, DoneText: String;
+  Ok: Boolean;
 Begin
   If Not Assigned(Command) Then
     Exit;
@@ -1745,48 +1701,26 @@ Begin
       PushLiveState;
       Exit;
     End;
-  SendBusy := False;
   LockBridge;
   Try
-    If Command.Kind = Ord(mmkResume) Then
+    If Command.Cancelled Then
+      Exit;
+    { A modal defers every command. A cancelled command sends nothing. }
+    If AssistantModalDepth > 0 Then
       Begin
-        If Command.Cancelled Then
-          Exit;
-        { A modal is not a reason to answer host_busy. The timer retries after it closes. }
-        If AssistantModalDepth > 0 Then
-          Begin
-            Command.Defer := True;
-            Exit;
-          End;
-        { The open conversation is not loaded yet. Waiting here is what puts it on the phone. }
-        If ResumeFormPending(Command) Then
-          Begin
-            Command.Defer := True;
-            Exit;
-          End;
-        Command.Claimed := True;
-      End
-    Else If Command.Cancelled Or (AssistantModalDepth > 0) Then
+        Command.Defer := True;
+        Exit;
+      End;
+    If (Command.Kind = Ord(mmkResume)) And ResumeFormPending(Command) Then
       Begin
-        If (Not Command.Cancelled) And (Not Command.BusySent) Then
-          Begin
-            Command.BusySent := True;
-            SendBusy := True;
-          End;
-      End
-    Else
-      Command.Claimed := True;
+        Command.Defer := True;
+        Exit;
+      End;
+    Command.Claimed := True;
   Finally
     UnlockBridge;
   End;
-  If Command.Defer Then
-    Exit;
-  If SendBusy Then
-    Begin
-      SendError(Command.ClientId, MonitorHostBusyReason, 'The Project Assistant is busy.');
-      Exit;
-    End;
-  If Not Command.Claimed Then
+  If Command.Defer Or (Not Command.Claimed) Then
     Exit;
   If Command.Kind = Ord(mmkResume) Then
     Begin
@@ -1806,7 +1740,8 @@ Begin
       SendError(Command.ClientId, MonitorNoSessionReason, MonitorNoSessionMessage);
       Exit;
     End;
-  Ok := DispatchCommand(Form, Command.Kind, Command.ClientId, Command.Payload, ErrorText);
+  DoneText := '';
+  Ok := DispatchCommand(Form, Command.Kind, Command.ClientId, Command.Payload, ErrorText, DoneText);
   If Not Ok Then
     Begin
       If ErrorText = '' Then
@@ -1818,7 +1753,7 @@ Begin
       LockBridge;
       Try
         If Assigned(FSession) Then
-          FSession.NoteCommandDone(Command.ClientId);
+          FSession.NoteCommandDone(Command.ClientId, DoneText);
       Finally
         UnlockBridge;
       End;

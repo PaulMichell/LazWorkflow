@@ -96,6 +96,10 @@ Type
     FHostFingerprint: String;
     FInstallationHostId: String;
     FHostFlags: TMonitorHostFlags;
+    { send, run_plan, or run_task accepted, before the form reports Sending or a plan run. }
+    FSendPending: Boolean;
+    FActiveCommandId: String;
+    FActiveCommandKind: Integer;
     FRemoteApproval: Boolean;
     FPairCode: String;
     FPairCodeUntil: QWord;
@@ -193,7 +197,7 @@ Type
     Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure HandleResume(Const Id, PayloadJson: String);
     Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
-    Procedure PublishCommandState(Const Id, State, Reason: String);
+    Procedure PublishCommandState(Const Id, State, Reason, DoneText: String);
     Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
@@ -294,7 +298,7 @@ Type
     { Moves a recorded command and tells the phone. Unknown ids are ignored. }
     Procedure NoteCommandAccepted(Const Id: String);
     Procedure NoteCommandRejected(Const Id, Reason: String);
-    Procedure NoteCommandDone(Const Id: String);
+    Procedure NoteCommandDone(Const Id: String; Const DoneText: String = '');
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
     Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
@@ -358,9 +362,6 @@ Type
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 { False when the ring can answer. The caller must not fill a form snapshot on that path. }
 Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
-{ True when the idle sweep should answer host_busy. Resume stays queued until the IDE thread claims it. }
-Function MonitorCommandSweepSendsBusy(Kind: Integer; Claimed, Finished: Boolean; AgeMs: QWord): Boolean;
-
 Implementation
 
 Uses
@@ -517,6 +518,9 @@ Begin
   FCredit := TMonitorLogCredit.Create;
   FOutbox := TMonitorOutbox.Create;
   FIntake := TMonitorCommandIntake.Create;
+  FSendPending := False;
+  FActiveCommandId := '';
+  FActiveCommandKind := 0;
   FObserved := Default(TMonitorSnapshot);
   FHasObserved := False;
   FState := mssStopped;
@@ -1399,31 +1403,38 @@ Begin
 End;
 
 Function TMonitorSession.CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
+
+  Function HostBusy: Boolean;
+  Begin
+    Result := FHostFlags.Sending Or FSendPending;
+  End;
+
 Begin
   Result := False;
   MessageText := 'The desktop control is not available.';
-  { CanSend starts false until the first status frame. An idle form still accepts Send. }
+  { CanSend starts false until the first status frame. An idle form still accepts Send.
+    FSendPending is the gap before the form reports Sending. It blocks like a running turn. }
   If Kind = Ord(mmkSend) Then
-    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := HostBusy Or FHostFlags.PlanAgentRunning
   Else If Kind = Ord(mmkSetMode) Then
-    Result := FHostFlags.Sending Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode)
+    Result := HostBusy Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode)
   Else If Kind = Ord(mmkNewConversation) Then
-    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := HostBusy Or FHostFlags.PlanAgentRunning
   Else If Kind = Ord(mmkRunPlan) Then
-    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := HostBusy Or FHostFlags.PlanAgentRunning
   Else If Kind = Ord(mmkWorkOnPlan) Then
-    Result := FHostFlags.Sending
+    Result := HostBusy
   Else If Kind = Ord(mmkRunTask) Then
-    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := HostBusy Or FHostFlags.PlanAgentRunning
   Else If (Kind = Ord(mmkClosePlan)) Or (Kind = Ord(mmkInsertTask)) Then
-    Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning
+    Result := HostBusy Or FHostFlags.PlanAgentRunning
   Else If (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkNewPlan)) Then
-    Result := FHostFlags.Sending
+    Result := HostBusy
   Else If Kind = Ord(mmkSelectTarget) Then
     Begin
       { A bind stops in-flight work. Review is still the form's check. }
-      Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
-      If FHostFlags.Sending Then
+      Result := HostBusy Or FHostFlags.PlanAgentRunning;
+      If HostBusy Then
         MessageText := 'Wait for the current reply to finish.'
       Else If FHostFlags.PlanAgentRunning Then
         MessageText := 'A plan run is already active.';
@@ -1431,22 +1442,31 @@ Begin
   Else If Kind = Ord(mmkSelectConversation) Then
     Begin
       { The History combo refuses only while a reply is sending. }
-      Result := FHostFlags.Sending;
+      Result := HostBusy;
       If Result Then
         MessageText := 'Stop the current reply before switching History.';
     End
   Else If (Kind = Ord(mmkSetModel)) Or (Kind = Ord(mmkSetReasoning)) Or (Kind = Ord(mmkSetPermissions)) Then
     Begin
       { Review is still the form's check. A plan run is work in progress. }
-      Result := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+      Result := HostBusy Or FHostFlags.PlanAgentRunning;
       If Result Then
         MessageText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
     End
   Else If Kind = Ord(mmkSteer) Then
     Begin
-      Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
-      If FState <> mssBusy Then
-        MessageText := 'Nothing is running to steer.';
+      { The gap before Sending is reported is not a turn to steer, and it is not a second prompt. }
+      If FSendPending Then
+        Begin
+          Result := True;
+          MessageText := 'Wait for the current reply to finish.';
+        End
+      Else
+        Begin
+          Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
+          If FState <> mssBusy Then
+            MessageText := 'Nothing is running to steer.';
+        End;
     End
   Else If Kind = Ord(mmkStop) Then
     Result := (FState = mssBusy) And (Not FHostFlags.CanStop);
@@ -1454,7 +1474,13 @@ End;
 
 Procedure TMonitorSession.EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
 Begin
-  FState := mssBusy;
+  { The form, not this accept, is what makes the session busy. }
+  If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkRunTask)) Then
+    Begin
+      FSendPending := True;
+      FActiveCommandId := Id;
+      FActiveCommandKind := Kind;
+    End;
   QueueCommand(Kind, Id, PayloadJson);
 End;
 
@@ -1483,6 +1509,7 @@ Var
   Prior: TMonitorCommandRecord;
   Admitted: TMonitorIntakeResult;
 Begin
+  Admitted := mirInvalid;
   If (FState <> mssLive) And (FState <> mssBusy) Then
     Begin
       RejectLocked('auth', True);
@@ -1502,26 +1529,45 @@ Begin
   If Kind = Ord(mmkStop) Then
     Begin
       If CommandBlocked(Kind, MessageText) Then
-        QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id))
+        Begin
+          If (Id <> '') And (Id = FActiveCommandId) Then
+            Begin
+              FSendPending := False;
+              FActiveCommandId := '';
+            End;
+          FIntake.NoteRejected(Id, MonitorHostBusyReason);
+          QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+        End
       Else
         Begin
+          If RecordedCommand(Kind) And (Admitted = mirQueued) Then
+            QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
           If FState = mssBusy Then
             FState := mssLive;
           QueueCommand(Kind, Id, PayloadJson);
         End;
       Exit;
     End;
-  { A dropped socket clears busy. A steer that arrives before the next snapshot is a prompt, not a steer. }
-  If (Kind = Ord(mmkSteer)) And ((FState <> mssBusy) Or (Not FHostFlags.CanSteer)) And (FState = mssLive) And
-    FHostFlags.CanSend And (Not FHostFlags.Sending) And (Not FHostFlags.PlanAgentRunning) Then
+  { A dropped socket clears busy. A steer that arrives before the next snapshot is a prompt, not a steer.
+    One already accepted, and not yet reported as Sending, must not become a second prompt. }
+  If (Kind = Ord(mmkSteer)) And (Not FSendPending) And ((FState <> mssBusy) Or (Not FHostFlags.CanSteer)) And
+    (FState = mssLive) And FHostFlags.CanSend And (Not FHostFlags.Sending) And (Not FHostFlags.PlanAgentRunning) Then
     Begin
       LogLine(1, 'steer submitted as send bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+      If RecordedCommand(Kind) And (Admitted = mirQueued) Then
+        QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
       EnterBusy(Ord(mmkSend), Id, PayloadJson);
       Exit;
     End;
   Blocked := CommandBlocked(Kind, MessageText);
   If Blocked Then
     Begin
+      If (Id <> '') And (Id = FActiveCommandId) Then
+        Begin
+          FSendPending := False;
+          FActiveCommandId := '';
+        End;
+      FIntake.NoteRejected(Id, MonitorHostBusyReason);
       QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
       Exit;
     End;
@@ -1530,6 +1576,8 @@ Begin
       If ServeTurnFromMirror(Id, PayloadJson) Then
         Exit;
     End;
+  If RecordedCommand(Kind) And (Admitted = mirQueued) Then
+    QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
   If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Then
     EnterBusy(Kind, Id, PayloadJson)
   Else
@@ -1962,14 +2010,38 @@ Begin
 End;
 
 Procedure TMonitorSession.SetHostFlags(Const Flags: TMonitorHostFlags);
+Var
+  WasSending, WasPlan: Boolean;
+  DoneId: String;
 Begin
+  DoneId := '';
   LockSession;
   Try
+    WasSending := FHostFlags.Sending;
+    WasPlan := FHostFlags.PlanAgentRunning;
     FHostFlags := Flags;
+    If Flags.Sending Or Flags.PlanAgentRunning Then
+      FSendPending := False;
     AdoptRunningHost;
+    If FActiveCommandId <> '' Then
+      Begin
+        If (FActiveCommandKind = Ord(mmkSend)) And WasSending And (Not Flags.Sending) Then
+          Begin
+            DoneId := FActiveCommandId;
+            FActiveCommandId := '';
+          End
+        Else If ((FActiveCommandKind = Ord(mmkRunPlan)) Or (FActiveCommandKind = Ord(mmkRunTask))) And WasPlan And
+          (Not Flags.PlanAgentRunning) Then
+          Begin
+            DoneId := FActiveCommandId;
+            FActiveCommandId := '';
+          End;
+      End;
   Finally
     UnlockSession;
   End;
+  If DoneId <> '' Then
+    NoteCommandDone(DoneId);
 End;
 
 Procedure TMonitorSession.SetRemoteApproval(Enabled: Boolean);
@@ -2614,15 +2686,6 @@ Begin
   Result := Not Session.TryResumeEvents(Epoch, Cursor, Catchup);
 End;
 
-Function MonitorCommandSweepSendsBusy(Kind: Integer; Claimed, Finished: Boolean; AgeMs: QWord): Boolean;
-Begin
-  If Kind = Ord(mmkResume) Then
-    Exit(False);
-  If Finished Or Claimed Then
-    Exit(False);
-  Result := AgeMs >= MonitorCommandWaitMs;
-End;
-
 Procedure TMonitorSession.PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);
 Var
   Notice: TAssistantApprovalNotice;
@@ -2922,10 +2985,12 @@ Begin
     Begin
       Replies[Index].Ref := Commands[Index];
       Replies[Index].Reason := '';
+      Replies[Index].Text := '';
       If FIntake.Lookup(Commands[Index], Found) Then
         Begin
           Replies[Index].State := MonitorCommandStateName(Found.State);
           Replies[Index].Reason := Found.Reason;
+          Replies[Index].Text := Found.Text;
         End
       Else
         Replies[Index].State := 'unknown';
@@ -2933,30 +2998,39 @@ Begin
   Result := EncodeMonitorCommandStates(Id, Replies);
 End;
 
-Procedure TMonitorSession.PublishCommandState(Const Id, State, Reason: String);
+Procedure TMonitorSession.PublishCommandState(Const Id, State, Reason, DoneText: String);
 Begin
-  SendHostJson(EncodeMonitorCommandState(AllocateHostId, Id, State, Reason));
+  SendHostJson(EncodeMonitorCommandState(AllocateHostId, Id, State, Reason, DoneText));
 End;
 
 Procedure TMonitorSession.NoteCommandAccepted(Const Id: String);
 Begin
   If Not FIntake.NoteAccepted(Id) Then
     Exit;
-  PublishCommandState(Id, 'accepted', '');
+  PublishCommandState(Id, 'accepted', '', '');
 End;
 
 Procedure TMonitorSession.NoteCommandRejected(Const Id, Reason: String);
 Begin
-  If Not FIntake.NoteRejected(Id, Reason) Then
-    Exit;
-  PublishCommandState(Id, 'rejected', Reason);
+  LockSession;
+  Try
+    If (Id <> '') And (Id = FActiveCommandId) Then
+      Begin
+        FSendPending := False;
+        FActiveCommandId := '';
+      End;
+  Finally
+    UnlockSession;
+  End;
+  { The wire answer is error. The table keeps rejected for a later resume. }
+  FIntake.NoteRejected(Id, Reason);
 End;
 
-Procedure TMonitorSession.NoteCommandDone(Const Id: String);
+Procedure TMonitorSession.NoteCommandDone(Const Id: String; Const DoneText: String);
 Begin
-  If Not FIntake.NoteDone(Id) Then
+  If Not FIntake.NoteDone(Id, DoneText) Then
     Exit;
-  PublishCommandState(Id, 'done', '');
+  PublishCommandState(Id, 'done', '', DoneText);
 End;
 
 Procedure TMonitorSession.SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
