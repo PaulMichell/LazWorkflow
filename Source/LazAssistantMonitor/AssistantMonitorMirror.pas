@@ -32,7 +32,8 @@ Uses
 Const
   MonitorLogBudgetBytes = 8 * 1024 * 1024;
   MonitorSnapshotPageBytes = 32 * 1024;
-  MonitorInlineBodyBytes = 256 * 1024;
+  { One block page must stay under MonitorSnapshotPageBytes, or the phone drops it. }
+  MonitorInlineBodyBytes = 8 * 1024;
   MonitorBlockDataBytes = 24 * 1024;
   MonitorCreditWindowBytes = 524288;
   MonitorAckIntervalMs = 250;
@@ -919,7 +920,8 @@ Begin
         IsPoint := (PointId <> '') And (Turn.Id = PointId);
         If FHasLive And (Turn.Id = FLive.Id) And (Turn.TurnIndex = FLive.TurnIndex) Then
           PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
-        If Utf8Bytes(PageBody) > 4 * 1024 * 1024 Then
+        { The phone drops a page larger than its 512 KiB inbound credit. One block per page stays under that. }
+        If Utf8Bytes(PageBody) > MonitorSnapshotPageBytes Then
           Begin
             { The chunk packer cannot take the whole turn. One block per page, still untruncated. }
             For BlockIndex := 0 To High(Turn.Blocks) Do

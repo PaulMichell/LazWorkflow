@@ -486,7 +486,11 @@ class MonitorCoordinator(
       // No turns means this page is the whole conversation. Waiting for a point page never ends.
       if (outline.isEmpty() && (local.catchingUp || awaitingConversation)) {
         finishEmptyConversation(pageConversation, seq)
+        return emptyList()
       }
+      // The point page can be too large for the inbound credit and never arrive. Show the prompts now.
+      val board = content.current()
+      if (outline.isNotEmpty() && board.turns.isEmpty() && board.live == null) seedOutline(outline, pageConversation)
       return emptyList()
     }
     val turn = snapshotPageTurn(payload) ?: return emptyList()
@@ -535,7 +539,8 @@ class MonitorCoordinator(
       else point.copy(turnIndex = row.turnIndex, live = false, promptPreview = row.promptPreview.ifEmpty { point.promptPreview })
     }
     val turns = if (point.live) stored.filter { row -> row.id != point.id } else stored
-    val live = if (point.live) point else null
+    val preview = stored.firstOrNull { row -> row.id == point.id }?.promptPreview.orEmpty()
+    val live = if (point.live) point.copy(promptPreview = preview.ifEmpty { point.promptPreview }) else null
     content.replace(contentHost, id, turns, live)
     content.sealHostPaint()
     if (id.isNotEmpty()) local = local.copy(conversationId = id)
