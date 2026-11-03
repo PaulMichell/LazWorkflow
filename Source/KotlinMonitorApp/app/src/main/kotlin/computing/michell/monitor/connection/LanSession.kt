@@ -734,6 +734,7 @@ class LanSession(
     stopped = true
     armed = false
     policy.pause()
+    chunks.reset()
     epochCounter.incrementAndGet()
     loop?.cancel()
     closeLink()
@@ -747,6 +748,7 @@ class LanSession(
 
   private fun startLoop() {
     // The previous loop must finish closing its own socket before this one opens.
+    chunks.reset()
     val epoch = epochCounter.incrementAndGet()
     val previous = loop
     previous?.cancel()

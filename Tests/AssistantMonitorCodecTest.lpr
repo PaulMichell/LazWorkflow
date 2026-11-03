@@ -1233,6 +1233,44 @@ Begin
   Check('v1 transcript is not a patch', Not DecodeMonitorPatch(Json, Patch));
 End;
 
+Procedure TestPlanDocumentFrames;
+Var
+  Frames: TStringArray;
+  Body, Json, Path, Title: String;
+  Index: Integer;
+  Data: TJSONData;
+  Payload: TJSONObject;
+  Running: Boolean;
+  Rows: TMonitorSnapshot;
+Begin
+  SetLength(Frames, 0);
+  Body := StringOfChar('a', MonitorMaxPayloadBytes);
+  Check('a plan larger than one frame splits', PackMonitorPlanFrames('plan-big', 'Documents/Plan.md', 'Big', False, [],
+    Nil, Nil, Body, True, Frames) And (Length(Frames) > 1));
+  For Index := 0 To High(Frames) Do
+    Check('plan chunk fits one frame', Length(Frames[Index]) <= MonitorMaxPayloadBytes);
+  Check('a fitting plan is one frame', PackMonitorPlanFrames('plan-small', 'Documents/Plan.md', 'Small', False, [],
+    Nil, Nil, '# Plan', True, Frames) And (Length(Frames) = 1));
+  Data := GetJSON(Frames[0]);
+  Try
+    Payload := TJSONObject(TJSONObject(Data).Find('payload'));
+    Check('a fitting plan is complete', DecodeMonitorPlan(Payload.AsJSON, Path, Title, Running, Rows) And
+      Rows.PlanComplete And (Rows.PlanBody = '# Plan'));
+  Finally
+    Data.Free;
+  End;
+  Json := EncodeMonitorPlan('plan-clear', 'Documents/Plan.md', 'Plan', False, [], Nil, Nil, '', 0, '', True);
+  Check('an empty complete plan omits body', (Json <> '') And (Pos('"body"', Json) = 0));
+  Data := GetJSON(Json);
+  Try
+    Payload := TJSONObject(TJSONObject(Data).Find('payload'));
+    Check('an empty complete plan is marked', DecodeMonitorPlan(Payload.AsJSON, Path, Title, Running, Rows) And
+      Rows.PlanComplete And (Rows.PlanBody = ''));
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestPlanBody;
 Var
   Json: String;
@@ -1504,6 +1542,7 @@ Begin
     End;
   TestRoundTrips;
   TestPlanBody;
+  TestPlanDocumentFrames;
   TestUsageFields;
   TestModelNote;
   TestPermissionsCaptions;

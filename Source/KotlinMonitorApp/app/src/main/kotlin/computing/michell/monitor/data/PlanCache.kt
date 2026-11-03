@@ -14,15 +14,16 @@ data class StoredPlan(
   val path: String,
   val title: String,
   val rows: List<PlanRow>,
-  val selected: Int
+  val selected: Int,
+  val body: String = ""
 )
 
 fun hasStoredPlan(path: String, title: String, rows: List<PlanRow>): Boolean {
   return path.isNotEmpty() || title.isNotEmpty() || rows.isNotEmpty()
 }
 
-fun planCacheText(path: String, title: String, rows: List<PlanRow>, selected: Int): String {
-  return encodeOfflineCache(OfflineCacheDocument(emptyList(), emptyList(), null, path, title, rows, selected, ""))
+fun planCacheText(path: String, title: String, rows: List<PlanRow>, selected: Int, body: String = ""): String {
+  return encodeOfflineCache(OfflineCacheDocument(emptyList(), emptyList(), null, path, title, rows, selected, "", body))
 }
 
 /** Columns win when they are set. A damaged row list still keeps the title. */
@@ -37,5 +38,5 @@ fun storedPlanOf(path: String, title: String, selected: Int, rowsJson: String): 
   val keptTitle = if (title.isNotEmpty()) title else decoded?.planTitle.orEmpty()
   val keptSelected = if (selected >= 0) selected else decoded?.selectedPlan ?: -1
   if (!hasStoredPlan(keptPath, keptTitle, rows)) return null
-  return StoredPlan(keptPath, keptTitle, rows, keptSelected)
+  return StoredPlan(keptPath, keptTitle, rows, keptSelected, decoded?.planBody.orEmpty())
 }

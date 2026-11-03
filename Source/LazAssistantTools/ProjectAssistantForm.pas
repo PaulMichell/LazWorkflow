@@ -363,6 +363,10 @@ Type
     FPlanFileTimer: TTimer; { Create(Nil). Not streamed. Notices a desktop save of the active plan. }
     FPlanDiskAge: LongInt;
     FPlanDiskPendingAge: LongInt;
+    FPlanDiskBytes: Int64;
+    FPlanDiskPendingBytes: Int64;
+    FPlanDocumentRevision: String;
+    FPlanHashTick: QWord;
     FPlanStallArmedTick: QWord;
     FPlanStallNoted: Boolean;
     FPlanStallRestarting: Boolean;
@@ -584,8 +588,12 @@ Type
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     /// Copies BuildSections. Does not write the plan file.
     Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
-    /// Capped Markdown of the active plan. Empty when none is loaded or the file cannot be read.
+    /// Whole active-plan Markdown for the phone cache. Empty when none is loaded or the file cannot be read.
     Function ReadMonitorPlanPreview: String;
+    { Reads the active plan file into the monitor revision. Does not scan rows. }
+    Procedure NoteMonitorPlanRevision;
+    { Cached hash of the document last read for the phone. Empty until that read. }
+    Function PlanDocumentRevision: String;
     /// Copies the visible plan combobox captions and their registered paths without scanning files.
     Procedure FillMonitorPlanChoices(Paths, Captions: TStrings);
     /// Same rows and limit as RefreshTargetChoices. No package row and no browse action.
@@ -653,6 +661,7 @@ Implementation
 
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, CanvasUtils, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
+  AssistantPlanDocument,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
@@ -857,6 +866,10 @@ Begin
   FPlanFileTimer := Nil;
   FPlanDiskAge := -1;
   FPlanDiskPendingAge := -1;
+  FPlanDiskBytes := -1;
+  FPlanDiskPendingBytes := -1;
+  FPlanDocumentRevision := '';
+  FPlanHashTick := 0;
   FPlanStallArmedTick := 0;
   FPlanStallNoted := False;
   FPlanStallRestarting := False;
@@ -2680,15 +2693,32 @@ End;
 
 Procedure TProjectAssistantForm.NotePlanDiskAge;
 Var
-  PlanRel, Resolved, Err: String;
+  PlanRel: String;
   Age: LongInt;
+  Bytes: Int64;
 Begin
-  Age := -1;
   PlanRel := GetActivePlanRelativePath;
-  If (PlanRel <> '') And ResolvePlanPath(PlanRel, Resolved, Err) And FileExistsUTF8(Resolved) Then
-    Age := FileAge(Resolved);
+  If Not AssistantPlanFileStamp(PlanRel, Age, Bytes) Then
+    Begin
+      Age := -1;
+      Bytes := -1;
+    End;
   FPlanDiskAge := Age;
   FPlanDiskPendingAge := Age;
+  FPlanDiskBytes := Bytes;
+  FPlanDiskPendingBytes := Bytes;
+  FPlanDocumentRevision := AssistantPlanDocumentRevision(PlanRel);
+  FPlanHashTick := GetTickCount64;
+End;
+
+Procedure TProjectAssistantForm.NoteMonitorPlanRevision;
+Begin
+  NotePlanDiskAge;
+End;
+
+Function TProjectAssistantForm.PlanDocumentRevision: String;
+Begin
+  Result := FPlanDocumentRevision;
 End;
 
 Procedure TProjectAssistantForm.EnsurePlanFileTimer;
@@ -2705,28 +2735,39 @@ End;
 
 Procedure TProjectAssistantForm.PlanFileTimerTimer(Sender: TObject);
 Var
-  PlanRel, Resolved, Err: String;
+  PlanRel: String;
   Age: LongInt;
+  Bytes: Int64;
+  Revision: String;
 Begin
   If (csDestroying In ComponentState) Or (Not (Sender Is TTimer)) Then
     Exit;
   PlanRel := GetActivePlanRelativePath;
-  If (PlanRel = '') Or (Not ResolvePlanPath(PlanRel, Resolved, Err)) Or (Not FileExistsUTF8(Resolved)) Then
+  If Not AssistantPlanFileStamp(PlanRel, Age, Bytes) Then
     Begin
-      If FPlanDiskAge <> -1 Then
+      If (FPlanDiskAge <> -1) Or (FPlanDocumentRevision <> '') Then
         RefreshBuildTodos;
       Exit;
     End;
-  Age := FileAge(Resolved);
-  If Age = FPlanDiskAge Then
+  If (Age = FPlanDiskAge) And (Bytes = FPlanDiskBytes) Then
     Begin
       FPlanDiskPendingAge := Age;
+      FPlanDiskPendingBytes := Bytes;
+      { Same-second saves can keep the timestamp. Hash once a second while a plan is open. }
+      If (FPlanHashTick <> 0) And (GetTickCount64 - FPlanHashTick < 1000) Then
+        Exit;
+      FPlanHashTick := GetTickCount64;
+      Revision := AssistantPlanDocumentRevision(PlanRel);
+      If Revision = FPlanDocumentRevision Then
+        Exit;
+      RefreshBuildTodos;
       Exit;
     End;
   { One quiet tick, so a save that touches the file twice is scanned once. }
-  If Age <> FPlanDiskPendingAge Then
+  If (Age <> FPlanDiskPendingAge) Or (Bytes <> FPlanDiskPendingBytes) Then
     Begin
       FPlanDiskPendingAge := Age;
+      FPlanDiskPendingBytes := Bytes;
       Exit;
     End;
   RefreshBuildTodos;
@@ -10861,7 +10902,7 @@ Function TProjectAssistantForm.ReadMonitorPlanPreview: String;
 Var
   Truncated: Boolean;
 Begin
-  Result := ReadAssistantPlanPreview(GetActivePlanRelativePath, Truncated);
+  Result := ReadAssistantPlanDocument(GetActivePlanRelativePath, Truncated);
   If Truncated And (Result <> '') Then
     Result := Result + LineEnding + LineEnding + 'The rest of the plan is on the desktop.';
 End;

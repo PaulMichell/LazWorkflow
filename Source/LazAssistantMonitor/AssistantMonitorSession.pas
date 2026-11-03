@@ -133,8 +133,8 @@ Type
     FRevokedIds: Array Of String;
     FControlSends: Array Of String;
     FBulkSends: Array Of String;
-    { Latest unsent plan. Replaced, not queued, so a status change is not dropped behind bulk. }
-    FPlanSend: String;
+    { Latest unsent plan frames. Replaced as one set, so a newer plan is not stuck behind its own chunks. }
+    FPlanFrames: TStringArray;
     FHasPlanSend: Boolean;
     FOutbox: TMonitorOutbox;
     FIntake: TMonitorCommandIntake;
@@ -207,6 +207,7 @@ Type
     Procedure EnqueueAccepted(Const Json: String);
     { Caller holds the session lock. The previous unsent plan is counted as dropped. }
     Procedure StorePlanSend(Const Json: String);
+    Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure NoteLogAck(Const PayloadJson: String);
     Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: String);
@@ -285,6 +286,8 @@ Type
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
     Procedure SendHostJson(Const Json: String);
+    { Replaces the unsent plan frames as one set and drains. A later plan drops the previous set. }
+    Procedure ReplacePlanFrames(Const Frames: TStringArray);
     { Moves a recorded command and tells the phone. Unknown ids are ignored. }
     Procedure NoteCommandAccepted(Const Id: String);
     Procedure NoteCommandRejected(Const Id, Reason: String);
@@ -556,7 +559,7 @@ Begin
   SetLength(FRevokedIds, 0);
   SetLength(FControlSends, 0);
   SetLength(FBulkSends, 0);
-  FPlanSend := '';
+  SetLength(FPlanFrames, 0);
   FHasPlanSend := False;
   FEpoch := '';
   FConversationId := '';
@@ -679,12 +682,42 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.StorePlanSend(Const Json: String);
+Procedure TMonitorSession.StorePlanFrames(Const Frames: TStringArray);
+Var
+  Index: Integer;
 Begin
+  If Length(Frames) = 0 Then
+    Exit;
   If FHasPlanSend Then
     Inc(FFramesDropped);
-  FPlanSend := Json;
+  SetLength(FPlanFrames, Length(Frames));
+  For Index := 0 To High(Frames) Do
+    FPlanFrames[Index] := Frames[Index];
   FHasPlanSend := True;
+End;
+
+Procedure TMonitorSession.StorePlanSend(Const Json: String);
+Var
+  Frames: TStringArray;
+Begin
+  If Json = '' Then
+    Exit;
+  SetLength(Frames, 1);
+  Frames[0] := Json;
+  StorePlanFrames(Frames);
+End;
+
+Procedure TMonitorSession.ReplacePlanFrames(Const Frames: TStringArray);
+Begin
+  If Length(Frames) = 0 Then
+    Exit;
+  LockSession;
+  Try
+    StorePlanFrames(Frames);
+  Finally
+    UnlockSession;
+  End;
+  DrainOutbound;
 End;
 
 Procedure TMonitorSession.EnqueueAccepted(Const Json: String);
@@ -920,8 +953,7 @@ End;
 
 Procedure TMonitorSession.DrainSends;
 Var
-  Control, Live, Bulk: TStringArray;
-  Plan: String;
+  Control, Live, Bulk, PlanFrames: TStringArray;
   Cursor: Int64;
   HadLive, HadPlan: Boolean;
   Index, Sent: Integer;
@@ -994,15 +1026,22 @@ Begin
   LockSession;
   Try
     HadPlan := FHasPlanSend;
-    Plan := FPlanSend;
+    PlanFrames := FPlanFrames;
     FHasPlanSend := False;
-    FPlanSend := '';
+    SetLength(FPlanFrames, 0);
   Finally
     UnlockSession;
   End;
   If HadPlan Then
     Begin
-      If Not Transmit(Plan) Then
+      Sent := 0;
+      While Sent < Length(PlanFrames) Do
+        Begin
+          If Not Transmit(PlanFrames[Sent]) Then
+            Break;
+          Inc(Sent);
+        End;
+      If Sent < Length(PlanFrames) Then
         Begin
           LockSession;
           Try
@@ -1010,7 +1049,12 @@ Begin
             If FHasPlanSend Then
               Inc(FFramesDropped)
             Else
-              StorePlanSend(Plan);
+              Begin
+                SetLength(FPlanFrames, Length(PlanFrames) - Sent);
+                For Index := 0 To High(FPlanFrames) Do
+                  FPlanFrames[Index] := PlanFrames[Sent + Index];
+                FHasPlanSend := Length(FPlanFrames) > 0;
+              End;
           Finally
             UnlockSession;
           End;
@@ -1076,7 +1120,7 @@ Begin
   FLiveCursor := 0;
   SetLength(FLiveFrames, 0);
   FHasPlanSend := False;
-  FPlanSend := '';
+  SetLength(FPlanFrames, 0);
 End;
 
 Procedure TMonitorSession.CloseToListening;

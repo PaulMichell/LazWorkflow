@@ -137,11 +137,16 @@ class OfflineCacheUiTest {
 
   @Test
   fun aCachedPlanFillsAnEmptyTabAndDoesNotReplaceALivePlan() {
-    val cached = StoredPlan("Documents/Plan.md", "Overview", listOf(PlanRow(0, 3, "Cache the plan", "", "not started", true)), 1)
+    val cached = StoredPlan(
+      "Documents/Plan.md", "Overview", listOf(PlanRow(0, 3, "Cache the plan", "", "not started", true)), 1, "# Plan"
+    )
     val filled = withCachedPlan(MonitorUi(), cached)
     assertEquals("Overview", filled.planTitle)
     assertEquals("Cache the plan", filled.planRows.single().title)
     assertEquals(1, filled.selectedPlan)
+    assertEquals("# Plan", filled.planBody)
+    val outlined = filled.copy(planBody = "")
+    assertEquals("# Plan", withCachedPlan(outlined, cached).planBody)
     val live = filled.copy(planTitle = "Live", planRows = listOf(PlanRow(0, 3, "Live row", "", "in progress", true)))
     assertEquals("Live", withCachedPlan(live, cached).planTitle)
     assertEquals(filled.planTitle, withCachedPlan(filled, StoredPlan("", "", emptyList(), -1)).planTitle)

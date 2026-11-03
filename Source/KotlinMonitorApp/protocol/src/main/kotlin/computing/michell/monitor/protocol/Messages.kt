@@ -293,7 +293,8 @@ data class PlanMessage(
   val running: Boolean,
   val rows: List<PlanRow>,
   val choices: List<PlanChoice>? = null,
-  val body: String = ""
+  val body: String = "",
+  val complete: Boolean = false
 )
 
 data class WireSnapshot(
@@ -1451,7 +1452,8 @@ fun encodePlan(
   title: String,
   running: Boolean,
   rows: List<PlanRow>,
-  body: String = ""
+  body: String = "",
+  complete: Boolean = false
 ): String {
   val payload = JsonObjectBuilder()
   payload.add("path", path)
@@ -1459,6 +1461,7 @@ fun encodePlan(
   payload.add("running", running)
   payload.add("rows", JsonValue.Arr(rows.map { planRowToJson(it) }))
   if (body.isNotEmpty()) payload.add("body", body)
+  if (complete) payload.add("complete", true)
   return encodeEnvelope(MessageKind.Plan, id, payload.build())
 }
 
@@ -1481,8 +1484,9 @@ fun decodePlan(obj: JsonValue.Obj): PlanMessage? {
     } ?: return null
   }
   val body = obj.readString("body", false)
-  if (!body.ok) return null
-  return PlanMessage(path.value, title.value, running.value, rows, choices, body.value)
+  val complete = obj.readBool("complete", false)
+  if (!body.ok || !complete.ok) return null
+  return PlanMessage(path.value, title.value, running.value, rows, choices, body.value, complete.value)
 }
 
 fun encodeTasks(id: String, rows: List<TaskRow>): String {
@@ -1582,7 +1586,8 @@ data class OfflineCacheDocument(
   val planTitle: String,
   val planRows: List<PlanRow>,
   val selectedPlan: Int,
-  val draft: String
+  val draft: String,
+  val planBody: String = ""
 )
 
 /** Local browse copy. Not a catalogue frame. Stored turns are index rows; history and live keep bodies. */
@@ -1596,6 +1601,7 @@ fun encodeOfflineCache(document: OfflineCacheDocument): String {
   obj.add("plan_rows", JsonValue.Arr(document.planRows.map { planRowToJson(it) }))
   obj.add("selected_plan", document.selectedPlan)
   obj.add("draft", document.draft)
+  if (document.planBody.isNotEmpty()) obj.add("plan_body", document.planBody)
   return obj.build().toFpJson()
 }
 
@@ -1632,8 +1638,10 @@ fun decodeOfflineCache(text: String): OfflineCacheDocument? {
   val draft = obj.readString("draft", true)
   if (!planPath.ok || !planTitle.ok || !selected.ok || !draft.ok) return null
   val planRows = rowsFrom(obj.field("plan_rows")) { planRowFromJson(it) } ?: return null
+  val planBody = obj.readString("plan_body", false)
+  if (!planBody.ok) return null
   return OfflineCacheDocument(
-    turns, history, live, planPath.value, planTitle.value, planRows, selected.value, draft.value
+    turns, history, live, planPath.value, planTitle.value, planRows, selected.value, draft.value, planBody.value
   )
 }
 
@@ -1981,6 +1989,10 @@ fun applySnapshotPageJson(stateTurns: List<WireTurn>, live: WireTurn?, payloadJs
 class ChunkAssembly {
   private class OpenItem(val partCount: Int, val parts: MutableMap<Int, String>)
   private val open = linkedMapOf<String, OpenItem>()
+
+  fun reset() {
+    open.clear()
+  }
 
   fun accept(message: MonitorMessage): MonitorMessage? {
     if (message.kind != MessageKind.Chunk) return message

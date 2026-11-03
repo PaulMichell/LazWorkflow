@@ -827,16 +827,7 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     is InboundPayload.Models -> applyModelsFrame(state, inbound.value)
     is InboundPayload.Reasoning -> applyReasoningFrame(state, inbound.value)
     is InboundPayload.Permissions -> applyPermissionsFrame(state, inbound.value)
-    is InboundPayload.Plan -> state.copy(
-      planPath = inbound.value.path,
-      planTitle = inbound.value.title,
-      planRunning = inbound.value.running,
-      planRows = inbound.value.rows,
-      planChoices = inbound.value.choices.orEmpty(),
-      planBody = keptPlanBody(state.planPath, state.planBody, inbound.value.path, inbound.value.body),
-      selectedPlan = if (state.planPath == inbound.value.path) state.selectedPlan else -1,
-      view = state.view.copy(planPath = inbound.value.path, planTitle = inbound.value.title, planRunning = inbound.value.running)
-    )
+    is InboundPayload.Plan -> applyPlanMessage(state, inbound.value)
     is InboundPayload.ApprovalRequest -> state.copy(approval = inbound.notice, approvalOpen = true)
     is InboundPayload.Insert -> state.copy(draft = inbound.text)
     is InboundPayload.Error -> applyErrorValue(state, inbound.body)
@@ -1075,25 +1066,40 @@ internal fun applyPermissionsFrame(state: MonitorUi, permissions: PermissionsMes
   )
 }
 
-/** A later frame without a document keeps the text already shown for that path. */
-internal fun keptPlanBody(previousPath: String, previousBody: String, nextPath: String, nextBody: String): String {
+/**
+ * A later frame without a document keeps the text already shown for that path.
+ * A complete frame replaces it, including when the desktop file is now empty.
+ */
+internal fun keptPlanBody(
+  previousPath: String,
+  previousBody: String,
+  nextPath: String,
+  nextBody: String,
+  nextComplete: Boolean = false
+): String {
+  if (nextComplete) return nextBody
   if (nextBody.isNotEmpty()) return nextBody
   if (nextPath.isNotEmpty() && nextPath == previousPath) return previousBody
   return ""
 }
 
-private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
-  val plan = decodePlan(payloadJson) ?: return state
+internal fun applyPlanMessage(state: MonitorUi, plan: computing.michell.monitor.protocol.PlanMessage): MonitorUi {
+  val samePath = state.planPath == plan.path
   return state.copy(
     planPath = plan.path,
     planTitle = plan.title,
     planRunning = plan.running,
     planRows = plan.rows,
     planChoices = plan.choices.orEmpty(),
-    planBody = keptPlanBody(state.planPath, state.planBody, plan.path, plan.body),
-    selectedPlan = if (state.planPath == plan.path) state.selectedPlan else -1,
+    planBody = keptPlanBody(state.planPath, state.planBody, plan.path, plan.body, plan.complete),
+    selectedPlan = if (samePath) state.selectedPlan else -1,
     view = state.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
   )
+}
+
+private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
+  val plan = decodePlan(payloadJson) ?: return state
+  return applyPlanMessage(state, plan)
 }
 
 private fun applyApprovalRequested(state: MonitorUi, payloadJson: String): MonitorUi {
@@ -1395,7 +1401,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
         coordinator.restoreOffline(seeded)
       }
-      if (cachedPlan != null) coordinator.noteCachedPlan(cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected)
+      if (cachedPlan != null) coordinator.noteCachedPlan(
+        cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected, cachedPlan.body
+      )
       uiState.value = coordinator.state
       if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
     }
@@ -1922,7 +1930,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         try {
           runBlocking {
             if (afterHas) {
-              conversations.savePlan(hostId, after.planPath, after.planTitle, after.planRows, after.selectedPlan, System.currentTimeMillis())
+              conversations.savePlan(
+                hostId, after.planPath, after.planTitle, after.planRows, after.selectedPlan, after.planBody,
+                System.currentTimeMillis()
+              )
             } else {
               conversations.deletePlan(hostId)
             }
@@ -2101,7 +2112,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun planChromeChanged(before: MonitorUi, after: MonitorUi): Boolean {
     return before.planPath != after.planPath || before.planTitle != after.planTitle ||
       before.planRunning != after.planRunning || before.planRows != after.planRows ||
-      before.planChoices != after.planChoices
+      before.planChoices != after.planChoices || before.planBody != after.planBody
   }
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {

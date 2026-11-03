@@ -190,9 +190,10 @@ class MonitorCoordinator(
   }
 
   /** Puts the cached plan on an empty plan tab. Does not wait for the host. */
-  fun noteCachedPlan(path: String, title: String, rows: List<PlanRow>, selected: Int) = synchronized(gate) {
-    local = withCachedPlan(local, StoredPlan(path, title, rows, selected))
-  }
+  fun noteCachedPlan(path: String, title: String, rows: List<PlanRow>, selected: Int, body: String = "") =
+    synchronized(gate) {
+      local = withCachedPlan(local, StoredPlan(path, title, rows, selected, body))
+    }
 
   fun restoreOffline(cached: MonitorUi) = synchronized(gate) {
     val typed = unsentPrompt()
@@ -674,17 +675,7 @@ class MonitorCoordinator(
   /** Snapshot pages do not carry rows. This frame is the phone's plan. */
   private fun applyPlan(message: MonitorMessage) {
     val plan = (message.inbound as? InboundPayload.Plan)?.value ?: decodePlan(message.payloadJson) ?: return
-    val samePath = local.planPath == plan.path
-    local = local.copy(
-      planPath = plan.path,
-      planTitle = plan.title,
-      planRunning = plan.running,
-      planRows = plan.rows,
-      planChoices = plan.choices.orEmpty(),
-      planBody = keptPlanBody(local.planPath, local.planBody, plan.path, plan.body),
-      selectedPlan = if (samePath) local.selectedPlan else -1,
-      view = local.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
-    )
+    local = applyPlanMessage(local, plan)
   }
 
   private fun applyPatch(patch: WirePatch) {

@@ -16,6 +16,9 @@ class PlanCacheTest {
     assertEquals("Overview", stored!!.title)
     assertEquals("Cache the plan", stored.rows.single().title)
     assertEquals(1, stored.selected)
+    assertEquals("", stored.body)
+    val withBody = storedPlanOf("Documents/Plan.md", "Overview", 1, planCacheText("Documents/Plan.md", "Overview", listOf(row), 1, "# Plan"))
+    assertEquals("# Plan", withBody!!.body)
     assertNull(storedPlanOf("", "", -1, planCacheText("", "", emptyList(), -1)))
   }
 

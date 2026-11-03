@@ -11,6 +11,7 @@ Unit AssistantMonitorBridge;
   duplicate the snapshot fill.
   Reviewed 2026-11-02: snapshot pages still replace snapshot frames. A status notice
   sends the view again, because a patch can miss the idle flags or blank the model.
+  A plan push sends the whole document. A later edit replaces that unsent set.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -837,11 +838,12 @@ Begin
     End;
 End;
 
-Function PlanRowsStamp(Const Rows: TAssistantMonitorPlanRows; Const Path, Title: String; Running: Boolean): String;
+Function PlanRowsStamp(Const Rows: TAssistantMonitorPlanRows; Const Path, Title, Revision: String;
+  Running: Boolean): String;
 Var
   I: Integer;
 Begin
-  Result := Path + #1 + Title + #1 + BoolToStr(Running, True);
+  Result := Path + #1 + Title + #1 + BoolToStr(Running, True) + #1 + Revision;
   For I := 0 To High(Rows) Do
     Result := Result + #1 + IntToStr(Rows[I].Index) + #1 + Rows[I].Status + #1 + Rows[I].Title;
 End;
@@ -987,7 +989,7 @@ Begin
     End;
   Form.FillMonitorPlan(Rows);
   Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
-  PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
+  PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
   If PlanStamp <> FPlanStamp Then
     Begin
       PushPlan(Form);
@@ -1006,6 +1008,8 @@ Var
   View: TAssistantMonitorView;
   Rows: TAssistantMonitorPlanRows;
   Session: TMonitorSession;
+  Frames: TStringArray;
+  Body, Note: String;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -1019,13 +1023,21 @@ Begin
   Captions := TStringList.Create;
   Try
     { Not a log event. A cursor here skips a patch, and the phone stops applying the turn. }
+    Form.NoteMonitorPlanRevision;
     Form.FillMonitorPlanChoices(Paths, Captions);
     Form.FillMonitorView(View);
     Form.FillMonitorPlan(Rows);
-    SendJson(EncodeMonitorPlan(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, '', 0,
-      Form.ReadMonitorPlanPreview));
-    If Assigned(Session) Then
-      FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, View.PlanRunning);
+    Body := Form.ReadMonitorPlanPreview;
+    Note := 'The plan is too large to cache on the phone.';
+    If Not PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, Body,
+      True, Frames) Then
+      PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, Note, True,
+        Frames);
+    If Assigned(Session) And (Length(Frames) > 0) Then
+      Begin
+        Session.ReplacePlanFrames(Frames);
+        FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
+      End;
   Finally
     Captions.Free;
     Paths.Free;

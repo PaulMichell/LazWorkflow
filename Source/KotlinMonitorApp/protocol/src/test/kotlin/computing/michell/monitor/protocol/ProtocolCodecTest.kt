@@ -553,6 +553,12 @@ class ProtocolCodecTest {
     assertEquals("Documents/Plan.md", decoded?.path)
     assertNull(decodePlan(bare.dropLast(1) + ",\"body\":1}"))
     assertFalse(encodePlan("plan", "Documents/Plan.md", "Plan", false, emptyList()).contains("\"body\""))
+    val cleared = encodePlan("plan-clear", "Documents/Plan.md", "Plan", false, emptyList(), complete = true)
+    assertFalse(cleared.contains("\"body\""))
+    val clearedPlan = decodePlan(tryDecodeEnvelope(cleared).message.payloadJson)
+    assertEquals(true, clearedPlan?.complete)
+    assertEquals("", clearedPlan?.body)
+    assertNull(decodePlan(bare.dropLast(1) + ",\"complete\":\"yes\""))
   }
 
   private fun sampleView(): WireView {

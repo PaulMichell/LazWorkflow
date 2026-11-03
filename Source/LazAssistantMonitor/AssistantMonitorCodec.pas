@@ -326,6 +326,8 @@ Type
     PlanRunning: Boolean;
     { Optional plan-frame body. Not written into a snapshot. }
     PlanBody: String;
+    { True when this frame replaces the phone's cached document, including an empty one. }
+    PlanComplete: Boolean;
     PlanRows: Array Of TAssistantMonitorPlanRow;
     TaskRows: Array Of TAssistantMonitorTaskRow;
     Approval: TAssistantApprovalNotice;
@@ -495,7 +497,11 @@ Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTu
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
-  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''): String;
+  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''; Complete: Boolean = False): String;
+{ One plan frame when it fits. Otherwise chunk frames of the same item, for the plan lane. }
+Function PackMonitorPlanFrames(Const Id, Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
+  Out Frames: TStringArray): Boolean;
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
@@ -2437,31 +2443,34 @@ Begin
     Result.Add(TaskRowToJson(Rows[I]));
 End;
 
-Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings;
-  Const Epoch: String; Cursor: Int64; Const Body: String): String;
+Function PlanPayload(Const Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings;
+  Const Epoch: String; Cursor: Int64; Const Body: String; Complete: Boolean): TJSONObject;
 Var
-  Payload, Choice: TJSONObject;
+  Choice: TJSONObject;
   Choices: TJSONArray;
   I: Integer;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('path', Path);
-  Payload.Add('title', Title);
-  Payload.Add('running', Running);
-  Payload.Add('rows', PlanRowsToJson(Rows));
+  Result := TJSONObject.Create;
+  Result.Add('path', Path);
+  Result.Add('title', Title);
+  Result.Add('running', Running);
+  Result.Add('rows', PlanRowsToJson(Rows));
   { Absent means this frame has no document text. An empty string is not sent. }
   If Body <> '' Then
-    Payload.Add('body', Body);
+    Result.Add('body', Body);
+  { Present even when the document is empty, so the phone can clear a deleted file. }
+  If Complete Then
+    Result.Add('complete', True);
   If Epoch <> '' Then
     Begin
-      Payload.Add('epoch', Epoch);
-      Payload.Add('cursor', Cursor);
+      Result.Add('epoch', Epoch);
+      Result.Add('cursor', Cursor);
     End;
   If Assigned(Paths) And Assigned(Captions) Then
     Begin
       Choices := TJSONArray.Create;
-      Payload.Add('choices', Choices);
+      Result.Add('choices', Choices);
       For I := 0 To Paths.Count - 1 Do
         Begin
           If I >= Captions.Count Then
@@ -2472,7 +2481,40 @@ Begin
           Choices.Add(Choice);
         End;
     End;
-  Result := EncodeWith(mmkPlan, Id, Payload);
+End;
+
+Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings;
+  Const Epoch: String; Cursor: Int64; Const Body: String; Complete: Boolean): String;
+Begin
+  Result := EncodeWith(mmkPlan, Id, PlanPayload(Path, Title, Running, Rows, Paths, Captions, Epoch, Cursor, Body,
+    Complete));
+End;
+
+Function PackMonitorPlanFrames(Const Id, Path, Title: String; Running: Boolean;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
+  Out Frames: TStringArray): Boolean;
+Var
+  Payload: TJSONObject;
+  PayloadJson, Envelope: String;
+Begin
+  Result := False;
+  SetLength(Frames, 0);
+  Payload := PlanPayload(Path, Title, Running, Rows, Paths, Captions, '', 0, Body, Complete);
+  Try
+    PayloadJson := Payload.AsJSON;
+    Envelope := EncodeMonitorEnvelope(mmkPlan, Id, Payload);
+  Finally
+    Payload.Free;
+  End;
+  If Envelope <> '' Then
+    Begin
+      SetLength(Frames, 1);
+      Frames[0] := Envelope;
+      Exit(True);
+    End;
+  { The plan lane replaces this set, so a later edit is not stuck behind the previous chunks. }
+  Result := PackMonitorBulkItem(Id, 'plan', PayloadJson, Frames);
 End;
 
 Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
@@ -2492,6 +2534,7 @@ Begin
   Rows.PlanTitle := '';
   Rows.PlanRunning := False;
   Rows.PlanBody := '';
+  Rows.PlanComplete := False;
   SetLength(Rows.PlanRows, 0);
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
@@ -2515,6 +2558,8 @@ Begin
     Rows.PlanTitle := Title;
     Rows.PlanRunning := Running;
     If Not ReadString(Obj, 'body', False, Rows.PlanBody) Then
+      Exit;
+    If Assigned(Obj.Find('complete')) And (Not ReadBool(Obj, 'complete', True, Rows.PlanComplete)) Then
       Exit;
     Result := True;
   Finally
@@ -2635,6 +2680,7 @@ Begin
   Snapshot.PlanTitle := '';
   Snapshot.PlanRunning := False;
   Snapshot.PlanBody := '';
+  Snapshot.PlanComplete := False;
   SetLength(Snapshot.PlanRows, 0);
   SetLength(Snapshot.TaskRows, 0);
   Snapshot.Approval.Active := False;

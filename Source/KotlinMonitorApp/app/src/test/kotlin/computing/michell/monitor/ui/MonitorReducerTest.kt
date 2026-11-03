@@ -286,6 +286,11 @@ class MonitorReducerTest {
     )))
     assertEquals("", cleared.planBody)
     assertEquals("Documents/Other.md", cleared.planPath)
+    val emptied = reduceMonitor(first, message(encodePlan(
+      "plan-empty", "Documents/Plan.md", "Plan", false, emptyList(), complete = true
+    )))
+    assertEquals("", emptied.planBody)
+    assertEquals("Documents/Plan.md", emptied.planPath)
   }
 
   @Test

@@ -169,10 +169,10 @@ class ConversationRepository(
     return storedPlanOf(row.path, row.title, row.selected, row.rowsJson)
   }
 
-  suspend fun savePlan(host: String, path: String, title: String, rows: List<PlanRow>, selected: Int, nowMs: Long) {
+  suspend fun savePlan(host: String, path: String, title: String, rows: List<PlanRow>, selected: Int, body: String, nowMs: Long) {
     if (host.isEmpty() || !hasStoredPlan(path, title, rows)) return
     database.hosts().insertIfAbsent(HostRecord(host, host, ""))
-    database.plans().upsert(PlanRecord(host, path, title, planCacheText(path, title, rows, selected), selected, nowMs))
+    database.plans().upsert(PlanRecord(host, path, title, planCacheText(path, title, rows, selected, body), selected, nowMs))
   }
 
   suspend fun deletePlan(key: String) {

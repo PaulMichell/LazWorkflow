@@ -182,15 +182,21 @@ fun imageTileLabel(hasBitmap: Boolean, reason: String?, missing: Boolean, allowF
   return LoadingImageLabel
 }
 
-/** Fills an empty plan tab from the host cache. A plan already on screen wins. */
+/** Fills an empty plan tab from the host cache. A plan already on screen wins, except a missing document. */
 fun withCachedPlan(state: MonitorUi, plan: StoredPlan): MonitorUi {
   if (!hasStoredPlan(plan.path, plan.title, plan.rows)) return state
-  if (hasStoredPlan(state.planPath, state.planTitle, state.planRows)) return state
+  if (hasStoredPlan(state.planPath, state.planTitle, state.planRows)) {
+    if (state.planPath == plan.path && state.planBody.isEmpty() && plan.body.isNotEmpty()) {
+      return state.copy(planBody = plan.body)
+    }
+    return state
+  }
   return state.copy(
     planPath = plan.path,
     planTitle = plan.title,
     planRows = plan.rows,
     selectedPlan = plan.selected,
+    planBody = plan.body,
     view = state.view.copy(planPath = plan.path, planTitle = plan.title)
   )
 }
@@ -204,6 +210,7 @@ fun keepShownPlan(incoming: MonitorUi, shown: MonitorUi): MonitorUi {
     planTitle = shown.planTitle,
     planRows = shown.planRows,
     selectedPlan = shown.selectedPlan,
+    planBody = shown.planBody,
     planChoices = if (incoming.planChoices.isNotEmpty()) incoming.planChoices else shown.planChoices,
     view = incoming.view.copy(planPath = shown.planPath, planTitle = shown.planTitle)
   )
