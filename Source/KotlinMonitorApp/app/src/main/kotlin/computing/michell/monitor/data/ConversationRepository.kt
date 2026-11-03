@@ -34,6 +34,8 @@ class ConversationRepository(
 
   fun images(host: String, conversationId: String): Flow<List<ImageRecord>> = database.images().observe(host, conversationId)
 
+  fun repairs(host: String, conversationId: String): Flow<List<BlockRepairRecord>> = database.sync().observeRepairs(host, conversationId)
+
   fun outbox(): Flow<List<OutboxRecord>> = database.outbox().observeAll()
 
   suspend fun saveHost(row: HostRecord) {

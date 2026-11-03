@@ -38,6 +38,25 @@ class MonitorCoordinatorLockupTest {
   }
 
   @Test
+  fun disconnectKeepsTheCommittedRows() {
+    val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
+    val prompt = WireBlock("user", "u", "", "", "", "kept", false, true, 0, emptyList())
+    coordinator.showStored(MonitorUi(
+      conversationId = "c1",
+      turns = listOf(WireTurn(1, "t", "build", "", "kept", "", blocks = listOf(prompt))),
+      planTitle = "Plan",
+      planRows = listOf(computing.michell.monitor.protocol.PlanRow(1, 1, "Step", "", "pending", false))
+    ), false)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
+    assertEquals("kept", coordinator.state.turns.single().blocks.single().body)
+    assertEquals("Plan", coordinator.state.planTitle)
+    assertTrue(coordinator.state.disconnected)
+    assertFalse(coordinator.state.approvalOpen)
+    assertFalse(coordinator.state.view.busy)
+    assertFalse(coordinator.state.view.sending)
+  }
+
+  @Test
   fun disconnectDoesNotKeepTheLinkLookingLive() {
     val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
     coordinator.noteSyncedChrome(coordinator.state.copy(view = coordinator.state.view.copy(canSend = true, busy = true, sending = true)))

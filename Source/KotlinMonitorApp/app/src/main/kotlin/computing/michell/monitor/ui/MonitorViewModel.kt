@@ -1271,6 +1271,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val uiState: MutableStateFlow<MonitorUi>
   val ui: StateFlow<MonitorUi>
   val bitmaps: StateFlow<Map<String, Bitmap>> = bitmapsState.asStateFlow()
+  private val storedBoardState = MutableStateFlow(BoardContent())
+  val storedBoard: StateFlow<BoardContent> = storedBoardState.asStateFlow()
   val link: StateFlow<computing.michell.monitor.connection.LinkStatus> = session.status
   private val cacheListOpenState = MutableStateFlow(false)
   val cacheListOpen: StateFlow<Boolean> = cacheListOpenState.asStateFlow()
@@ -1367,7 +1369,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         uiState.value = coordinator.state
         val hostId = store.load().hostId
         val conversationId = board.conversationId.ifEmpty { coordinator.state.conversationId }
-        watchRepository(hostId, conversationId)
         // A hello can name this chat before its turn arrives. Filing that is the blank row.
         val waitingForPoint = board.turns.isEmpty() && board.live == null && coordinator.state.desktopPoint == 0
         if (!waitingForPoint && board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
@@ -1438,8 +1439,15 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       if (cachedPlan != null) coordinator.noteCachedPlan(
         cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected, cachedPlan.body
       )
+      if (open != null) {
+        coordinator.noteResumeCursor(open.id, open.streamId, open.seq)
+        watchScreen(open.host, open.id)
+      } else {
+        watchScreen("", "")
+      }
       uiState.value = coordinator.state
       if (open != null && cached != null) restoreCachedImages(open.host, open.id, cached, uiState.value.hostGeneration)
+      queueStoredResume()
     }
     if (record.address.isEmpty()) return
     try {
@@ -1629,26 +1637,44 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheListOpenState.value = false
   }
 
-  /** Offline opens Room only. A live link selects the conversation and waits for the host. */
+  /** Opens the stored rows at once. A live link also asks the host to resume that cursor. */
   fun openCachedRow(row: ConversationRecord) {
     val live = ideLinkLive(uiState.value.disconnected, link.value.phase)
-    viewModelScope.launch(Dispatchers.IO) {
-      val document = try {
-        conversations.loadDocument(row.host, row.id)
-      } catch (error: Exception) {
-        null
-      } ?: return@launch
-      withContext(Dispatchers.Main) {
-        val seeded = if (live) syncingCacheState(uiState.value, document, row)
-          else reviewedCacheState(uiState.value, document, row, store.load().address.isNotEmpty())
-        coordinator.setSettingsOpen(false)
-        coordinator.showStored(seeded, live)
-        uiState.value = coordinator.state
-        cacheListOpenState.value = false
-        cacheBackToListState.value = !live
-        restoreCachedImages(row.host, row.id, document, uiState.value.hostGeneration)
-        if (live) session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), row.id))
-      }
+    coordinator.setSettingsOpen(false)
+    coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
+    val chrome = if (live) {
+      uiState.value.copy(
+        conversationId = row.id,
+        conversationTitle = row.title,
+        projectRoot = row.projectRoot,
+        hostEpoch = row.streamId,
+        hostCursor = row.seq,
+        reviewingOffline = false,
+        disconnected = false
+      )
+    } else {
+      uiState.value.copy(
+        conversationId = row.id,
+        conversationTitle = row.title,
+        projectRoot = row.projectRoot,
+        hostEpoch = row.streamId,
+        hostCursor = row.seq,
+        reviewingOffline = true,
+        disconnected = true,
+        banner = OfflineReviewBanner,
+        approvalOpen = false,
+        approval = null,
+        view = clearRemoteActions(uiState.value.view)
+      )
+    }
+    coordinator.showStored(chrome, live)
+    uiState.value = coordinator.state
+    cacheListOpenState.value = false
+    cacheBackToListState.value = !live
+    watchScreen(row.host, row.id)
+    if (live) {
+      queueStoredResume()
+      session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), row.id))
     }
   }
 
@@ -1666,6 +1692,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         if (uiState.value.conversationId == row.id) {
           coordinator.showStored(uiState.value.copy(turns = emptyList(), live = null, conversationId = ""), false)
           uiState.value = coordinator.state
+          watchScreen("", "")
         }
         refreshCachedRows()
       }
@@ -1791,15 +1818,24 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  private fun watchRepository(hostId: String, conversationId: String) {
-    if (!hostIdIsValid(hostId) || conversationId.isEmpty() || !coordinator.acceptsRepository(conversationId)) {
+  private data class ScreenRead(
+    val turns: List<computing.michell.monitor.data.TurnRecord>,
+    val blocks: List<computing.michell.monitor.data.BlockRecord>,
+    val images: List<computing.michell.monitor.data.ImageRecord>,
+    val repairs: List<computing.michell.monitor.data.BlockRepairRecord>,
+    val row: ConversationRecord?
+  )
+
+  private fun watchScreen(hostId: String, conversationId: String) {
+    if (hostId.isEmpty() || conversationId.isEmpty()) {
       contentWatch?.cancel()
       contentWatch = null
       watchedHost = ""
       watchedConversation = ""
+      storedBoardState.value = BoardContent()
       return
     }
-    if (hostId == watchedHost && conversationId == watchedConversation) return
+    if (hostId == watchedHost && conversationId == watchedConversation && contentWatch?.isActive == true) return
     watchedHost = hostId
     watchedConversation = conversationId
     contentWatch?.cancel()
@@ -1807,14 +1843,56 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       kotlinx.coroutines.flow.combine(
         conversations.turns(hostId, conversationId),
         conversations.blocks(hostId, conversationId),
+        conversations.images(hostId, conversationId),
+        conversations.repairs(hostId, conversationId),
         conversations.conversation(hostId, conversationId)
-      ) { turns, blocks, row -> documentFromRows(turns, blocks) to (row?.updatedAt ?: 0L) }
-        .collect { (document, updatedAt) ->
-          if (!coordinator.acceptsRepository(conversationId)) return@collect
-          coordinator.noteSyncTime(updatedAt)
-          content.adopt(hostId, conversationId, document.turns, document.live)
-          uiState.value = coordinator.state
+      ) { turns, blocks, images, repairs, row ->
+        ScreenRead(turns, blocks, images, repairs, row)
+      }.collect { read ->
+        val document = documentFromRows(read.turns, read.blocks, read.repairs, read.images)
+        val live = document.live
+        val stored = if (live == null) document.turns else document.turns.filter { turn -> turn.id != live.id }
+        storedBoardState.value = BoardContent(hostId, conversationId, stored, live)
+        val row = read.row
+        if (row != null) {
+          coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
+          coordinator.noteSyncTime(row.updatedAt)
         }
+        loadStoredImages(read.images)
+      }
+    }
+  }
+
+  private fun queueStoredResume() {
+    val id = watchedConversation.ifEmpty { coordinator.state.conversationId }
+    if (id.isEmpty()) return
+    val stream = coordinator.state.hostEpoch
+    val seq = coordinator.state.hostCursor
+    session.queueSyncResume(computing.michell.monitor.protocol.encodeSyncResume(session.nextCommandId(), id, stream, seq))
+  }
+
+  private fun loadStoredImages(images: List<computing.michell.monitor.data.ImageRecord>) {
+    if (images.isEmpty()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val generation = uiState.value.hostGeneration
+      val decoded = LinkedHashMap<String, Bitmap>()
+      for (image in images) {
+        if (image.filePath.isEmpty()) continue
+        val file = java.io.File(image.filePath)
+        if (!file.isFile) continue
+        val bytes = try {
+          file.readBytes()
+        } catch (error: Exception) {
+          continue
+        }
+        val bitmap = decodeBounded(bytes) ?: continue
+        decoded[imageCacheText(ImageCacheKey(generation, image.id, 0))] = bitmap
+      }
+      if (decoded.isEmpty()) return@launch
+      withContext(Dispatchers.Main) {
+        if (uiState.value.hostGeneration != generation) return@withContext
+        bitmapsState.update { current -> current + decoded }
+      }
     }
   }
 
@@ -1962,7 +2040,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   override fun onCleared() {
     lanWatch.stop()
-    saveCacheNow(uiState.value, true)
     if (hasStoredPlan(uiState.value.planPath, uiState.value.planTitle, uiState.value.planRows))
       rememberPlan(uiState.value, uiState.value, true)
     supportPending = false
@@ -2126,8 +2203,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) {
-      saveCacheNow(uiState.value, false)
       askedStatusModel = false
+    }
+    if (status.phase == computing.michell.monitor.connection.LinkPhase.Connecting) {
+      watchScreen(watchedHost, watchedConversation)
+      queueStoredResume()
     }
     if (ideLinkLive(uiState.value.disconnected, status.phase)) {
       cacheListOpenState.value = false

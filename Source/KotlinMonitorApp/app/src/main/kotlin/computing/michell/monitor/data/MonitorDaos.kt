@@ -148,6 +148,9 @@ abstract class SyncDao {
   @Query("SELECT * FROM block_repair WHERE host = :host AND missingBody = 1")
   abstract suspend fun loadMissingRepairs(host: String): List<BlockRepairRecord>
 
+  @Query("SELECT * FROM block_repair WHERE host = :host AND conversation = :conversation")
+  abstract fun observeRepairs(host: String, conversation: String): Flow<List<BlockRepairRecord>>
+
   @Query("SELECT * FROM held_append WHERE host = :host AND conversation = :conversation AND blockId IN (:blockIds) ORDER BY seq")
   abstract suspend fun loadHeld(host: String, conversation: String, blockIds: List<String>): List<HeldAppendRecord>
 

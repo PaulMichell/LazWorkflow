@@ -19,6 +19,7 @@ const val OfflineReviewBanner = "Offline review. Send, Stop, and New need a live
 const val NoAddressBanner = "Set the desktop address in Settings."
 const val CacheSaveDebounceMs = 1_000L
 const val ImagePlaceholder = "Image"
+const val NotCurrentLabel = "Not current"
 const val LoadingImageLabel = "Loading image"
 
 fun bannerIsStatus(banner: String): Boolean {

@@ -56,6 +56,7 @@ import computing.michell.monitor.protocol.fillBlockBody
 import computing.michell.monitor.protocol.joinBlockPieces
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
+import computing.michell.monitor.protocol.encodeSyncResume
 import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.tryEncodeSteer
@@ -133,6 +134,9 @@ class MonitorCoordinator(
   private var pointId = ""
   private var pointTurn: WireTurn? = null
   private var desktopMatched = false
+  private var resumeConversation = ""
+  private var resumeStream = ""
+  private var resumeSeq = 0L
   /** Last time an empty screen asked the desktop for the open turn. */
   private var screenAskedAt = 0L
   private var heldOutline: List<WireTurn> = emptyList()
@@ -334,6 +338,20 @@ class MonitorCoordinator(
   fun noteCacheReadable(): MonitorUi = synchronized(gate) {
     local = local.copy(catchingUp = false, reviewingOffline = false)
     published()
+  }
+
+  /** The conversation row is the resume cursor. A hello head must not replace it. */
+  fun noteResumeCursor(conversationId: String, streamId: String, seq: Long) = synchronized(gate) {
+    resumeConversation = conversationId
+    resumeStream = streamId
+    resumeSeq = seq
+    if (conversationId.isNotEmpty()) {
+      local = local.copy(
+        conversationId = conversationId,
+        hostEpoch = streamId,
+        hostCursor = seq
+      )
+    }
   }
 
   private fun quietFinishedBlocks() {
@@ -882,7 +900,12 @@ class MonitorCoordinator(
     local = local.copy(catchingUp = true)
     val owed = session.takeSyncResume()
     if (owed != null) return MonitorEffect.Send(owed)
-    // A saved cursor is not the open screen. Empty epoch makes the host send the mirror pages.
+    if (resumeConversation.isNotEmpty()) {
+      return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), resumeConversation, resumeStream, resumeSeq))
+    }
+    if (local.conversationId.isNotEmpty() && (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
+      return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), local.conversationId, local.hostEpoch, local.hostCursor))
+    }
     return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
   }
 
@@ -926,6 +949,8 @@ class MonitorCoordinator(
         disconnected = true,
         catchingUp = false,
         statusBusy = false,
+        approvalOpen = false,
+        approval = null,
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
         view = viewAfterDrop(clearRemoteActions(local.view))
       )

@@ -233,7 +233,7 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun helloAsksForTheOpenScreenNotTheSavedCursor() {
+  fun helloResumesFromTheStoredCursor() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
     coordinator.restoreOffline(MonitorUi(
@@ -246,8 +246,8 @@ class MonitorCoordinatorTest {
     val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello)))).orEmpty()
     val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
     val asked = decodeResume(tryDecodeEnvelope(sent.json).message.payloadJson)
-    assertEquals("", asked!!.epoch)
-    assertEquals(0L, asked.cursor)
+    assertEquals("epoch", asked!!.epoch)
+    assertEquals(118L, asked.cursor)
     assertEquals("the prompt", coordinator.state.turns.single().blocks.single().body)
   }
 

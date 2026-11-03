@@ -120,8 +120,10 @@ fun ConversationScreen(
   permissionRequest: Boolean,
   onPermissionResult: (Boolean) -> Unit,
   onPermissionConsumed: () -> Unit,
-  onRetry: () -> Unit = {}
+  onRetry: () -> Unit = {},
+  stored: BoardContent? = null
 ) {
+  val shown = if (stored == null) ui else ui.withBoard(stored)
   val activity = LocalContext.current as? Activity
   val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
     onPermissionResult(granted)
@@ -133,7 +135,7 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    ConversationPane(ui, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
+    ConversationPane(shown, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
     }
@@ -521,7 +523,9 @@ private fun RoleBlock(
   fetchImages: Boolean,
   showThinking: Boolean
 ) {
-  when (displayKind(block)) {
+  Column {
+    if (block.deferred) Text(NotCurrentLabel, color = QuietText)
+    when (displayKind(block)) {
     "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons, fetchImages)
     "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons, fetchImages)
     "thinking" -> ThinkingCard(foldKey, block, showThinking)
@@ -532,6 +536,7 @@ private fun RoleBlock(
     else -> {
       val caption = block.body.ifEmpty { block.title }
       if (rendersMarkdown(displayKind(block))) MarkdownText(caption) else Text(caption)
+    }
     }
   }
 }

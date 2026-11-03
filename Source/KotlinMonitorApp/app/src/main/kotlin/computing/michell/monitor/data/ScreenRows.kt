@@ -8,7 +8,9 @@ package computing.michell.monitor.data
 
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.protocol.WireImage
 import computing.michell.monitor.protocol.WireTurn
+import java.io.File
 
 data class StoredScreen(
   val conversation: ConversationRecord,
@@ -57,7 +59,14 @@ fun storedScreen(
   )
 }
 
-fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): OfflineCacheDocument {
+fun documentFromRows(
+  turns: List<TurnRecord>,
+  blocks: List<BlockRecord>,
+  repairs: List<BlockRepairRecord> = emptyList(),
+  images: List<ImageRecord> = emptyList()
+): OfflineCacheDocument {
+  val stale = repairs.filter { repair -> repair.missingBody || repair.stale }.map { repair -> repair.blockId }.toSet()
+  val pictures = images.map { image -> wireImage(image) }
   val byTurn = blocks.groupBy { block -> block.turn }
   val wire = turns.sortedBy { turn -> turn.ordinal }.map { turn ->
     val turnRunning = turn.outcome == "running"
@@ -72,7 +81,8 @@ fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): Offlin
         turnRunning && block.state == "running",
         block.state == "ok",
         0,
-        emptyList()
+        emptyList(),
+        deferred = block.blockId in stale
       )
     }
     val response = bodies.firstOrNull { block -> block.kind == "answer" }?.body ?: ""
@@ -90,7 +100,16 @@ fun documentFromRows(turns: List<TurnRecord>, blocks: List<BlockRecord>): Offlin
       blocks = bodies
     )
   }
-  return OfflineCacheDocument(wire, wire, wire.lastOrNull { turn -> turn.live }, "", "", emptyList(), -1, "")
+  val withPictures = if (pictures.isEmpty() || wire.isEmpty()) wire
+    else wire.dropLast(1) + wire.last().copy(blocks = wire.last().blocks + WireBlock(
+      "note", "stored-images", "", "", "", "", false, true, 0, pictures
+    ))
+  return OfflineCacheDocument(withPictures, withPictures, withPictures.lastOrNull { turn -> turn.live }, "", "", emptyList(), -1, "")
+}
+
+fun wireImage(image: ImageRecord): WireImage {
+  val present = image.filePath.isNotEmpty() && File(image.filePath).isFile
+  return WireImage(image.id, image.id, image.mime, 0, 0, image.filePath, !present)
 }
 
 private fun mergedTurns(document: OfflineCacheDocument): List<WireTurn> {

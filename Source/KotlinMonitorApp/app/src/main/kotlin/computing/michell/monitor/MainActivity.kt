@@ -173,6 +173,7 @@ private fun MonitorShell(model: MonitorViewModel) {
     Toast.makeText(context, statusNoticeText, Toast.LENGTH_LONG).show()
   }
   val cacheListOpen by model.cacheListOpen.collectAsState()
+  val stored by model.storedBoard.collectAsState()
   val cacheRows by model.cacheRows.collectAsState()
   val cacheBackToList by model.cacheBackToList.collectAsState()
   val scope = rememberCoroutineScope()
@@ -321,7 +322,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                         model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
                         dictation, model::toggleDictationOn, model::toggleDictationOff,
                         permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
-                        model::retryUndelivered
+                        model::retryUndelivered, stored
                       )
                     }
                     AppTab.Plan -> PlanScreen(
