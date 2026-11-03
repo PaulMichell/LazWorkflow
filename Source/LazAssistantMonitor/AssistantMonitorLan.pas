@@ -2,19 +2,21 @@ Unit AssistantMonitorLan;
 
 { Host-listens LAN carrier for monitor frames (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. The accept loop, per-socket frame
-  buffer, and the locked queues are one carrier. Splitting the idle read from the
-  thread would hide the single-read rule.
-  Threading: the listen thread owns accept and every accepted SSL object. OnIdle
-  still polls every MonitorAcceptIdleMs. One pass reads, then writes. An owed read
-  or write is retried before the other call. SSL_accept still runs on the accept
-  path. The section 4 link thread is not this unit.
-  Reviewed 2026-10-29: no form code and no relay class.
+  Size note: exceeds the 1000 line preference. The carrier queues and the
+  accept loop are still one unit. The per-socket SSL loop has moved to
+  AssistantMonitorLink. Reviewed 2026-11-03: no form code and no relay class.
 
-  Listen path is ssockets.TInetServer. TLS is opensslsockets.TOpenSSLSocketHandler.
-  Reads and writes go through the public SSL: TSSL property (Read, Write, Pending,
-  GetError). OpenSSL load is AssistantHttps.EnsureOpenSSLReady. Frame bytes are
-  AssistantMonitorFrames. There is no relay class.
+  The listen thread keeps TInetServer for accept and the simultaneous cap. It
+  hands each accepted socket to a link thread and does not read or write it.
+  AcceptIdleTimeOut stays 250 ms and is not on any send or receive path.
+  TLS, the wake handle, and the frame loop live in AssistantMonitorLink.
+  A second socket that finishes TLS replaces the controller. The spare
+  rejected busy path is gone.
+
+  Listen path is ssockets.TInetServer. The client handler is a plain
+  TSocketHandler, so accept does not call SSL_accept. OpenSSL load is
+  AssistantHttps.EnsureOpenSSLReady. Frame bytes are AssistantMonitorFrames.
+  There is no relay class.
 
   Accepted-socket non-blocking is not SetSocketBlockingMode and not
   TSocketServer.SetNonBlocking. Those helpers do not cover the accepted handle.
@@ -31,7 +33,8 @@ Unit AssistantMonitorLan;
 Interface
 
 Uses
-  Classes, SysUtils, SyncObjs, ssockets, AssistantMonitorCarrier, AssistantMonitorFrames, AssistantMonitorSession;
+  Classes, SysUtils, SyncObjs, ssockets, AssistantMonitorCarrier, AssistantMonitorFrames, AssistantMonitorLink,
+  AssistantMonitorSession;
 
 Const
   MonitorAcceptIdleMs = 250;
@@ -42,10 +45,11 @@ Type
 
   { v1 host listener. Start reports mcsListening, then mcsConnected for the
     controller socket. It never reports mcsConnecting. }
-  TMonitorLanCarrier = Class(TInterfacedObject, IMonitorCarrier)
+  TMonitorLanCarrier = Class(TMonitorLinkHost, IMonitorCarrier)
   Private
     FLock: TRTLCriticalSection;
     FThread: TMonitorListenThread;
+    FController: TMonitorLinkThread;
     FHandler: TMonitorFrameHandler;
     FSession: TMonitorSession;
     FState: TMonitorCarrierState;
@@ -69,8 +73,10 @@ Type
     Function CopySession: TMonitorSession;
     Procedure EnqueueInbound(Const Frame: TMonitorFrame);
     Function PopInbound(Out Frame: TMonitorFrame): Boolean;
-    Function TakeOutbound(Out Bytes: RawByteString): Boolean;
     Function OutboundEmpty: Boolean;
+    Procedure WakeController;
+    Procedure ForgetController(Link: TMonitorLinkThread);
+    Procedure DetachController;
   Public
     Constructor Create(Const BindAddress: String; Port: Integer; Const CertificatePath, KeyPath: String);
     Destructor Destroy; Override;
@@ -83,6 +89,17 @@ Type
     Procedure AttachSession(Session: TMonitorSession);
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
+    Function IsController(Link: TMonitorLinkThread): Boolean; Override;
+    Function TakeOutbound(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Override;
+    Function OutboundPending(Link: TMonitorLinkThread): Boolean; Override;
+    Procedure DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame); Override;
+    Procedure NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean); Override;
+    Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Override;
+    Function AcceptLink(Out RejectFrame: TMonitorFrame): Boolean; Override;
+    Function CloseRequested(Link: TMonitorLinkThread): Boolean; Override;
+    Function PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread; Override;
+    Procedure AdoptController(Link: TMonitorLinkThread); Override;
+    Function ReleaseController(Link: TMonitorLinkThread): Boolean; Override;
     { Valid from a successful Start until Stop returns. Stop joins the thread. Do not WaitFor as well. }
     Property ListenThread: TMonitorListenThread Read FThread;
     Property LastError: String Read FLastError;
@@ -92,19 +109,9 @@ Type
   TMonitorListenThread = Class(TThread)
   Private
     Type
-      TMonitorAccepted = Record
+      TMonitorLinkSlot = Record
         Stream: TSocketStream;
-        Pending: RawByteString;
-        Unsent: RawByteString;
-        SpareFrame: RawByteString;
-        HasSpareFrame: Boolean;
-        FirstByteMs: QWord;
-        ReadOwed: Boolean;
-        WriteOwed: Boolean;
-        Controller: Boolean;
-        Noted: Boolean;
-        CloseAfterWrite: Boolean;
-        DropAfter: Boolean;
+        Link: TMonitorLinkThread;
       End;
     Var
       FCarrier: TMonitorLanCarrier;
@@ -120,23 +127,17 @@ Type
     FBindOk: Boolean;
     FErrorText: String;
     FBoundPort: Word;
-    FAccepted: Array Of TMonitorAccepted;
-    FCloseWaitMs: QWord;
+    FSlots: Array Of TMonitorLinkSlot;
     Procedure Fail(Const ErrorText: String);
+    Procedure StopLinks;
     Procedure FreeSockets;
     Procedure ReleaseServer;
     Procedure CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
     Procedure HandleConnect(Sender: TObject; Data: TSocketStream);
     Procedure HandleIdle(Sender: TObject);
     Procedure HandleDropped(Sender: TObject; Data: TSocketStream);
-    Procedure NoteHandshake(Var Accepted: TMonitorAccepted);
-    Procedure AppendPending(Var Pending: RawByteString; Buf: Pointer; Count: Integer);
-    Procedure ConsumePending(Var Accepted: TMonitorAccepted);
-    Function ReadOnce(Var Accepted: TMonitorAccepted): Boolean;
-    Function WriteOnce(Var Accepted: TMonitorAccepted): Boolean;
-    Procedure ServiceAccepted(Var Accepted: TMonitorAccepted);
-    Procedure DropAccepted(Index: Integer; Const Reason: String);
-    Procedure ServiceIdle;
+    Function Handoff(Data: TSocketStream): Boolean;
+    Procedure ReapFinished;
   Protected
     Procedure Execute; Override;
   Public
@@ -158,12 +159,11 @@ Uses
   BaseUnix,
   {$ENDIF}
   {$IFDEF WINDOWS}
-  winsock2,
+  Windows, winsock2,
   {$ENDIF}
-  sockets, openssl, fpopenssl, opensslsockets, AssistantHttps, AssistantMonitorCodec, AssistantMonitorTls, WorkflowLog;
+  sockets, AssistantHttps, AssistantMonitorCodec, AssistantMonitorTls, WorkflowLog;
 
 Const
-  MonitorReadChunk = 16384;
   MonitorOutboundCap = 32;
   MonitorBindWaitMs = 10000;
   { Keepalive probes start after the heartbeat's dead-link time, so the heartbeat normally acts first. }
@@ -296,17 +296,6 @@ Begin
   Result := (Json <> '') And TryEncodeMonitorFrame(Json, Bytes, Status);
 End;
 
-Function RetryableSyscall: Boolean;
-Var
-  Code: Integer;
-Begin
-  Code := socketerror;
-  Result := Code = EsockEWOULDBLOCK;
-{$IFDEF UNIX}
-  Result := Result Or (Code = ESysEINTR) Or (Code = ESysEAGAIN);
-{$ENDIF}
-End;
-
 { TMonitorLanCarrier }
 
 Constructor TMonitorLanCarrier.Create(Const BindAddress: String; Port: Integer; Const CertificatePath, KeyPath: String);
@@ -314,6 +303,7 @@ Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FThread := Nil;
+  FController := Nil;
   FHandler := Nil;
   FSession := Nil;
   FState := mcsIdle;
@@ -469,13 +459,16 @@ Begin
   End;
 End;
 
-Function TMonitorLanCarrier.TakeOutbound(Out Bytes: RawByteString): Boolean;
+Function TMonitorLanCarrier.TakeOutbound(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean;
 Var
   Index: Integer;
 Begin
   Bytes := '';
+  Result := False;
   LockCarrier;
   Try
+    If FController <> Link Then
+      Exit;
     Result := Length(FOutboundQueue) > 0;
     If Not Result Then
       Exit;
@@ -634,6 +627,8 @@ Begin
   Finally
     UnlockCarrier;
   End;
+  If Result Then
+    WakeController;
 End;
 
 Function TMonitorLanCarrier.State: TMonitorCarrierState;
@@ -693,6 +688,192 @@ Begin
   End;
 End;
 
+Procedure TMonitorLanCarrier.WakeController;
+Var
+  Link: TMonitorLinkThread;
+Begin
+  LockCarrier;
+  Try
+    Link := FController;
+    If Assigned(Link) Then
+      Link.Retain;
+  Finally
+    UnlockCarrier;
+  End;
+  If Not Assigned(Link) Then
+    Exit;
+  Try
+    Link.Wake;
+  Finally
+    Link.Release;
+  End;
+End;
+
+Procedure TMonitorLanCarrier.ForgetController(Link: TMonitorLinkThread);
+Begin
+  LockCarrier;
+  Try
+    If FController = Link Then
+      FController := Nil;
+  Finally
+    UnlockCarrier;
+  End;
+End;
+
+Procedure TMonitorLanCarrier.DetachController;
+Var
+  Had: Boolean;
+  Session: TMonitorSession;
+Begin
+  LockCarrier;
+  Try
+    Had := Assigned(FController);
+    FController := Nil;
+  Finally
+    UnlockCarrier;
+  End;
+  If Not Had Then
+    Exit;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Session.NoteSocketClosed;
+  NoteControllerDropped;
+End;
+
+Function TMonitorLanCarrier.IsController(Link: TMonitorLinkThread): Boolean;
+Begin
+  LockCarrier;
+  Try
+    Result := Assigned(Link) And (FController = Link);
+  Finally
+    UnlockCarrier;
+  End;
+End;
+
+Function TMonitorLanCarrier.OutboundPending(Link: TMonitorLinkThread): Boolean;
+Begin
+  Result := IsController(Link) And Not OutboundEmpty;
+End;
+
+Procedure TMonitorLanCarrier.DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame);
+Var
+  Handler: TMonitorFrameHandler;
+Begin
+  If Not IsController(Link) Then
+    Exit;
+  Handler := CopyHandler;
+  If Not Assigned(Handler) Then
+    Exit;
+  Try
+    Handler(Frame);
+  Except
+    On E: Exception Do
+      ReportPluginException(MonitorLogArea, E);
+  End;
+End;
+
+Procedure TMonitorLanCarrier.NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean);
+Var
+  Session: TMonitorSession;
+Begin
+  If Not IsController(Link) Then
+    Exit;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Session.NotePartialFrame(Open);
+End;
+
+Procedure TMonitorLanCarrier.NoteTime(Link: TMonitorLinkThread; NowMs: QWord);
+Var
+  Session: TMonitorSession;
+Begin
+  If Not IsController(Link) Then
+    Exit;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Session.NoteTime(NowMs);
+End;
+
+Function TMonitorLanCarrier.AcceptLink(Out RejectFrame: TMonitorFrame): Boolean;
+Var
+  Session: TMonitorSession;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  RejectFrame.Version := MonitorFrameVersion;
+  RejectFrame.Flags := 0;
+  RejectFrame.Json := '';
+  Session := CopySession;
+  If Not Assigned(Session) Then
+    Exit(True);
+  Result := Session.AcceptHandshake(RejectFrame);
+  If Result Or (RejectFrame.Json = '') Then
+    Exit;
+  { The spare busy reject is not sent. disabled still is. }
+  If Not TryDecodeMonitorEnvelope(RejectFrame.Json, Message, ErrorText) Or (Message.Kind <> mmkRejected) Or
+    (Message.Reason <> 'disabled') Then
+    RejectFrame.Json := '';
+End;
+
+Function TMonitorLanCarrier.CloseRequested(Link: TMonitorLinkThread): Boolean;
+Var
+  Session: TMonitorSession;
+Begin
+  Result := False;
+  If Not IsController(Link) Then
+    Exit;
+  Session := CopySession;
+  Result := Assigned(Session) And Session.CloseRequested;
+End;
+
+Function TMonitorLanCarrier.PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread;
+Begin
+  Result := Nil;
+  LockCarrier;
+  Try
+    If FController = Link Then
+      Exit;
+    Result := FController;
+    If Assigned(Result) Then
+      Result.Retain;
+  Finally
+    UnlockCarrier;
+  End;
+  If Assigned(Result) Then
+    Result.StartReplace;
+End;
+
+Procedure TMonitorLanCarrier.AdoptController(Link: TMonitorLinkThread);
+Begin
+  LockCarrier;
+  Try
+    FController := Link;
+  Finally
+    UnlockCarrier;
+  End;
+  NoteConnected;
+End;
+
+Function TMonitorLanCarrier.ReleaseController(Link: TMonitorLinkThread): Boolean;
+Var
+  Session: TMonitorSession;
+Begin
+  LockCarrier;
+  Try
+    Result := Assigned(Link) And (FController = Link);
+    If Result Then
+      FController := Nil;
+  Finally
+    UnlockCarrier;
+  End;
+  If Not Result Then
+    Exit;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Session.NoteSocketClosed;
+  NoteControllerDropped;
+End;
+
 { TMonitorListenThread }
 
 Constructor TMonitorListenThread.Create(Const NewBindAddress: String; NewPort: Word; Const NewCertificatePath, NewKeyPath: String;
@@ -711,8 +892,7 @@ Begin
   FBindOk := False;
   FErrorText := '';
   FBoundPort := 0;
-  SetLength(FAccepted, 0);
-  FCloseWaitMs := 0;
+  SetLength(FSlots, 0);
   FreeOnTerminate := False;
   Inherited Create(False);
 End;
@@ -740,15 +920,50 @@ Begin
   RTLEventSetEvent(FReady);
 End;
 
-Procedure TMonitorListenThread.FreeSockets;
+Function DuplicateAcceptedSocket(Handle: THandle): cint;
+{$IFDEF UNIX}
+Begin
+  Result := fpDup(Handle);
+End;
+{$ENDIF}
+{$IFDEF WINDOWS}
+Var
+  Dup: THandle;
+Begin
+  Result := -1;
+  Dup := 0;
+  If DuplicateHandle(GetCurrentProcess, Handle, GetCurrentProcess, @Dup, 0, False, DUPLICATE_SAME_ACCESS) Then
+    Result := cint(Dup);
+End;
+{$ENDIF}
+
+Procedure TMonitorListenThread.StopLinks;
 Var
   Index: Integer;
+  Link: TMonitorLinkThread;
   Stream: TSocketStream;
 Begin
-  For Index := 0 To High(FAccepted) Do
+  If Assigned(FCarrier) Then
+    FCarrier.DetachController;
+  For Index := 0 To High(FSlots) Do
+    If Assigned(FSlots[Index].Link) Then
+      Begin
+        FSlots[Index].Link.Terminate;
+        FSlots[Index].Link.Wake;
+      End;
+  For Index := 0 To High(FSlots) Do
     Begin
-      Stream := FAccepted[Index].Stream;
-      FAccepted[Index].Stream := Nil;
+      Link := FSlots[Index].Link;
+      Stream := FSlots[Index].Stream;
+      FSlots[Index].Link := Nil;
+      FSlots[Index].Stream := Nil;
+      If Assigned(Link) Then
+        Begin
+          Link.WaitFor;
+          While Link.Held Do
+            Sleep(1);
+          Link.Free;
+        End;
       If Assigned(Stream) Then
         Try
           Stream.Free;
@@ -757,7 +972,12 @@ Begin
             LogMonitor(2, 'listen socket release ' + E.Message);
         End;
     End;
-  SetLength(FAccepted, 0);
+  SetLength(FSlots, 0);
+End;
+
+Procedure TMonitorListenThread.FreeSockets;
+Begin
+  StopLinks;
 End;
 
 Procedure TMonitorListenThread.ReleaseServer;
@@ -788,174 +1008,60 @@ End;
 
 {$PUSH}{$HINTS OFF}
 Procedure TMonitorListenThread.CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
-Var
-  Handler: TMonitorTlsHandler;
 Begin
-  AHandler := Nil;
-  Handler := TMonitorTlsHandler.Create;
-  Handler.LoadHostMaterial(FCertificateDer, FKeyDer);
-  AHandler := Handler;
+  { Plain handler. SSL_accept runs on the link thread, not inside accept. }
+  AHandler := TSocketHandler.Create;
 End;
 {$POP}
 
-Procedure TMonitorListenThread.AppendPending(Var Pending: RawByteString; Buf: Pointer; Count: Integer);
+Function TMonitorListenThread.Handoff(Data: TSocketStream): Boolean;
 Var
-  StartAt: Integer;
-Begin
-  If (Count <= 0) Or Not Assigned(Buf) Then
-    Exit;
-  StartAt := Length(Pending);
-  SetLength(Pending, StartAt + Count);
-  Move(Buf^, Pending[StartAt + 1], Count);
-End;
-
-Procedure TMonitorListenThread.ConsumePending(Var Accepted: TMonitorAccepted);
-Var
-  Frame: TMonitorFrame;
-  Status: TMonitorFrameStatus;
-  Had, Consumed: Integer;
-  Ok: Boolean;
-Begin
-  Had := Length(Accepted.Pending);
-  Consumed := 0;
-  Status := mfsNeedMore;
-  Ok := True;
-  While Ok And (Length(Accepted.Pending) > 0) Do
-    Begin
-      Ok := TryConsumeMonitorFrame(Accepted.Pending, Frame, Status);
-      If Ok And Accepted.Controller And Assigned(FCarrier) Then
-        Begin
-          FCarrier.EnqueueInbound(Frame);
-          Inc(Consumed);
-        End
-      Else If Ok Then
-        Inc(Consumed);
-    End;
-  If (Not Ok) And (Status <> mfsNeedMore) And (Length(Accepted.Pending) > 0) Then
-    Begin
-      Accepted.DropAfter := True;
-      LogMonitor(2, 'frame rejected status=' + IntToStr(Ord(Status)) + ' bytes=' + IntToStr(Length(Accepted.Pending)) +
-        ' bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
-    End;
-  If Length(Accepted.Pending) = 0 Then
-    Begin
-      If Accepted.Controller Then
-        Accepted.FirstByteMs := 0;
-    End
-  Else If Accepted.Controller And ((Had = 0) Or (Consumed > 0) Or (Accepted.FirstByteMs = 0)) Then
-    Accepted.FirstByteMs := GetTickCount64;
-End;
-
-Procedure TMonitorListenThread.NoteHandshake(Var Accepted: TMonitorAccepted);
-Var
-  Session: TMonitorSession;
-  RejectFrame: TMonitorFrame;
-  Json, Bytes: RawByteString;
-  HasController, Released: Boolean;
+  Dup: cint;
+  Link: TMonitorLinkThread;
   Index: Integer;
 Begin
-  If Accepted.Noted Then
+  Result := False;
+  If Not Assigned(Data) Then
     Exit;
-  { A reconnect arrives while the previous socket is still the controller.
-    Rejecting it as busy leaves the phone looping on Reconnecting. }
-  Released := False;
-  For Index := 0 To High(FAccepted) Do
-    If FAccepted[Index].Controller And (FAccepted[Index].Stream <> Accepted.Stream) Then
-      Begin
-        FAccepted[Index].Controller := False;
-        FAccepted[Index].DropAfter := True;
-        Released := True;
-      End;
-  Session := Nil;
-  If Assigned(FCarrier) Then
-    Session := FCarrier.CopySession;
-  If Released And Assigned(Session) Then
-    Session.NoteSocketClosed;
-  If Assigned(Session) Then
+  SetAcceptedHandleNonBlocking(Data.Handle);
+  EnableAcceptedKeepAlive(Data.Handle);
+  Dup := DuplicateAcceptedSocket(Data.Handle);
+  If Dup < 0 Then
     Begin
-      If Session.AcceptHandshake(RejectFrame) Then
-        Begin
-          Accepted.Controller := True;
-          Accepted.Noted := True;
-          If Assigned(FCarrier) Then
-            FCarrier.NoteConnected;
-          Exit;
-        End;
-      Accepted.Controller := False;
-      Accepted.Noted := True;
-      Accepted.CloseAfterWrite := True;
-      If Accepted.FirstByteMs = 0 Then
-        Accepted.FirstByteMs := GetTickCount64;
-      If EncodeFrame(RejectFrame.Json, Bytes) Then
-        Begin
-          Accepted.SpareFrame := Bytes;
-          Accepted.HasSpareFrame := True;
-          LogMonitor(2, 'rejected bytes=' + IntToStr(Length(Bytes)) + ' bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
-        End;
+      LogMonitor(2, 'could not detach the accepted socket bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Exit;
     End;
-  HasController := False;
-  For Index := 0 To High(FAccepted) Do
-    If FAccepted[Index].Controller Then
-      HasController := True;
-  If Not HasController Then
+  Link := TMonitorLinkThread.Create(Dup, True, FCertificateDer, FKeyDer, FCarrier, FBindAddress, FBoundPort);
+  If Not Link.WakeOpen Then
     Begin
-      Accepted.Controller := True;
-      Accepted.Noted := True;
-      If Assigned(FCarrier) Then
-        FCarrier.NoteConnected;
+      Link.Free;
+      LogMonitor(3, 'wake handle failed bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Exit;
     End;
-  Accepted.Controller := False;
-  Accepted.Noted := True;
-  Accepted.CloseAfterWrite := True;
-  If Accepted.FirstByteMs = 0 Then
-    Accepted.FirstByteMs := GetTickCount64;
-  Json := EncodeMonitorRejected('spare', 'busy', MonitorCatalogueVersion, 0);
-  If EncodeFrame(Json, Bytes) Then
-    Begin
-      Accepted.SpareFrame := Bytes;
-      Accepted.HasSpareFrame := True;
-      LogMonitor(2, 'rejected reason=busy bytes=' + IntToStr(Length(Bytes)) + ' bind=' + FBindAddress +
-        ' port=' + IntToStr(FBoundPort));
-    End;
+  Link.TakeAccepted(Data);
+  Index := Length(FSlots);
+  SetLength(FSlots, Index + 1);
+  FSlots[Index].Stream := Nil;
+  FSlots[Index].Link := Link;
+  Result := True;
+  Link.Start;
 End;
 
 Procedure TMonitorListenThread.HandleConnect(Sender: TObject; Data: TSocketStream);
 Var
-  Index: Integer;
+  Owned: Boolean;
 Begin
   If Not Assigned(Data) Or (Sender = Nil) Then
     Exit;
-  Index := -1;
+  Owned := False;
   Try
-    SetLength(FAccepted, Length(FAccepted) + 1);
-    Index := High(FAccepted);
-    FAccepted[Index].Stream := Data;
-    FAccepted[Index].Pending := '';
-    FAccepted[Index].Unsent := '';
-    FAccepted[Index].SpareFrame := '';
-    FAccepted[Index].HasSpareFrame := False;
-    FAccepted[Index].FirstByteMs := 0;
-    FAccepted[Index].ReadOwed := False;
-    FAccepted[Index].WriteOwed := False;
-    FAccepted[Index].Controller := False;
-    FAccepted[Index].Noted := False;
-    FAccepted[Index].CloseAfterWrite := False;
-    FAccepted[Index].DropAfter := False;
-    { IOTimeout stays 0. A positive timeout would turn WANT_READ into a close inside Recv. }
-    NoteHandshake(FAccepted[Index]);
+    Owned := Handoff(Data);
   Except
     On E: Exception Do
-      Begin
-        ReportPluginException(MonitorLogArea, E);
-        If Index >= 0 Then
-          FAccepted[Index].DropAfter := True;
-      End;
+      ReportPluginException(MonitorLogArea, E);
   End;
-  { Registration has returned. The accepted handle is still blocking until these calls. }
-  SetAcceptedHandleNonBlocking(Data.Handle);
-  EnableAcceptedKeepAlive(Data.Handle);
+  If Not Owned Then
+    Data.Free;
 End;
 
 {$PUSH}{$HINTS OFF}
@@ -968,228 +1074,40 @@ Begin
 End;
 {$POP}
 
-Function TMonitorListenThread.ReadOnce(Var Accepted: TMonitorAccepted): Boolean;
-Var
-  Handler: TOpenSSLSocketHandler;
-  Buf: Array[0..MonitorReadChunk - 1] Of Byte;
-  Count, Err: Integer;
-  ReadDue: Boolean;
-Begin
-  Result := True;
-  If Not Assigned(Accepted.Stream) Or Not Assigned(Accepted.Stream.Handler) Then
-    Begin
-      Accepted.DropAfter := True;
-      Exit;
-    End;
-  If Not (Accepted.Stream.Handler Is TOpenSSLSocketHandler) Then
-    Begin
-      Accepted.DropAfter := True;
-      Exit;
-    End;
-  Handler := TOpenSSLSocketHandler(Accepted.Stream.Handler);
-  If Not Assigned(Handler.SSL) Then
-    Begin
-      Accepted.DropAfter := True;
-      Exit;
-    End;
-  { A write that returned WANT_READ must be retried before another SSL.Read. }
-  If Accepted.WriteOwed Then
-    Exit;
-  { Or does not skip CanRead. Pending does not replace the TCP poll. }
-  ReadDue := Accepted.ReadOwed Or (Handler.SSL.Pending > 0) Or Handler.CanRead(0);
-  If Not ReadDue Then
-    Exit;
-  Count := Handler.SSL.Read(@Buf[0], SizeOf(Buf));
-  Err := Handler.SSL.GetError(Count);
-  If Count > 0 Then
-    Begin
-      AppendPending(Accepted.Pending, @Buf[0], Count);
-      Accepted.ReadOwed := False;
-      ConsumePending(Accepted);
-      Exit;
-    End;
-  If (Err = SSL_ERROR_WANT_READ) Or (Err = SSL_ERROR_WANT_WRITE) Then
-    Begin
-      Accepted.ReadOwed := True;
-      Exit;
-    End;
-  If (Err = SSL_ERROR_SYSCALL) And RetryableSyscall Then
-    Begin
-      Accepted.ReadOwed := True;
-      Exit;
-    End;
-  Accepted.DropAfter := True;
-  Result := False;
-End;
-
-Function TMonitorListenThread.WriteOnce(Var Accepted: TMonitorAccepted): Boolean;
-Var
-  Handler: TOpenSSLSocketHandler;
-  Count, Err: Integer;
-  Took: RawByteString;
-Begin
-  Result := True;
-  If Accepted.DropAfter Or Not Assigned(Accepted.Stream) Or Not Assigned(Accepted.Stream.Handler) Then
-    Exit;
-  If Not (Accepted.Stream.Handler Is TOpenSSLSocketHandler) Then
-    Exit;
-  Handler := TOpenSSLSocketHandler(Accepted.Stream.Handler);
-  If Not Assigned(Handler.SSL) Then
-    Exit;
-  { An owed read must be retried before a new SSL.Write. }
-  If Accepted.ReadOwed Then
-    Exit;
-  If Accepted.Unsent = '' Then
-    Begin
-      If Accepted.HasSpareFrame Then
-        Begin
-          Accepted.Unsent := Accepted.SpareFrame;
-          Accepted.SpareFrame := '';
-          Accepted.HasSpareFrame := False;
-        End
-      Else If Accepted.Controller And Assigned(FCarrier) And FCarrier.TakeOutbound(Took) Then
-        Accepted.Unsent := Took
-      Else
-        Exit;
-    End;
-  If Accepted.Unsent = '' Then
-    Exit;
-  Count := Handler.SSL.Write(@Accepted.Unsent[1], Length(Accepted.Unsent));
-  Err := Handler.SSL.GetError(Count);
-  If Count > 0 Then
-    Begin
-      If Count > Length(Accepted.Unsent) Then
-        Count := Length(Accepted.Unsent);
-      Delete(Accepted.Unsent, 1, Count);
-      Accepted.WriteOwed := False;
-      Exit;
-    End;
-  If (Err = SSL_ERROR_WANT_READ) Or (Err = SSL_ERROR_WANT_WRITE) Then
-    Begin
-      Accepted.WriteOwed := True;
-      Exit;
-    End;
-  If (Err = SSL_ERROR_SYSCALL) And RetryableSyscall Then
-    Begin
-      Accepted.WriteOwed := True;
-      Exit;
-    End;
-  Accepted.DropAfter := True;
-  Result := False;
-End;
-
-Procedure TMonitorListenThread.ServiceAccepted(Var Accepted: TMonitorAccepted);
-Var
-  NowMs: QWord;
-  Session: TMonitorSession;
-Begin
-  If Accepted.DropAfter Then
-    Exit;
-  If Not Accepted.Noted Then
-    NoteHandshake(Accepted);
-  ReadOnce(Accepted);
-  WriteOnce(Accepted);
-  NowMs := GetTickCount64;
-  If (Accepted.FirstByteMs <> 0) And (NowMs >= Accepted.FirstByteMs + MonitorPartialFrameMs) Then
-    Begin
-      Accepted.DropAfter := True;
-      LogMonitor(2, 'partial frame timeout bytes=' + IntToStr(Length(Accepted.Pending)) + ' bind=' + FBindAddress +
-        ' port=' + IntToStr(FBoundPort));
-    End;
-  If Accepted.Controller And Assigned(FCarrier) Then
-    Begin
-      Session := FCarrier.CopySession;
-      If Assigned(Session) Then
-        Session.NotePartialFrame((Accepted.FirstByteMs <> 0) And (Length(Accepted.Pending) > 0) And (Not Accepted.DropAfter));
-    End;
-  If Accepted.CloseAfterWrite And (Not Accepted.WriteOwed) And (Accepted.Unsent = '') And (Not Accepted.HasSpareFrame) Then
-    Accepted.DropAfter := True;
-End;
-
-Procedure TMonitorListenThread.DropAccepted(Index: Integer; Const Reason: String);
-Var
-  Stream: TSocketStream;
-  WasController: Boolean;
-  PendingBytes: Integer;
-  Session: TMonitorSession;
-Begin
-  If (Index < 0) Or (Index > High(FAccepted)) Then
-    Exit;
-  WasController := FAccepted[Index].Controller;
-  PendingBytes := Length(FAccepted[Index].Pending);
-  Stream := FAccepted[Index].Stream;
-  FAccepted[Index].Stream := Nil;
-  If Index < High(FAccepted) Then
-    FAccepted[Index] := FAccepted[High(FAccepted)];
-  SetLength(FAccepted, Length(FAccepted) - 1);
-  If Assigned(Stream) Then
-    Stream.Free;
-  LogMonitor(1, 'disconnect bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort) + ' bytes=' + IntToStr(PendingBytes) +
-    ' ' + Reason);
-  If Not WasController Then
-    Exit;
-  FCloseWaitMs := 0;
-  If Assigned(FCarrier) Then
-    Begin
-      Session := FCarrier.CopySession;
-      If Assigned(Session) Then
-        Session.NoteSocketClosed;
-      FCarrier.NoteControllerDropped;
-    End;
-End;
-
-Procedure TMonitorListenThread.ServiceIdle;
+Procedure TMonitorListenThread.ReapFinished;
 Var
   Index: Integer;
-  NowMs: QWord;
-  Session: TMonitorSession;
-  Handler: TMonitorFrameHandler;
-  Frame: TMonitorFrame;
-  Controller: Integer;
-  WaitingClose: Boolean;
+  Link: TMonitorLinkThread;
+  Stream: TSocketStream;
 Begin
-  For Index := 0 To High(FAccepted) Do
-    ServiceAccepted(FAccepted[Index]);
-  Handler := Nil;
-  If Assigned(FCarrier) Then
-    Handler := FCarrier.CopyHandler;
-  If Assigned(Handler) And Assigned(FCarrier) Then
-    While FCarrier.PopInbound(Frame) Do
-      Try
-        Handler(Frame);
-      Except
-        On E: Exception Do
-          ReportPluginException(MonitorLogArea, E);
-      End;
-  Session := Nil;
-  If Assigned(FCarrier) Then
-    Session := FCarrier.CopySession;
-  If Assigned(Session) Then
-    Session.NoteTime(GetTickCount64);
-  NowMs := GetTickCount64;
-  Controller := -1;
-  For Index := 0 To High(FAccepted) Do
-    If FAccepted[Index].Controller Then
-      Controller := Index;
-  WaitingClose := Assigned(Session) And Session.CloseRequested And (Controller >= 0);
-  If WaitingClose And (FCloseWaitMs = 0) Then
-    FCloseWaitMs := NowMs;
-  If Not WaitingClose Then
-    FCloseWaitMs := 0;
-  If WaitingClose And (FCloseWaitMs <> 0) And (NowMs >= FCloseWaitMs + MonitorPartialFrameMs) Then
-    FAccepted[Controller].DropAfter := True;
-  If WaitingClose And (Not FAccepted[Controller].WriteOwed) And (FAccepted[Controller].Unsent = '') And
-    Assigned(FCarrier) And FCarrier.OutboundEmpty Then
-    FAccepted[Controller].DropAfter := True;
-  Index := High(FAccepted);
+  Index := High(FSlots);
   While Index >= 0 Do
     Begin
-      If FAccepted[Index].DropAfter Then
-        DropAccepted(Index, 'closed')
+      Link := FSlots[Index].Link;
+      If Not Assigned(Link) Or Not Link.Finished Then
+        Dec(Index)
       Else
-        Dec(Index);
-      If Index > High(FAccepted) Then
-        Index := High(FAccepted);
+        Begin
+          Link.WaitFor;
+          If Assigned(FCarrier) Then
+            FCarrier.ForgetController(Link);
+          While Link.Held Do
+            Sleep(1);
+          Stream := FSlots[Index].Stream;
+          If Index < High(FSlots) Then
+            FSlots[Index] := FSlots[High(FSlots)];
+          SetLength(FSlots, Length(FSlots) - 1);
+          Link.Free;
+          If Assigned(Stream) Then
+            Try
+              Stream.Free;
+            Except
+              On E: Exception Do
+                LogMonitor(2, 'listen socket release ' + E.Message);
+            End;
+          If Index > High(FSlots) Then
+            Index := High(FSlots);
+        End;
     End;
 End;
 
@@ -1204,7 +1122,7 @@ Begin
   If Sender = Nil Then
     Exit;
   Try
-    ServiceIdle;
+    ReapFinished;
   Except
     On E: Exception Do
       ReportPluginException(MonitorLogArea, E);

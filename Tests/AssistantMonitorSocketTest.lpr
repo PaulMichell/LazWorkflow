@@ -8,7 +8,8 @@ Program AssistantMonitorSocketTest;
   non-zero with that error. That is a failure, not a skip.
 
   The partial-record check is an incomplete TLS application-data record after
-  the handshake. That is the OnIdle stall a blocking SSL.Read would cause.
+  the handshake. A second handshake must not stall the link already up.
+  A second controller replaces the first with bye reason replaced.
   The kernel port is fpGetSockName. TInetServer.Port is not the connect port. }
 
 {$IFDEF FPC}
@@ -433,6 +434,43 @@ Begin
     Reason := Rejected.Reason;
 End;
 
+Function ByeReason(Const Message: TMonitorMessage; Out Reason: String): Boolean;
+Var
+  Bye: TMonitorBye;
+Begin
+  Reason := '';
+  Result := (Message.Kind = mmkBye) And DecodeMonitorBye(Message.PayloadJson, Bye);
+  If Result Then
+    Reason := Bye.Reason;
+End;
+
+{ Half a ClientHello. The accept thread must hand this off and leave the live link free. }
+Function OpenHandshakeStall(Port: Word): cint;
+Var
+  Addr: TSockAddr;
+  One: Byte;
+Begin
+  Result := fpSocket(AF_INET, SOCK_STREAM, 0);
+  If Result < 0 Then
+    Exit;
+  Addr := Default(TSockAddr);
+  Addr.sin_family := AF_INET;
+  Addr.sin_port := NToHs(Port);
+  Addr.sin_addr.s_addr := htonl($7F000001);
+  If fpConnect(Result, @Addr, SizeOf(Addr)) <> 0 Then
+    Begin
+      CloseSocket(Result);
+      Result := -1;
+      Exit;
+    End;
+  One := $16;
+  If fpSend(Result, @One, 1, 0) <> 1 Then
+    Begin
+      CloseSocket(Result);
+      Result := -1;
+    End;
+End;
+
 Function PongTicks(Const Message: TMonitorMessage; Out Ticks: Int64): Boolean;
 Var
   Body: TMonitorTicks;
@@ -540,6 +578,7 @@ Var
   Elapsed: QWord;
   I: Integer;
   Server: TInetServer;
+  Stall: cint;
 Begin
   First := Nil;
   Spare := Nil;
@@ -547,6 +586,7 @@ Begin
   Partial := Nil;
   Probe := Nil;
   Blocked := Nil;
+  Stall := -1;
   FirstPrint := '';
   SecondPrint := '';
   Try
@@ -573,22 +613,42 @@ Begin
     If Message.Kind <> mmkPong Then
       WriteLn('detail round-trip type=', Message.TypeName);
 
+    Stall := OpenHandshakeStall(Port);
+    Check('handshake stall connected', Stall >= 0);
+    Started := GetTickCount64;
+    Check('live ping during handshake stall', First.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-stall', 9), After(1000)));
+    Check('live pong during handshake stall', First.ReadMessage(After(800), Message, ErrorText) And PongTicks(Message, Ticks) And
+      (Ticks = 9));
+    Elapsed := GetTickCount64 - Started;
+    If ErrorText <> '' Then
+      WriteLn('detail stall ', ErrorText, ' elapsed=', IntToStr(Elapsed));
+    Check('stall does not delay the live link', Elapsed < 800);
+    If Stall >= 0 Then
+      CloseSocket(Stall);
+    Stall := -1;
+    SleepPump(800);
+
     Spare := TLoopClient.Create;
     Check('second tls connection', Spare.Open(Port, 3000, ErrorText));
     If ErrorText <> '' Then
       WriteLn('detail second ', ErrorText);
-    Check('second connection frame', Spare.ReadMessage(After(3000), Message, ErrorText));
+    Check('first link replaced', First.ReadMessage(After(3000), Message, ErrorText) And ByeReason(Message, Reason) And
+      (Reason = 'replaced'));
+    If Reason <> 'replaced' Then
+      WriteLn('detail replaced reason=', Reason, ' type=', Message.TypeName);
+    Check('second reaches accepted', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
+    Check('second ping', Spare.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-spare', 11), After(3000)));
+    Check('second pong', Spare.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 11));
     If ErrorText <> '' Then
-      WriteLn('detail busy ', ErrorText);
-    Check('second connection busy', RejectedReason(Message, Reason) And (Reason = 'busy'));
-    If Reason <> 'busy' Then
-      WriteLn('detail busy reason=', Reason, ' type=', Message.TypeName);
-    Check('busy leaves controller', (Session.State = mssAccepted) And First.StillOpen And (Lan.State = mcsConnected));
-    FreeAndNil(Spare);
-
-    Check('bye write', First.WriteJson(EncodeMonitorBye('bye1', 'client'), After(3000)));
-    Check('listening after bye', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
+      WriteLn('detail second pong ', ErrorText);
+    Check('replaced link closed', Not First.ReadMessage(After(1000), Message, ErrorText) And (Pos('closed', ErrorText) > 0));
+    If ErrorText <> '' Then
+      WriteLn('detail replaced close ', ErrorText);
     FreeAndNil(First);
+
+    Check('bye write', Spare.WriteJson(EncodeMonitorBye('bye1', 'client'), After(3000)));
+    Check('listening after bye', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
+    FreeAndNil(Spare);
 
     Again := TLoopClient.Create;
     Check('reconnect after bye', Again.Open(Port, 3000, ErrorText));
@@ -624,12 +684,15 @@ Begin
     If ErrorText <> '' Then
       WriteLn('detail probe ', ErrorText, ' elapsed=', IntToStr(Elapsed));
     Check('partial record does not stall', Elapsed < 1800);
-    Check('probe frame', Probe.ReadMessage(After(3000), Message, ErrorText));
+    Check('partial link replaced', Partial.ReadMessage(After(3000), Message, ErrorText) And ByeReason(Message, Reason) And
+      (Reason = 'replaced'));
+    If Reason <> 'replaced' Then
+      WriteLn('detail partial replaced reason=', Reason, ' type=', Message.TypeName, ' ', ErrorText);
+    Check('probe is controller', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
+    Check('probe ping', Probe.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-probe', 3), After(3000)));
+    Check('probe pong', Probe.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 3));
     If ErrorText <> '' Then
-      WriteLn('detail probe frame ', ErrorText);
-    Check('probe busy', RejectedReason(Message, Reason) And (Reason = 'busy'));
-    SleepPump(500);
-    Check('want_read does not close', Partial.StillOpen And (Lan.State = mcsConnected) And (Session.State = mssAccepted));
+      WriteLn('detail probe pong ', ErrorText);
     FreeAndNil(Probe);
     FreeAndNil(Partial);
     Check('listening after partial', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
@@ -655,6 +718,8 @@ Begin
       WriteLn('detail blocked read ', ErrorText);
     Check('never connecting', Not SawConnecting);
   Finally
+    If Stall >= 0 Then
+      CloseSocket(Stall);
     FreeAndNil(Probe);
     FreeAndNil(Partial);
     FreeAndNil(Blocked);
