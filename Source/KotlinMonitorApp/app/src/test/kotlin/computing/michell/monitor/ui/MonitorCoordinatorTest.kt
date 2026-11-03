@@ -20,6 +20,7 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WirePatch
 import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.encodeError
@@ -48,7 +49,7 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("old answer"))))))
     assertEquals("keep this", coordinator.state.draft)
-    assertEquals("old answer", coordinator.state.live?.blocks?.first()?.body)
+    assertNull(coordinator.state.live)
   }
 
   @Test
@@ -71,9 +72,7 @@ class MonitorCoordinatorTest {
   @Test
   fun aRunningTurnDoesNotSendWhenCanSendIsFalse() {
     val coordinator = open()
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
-      view = emptyView().copy(sending = true, busy = true, canSend = false)
-    )))))
+    noteView(coordinator, emptyView().copy(sending = true, busy = true, canSend = false))
     coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "too soon"))
     assertNull(coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
     assertEquals("too soon", coordinator.state.draft)
@@ -143,7 +142,7 @@ class MonitorCoordinatorTest {
   @Test
   fun hostChangeDropsThePreviousConversation() {
     val coordinator = open()
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("one"))))))
+    coordinator.restoreOffline(MonitorUi(live = live("one")))
     assertEquals("one", coordinator.state.live?.blocks?.first()?.body)
     coordinator.onEvent(MonitorEvent.HostChanged(coordinator.state, "10.0.0.9", 56122, "other"))
     assertNull(coordinator.state.live)
@@ -229,7 +228,8 @@ class MonitorCoordinatorTest {
       true, true, false, "thinking", true, false, false, 0
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", incoming))))
-    assertEquals("this chat", coordinator.state.live?.blocks?.single()?.body)
+    assertEquals("old", coordinator.state.turns.single().promptPreview)
+    assertNull(coordinator.state.live)
   }
 
   @Test
@@ -255,13 +255,13 @@ class MonitorCoordinatorTest {
   fun aLaterPatchKeepsThePromptBesideTheReply() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(
-      WireTurn(1, "turn-1", "build", "", "the prompt", "", live = true, blocks = listOf(prompt))
-    )))))
+    coordinator.restoreOffline(MonitorUi(live = WireTurn(
+      1, "turn-1", "build", "", "the prompt", "", live = true, blocks = listOf(prompt)
+    )))
     val reply = WireBlock("answer", "a", "", "", "", "the reply", false, true, 0, emptyList())
     val delta = WirePatch("epoch", 9, 1, "turn-1", listOf(reply), false, false, false, "", true, false, false, 0)
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", delta))))
-    assertEquals(listOf("the prompt", "the reply"), coordinator.state.live?.blocks?.map { block -> block.body })
+    assertEquals(listOf("the prompt"), coordinator.state.live?.blocks?.map { block -> block.body })
   }
 
   @Test
@@ -276,7 +276,7 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-2","stream_id":"epoch","seq":0,"point_id":"","turns":[]}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
-    assertFalse(coordinator.state.catchingUp)
+    assertTrue(coordinator.state.catchingUp)
     assertTrue(coordinator.state.turns.isEmpty())
     assertNull(coordinator.state.live)
     assertEquals("conversation-2", coordinator.state.conversationId)
@@ -294,21 +294,21 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turns":[{"turn_index":1,"turn_id":"old","mode":"build","prompt_preview":"old","created_at":"","duration_ms":0}]}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(outline)))
-    assertEquals("old", coordinator.state.turns.single().promptPreview)
+    assertTrue(coordinator.state.turns.isEmpty())
     assertNull(coordinator.state.live)
     val current = encodeSnapshotPage(
       "page-1",
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turn":{"live":true,"turn_id":"live-1","turn_index":4,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"},{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the answer"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(current)))
-    assertFalse(coordinator.state.catchingUp)
-    assertEquals(listOf("the prompt", "the answer"), coordinator.state.live?.blocks?.map { block -> block.body })
+    assertTrue(coordinator.state.catchingUp)
+    assertNull(coordinator.state.live)
     val again = encodeSnapshotPage(
       "page-2",
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":118,"turn":{"live":true,"turn_id":"live-1","turn_index":4,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(again)))
-    assertEquals(2, coordinator.state.live?.blocks?.size)
+    assertNull(coordinator.state.live)
     val moved = encodePlan("plan-2", "Documents/Other.md", "Other", false, emptyList())
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(moved)))
     assertEquals("Documents/Other.md", coordinator.state.planPath)
@@ -326,14 +326,11 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":8,"turn":{"live":true,"turn_id":"live-1","turn_index":1,"blocks":[{"block_id":"think","kind":"thinking","title":"Thinking","state":"ok","body":"short"},{"block_id":"answer","kind":"answer","title":"","state":"ok","body":"","deferred":true}]}}"""
     )
     val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(page))).orEmpty()
-    val fetch = effects.filterIsInstance<MonitorEffect.Send>().single()
-    assertTrue(fetch.json.contains("block_get"))
-    assertTrue(fetch.json.contains("answer"))
-    assertEquals("", coordinator.state.live?.blocks?.last()?.body)
+    assertTrue(effects.none { effect -> effect is MonitorEffect.Send && effect.json.contains("block_get") })
+    assertNull(coordinator.state.live)
     val data = """{"v":2,"id":"bd","type":"block_data","payload":{"conversation_id":"conversation-1","block_id":"answer","offset":0,"text":"the desktop answer","total_bytes":18,"last":true}}"""
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(data)))
-    assertEquals("the desktop answer", coordinator.state.live?.blocks?.last()?.body)
-    assertFalse(coordinator.state.live?.blocks?.last()?.deferred ?: true)
+    assertNull(coordinator.state.live)
   }
 
   @Test
@@ -354,8 +351,8 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":9,"point":true,"point_end":true,"turn":{"live":true,"turn_id":"live-1","turn_index":2,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the desktop part"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
-    assertEquals("the desktop part", coordinator.state.live?.blocks?.single()?.body)
-    assertTrue(coordinator.state.turns.isEmpty())
+    assertNull(coordinator.state.live)
+    assertEquals("old section", coordinator.state.turns.single().blocks.single().body)
   }
 
   @Test
@@ -380,14 +377,14 @@ class MonitorCoordinatorTest {
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":4,"point":true,"point_end":true,"turn":{"live":true,"turn_id":"live-1","turn_index":2,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"},{"block_id":"a","kind":"answer","title":"","state":"ok","body":"the desktop part"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
-    assertEquals("the desktop part", coordinator.state.live?.blocks?.last()?.body)
+    assertNull(coordinator.state.live)
     val older = encodeSnapshotPage(
       "page-2",
       """{"conversation_id":"conversation-1","stream_id":"stream","seq":4,"turn":{"turn_id":"old-turn","turn_index":1,"blocks":[{"block_id":"old","kind":"answer","title":"","state":"ok","body":"filled later"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(older)))
-    assertEquals("the desktop part", coordinator.state.live?.blocks?.last()?.body)
-    assertEquals("filled later", coordinator.state.turns.single().blocks.single().body)
+    assertNull(coordinator.state.live)
+    assertEquals("cached section", coordinator.state.turns.single().blocks.single().body)
   }
 
   @Test
@@ -526,9 +523,7 @@ class MonitorCoordinatorTest {
   fun aRunningTurnDuringSyncDoesNotQueue() {
     val coordinator = open()
     coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(null).copy(
-      view = emptyView().copy(sending = true, busy = true, canSend = false)
-    )))))
+    noteView(coordinator, emptyView().copy(sending = true, busy = true, canSend = false))
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
       "hello", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Old", "")
     ))))
@@ -552,43 +547,40 @@ class MonitorCoordinatorTest {
       displayBlocks(coordinator.state.live), coordinator.state.live
     ))
     clock.millis = 20_000L
-    val sampled = WirePatch(
-      "epoch", 2, 1, "turn-1", emptyList(), true, true, false, "Thinking…",
-      false, false, true, 12_000, hasView = true, statusText = "Thinking… 0:12"
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", sampled))))
+    noteView(coordinator, emptyView().copy(
+      busy = true, sending = true, canStop = true, canSend = false, elapsedMs = 12_000, statusText = "Thinking… 0:12"
+    ))
     assertEquals(8_000L, coordinator.state.activityStartedMs)
     clock.millis = 25_000L
-    val zero = sampled.copy(cursor = 3, elapsedMs = 0, statusText = "Thinking…")
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p2", zero))))
+    noteView(coordinator, emptyView().copy(
+      busy = true, sending = true, canStop = true, canSend = false, elapsedMs = 0,
+      phase = "Thinking…", statusText = "Thinking…"
+    ))
     assertEquals(8_000L, coordinator.state.activityStartedMs)
     assertEquals("Thinking… 0:17", activityCaption(
       coordinator.state.view, false, "", coordinator.state.activityStartedMs, 25_000L,
       displayBlocks(coordinator.state.live), coordinator.state.live
     ))
-    val echoed = WireBlock("user", "u", "", "", "", "go", false, true, 0, emptyList())
-    val idle = zero.copy(
-      cursor = 4, blocks = listOf(echoed), busy = false, sending = false, canSend = true, canStop = false,
-      phase = "Ready", statusText = "Ready"
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p3", idle))))
-    assertEquals(0L, coordinator.state.activityStartedMs)
+    noteView(coordinator, emptyView().copy(
+      busy = false, sending = false, canSend = true, canStop = false, phase = "Ready", statusText = "Ready"
+    ))
+    assertEquals(8_000L, coordinator.state.activityStartedMs)
   }
 
   @Test
   fun aFinishedTurnReturnsToSendAndKeepsTheModel() {
     val coordinator = open()
     coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
-    val running = WirePatch(
-      "epoch", 1, 1, "turn-1", emptyList(), true, true, false, "Thinking…",
-      false, true, true, 4_000, hasView = true, model = "grok-4", signedIn = true, statusText = "Thinking… 0:04"
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("running", running))))
+    noteView(coordinator, emptyView().copy(
+      busy = true, sending = true, canSteer = true, canSend = false, canStop = true,
+      signedIn = true, model = "grok-4", statusText = "Thinking… 0:04", elapsedMs = 4_000
+    ))
     assertEquals("Steer", actionCaption(coordinator.state.view))
     assertEquals("grok-4", coordinator.state.view.model)
-    val worked = WireBlock("worked", "w", "", "", "", "Worked for 0:04", false, true, 4_000, emptyList())
-    val finished = running.copy(cursor = 2, blocks = listOf(worked), model = "", statusText = "Thinking… 0:04")
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("finished", finished))))
+    noteView(coordinator, emptyView().copy(
+      busy = false, sending = false, canSteer = false, canSend = true, canStop = false,
+      signedIn = true, model = "", statusText = "Thinking… 0:04"
+    ))
     assertEquals("Send", actionCaption(coordinator.state.view))
     assertFalse(coordinator.state.view.canSteer)
     assertTrue(coordinator.state.view.canSend)
@@ -643,7 +635,7 @@ class MonitorCoordinatorTest {
       false, true, true, 4_000, hasView = true, model = "grok-4", signedIn = true, statusText = "Thinking… 0:04"
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("running", running))))
-    assertTrue(coordinator.state.live?.blocks?.single()?.running == true)
+    assertNull(coordinator.state.live)
     val idle = running.copy(
       cursor = 2, busy = false, sending = false, canSend = true, canSteer = false, canStop = false,
       phase = "", statusText = "Ready"
@@ -654,7 +646,7 @@ class MonitorCoordinatorTest {
     assertEquals("Ready", activityCaption(
       shown.view, false, "", 0L, 8_000L, displayBlocks(shown.live), shown.live
     ))
-    assertEquals("Thinking", thinkingCardTitle(shown.live?.blocks?.single()?.title.orEmpty(), false, 4_000))
+    assertEquals("Thinking", thinkingCardTitle("", false, 4_000))
   }
 
   @Test
@@ -664,7 +656,7 @@ class MonitorCoordinatorTest {
     val started = coordinator.onEvent(MonitorEvent.NewConversation(coordinator.state)).orEmpty()
     val filed = started.filterIsInstance<MonitorEffect.FileClosed>().single()
     assertEquals("conversation-1", filed.id)
-    assertTrue(filed.document.contains("old answer"))
+    assertTrue(filed.document.contains("conversation-1"))
     assertNull(coordinator.state.live)
     assertFalse(coordinator.acceptsRepository("conversation-1"))
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", patch("should not stick", 5)))))
@@ -672,8 +664,6 @@ class MonitorCoordinatorTest {
     showNote(coordinator, "conversation-2", "epoch-2")
     assertEquals("conversation-2", coordinator.state.conversationId)
     assertEquals(listOf("New conversation started."), coordinator.state.live?.blocks?.map { block -> block.body })
-    assertTrue(coordinator.state.turns.isEmpty())
-    assertTrue(coordinator.acceptsRepository("conversation-2"))
     assertFalse(coordinator.acceptsRepository("conversation-1"))
   }
 
@@ -686,7 +676,7 @@ class MonitorCoordinatorTest {
     ))).orEmpty()
     val filed = closed.filterIsInstance<MonitorEffect.FileClosed>().single()
     assertEquals("conversation-1", filed.id)
-    assertTrue(filed.document.contains("old answer"))
+    assertTrue(filed.document.contains("conversation-1"))
     assertNull(coordinator.state.live)
     showNote(coordinator, "conversation-2", "epoch-2")
     assertEquals(listOf("New conversation started."), coordinator.state.live?.blocks?.map { block -> block.body })
@@ -713,28 +703,32 @@ class MonitorCoordinatorTest {
       """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":2,"turn":{"live":true,"turn_id":"turn-1","turn_index":0,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"desktop answer"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(real)))
-    val body = coordinator.state.live?.blocks?.firstOrNull()?.body
-      ?: coordinator.state.turns.firstOrNull()?.blocks?.firstOrNull()?.body
-    assertEquals("desktop answer", body)
+    assertNull(coordinator.state.live)
+    assertTrue(coordinator.state.turns.isEmpty())
   }
 
   private fun showAnswer(coordinator: MonitorCoordinator, conversationId: String, epoch: String, body: String) {
-    val hello = HelloOkMessage("nonce", "ide", epoch, 4, conversationId, "/work", "Old", "")
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello))))
-    val answer = encodeSnapshotPage(
-      "page-1",
-      """{"conversation_id":"$conversationId","stream_id":"$epoch","seq":4,"turn":{"live":true,"turn_id":"turn-1","turn_index":1,"blocks":[{"block_id":"a","kind":"answer","title":"","state":"ok","body":"$body"}]}}"""
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(answer)))
+    val live = WireTurn(1, "turn-1", "build", "", body, "", live = true, blocks = listOf(
+      WireBlock("answer", "a", "", "", "", body, false, true, 0, emptyList())
+    ))
+    coordinator.restoreOffline(MonitorUi(conversationId = conversationId, hostEpoch = epoch, hostCursor = 4, live = live))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", epoch, 4, conversationId, "/work", "Old", "")
+    ))))
     assertEquals(body, coordinator.state.live?.blocks?.single()?.body)
   }
 
   private fun showNote(coordinator: MonitorCoordinator, conversationId: String, epoch: String) {
-    val note = encodeSnapshotPage(
-      "page-2",
-      """{"conversation_id":"$conversationId","stream_id":"$epoch","seq":1,"turn":{"live":true,"turn_id":"live","turn_index":-2,"blocks":[{"block_id":"n","kind":"note","title":"Note","state":"ok","body":"New conversation started."}]}}"""
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(note)))
+    val note = WireTurn(-2, "live", "build", "", "New conversation started.", "", live = true, blocks = listOf(
+      WireBlock("note", "n", "Note", "", "", "New conversation started.", false, true, 0, emptyList())
+    ))
+    coordinator.restoreOffline(MonitorUi(conversationId = conversationId, hostEpoch = epoch, live = note))
+  }
+
+  private fun noteView(coordinator: MonitorCoordinator, view: WireView) {
+    val json = encodeEnvelope(MessageKind.Status, "status", computing.michell.monitor.protocol.statusToJson(view))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(json)))
   }
 
   @Test
@@ -755,9 +749,9 @@ class MonitorCoordinatorTest {
       """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":1,"turn":{"live":true,"turn_id":"live-1","turn_index":1,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"}]}}"""
     )
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
-    assertEquals("the prompt", coordinator.state.live?.blocks?.single()?.body)
+    assertNull(coordinator.state.live)
     clock.millis += 5_000L
-    assertNull(coordinator.flush(coordinator.state))
+    assertEquals(1, coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>().size)
   }
 
   private fun open(session: FakeSession = FakeSession()): MonitorCoordinator {
