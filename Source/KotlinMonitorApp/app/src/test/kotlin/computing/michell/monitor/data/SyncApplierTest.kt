@@ -21,14 +21,14 @@ class SyncApplierTest {
     assertTrue(applier.tick().isEmpty())
     assertEquals(0, store.applyCalls)
     clock.now = 1_050L
-    assertTrue(applier.tick().isEmpty())
+    assertEquals(listOf(SyncEffect.Ack("c1", "stream-a", 1L), SyncEffect.CacheReady), applier.tick())
     assertEquals(1, store.applyCalls)
     assertEquals(1L, store.seq("c1"))
     repeat(127) { index ->
       applier.offer(turn(index + 2L))
     }
     assertEquals(1, store.applyCalls)
-    assertTrue(applier.offer(turn(129L)).isEmpty())
+    assertEquals(listOf(SyncEffect.CacheReady), applier.offer(turn(129L)))
     assertEquals(2, store.applyCalls)
     assertEquals(129L, store.seq("c1"))
   }
@@ -42,7 +42,7 @@ class SyncApplierTest {
     applier.offer(turn(4))
     applier.offer(turn(5))
     clock.now = 50L
-    assertTrue(applier.tick().isEmpty())
+    assertEquals(listOf(SyncEffect.Ack("c1", "stream-a", 5L), SyncEffect.CacheReady), applier.tick())
     assertEquals(5L, store.seq("c1"))
     assertEquals("Add 5", store.prompt("c1", "t5"))
     applier.offer(turn(7))
@@ -78,7 +78,7 @@ class SyncApplierTest {
     assertEquals(SyncEffect.Resume("c1", "stream-a", 2L), caught.tick().single())
     caught.offer(turn(3))
     clock.now = 20_050L
-    assertTrue(caught.tick().isEmpty())
+    assertEquals(listOf(SyncEffect.Ack("c1", "stream-a", 3L), SyncEffect.CacheReady), caught.tick())
     clock.now = 21_050L
     assertTrue(caught.tick().isEmpty())
     assertEquals(3L, store.seq("c1"))
@@ -93,7 +93,12 @@ class SyncApplierTest {
     val applier = SyncApplier("host-1", store, clock)
     applier.offer(MonitorEvent.BlockAppend("c1", "stream-a", 1L, "b1", 4, " there"))
     clock.now = 50L
-    assertEquals(listOf(SyncEffect.FetchBlock("c1", "b1")), applier.tick())
+    val effects = applier.tick()
+    assertEquals(SyncEffect.Ack("c1", "stream-a", 1L), effects[0])
+    val fetch = effects[1] as SyncEffect.FetchBlock
+    assertEquals("c1", fetch.conversationId)
+    assertEquals("b1", fetch.blockId)
+    assertEquals(2, fetch.offset)
     assertEquals("Hi", store.blocks.single().body)
     assertEquals(1L, store.seq("c1"))
   }
@@ -144,12 +149,18 @@ private class MemorySyncStore : SyncStore {
       if (commit != null) {
         commits += commit
         conversations[id] = commit.conversation
-        turns.removeAll { it.conversationId == id }
-        turns += commit.turns
-        blocks.removeAll { it.conversation == id }
-        blocks += commit.blocks
-        images.removeAll { it.conversation == id }
-        images += commit.images
+        for (turn in commit.turns) {
+          turns.removeAll { it.conversationId == id && it.turnId == turn.turnId }
+          turns += turn
+        }
+        for (block in commit.blocks) {
+          blocks.removeAll { it.conversation == id && it.blockId == block.blockId }
+          blocks += block
+        }
+        for (image in commit.images) {
+          images.removeAll { it.conversation == id && it.id == image.id }
+          images += image
+        }
       }
       reduced.gap?.let { gaps += it }
       fetches += reduced.fetches

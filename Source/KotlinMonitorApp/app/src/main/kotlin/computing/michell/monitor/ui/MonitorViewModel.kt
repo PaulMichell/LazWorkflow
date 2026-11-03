@@ -1372,7 +1372,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         val waitingForPoint = board.turns.isEmpty() && board.live == null && coordinator.state.desktopPoint == 0
         if (!waitingForPoint && board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
           savedBoardRevision = board.revision
-          persistBoard(hostId, conversationId, board)
         }
       }
     }
@@ -1399,6 +1398,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (!engine.available()) {
       dictationState.value = DictationState(statusMessage = DictationUnavailableMessage, available = false)
     }
+    attachApplier(record.hostId)
     // 2. Cached conversation and plan. 3. Only then reconnect.
     viewModelScope.launch {
       showCachedThenConnect(record)
@@ -1822,10 +1822,48 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (!hostIdIsValid(hostId)) return
     val current = syncApplier
     if (current != null) return
-    val created = computing.michell.monitor.data.SyncApplier(hostId, computing.michell.monitor.data.RoomSyncStore(database), { System.currentTimeMillis() })
+    val created = computing.michell.monitor.data.SyncApplier(
+      hostId,
+      computing.michell.monitor.data.RoomSyncStore(database),
+      { System.currentTimeMillis() },
+      ::onSyncEffect
+    )
     syncApplier = created
     session.attachApplier(created)
     created.start(viewModelScope)
+  }
+
+  private fun onSyncEffect(effect: computing.michell.monitor.data.SyncEffect) {
+    viewModelScope.launch(Dispatchers.Main.immediate) {
+      when (effect) {
+        is computing.michell.monitor.data.SyncEffect.Ack -> session.sendCatalogue(
+          computing.michell.monitor.protocol.encodeAck(session.nextCommandId(), effect.conversationId, effect.streamId, effect.seq)
+        )
+        is computing.michell.monitor.data.SyncEffect.Resume -> {
+          val json = computing.michell.monitor.protocol.encodeSyncResume(
+            session.nextCommandId(), effect.conversationId, effect.streamId, effect.seq
+          )
+          if (effect.hold) session.queueSyncResume(json) else session.sendCatalogue(json)
+        }
+        computing.michell.monitor.data.SyncEffect.Reconnect -> session.reconnect()
+        is computing.michell.monitor.data.SyncEffect.FetchBlock -> {
+          val id = effect.requestId.ifEmpty { session.nextCommandId() }
+          session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncBlockGet(
+            id, effect.conversationId, effect.blockId, effect.offset, effect.prefixHash
+          ))
+        }
+        is computing.michell.monitor.data.SyncEffect.StateApplied -> {
+          val next = if (effect.key == "approval") {
+            computing.michell.monitor.data.applyApprovalState(coordinator.state, effect.valueJson)
+          } else {
+            computing.michell.monitor.data.applyStateValue(coordinator.state, effect.key, effect.valueJson)
+          }
+          uiState.value = coordinator.noteSyncedChrome(next)
+        }
+        is computing.michell.monitor.data.SyncEffect.Note -> uiState.value = coordinator.noteSyncNote(effect.text)
+        computing.michell.monitor.data.SyncEffect.CacheReady -> uiState.value = coordinator.noteCacheReadable()
+      }
+    }
   }
 
   private var syncApplier: computing.michell.monitor.data.SyncApplier? = null
@@ -2126,23 +2164,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  private var ackJob: kotlinx.coroutines.Job? = null
-
-  private fun scheduleAck(effect: MonitorEffect.Ack) {
-    ackJob?.cancel()
-    ackJob = null
-    if (effect.delayMs <= 0L) {
-      session.sendCatalogue(effect.json)
-      coordinator.noteAckSent(System.currentTimeMillis(), effect.seq)
-      return
-    }
-    ackJob = viewModelScope.launch {
-      kotlinx.coroutines.delay(effect.delayMs)
-      session.sendCatalogue(effect.json)
-      coordinator.noteAckSent(System.currentTimeMillis(), effect.seq)
-    }
-  }
-
   private fun planChromeChanged(before: MonitorUi, after: MonitorUi): Boolean {
     return before.planPath != after.planPath || before.planTitle != after.planTitle ||
       before.planRunning != after.planRunning || before.planRows != after.planRows ||
@@ -2169,7 +2190,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         MonitorEffect.LeaveDictation -> leaveDictation()
         is MonitorEffect.RememberDraft -> session.updateDraft(effect.text)
         is MonitorEffect.Send -> session.sendCatalogue(effect.json)
-        is MonitorEffect.Ack -> scheduleAck(effect)
         MonitorEffect.Prefetch -> applyUiEffects(coordinator.collectMissing(uiState.value))
         MonitorEffect.ClearCaches -> {
           images.reset()

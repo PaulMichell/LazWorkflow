@@ -151,12 +151,12 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun aLaterPatchReplacesTheBodyWithoutARevisionGate() {
+  fun aLaterPatchDoesNotReplaceTheBody() {
     val coordinator = open()
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot(live("first"))))))
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p2", patch("second", 8)))))
-    assertEquals("second", coordinator.state.live?.blocks?.first()?.body)
-    assertEquals(8, coordinator.state.hostCursor)
+    assertNull(coordinator.state.live)
+    assertEquals(0, coordinator.state.hostCursor)
   }
 
   @Test

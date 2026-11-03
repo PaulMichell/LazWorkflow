@@ -2524,7 +2524,10 @@ sealed class MonitorEvent {
     override val streamId: String,
     override val seq: Long,
     val blockId: String,
-    val body: String
+    val body: String,
+    val deferred: Boolean = false,
+    val revision: Long = 0,
+    val bodyBytes: Int = 0
   ) : MonitorEvent()
 
   data class BlockClose(
@@ -2608,9 +2611,15 @@ fun decodeMonitorEvent(payloadJson: String): MonitorEvent? {
     }
     "block_replace" -> {
       val blockId = data.readString("block_id", true)
-      val body = data.readString("body", true)
-      if (!blockId.ok || !body.ok) null
-      else MonitorEvent.BlockReplace(id, stream, number, blockId.value, body.value)
+      val deferred = data.readBool("deferred", false)
+      val body = data.readString("body", false)
+      val revision = data.readLong("revision", false)
+      val bodyBytes = data.readInt("body_bytes", false)
+      if (!blockId.ok || !deferred.ok || !body.ok || !revision.ok || !bodyBytes.ok) null
+      else if (deferred.value) {
+        MonitorEvent.BlockReplace(id, stream, number, blockId.value, "", true, revision.value, bodyBytes.value)
+      } else if (body.value.isEmpty() && !data.has("body")) null
+      else MonitorEvent.BlockReplace(id, stream, number, blockId.value, body.value, false, revision.value, bodyBytes.value)
     }
     "block_close" -> {
       val blockId = data.readString("block_id", true)

@@ -1,9 +1,8 @@
 package computing.michell.monitor.ui
 
-/* A skipped cursor no longer freezes the body the screen reads (c) 2026 Michell Computing.
+/* Catalogue 2 patches do not paint the conversation board (c) 2026 Michell Computing.
 
-   The store takes the latest patch. There is no revision gate and no grace
-   period that keeps the previous answer on screen. */
+   The applier commits slices. A patch must not replace the stored body. */
 
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.LinkPhase
@@ -23,27 +22,29 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MonitorCoordinatorLockupTest {
   @Test
-  fun aSkippedCursorReplacesTheStoredBody() {
+  fun aPatchDoesNotReplaceTheStoredBody() {
     val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot("first")))))
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("late", patch("second", 9)))))
-    assertEquals("second", coordinator.state.live?.blocks?.first()?.body)
-    assertEquals(9, coordinator.state.hostCursor)
+    assertNull(coordinator.state.live)
+    assertEquals(0, coordinator.state.hostCursor)
     assertFalse(coordinator.holdingLink)
   }
 
   @Test
   fun disconnectDoesNotKeepTheLinkLookingLive() {
     val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot("first")))))
+    coordinator.noteSyncedChrome(coordinator.state.copy(view = coordinator.state.view.copy(canSend = true, busy = true, sending = true)))
     coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, "", "")))
     assertTrue(coordinator.state.disconnected)
-    assertFalse(coordinator.state.view.canSend)
+    assertFalse(coordinator.state.view.busy)
+    assertFalse(coordinator.state.view.sending)
   }
 }
 

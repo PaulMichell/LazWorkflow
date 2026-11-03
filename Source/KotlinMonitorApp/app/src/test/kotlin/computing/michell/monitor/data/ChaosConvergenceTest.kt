@@ -121,8 +121,6 @@ private class ChaosMemoryStore : SyncStore {
     val commit = reduced.commit
     if (commit != null) {
       conversation = commit.conversation
-      turns.clear()
-      blocks.clear()
       for (turn in commit.turns) turns[turn.turnId] = turn
       for (block in commit.blocks) blocks[block.blockId] = block
     }

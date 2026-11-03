@@ -115,6 +115,78 @@ data class ImageRecord(
   val size: Long
 )
 
+/** A block whose body is not the cursor's text until a fetch finishes. */
+@Entity(
+  tableName = "block_repair",
+  primaryKeys = ["host", "conversation", "blockId"],
+  foreignKeys = [
+    ForeignKey(
+      entity = ConversationRecord::class,
+      parentColumns = ["host", "id"],
+      childColumns = ["host", "conversation"],
+      onDelete = ForeignKey.CASCADE
+    )
+  ],
+  indices = [Index("host", "conversation"), Index("host", "requestId")]
+)
+data class BlockRepairRecord(
+  val host: String,
+  val conversation: String,
+  val blockId: String,
+  val revision: Long,
+  val expectedLength: Int,
+  val missingBody: Boolean,
+  val hash: String,
+  val stale: Boolean,
+  val requestId: String,
+  val fetchedBody: String
+)
+
+/** An append held until the block fetch it depends on has committed. */
+@Entity(
+  tableName = "held_append",
+  primaryKeys = ["host", "conversation", "blockId", "seq"],
+  foreignKeys = [
+    ForeignKey(
+      entity = ConversationRecord::class,
+      parentColumns = ["host", "id"],
+      childColumns = ["host", "conversation"],
+      onDelete = ForeignKey.CASCADE
+    )
+  ],
+  indices = [Index("host", "conversation", "blockId")]
+)
+data class HeldAppendRecord(
+  val host: String,
+  val conversation: String,
+  val blockId: String,
+  val seq: Long,
+  val offset: Int,
+  val text: String,
+  val streamId: String
+)
+
+/** Latest value of one state key. It has no content sequence. */
+@Entity(
+  tableName = "host_state",
+  primaryKeys = ["host", "key"],
+  foreignKeys = [
+    ForeignKey(
+      entity = HostRecord::class,
+      parentColumns = ["id"],
+      childColumns = ["host"],
+      onDelete = ForeignKey.CASCADE
+    )
+  ],
+  indices = [Index("host")]
+)
+data class HostStateRecord(
+  val host: String,
+  val key: String,
+  val valueJson: String,
+  val updatedAt: Long
+)
+
 /** The desktop's current plan for one host. Not a conversation row. */
 @Entity(tableName = "plan")
 data class PlanRecord(

@@ -36,6 +36,7 @@ import computing.michell.monitor.protocol.decodeCommandStates
 import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodePairOk
+import computing.michell.monitor.protocol.decodeSyncEnvelope
 import computing.michell.monitor.protocol.decodeTicks
 import computing.michell.monitor.protocol.encodeAuth
 import computing.michell.monitor.protocol.encodeBye
@@ -44,6 +45,7 @@ import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeHello
 import computing.michell.monitor.protocol.encodePair
 import computing.michell.monitor.protocol.encodeTicks
+import computing.michell.monitor.protocol.SyncFrame
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.Closeable
@@ -484,6 +486,9 @@ interface SessionPort {
   fun updateDraft(text: String)
   fun sendCatalogue(json: String)
   fun resetImages()
+  fun takeSyncResume(): String? = null
+  fun queueSyncResume(json: String) {}
+  fun reconnect() {}
 }
 
 class LanSession(
@@ -513,7 +518,11 @@ class LanSession(
   private var link: TlsLink? = null
   private var writer: ConnectionWriter? = null
   internal val events = AccountedEvents()
+  private val syncFrames = Channel<SyncFrame>(Channel.UNLIMITED)
+  private val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
+  private val applierReady = Channel<Unit>(Channel.CONFLATED)
   private var applier: computing.michell.monitor.data.SyncApplier? = null
+  private var owedResume: String? = null
   @Volatile
   private var lastSentMs = 0L
   @Volatile
@@ -943,6 +952,23 @@ class LanSession(
 
   fun attachApplier(next: computing.michell.monitor.data.SyncApplier) {
     applier = next
+    applierReady.trySend(Unit)
+  }
+
+  override fun queueSyncResume(json: String) {
+    owedResume = json
+  }
+
+  override fun takeSyncResume(): String? {
+    val json = owedResume
+    owedResume = null
+    return json
+  }
+
+  override fun reconnect() {
+    if (stopped) return
+    policy.resume()
+    startLoop()
   }
 
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
@@ -973,12 +999,25 @@ class LanSession(
       val applying = actor.launch {
         while (coroutineContext[Job]?.isActive != false) {
           val event = events.receive()
+          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
           applier?.offer(event)
+        }
+      }
+      val framing = actor.launch {
+        for (frame in syncFrames) {
+          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+          applier?.offerFrame(frame)
+        }
+      }
+      val refusing = actor.launch {
+        for (event in refusedEvents) {
+          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+          applier?.noteRefused(event)
         }
       }
       reading.join()
       supervisor.cancel()
-      for (child in listOf(writing, beating, applying)) {
+      for (child in listOf(writing, beating, applying, framing, refusing)) {
         try {
           child.join()
         } catch (error: CancellationException) {
@@ -1069,15 +1108,24 @@ class LanSession(
 
   private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink, outbound: ConnectionWriter) {
     if (epochCounter.get() != epoch) return
+    val sync = decodeSyncEnvelope(frame.json)
+    if (sync is SyncFrame.Event) {
+      session.noteSyncTraffic()
+      if (!events.offer(sync.event, sync.wireBytes)) refusedEvents.trySend(sync.event)
+      if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
+      return
+    }
+    if (sync != null && sync !is SyncFrame.RevisionChanged) {
+      session.noteSyncTraffic()
+      syncFrames.trySend(sync)
+      if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
+      return
+    }
+    if (sync is SyncFrame.RevisionChanged) syncFrames.trySend(sync)
     val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
     val message = chunks.accept(envelope.message) ?: return
     session.apply(message)
-    if (message.typeName == "event") {
-      val event = computing.michell.monitor.protocol.decodeMonitorEvent(message.payloadJson)
-      if (event != null) events.offer(event, message.wireJson.length)
-      // A full event window is dropped. Closing the socket here stops the host reading a send.
-    }
     inbound.publish(message)
     when (message.kind) {
       MessageKind.PairOk -> {

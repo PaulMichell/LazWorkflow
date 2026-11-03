@@ -88,7 +88,6 @@ sealed class MonitorEvent {
 
 sealed class MonitorEffect {
   data class Send(val json: String) : MonitorEffect()
-  data class Ack(val json: String, val seq: Long, val delayMs: Long) : MonitorEffect()
   data class RememberDraft(val text: String) : MonitorEffect()
   data object LeaveDictation : MonitorEffect()
   data object Prefetch : MonitorEffect()
@@ -293,7 +292,49 @@ class MonitorCoordinator(
 
   fun revealHeldLink(current: MonitorUi, status: LinkStatus): List<MonitorEffect>? = null
 
-  fun noteAckSent(nowMs: Long, seq: Long) {}
+  /** Chrome from a state frame. The conversation board stays with the store. */
+  fun noteSyncedChrome(next: MonitorUi): MonitorUi = synchronized(gate) {
+    local = local.copy(
+      view = next.view,
+      planPath = next.planPath,
+      planTitle = next.planTitle,
+      planRunning = next.planRunning,
+      planRows = next.planRows,
+      planChoices = next.planChoices,
+      targetChoices = next.targetChoices,
+      targetCurrent = next.targetCurrent,
+      conversationChoices = next.conversationChoices,
+      conversationCurrent = next.conversationCurrent,
+      conversationsTruncated = next.conversationsTruncated,
+      modelChoices = next.modelChoices,
+      modelBackend = next.modelBackend,
+      modelNote = next.modelNote,
+      reasoningChoices = next.reasoningChoices,
+      reasoningCurrent = next.reasoningCurrent,
+      reasoningNote = next.reasoningNote,
+      permissionChoices = next.permissionChoices,
+      permissionCurrent = next.permissionCurrent,
+      permissionNote = next.permissionNote,
+      approval = next.approval,
+      approvalOpen = next.approvalOpen,
+      statusBusy = next.statusBusy,
+      activityStartedMs = next.activityStartedMs,
+      projectRoot = next.projectRoot.ifEmpty { local.projectRoot },
+      conversationTitle = next.conversationTitle.ifEmpty { local.conversationTitle },
+      conversationId = next.conversationId.ifEmpty { local.conversationId }
+    )
+    published()
+  }
+
+  fun noteSyncNote(text: String): MonitorUi = synchronized(gate) {
+    if (text.isNotEmpty()) local = local.copy(banner = text)
+    published()
+  }
+
+  fun noteCacheReadable(): MonitorUi = synchronized(gate) {
+    local = local.copy(catchingUp = false, reviewingOffline = false)
+    published()
+  }
 
   private fun quietFinishedBlocks() {
     if (local.view.sending || local.view.busy || local.view.planRunning || local.planRunning) return
@@ -407,11 +448,9 @@ class MonitorCoordinator(
         noteHello(message)
         effects += resumeNow()
       }
-      MessageKind.Snapshot -> applySnapshot(decodeSnapshot(message.payloadJson) ?: snapshotFrom(message))
-      MessageKind.SnapshotPage -> effects += applySnapshotPage(message)
-      MessageKind.BlockData -> applyBlockData(message)
-      MessageKind.Catchup -> decodeCatchup(message.payloadJson)?.let { applyCatchup(it) }
-      MessageKind.Patch -> decodePatch(message.payloadJson)?.let { applyPatch(it) }
+      MessageKind.Snapshot, MessageKind.SnapshotPage, MessageKind.Catchup, MessageKind.Patch, MessageKind.BlockData -> {
+        // Slices, fetches, and the baseline own the board. These frames must not paint it.
+      }
       MessageKind.ConversationClosed -> {
         val closed = (message.inbound as? InboundPayload.ConversationClosed)?.value
           ?: decodeConversationClosed(message.payloadJson)
@@ -840,8 +879,10 @@ class MonitorCoordinator(
   }
 
   private fun resumeNow(): MonitorEffect {
-    // A saved cursor is not the open screen. Empty epoch makes the host send the mirror pages.
     local = local.copy(catchingUp = true)
+    val owed = session.takeSyncResume()
+    if (owed != null) return MonitorEffect.Send(owed)
+    // A saved cursor is not the open screen. Empty epoch makes the host send the mirror pages.
     return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
   }
 
@@ -850,9 +891,9 @@ class MonitorCoordinator(
     local = local.copy(lastSyncMs = updatedAt)
   }
 
-  /** Room may paint only the conversation New has not left. */
+  /** Room may paint only the conversation New has not left. Catch-up does not hide a committed row. */
   fun acceptsRepository(conversationId: String): Boolean = synchronized(gate) {
-    !local.catchingUp && !awaitingConversation && conversationId.isNotEmpty() && conversationId == local.conversationId
+    !awaitingConversation && conversationId.isNotEmpty() && conversationId == local.conversationId
   }
 
   /** The Plan tab highlight. A later plan frame for the same path keeps it. */

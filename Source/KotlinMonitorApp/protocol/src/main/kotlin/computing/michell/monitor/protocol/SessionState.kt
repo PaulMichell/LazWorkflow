@@ -165,6 +165,11 @@ class SessionState {
     if (kind == MessageKind.Auth) authSent = true
   }
 
+  /** Catalogue 3 slices are live traffic. They are not a catalogue 2 status frame. */
+  fun noteSyncTraffic() {
+    if (phase == SessionPhase.Accepted && authSent) phase = SessionPhase.Live
+  }
+
   fun apply(message: MonitorMessage) {
     if (!message.changesState) return
     when (message.kind) {

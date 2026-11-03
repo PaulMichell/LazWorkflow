@@ -121,6 +121,36 @@ abstract class SyncDao {
   @Query("SELECT * FROM image WHERE host = :host AND conversation = :conversation")
   abstract suspend fun loadImages(host: String, conversation: String): List<ImageRecord>
 
+  @Query("SELECT * FROM turn WHERE host = :host AND conversationId = :conversationId AND turnId IN (:turnIds)")
+  abstract suspend fun loadTurnsById(host: String, conversationId: String, turnIds: List<String>): List<TurnRecord>
+
+  @Query("SELECT * FROM block WHERE host = :host AND conversation = :conversation AND blockId IN (:blockIds)")
+  abstract suspend fun loadBlocksById(host: String, conversation: String, blockIds: List<String>): List<BlockRecord>
+
+  @Query("SELECT * FROM block WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
+  abstract suspend fun loadBlock(host: String, conversation: String, blockId: String): BlockRecord?
+
+  @Query("SELECT * FROM image WHERE host = :host AND conversation = :conversation AND id IN (:imageIds)")
+  abstract suspend fun loadImagesById(host: String, conversation: String, imageIds: List<String>): List<ImageRecord>
+
+  @Query("SELECT * FROM block_repair WHERE host = :host AND conversation = :conversation AND blockId IN (:blockIds)")
+  abstract suspend fun loadRepairs(host: String, conversation: String, blockIds: List<String>): List<BlockRepairRecord>
+
+  @Query("SELECT * FROM block_repair WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
+  abstract suspend fun loadRepair(host: String, conversation: String, blockId: String): BlockRepairRecord?
+
+  @Query("SELECT * FROM block_repair WHERE host = :host AND blockId = :blockId AND missingBody = 1 LIMIT 1")
+  abstract suspend fun loadRepairByBlock(host: String, blockId: String): BlockRepairRecord?
+
+  @Query("SELECT * FROM block_repair WHERE host = :host AND requestId = :requestId LIMIT 1")
+  abstract suspend fun loadRepairByRequest(host: String, requestId: String): BlockRepairRecord?
+
+  @Query("SELECT * FROM block_repair WHERE host = :host AND missingBody = 1")
+  abstract suspend fun loadMissingRepairs(host: String): List<BlockRepairRecord>
+
+  @Query("SELECT * FROM held_append WHERE host = :host AND conversation = :conversation AND blockId IN (:blockIds) ORDER BY seq")
+  abstract suspend fun loadHeld(host: String, conversation: String, blockIds: List<String>): List<HeldAppendRecord>
+
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   abstract suspend fun upsertConversation(row: ConversationRecord)
 
@@ -132,6 +162,30 @@ abstract class SyncDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   abstract suspend fun upsertImages(rows: List<ImageRecord>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertRepairs(rows: List<BlockRepairRecord>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertHeld(rows: List<HeldAppendRecord>)
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  abstract suspend fun upsertState(row: HostStateRecord)
+
+  @Query("DELETE FROM block_repair WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
+  abstract suspend fun deleteRepair(host: String, conversation: String, blockId: String)
+
+  @Query("DELETE FROM held_append WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
+  abstract suspend fun deleteHeldBlock(host: String, conversation: String, blockId: String)
+
+  @Query("DELETE FROM held_append WHERE host = :host AND conversation = :conversation AND blockId = :blockId AND seq = :seq")
+  abstract suspend fun deleteHeldSeq(host: String, conversation: String, blockId: String, seq: Long)
+
+  @Query("DELETE FROM turn WHERE host = :host AND conversationId = :conversationId AND turnId = :turnId")
+  abstract suspend fun deleteTurn(host: String, conversationId: String, turnId: String)
+
+  @Query("DELETE FROM block WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
+  abstract suspend fun deleteBlock(host: String, conversation: String, blockId: String)
 }
 
 @Dao
