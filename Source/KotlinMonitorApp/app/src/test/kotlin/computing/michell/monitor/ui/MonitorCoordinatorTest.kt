@@ -208,6 +208,31 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aNewEpochPatchPaintsTheOpenTurnWhileCatchingUp() {
+    val coordinator = open()
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "conversation-1",
+      hostEpoch = "old",
+      hostCursor = 4,
+      turns = listOf(WireTurn(1, "old-turn", "build", "", "old", "", blocks = listOf(
+        WireBlock("user", "u", "", "", "", "old", false, true, 0, emptyList())
+      )))
+    ))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "new-epoch", 9, "conversation-1", "/work", "Chat", "")
+    ))))
+    assertEquals("new-epoch", coordinator.state.hostEpoch)
+    assertEquals("old", coordinator.state.turns.single().promptPreview)
+    val incoming = WirePatch(
+      "new-epoch", 9, -2, "live",
+      listOf(WireBlock("user", "u2", "", "", "", "this chat", false, true, 0, emptyList())),
+      true, true, false, "thinking", true, false, false, 0
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("p", incoming))))
+    assertEquals("this chat", coordinator.state.live?.blocks?.single()?.body)
+  }
+
+  @Test
   fun helloAsksForTheOpenScreenNotTheSavedCursor() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())

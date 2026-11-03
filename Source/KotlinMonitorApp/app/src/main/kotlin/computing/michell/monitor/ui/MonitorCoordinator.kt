@@ -683,8 +683,13 @@ class MonitorCoordinator(
   private fun applyPatch(patch: WirePatch) {
     if (awaitingConversation) return
     if (patch.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && patch.epoch != local.hostEpoch) {
-      local = local.copy(catchingUp = true, announcedEpoch = patch.epoch)
-      return
+      // The saved cursor is not this chat. Paint the turn the desktop is sending.
+      if (desktopMatched && !local.catchingUp) {
+        local = local.copy(catchingUp = true, announcedEpoch = patch.epoch)
+        return
+      }
+      resetMatch()
+      local = local.copy(hostEpoch = patch.epoch, catchingUp = true, announcedEpoch = "")
     }
     val board = content.current()
     val previous = board.live?.takeIf { turn -> turn.id == patch.turnId || turn.turnIndex == patch.turnIndex }
@@ -703,6 +708,8 @@ class MonitorCoordinator(
     )
     val kept = board.turns.filter { turn -> turn.id != live.id && turn.turnIndex != live.turnIndex }
     content.replace(contentHost, local.conversationId, kept, live)
+    // Room must not replace this turn with an older copy that does not have it yet.
+    content.sealHostPaint()
     val flagged = local.view.copy(
       busy = patch.busy,
       sending = patch.sending,
@@ -773,10 +780,13 @@ class MonitorCoordinator(
     resetMatch()
     val board = content.current()
     val haveBody = board.turns.isNotEmpty() || board.live != null
-    val keepPlace = haveBody && local.hostEpoch.isNotEmpty() && local.hostCursor > 0L
+    val announced = hello.epoch.ifEmpty { local.hostEpoch }
+    val sameEpoch = announced.isEmpty() || announced == local.hostEpoch
+    val keepPlace = haveBody && sameEpoch && local.hostCursor > 0L
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
-      hostEpoch = if (keepPlace) local.hostEpoch else hello.epoch.ifEmpty { local.hostEpoch },
+      // A saved epoch must not reject the chat the desktop is about to send.
+      hostEpoch = announced,
       hostCursor = if (keepPlace) local.hostCursor else if (hello.cursor > 0L) hello.cursor else local.hostCursor,
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
       conversationTitle = hello.title.ifEmpty { local.conversationTitle },

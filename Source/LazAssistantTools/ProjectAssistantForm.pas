@@ -679,10 +679,27 @@ Var
   RegisteredAssistantForm: TProjectAssistantForm;
 
 Function OpenProjectAssistantForm: TProjectAssistantForm;
+Var
+  I: Integer;
+  Form: TCustomForm;
 Begin
   Result := RegisteredAssistantForm;
-  If Assigned(Result) And (csDestroying In Result.ComponentState) Then
-    Result := Nil;
+  If Assigned(Result) And (Not (csDestroying In Result.ComponentState)) Then
+    Exit;
+  Result := Nil;
+  { Scan here, not in the monitor package. A second copy of this class makes Is fail there. }
+  For I := 0 To Screen.CustomFormCount - 1 Do
+    Begin
+      Form := Screen.CustomForms[I];
+      If (Form Is TProjectAssistantForm) And (Not (csDestroying In Form.ComponentState)) Then
+        Exit(TProjectAssistantForm(Form));
+    End;
+  For I := 0 To Screen.FormCount - 1 Do
+    Begin
+      Form := Screen.Forms[I];
+      If (Form Is TProjectAssistantForm) And (Not (csDestroying In Form.ComponentState)) Then
+        Exit(TProjectAssistantForm(Form));
+    End;
 End;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;

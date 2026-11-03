@@ -57,6 +57,11 @@ class MemoryConversationStore : ConversationStore {
     if (turns.isEmpty() && live == null && showing && current.conversationId == conversationId) return
     // A late read of the previous conversation must not paint over the new one.
     if (showing && current.conversationId.isNotEmpty() && conversationId != current.conversationId) return
+    val hostLive = current.live
+    if (hostLive != null && hostLive.id.isNotEmpty() && conversationId == current.conversationId) {
+      val kept = (live != null && live.id == hostLive.id) || turns.any { turn -> turn.id == hostLive.id }
+      if (!kept) return
+    }
     publish(host, conversationId, turns, live, current.revision)
   }
 

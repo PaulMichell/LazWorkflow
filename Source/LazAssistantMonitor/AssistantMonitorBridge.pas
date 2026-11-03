@@ -886,7 +886,8 @@ Begin
     Exit;
   RetryDeferredResumes;
   Seen := AssistantMirrorCounter;
-  If Seen = FPumpedMirror Then
+  { An idle window still has to reach a phone that connected after the last trace tick. }
+  If (Seen = FPumpedMirror) And (FSentEpoch <> '') Then
     Exit;
   PumpMirror(Seen);
 End;
@@ -925,10 +926,7 @@ Begin
     UnlockBridge;
   End;
   If (Not Assigned(Session)) Or (Not Assigned(Form)) Then
-    Begin
-      FPumpedMirror := Seen;
-      Exit;
-    End;
+    Exit;
   Form.FillMonitorView(View);
   ApplyHostFlags(View);
   { New has already minted the next id. Do not observe its note onto the closed mirror. }
