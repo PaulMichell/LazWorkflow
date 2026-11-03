@@ -95,6 +95,8 @@ Type
     FSentModel: String;
     FSentStatusText: String;
     FPumping: Boolean;
+    { Epoch and conversation already copied to the connected phone. Cleared when it drops. }
+    FDeliveredScreen: String;
     Procedure LockBridge;
     Procedure UnlockBridge;
     { Caller holds FLock. True when this command was still listed. }
@@ -130,6 +132,7 @@ Type
     Procedure PushReasoning(Form: TProjectAssistantForm);
     Procedure PushPermissions(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
+    Procedure DeliverOpenScreen;
     Procedure PumpMirror(Seen: Int64);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
@@ -144,6 +147,8 @@ Type
 
 Var
   Bridge: TAssistantMonitorBridge;
+
+Function SnapshotHasOpenTurn(Const Snapshot: TMonitorSnapshot): Boolean; Forward;
 
 Procedure TMonitorQueuedCommand.Release;
 Begin
@@ -462,7 +467,11 @@ Begin
   If Assigned(Form) And Form.MonitorScreenReady Then
     Exit(False);
   Age := GetTickCount64 - Command.QueuedAt;
-  { The window may still be opening. Do not tell the phone it is missing yet. }
+  { The window is open and the conversation is still loading. An empty page here
+    is what the phone saves as this chat with no turns. }
+  If Assigned(Form) Then
+    Exit(Age < 60000);
+  { No window yet. Do not tell the phone it is missing for the first few seconds. }
   Result := Age < 8000;
 End;
 
@@ -626,9 +635,10 @@ Begin
   FPlanStamp := '';
   SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
-  { The connected client learns the new epoch from this catchup. Cursor 0 was the empty start. }
-  If HadEpoch And Assigned(Form) Then
-    SendCatchupSnapshot(Form, '');
+  { The connected client learns the new epoch from this catchup. Cursor 0 was the empty start.
+    An unbound window has no turns yet. Sending that page is the blank chat. }
+  If HadEpoch And Assigned(Form) And Form.MonitorScreenReady Then
+    SendCatchupSnapshot(Form, '', True);
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -732,6 +742,10 @@ Begin
   If (Not Assigned(Session)) Or (Session.MirrorEpoch = '') Then
     Exit;
   FillSnapshot(Form, Snapshot);
+  { The store has this chat. Do not publish the empty page the phone files as the conversation. }
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) And
+    (Not SnapshotHasOpenTurn(Snapshot)) Then
+    Exit;
   Session.ObserveSnapshot(Snapshot);
   Id := RefId;
   If Id = '' Then
@@ -878,6 +892,62 @@ Begin
     Result := Result + #1 + IntToStr(Rows[I].Index) + #1 + Rows[I].Status + #1 + Rows[I].Title;
 End;
 
+Function SnapshotHasOpenTurn(Const Snapshot: TMonitorSnapshot): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  For Index := 0 To High(Snapshot.StoredTurns) Do
+    If Snapshot.StoredTurns[Index].Id <> '' Then
+      Exit(True);
+  If Not Snapshot.HasLive Then
+    Exit;
+  { The idle placeholder is not the stored chat. Sending it is the blank page. }
+  If (Snapshot.Live.Id <> '') And (Snapshot.Live.Id <> 'live') Then
+    Exit(True);
+  Result := Length(Snapshot.Live.Blocks) > 0;
+End;
+
+Procedure TAssistantMonitorBridge.DeliverOpenScreen;
+Var
+  Form: TProjectAssistantForm;
+  Session: TMonitorSession;
+  Snapshot: TMonitorSnapshot;
+  ConversationId, ProjectRoot, Title, Epoch, MirrorId, MirrorRoot, MirrorTitle, Key: String;
+  Cursor: Int64;
+Begin
+  Form := OpenForm;
+  If (Not Assigned(Form)) Or (Not Form.MonitorScreenReady) Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  If (Not Assigned(Session)) Or (Not Session.ClientAuthenticated) Then
+    Begin
+      FDeliveredScreen := '';
+      Exit;
+    End;
+  Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
+  Session.CopyMirrorIdentity(Epoch, MirrorId, MirrorRoot, MirrorTitle, Cursor);
+  If Epoch = '' Then
+    Exit;
+  Key := Epoch + #1 + ConversationId;
+  If Key = FDeliveredScreen Then
+    Exit;
+  FillSnapshot(Form, Snapshot);
+  { The store has this chat. An empty page is not a delivery. }
+  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) And
+    (Not SnapshotHasOpenTurn(Snapshot)) Then
+    Exit;
+  Session.ObserveSnapshot(Snapshot);
+  If Not Session.SendMirrorPoint(HostId) Then
+    Exit;
+  FDeliveredScreen := Key;
+End;
+
 Procedure TAssistantMonitorBridge.MirrorTimerTimer(Sender: TObject);
 Var
   Seen: Int64;
@@ -887,9 +957,10 @@ Begin
   RetryDeferredResumes;
   Seen := AssistantMirrorCounter;
   { An idle window still has to reach a phone that connected after the last trace tick. }
-  If (Seen = FPumpedMirror) And (FSentEpoch <> '') Then
-    Exit;
-  PumpMirror(Seen);
+  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
+    PumpMirror(Seen);
+  { Resume can be answered before the conversation is loaded. Push the open turn once it is. }
+  DeliverOpenScreen;
 End;
 
 Function FlagsChanged(Const View: TAssistantMonitorView; Valid, Busy, Sending, PlanRunning, CanSend, CanSteer, CanStop: Boolean;

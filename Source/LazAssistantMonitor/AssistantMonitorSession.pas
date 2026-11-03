@@ -326,6 +326,8 @@ Type
     Property ConnectedClientName: String Read GetConnectedClientName;
     Property RemoteApproval: Boolean Read FRemoteApproval;
     Function SecondsSinceFrame: Integer;
+    /// True after auth. A hello that has not been proved cannot take the open screen.
+    Function ClientAuthenticated: Boolean;
   End;
 
   { In-memory double. The session's interface reference keeps it alive.
@@ -1134,6 +1136,16 @@ End;
 Function TMonitorSession.Connected: Boolean;
 Begin
   Result := FState In [mssAccepted, mssLive, mssBusy, mssRevoked];
+End;
+
+Function TMonitorSession.ClientAuthenticated: Boolean;
+Begin
+  LockSession;
+  Try
+    Result := FState In [mssLive, mssBusy];
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Function TMonitorSession.IsRevoked(Const ClientId: String): Boolean;
@@ -2582,32 +2594,39 @@ Function TMonitorSession.QueueMirrorPagesLocked(Const Id: String; PointOnly: Boo
 Var
   Pages: TMonitorSnapshotPageArray;
   Frames: TStringArray;
-  Index: Integer;
+  ReadyFrames: Array Of TStringArray;
+  Index, Count: Integer;
   SawPoint: Boolean;
 Begin
   Result := False;
   SetLength(Pages, 0);
   SetLength(Frames, 0);
+  SetLength(ReadyFrames, 0);
   If (Not Assigned(FMirror)) Or (FEpoch = '') Then
     Exit;
   If Not FMirror.BuildSnapshotPages(FEpoch, FCommittedCursor, Pages) Then
     Exit;
-  { A resume that asks for every older turn fills the phone and the link drops mid-sync. }
+  { Pack every page before queueing. An outline that arrives alone is the blank chat. }
   SawPoint := False;
+  Count := 0;
   For Index := 0 To High(Pages) Do
     Begin
       If PointOnly And (Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)) And SawPoint Then
         Break;
       If Not PackMonitorBulkItem(Id, 'snapshot_page', Pages[Index].Json, Frames) Then
         Exit;
-      QueueBulkFramesLocked(Frames);
+      SetLength(ReadyFrames, Count + 1);
+      ReadyFrames[Count] := Copy(Frames);
+      Inc(Count);
       If PageIsPoint(Pages[Index].Json) Then
         SawPoint := True;
       If PointOnly And (PageEndsPoint(Pages[Index].Json) Or
         ((Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)))) Then
         Break;
     End;
-  Result := Length(Pages) > 0;
+  For Index := 0 To Count - 1 Do
+    QueueBulkFramesLocked(ReadyFrames[Index]);
+  Result := Count > 0;
 End;
 
 Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;

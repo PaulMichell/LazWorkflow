@@ -737,6 +737,29 @@ class MonitorCoordinatorTest {
     coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(note)))
   }
 
+  @Test
+  fun anEmptyHelloKeepsAskingUntilTheOpenTurnArrives() {
+    val clock = MovableClock(1_000L)
+    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 0, "conversation-1", "/work", "", "")
+    ))))
+    val first = coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>()
+    assertEquals(1, first.size)
+    assertTrue(first.single().json.contains("resume"))
+    assertNull(coordinator.flush(coordinator.state))
+    clock.millis += 2_000L
+    assertEquals(1, coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>().size)
+    val point = encodeSnapshotPage(
+      "page-1",
+      """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":1,"turn":{"live":true,"turn_id":"live-1","turn_index":1,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"}]}}"""
+    )
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
+    assertEquals("the prompt", coordinator.state.live?.blocks?.single()?.body)
+    clock.millis += 5_000L
+    assertNull(coordinator.flush(coordinator.state))
+  }
+
   private fun open(session: FakeSession = FakeSession()): MonitorCoordinator {
     return MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, true))
   }

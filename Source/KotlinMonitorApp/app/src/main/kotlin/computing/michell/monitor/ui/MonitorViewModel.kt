@@ -1368,7 +1368,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         val hostId = store.load().hostId
         val conversationId = board.conversationId.ifEmpty { coordinator.state.conversationId }
         watchRepository(hostId, conversationId)
-        if (board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
+        // A hello can name this chat before its turn arrives. Filing that is the blank row.
+        val waitingForPoint = board.turns.isEmpty() && board.live == null && coordinator.state.desktopPoint == 0
+        if (!waitingForPoint && board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
           savedBoardRevision = board.revision
           persistBoard(hostId, conversationId, board)
         }

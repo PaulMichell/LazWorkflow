@@ -134,6 +134,8 @@ class MonitorCoordinator(
   private var pointId = ""
   private var pointTurn: WireTurn? = null
   private var desktopMatched = false
+  /** Last time an empty screen asked the desktop for the open turn. */
+  private var screenAskedAt = 0L
   private var heldOutline: List<WireTurn> = emptyList()
   private val backgroundPages = ArrayDeque<String>()
   private val askedTurns = HashSet<Int>()
@@ -237,7 +239,21 @@ class MonitorCoordinator(
     }
   }
 
-  fun flush(current: MonitorUi): List<MonitorEffect>? = null
+  /** Asks again while the link is up and this chat still has no turn.
+      An empty outline answered before the window was bound must not be the last word. */
+  fun flush(current: MonitorUi): List<MonitorEffect>? = synchronized(gate) {
+    if (!commandsReady()) return null
+    val board = content.current()
+    if (desktopMatched || board.turns.isNotEmpty() || board.live != null) {
+      screenAskedAt = 0L
+      return null
+    }
+    if (local.conversationId.isEmpty() && !local.catchingUp) return null
+    val now = clock.nowMs()
+    if (screenAskedAt != 0L && now - screenAskedAt < 2000L) return null
+    screenAskedAt = now
+    listOf(resumeNow())
+  }
 
   /** The retry chip may offer the old text. It must not become the composer on the next open. */
   fun noteUndelivered(current: MonitorUi, text: String): MonitorUi = synchronized(gate) {
