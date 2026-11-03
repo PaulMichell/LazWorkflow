@@ -73,6 +73,7 @@ Var
   Session: TMonitorSession;
   Answerer: TResumeAnswerer;
   ErrorText: String;
+  BulkSerial: Integer;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -615,6 +616,131 @@ Begin
     Answerer.AnsweredMs - Sent, ' catchup_ms=', CatchupAt - Sent, ' complete_ms=', LastAt - Sent);
 End;
 
+{ Item 4.2 turns these green. Do not loosen the bounds to match the hybrid.
+  These frames are snapshot pages, so they sit on the bulk lane. A plan frame is coalesced and is not this test. }
+Function NextBulkFrame: String;
+Begin
+  Inc(BulkSerial);
+  Result := '{"v":2,"id":"b' + IntToStr(BulkSerial) + '","type":"snapshot_page","payload":{"page":' + IntToStr(BulkSerial) + '}}';
+End;
+
+Function QueueBulkLane(Count: Integer): Integer;
+Var
+  I: Integer;
+Begin
+  Result := 0;
+  For I := 1 To Count Do
+    If Session.TryQueueHostJson(NextBulkFrame) Then
+      Inc(Result);
+  Session.DrainOutbound;
+End;
+
+Procedure TestIdleFrame(Client: TLoopClient);
+Var
+  Started, Arrived: QWord;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  Started := GetTickCount64;
+  Check('4.2 idle frame queued', QueueBulkLane(1) = 1);
+  Arrived := 0;
+  If Client.ReadMessage(After(1000), Message, ErrorText) And (Message.Kind = mmkSnapshotPage) Then
+    Arrived := GetTickCount64;
+  Check('4.2 a frame queued while the link is idle reaches the client in under 20 ms',
+    (Arrived <> 0) And (Arrived - Started < 20));
+  If Arrived <> 0 Then
+    WriteLn('detail idle_ms=', Arrived - Started);
+End;
+
+Procedure TestPriorityPing(Client: TLoopClient);
+Var
+  Queued, Before: Integer;
+  Sent, PongAt: QWord;
+  Message: TMonitorMessage;
+  Ticks: TMonitorTicks;
+  ErrorText: String;
+  GotPong: Boolean;
+Begin
+  Queued := QueueBulkLane(64);
+  Check('4.2 sixty-four bulk frames stay queued', Queued = 64);
+  Sent := GetTickCount64;
+  Check('4.2 priority ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'priority-ping', 9), After(3000)));
+  GotPong := False;
+  Before := 0;
+  PongAt := 0;
+  While Not GotPong Do
+    Begin
+      If Not Client.ReadMessage(After(150), Message, ErrorText) Then
+        Break;
+      If Message.Kind = mmkSnapshotPage Then
+        Inc(Before)
+      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) Then
+        Begin
+          GotPong := True;
+          PongAt := GetTickCount64;
+        End;
+    End;
+  Check('4.2 a ping while 64 bulk frames are queued gets its pong before the next bulk frame', GotPong And (Before = 0));
+  Check('4.2 that pong arrives in under 100 ms', GotPong And (PongAt >= Sent) And (PongAt - Sent < 100));
+  If PongAt <> 0 Then
+    WriteLn('detail priority queued=', Queued, ' bulk_before_pong=', Before, ' pong_ms=', PongAt - Sent)
+  Else
+    WriteLn('detail priority queued=', Queued, ' bulk_before_pong=', Before, ' pong_ms=unset');
+End;
+
+Procedure TestNoDrops(Client: TLoopClient);
+Var
+  DroppedBefore, Queued, Received: Integer;
+  Deadline: QWord;
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  DroppedBefore := Session.FramesDropped;
+  Queued := QueueBulkLane(64);
+  Received := 0;
+  Deadline := After(3000);
+  While GetTickCount64 < Deadline Do
+    If Client.ReadMessage(After(200), Message, ErrorText) And (Message.Kind = mmkSnapshotPage) Then
+      Inc(Received);
+  Check('4.2 no frame of any lane is dropped while the client keeps reading',
+    (Queued = 64) And (Received = 64) And (Session.FramesDropped = DroppedBefore));
+  WriteLn('detail no_drop queued=', Queued, ' received=', Received, ' dropped=', Session.FramesDropped - DroppedBefore);
+End;
+
+Procedure TestPartialWrite(Client: TLoopClient);
+Var
+  First, Second: TMonitorMessage;
+  ErrorText: String;
+  Intact: Boolean;
+Begin
+  { A stalled reader forces a short TLS write. The next frame must not be spliced into it.
+    Both SSL_ERROR_WANT_READ and SSL_ERROR_WANT_WRITE are retried on the same buffer. }
+  Check('4.2 large frame queued for a partial write', QueueBulkLane(1) = 1);
+  Check('4.2 following frame queued while the first may be partial', QueueBulkLane(1) = 1);
+  Intact := Client.ReadMessage(After(8000), First, ErrorText) And (First.Kind = mmkSnapshotPage) And
+    Client.ReadMessage(After(8000), Second, ErrorText) And (Second.Kind = mmkSnapshotPage) And
+    (First.Id <> Second.Id) And (Pos(Second.Id, First.PayloadJson) = 0);
+  Check('4.2 a partial TLS write is resumed without splicing the next frame', Intact);
+End;
+
+Procedure TestAnswerClock(Client: TLoopClient);
+Var
+  Sent: QWord;
+Begin
+  { A short resume that is not answered must still set the clock. Subtracting an unset
+    clock overflowed the 2026-10-29 metric (LinkResumeFrames). }
+  Answerer.AnsweredMs := 0;
+  Answerer.HeardMs := 0;
+  Sent := GetTickCount64;
+  Check('4.2 timeout resume write', Client.WriteJson(EncodeMonitorResume('resume-timeout', '', 0), After(3000)));
+  Sleep(30);
+  Check('4.2 the answer clock is set on a timeout path', (Answerer.AnsweredMs <> 0) And (Answerer.AnsweredMs >= Sent));
+  If Answerer.AnsweredMs <> 0 Then
+    WriteLn('detail answer_clock_ms=', Answerer.AnsweredMs - Sent)
+  Else
+    WriteLn('detail answer_clock unset');
+End;
+
 Procedure RunChecks;
 Var
   Client: TLoopClient;
@@ -635,6 +761,11 @@ Begin
     Check('no frame dropped', Session.FramesDropped = 0);
     If Session.FramesDropped <> 0 Then
       WriteLn('detail dropped=', Session.FramesDropped);
+    TestIdleFrame(Client);
+    TestPriorityPing(Client);
+    TestNoDrops(Client);
+    TestPartialWrite(Client);
+    TestAnswerClock(Client);
     Client.WriteJson(EncodeMonitorBye('bye1', 'client'), After(3000));
     WaitSession(mssListening, 3000);
   Finally

@@ -119,6 +119,8 @@ Type
     Procedure RememberPatch(Seq: Int64; Const PatchJson: RawByteString);
     { True when every patch after Seq is still in the log. Seq equal to the head is an empty tail. }
     Function TryReplayPatches(Const StreamId: String; Seq, ThroughSeq: Int64; Out Events: TMonitorMirrorEventArray; Out Head: Int64): Boolean;
+    { Copy of the log. Tests read the grain without sending it. }
+    Function CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
     Function HasModel: Boolean;
@@ -971,6 +973,17 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Result := FDroppedThrough;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Events := Copy(FEvents);
+    Result := Length(Events);
   Finally
     LeaveCriticalSection(FLock);
   End;
