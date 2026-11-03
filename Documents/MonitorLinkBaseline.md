@@ -9,9 +9,9 @@ The test starts a real `TMonitorLanCarrier` and `TMonitorSession` on 127.0.0.1 w
 temporary settings directory. An OpenSSL client socket connects and pairs on the open-LAN path (no code armed). The test
 then reads the link in three phases, all on the same connection:
 
-1. **Throughput.** 32 bulk `plan` frames (2000-byte title each) go through `TryQueueHostJson` and `DrainOutbound`, as
-   the bridge queues them. The test times how long the client takes to receive all 32. The rate is
-   `frames / (last frame − queue time)`.
+1. **Throughput.** 32 bulk snapshot pages (2000-byte title each) go through `TryQueueHostJson` and `DrainOutbound`.
+   Plan frames coalesce, so they are not this workload. The 2026-10-29 row used plan frames. The test times how long
+   the client takes to receive all 32. The rate is `frames / (last frame − queue time)`.
 2. **Ping with a full queue.** 32 more bulk frames are queued, and then the client sends `ping`. The test records how
    many bulk frames arrived before the `pong`, and the ping→pong round trip.
 3. **Resume answer.** The client sends `resume`. A stand-in for the bridge hears the command on the listen thread and
@@ -49,6 +49,7 @@ at most one frame. The expected results are:
 | Date | Commit | Throughput (frames/s) | First frame (ms) | Pong (ms) | Bulk frames before pong | Resume catchup (ms) | Resume complete (ms) | Notes |
 |---|---|---|---|---|---|---|---|---|
 | 2026-10-29 | bbd3789 | 4.0 | 251 | 8261 | 32 | not a number | not a number | `instantfpc Tests/RunAssistantTests.pas --only AssistantMonitorLinkTest`. 32 frames, `total_ms=8013`. Resume delivered 1 of 8 frames, then timed out. The metric line then hit an arithmetic overflow because the answer clock was never set. |
+| 2026-11-03 | 901717e | 381.0 | 44 | 0 | 0 | 132 | 132 | Item 4.2. One harness run, `GetTickCount64`. 32 snapshot pages, not plan frames. Pong behind 64 queued pages was 0 ms with none before it. Resume answer clock was set (`answered_ms=6`, timeout path 1 ms). `heard_ms=0` is a same-millisecond delta, not an unset clock. |
 
 Metric lines:
 
@@ -56,6 +57,14 @@ Metric lines:
 metric throughput frames=32 title_bytes=2000 first_ms=251 total_ms=8013 frames_per_second=4.0
 metric ping queued_bulk=32 bulk_before_pong=32 pong_ms=8261
 metric resume frames=1 heard_ms=FAIL exception Arithmetic overflow
+```
+
+Item 4.2, one run, `GetTickCount64`:
+
+```text
+metric throughput frames=32 title_bytes=2000 first_ms=44 total_ms=84 frames_per_second=381.0
+metric ping queued_bulk=32 bulk_before_pong=0 pong_ms=0
+metric resume frames=8 heard_ms=0 answered_ms=6 catchup_ms=132 complete_ms=132
 ```
 
 ## Success criteria (item 9.2)
