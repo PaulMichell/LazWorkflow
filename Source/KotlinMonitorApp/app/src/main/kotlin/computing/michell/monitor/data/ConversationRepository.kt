@@ -96,6 +96,7 @@ class ConversationRepository(
     return documentFromRows(database.sync().loadTurns(host, id), database.sync().loadBlocks(host, id))
   }
 
+  /** One-time import. Later text reaches Room through the applier, not a document rewrite. */
   suspend fun saveImported(row: LegacyReady, imageRoot: File) {
     val stored = storedScreen(row.hostKey, row.conversationId, row.projectRoot, row.title, row.updatedMs, row.document, 0L, "")
     val images = ArrayList<ImageRecord>()
@@ -106,22 +107,6 @@ class ConversationRepository(
       images += ImageRecord(id, row.hostKey, row.conversationId, target.absolutePath, source.length(), "application/octet-stream", source.length())
     }
     commit(row.hostKey, stored, images)
-    retain()
-  }
-
-  suspend fun saveScreen(host: String, conversationId: String, projectRoot: String, title: String, document: OfflineCacheDocument, images: List<Pair<String, ByteArray>>, nowMs: Long) {
-    val existing = database.sync().loadConversation(host, conversationId)
-    val stored = storedScreen(host, conversationId, projectRoot, title, nowMs, document, existing?.seq ?: 0L, existing?.streamId ?: "")
-    val kept = stored.conversation.copy(pinned = existing?.pinned ?: false)
-    val written = ArrayList<ImageRecord>()
-    val root = imageRoot
-    for ((id, bytes) in images) {
-      if (root == null || bytes.isEmpty()) continue
-      val target = monitorImageFile(root, host, conversationId, id) ?: continue
-      copyBytes(bytes, target)
-      written += ImageRecord(id, host, conversationId, target.absolutePath, bytes.size.toLong(), "image/png", bytes.size.toLong())
-    }
-    commit(host, stored.copy(conversation = kept), written)
     retain()
   }
 

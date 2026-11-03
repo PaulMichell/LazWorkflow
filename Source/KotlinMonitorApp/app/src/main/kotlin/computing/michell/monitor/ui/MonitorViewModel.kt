@@ -68,7 +68,6 @@ import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.WaitingForWifiBanner
 import computing.michell.monitor.connection.WifiLanWatch
-import java.io.ByteArrayOutputStream
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
@@ -1295,7 +1294,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var recognitionSupported = true
   private var supportPending = false
   private var contentWatch: Job? = null
-  private var savedBoardRevision = 0L
   private var watchedHost = ""
   private var watchedConversation = ""
   // Callbacks splice the prompt only. They must not call sendOrSteer.
@@ -1365,15 +1363,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       session.status.collect { status -> onLink(status) }
     }
     viewModelScope.launch {
-      content.updates.collect { board ->
+      content.updates.collect {
         uiState.value = coordinator.state
-        val hostId = store.load().hostId
-        val conversationId = board.conversationId.ifEmpty { coordinator.state.conversationId }
-        // A hello can name this chat before its turn arrives. Filing that is the blank row.
-        val waitingForPoint = board.turns.isEmpty() && board.live == null && coordinator.state.desktopPoint == 0
-        if (!waitingForPoint && board.revision > savedBoardRevision && hostIdIsValid(hostId) && conversationId.isNotEmpty()) {
-          savedBoardRevision = board.revision
-        }
       }
     }
     viewModelScope.launch {
@@ -1803,23 +1794,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
   }
 
-  private fun persistBoard(hostId: String, conversationId: String, board: BoardContent) {
-    val chrome = coordinator.state
-    val document = computing.michell.monitor.protocol.OfflineCacheDocument(
-      board.turns,
-      board.turns,
-      board.live,
-      chrome.planPath,
-      chrome.planTitle,
-      chrome.planRows,
-      chrome.selectedPlan,
-      ""
-    )
-    viewModelScope.launch(Dispatchers.IO) {
-      conversations.saveScreen(hostId, conversationId, chrome.projectRoot, chrome.conversationTitle, document, emptyList(), System.currentTimeMillis())
-    }
-  }
-
   private data class ScreenRead(
     val turns: List<computing.michell.monitor.data.TurnRecord>,
     val blocks: List<computing.michell.monitor.data.BlockRecord>,
@@ -2119,21 +2093,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     database.close()
   }
 
-  private fun scheduleCacheSave() {
-    if (suppressCache) return
-    cacheSaveJob?.cancel()
-    cacheSaveJob = viewModelScope.launch {
-      delay(CacheSaveDebounceMs)
-      writeCache(uiState.value, false)
-    }
-  }
-
-  private fun saveCacheNow(ui: MonitorUi, await: Boolean) {
-    cacheSaveJob?.cancel()
-    cacheSaveJob = null
-    writeCache(ui, await)
-  }
-
   private fun rememberPlan(before: MonitorUi, after: MonitorUi, await: Boolean) {
     val afterHas = hasStoredPlan(after.planPath, after.planTitle, after.planRows)
     val beforeHas = hasStoredPlan(before.planPath, before.planTitle, before.planRows)
@@ -2163,68 +2122,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     if (await) write.run()
     else viewModelScope.launch(Dispatchers.IO) { write.run() }
-  }
-
-  private fun writeCache(ui: MonitorUi, await: Boolean) {
-    if (suppressCache) return
-    val target = cacheSaveTarget(ui) ?: return
-    val document = offlineDocument(ui)
-    val images = cachedImageBytes(ui)
-    val serial = synchronized(cacheGate) { ++cacheWriteSerial }
-    val write = Runnable {
-      synchronized(cacheGate) {
-        if (suppressCache || serial != cacheWriteSerial) return@Runnable
-        try {
-          val hostId = store.load().hostId
-          if (!hostIdIsValid(hostId)) return@Runnable
-          runBlocking {
-            conversations.saveScreen(hostId, target.conversationId, target.projectRoot, target.title, document, images, System.currentTimeMillis())
-          }
-        } catch (error: Exception) {
-          // A failed local copy must not drop the live session.
-        }
-      }
-    }
-    if (await) write.run()
-    else viewModelScope.launch(Dispatchers.IO) { write.run() }
-  }
-
-  private fun fileClosed(id: String, title: String, projectRoot: String, document: String, epoch: String, cursor: Long) {
-    if (id.isEmpty() || id == "current") return
-    val hostId = store.load().hostId
-    if (!hostIdIsValid(hostId)) return
-    val images = cachedImageBytes(uiState.value)
-    viewModelScope.launch(Dispatchers.IO) {
-      synchronized(cacheGate) {
-        if (suppressCache) return@synchronized
-        try {
-          val decoded = computing.michell.monitor.protocol.decodeClosedScreen(document) ?: return@synchronized
-          runBlocking {
-            conversations.saveScreen(hostId, id, projectRoot, title, decoded, images, System.currentTimeMillis())
-          }
-        } catch (error: Exception) {
-          // A failed local copy must not drop the live session.
-        }
-      }
-    }
-  }
-
-  private fun cachedImageBytes(ui: MonitorUi): List<Pair<String, ByteArray>> {
-    val images = ArrayList<Pair<String, ByteArray>>()
-    val bitmaps = bitmapsState.value
-    for (id in documentImageIds(offlineDocument(ui))) {
-      val bitmap = findCachedBitmap(bitmaps, ui.hostGeneration, id) ?: continue
-      val stream = ByteArrayOutputStream()
-      try {
-        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) continue
-      } catch (error: Exception) {
-        continue
-      }
-      val bytes = stream.toByteArray()
-      if (bytes.isEmpty()) continue
-      images += id to bytes
-    }
-    return images
   }
 
   private fun restoreCachedImages(host: String, conversationId: String, document: OfflineCacheDocument, generation: Int) {
@@ -2328,17 +2225,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
     val before = uiState.value
-    // File the open screen before the coordinator's clear replaces it.
-    for (effect in effects) {
-      if (effect is MonitorEffect.FileClosed) {
-        fileClosed(effect.id, effect.title, effect.projectRoot, effect.document, effect.epoch, effect.cursor)
-      }
-    }
     uiState.value = coordinator.state
     rememberShownModel(uiState.value.view.model)
     if (planChromeChanged(before, uiState.value)) rememberPlan(before, uiState.value, false)
-    if (cursorCommitted(before, uiState.value) || cacheRowChanged(before, uiState.value) ||
-      planChromeChanged(before, uiState.value)) scheduleCacheSave()
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))
     for (effect in effects) {
       when (effect) {
