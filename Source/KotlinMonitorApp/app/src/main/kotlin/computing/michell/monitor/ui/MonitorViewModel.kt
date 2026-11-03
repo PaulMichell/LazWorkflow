@@ -95,6 +95,8 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.decodeApprovalRequested
+import computing.michell.monitor.protocol.NoSessionMessage
+import computing.michell.monitor.protocol.NoSessionReason
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeMode
@@ -293,6 +295,32 @@ fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
     banner == HostClosedBanner || banner == OfflineBanner || banner == OfflineReviewBanner || banner == NoAddressBanner ||
     banner == BackgroundBanner || banner == WaitingForWifiBanner
+}
+
+/**
+ * A sentence for a toast. Empty when the text is already core status.
+ * The status bar keeps the connection chip, the model, and progress.
+ */
+fun statusNotice(banner: String): String {
+  val text = banner.trim()
+  if (text.isEmpty() || linkBanner(text) || text == PairedElsewhereLabel) return ""
+  return when (text) {
+    "auth" -> "The desktop did not accept this phone."
+    "revoked" -> "This phone was revoked on the desktop."
+    "expired" -> "The desktop sign-in expired. Pair again."
+    "protocol" -> "The desktop rejected the connection."
+    "pair_code" -> "The pair code was not accepted."
+    "fingerprint" -> "The desktop certificate did not match."
+    "busy" -> "The Project Assistant is busy."
+    "disabled" -> "Remote monitor is turned off."
+    else -> text
+  }
+}
+
+/** Left status slot. A notice never replaces Live, Offline, Syncing, or Busy. */
+fun statusConnectionLabel(chipLabel: String, banner: String): String {
+  if (statusNotice(banner).isNotEmpty()) return chipLabel
+  return chipLabel
 }
 
 fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
@@ -1138,6 +1166,10 @@ private fun applyErrorValue(state: MonitorUi, error: ErrorBody): MonitorUi {
   }
   if (error.messageText == NothingRunningToSteer) {
     return state.copy(banner = error.messageText, view = state.view.copy(canSteer = false))
+  }
+  // The window was not ready. Keep the cached turns; the bar must not sit on Syncing.
+  if (error.reason == NoSessionReason || error.messageText == NoSessionMessage) {
+    return state.copy(banner = error.messageText, catchingUp = false)
   }
   return state.copy(banner = error.messageText)
 }

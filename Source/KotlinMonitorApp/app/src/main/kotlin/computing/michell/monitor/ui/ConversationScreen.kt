@@ -405,8 +405,9 @@ fun ActivityStatus(
     ui.syncHead,
     ui.lastSyncMs
   )
-  val connectionText = if (ui.banner.isNotEmpty() && !linkBanner(ui.banner)) ui.banner else chip.label
-  // The link is plain on the left. The model wears the rounded mark; a touch opens credit usage. Progress stays right.
+  val connectionText = statusConnectionLabel(chip.label, ui.banner)
+  // The link is plain on the left. Notices are toasts, not a second chip.
+  // The model wears the rounded mark; a touch opens credit usage. Progress stays right.
   Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
     Text(
       connectionText,

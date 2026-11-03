@@ -31,6 +31,8 @@ import computing.michell.monitor.protocol.mergePatchBlocks
 import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.decodeCatchup
 import computing.michell.monitor.protocol.decodeConversationClosed
+import computing.michell.monitor.protocol.NoSessionMessage
+import computing.michell.monitor.protocol.NoSessionReason
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodeModels
@@ -751,7 +753,9 @@ class MonitorCoordinator(
       )
       return MonitorEffect.RememberDraft(text)
     }
-    local = local.copy(banner = body.messageText)
+    // No screen is coming from this resume. Keep the turns already on screen.
+    val waiting = body.reason == NoSessionReason || body.messageText == NoSessionMessage
+    local = local.copy(banner = body.messageText, catchingUp = if (waiting) false else local.catchingUp)
     return null
   }
 

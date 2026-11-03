@@ -3,6 +3,7 @@ package computing.michell.monitor.ui
 /* Connection chip and lazy row keys (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.protocol.NoSessionMessage
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import java.time.ZoneOffset
@@ -40,6 +41,18 @@ class ConnectionChipTest {
     )
     assertTrue(offline.label.startsWith("Offline · "))
     assertFalse(offline.label == ChipOffline)
+  }
+
+  @Test
+  fun aNoticeDoesNotReplaceTheConnectionChip() {
+    assertEquals("", statusNotice(ConnectingBanner))
+    assertEquals("", statusNotice(OfflineBanner))
+    assertEquals("", statusNotice(PairedElsewhereLabel))
+    assertEquals("The desktop did not accept this phone.", statusNotice("auth"))
+    assertEquals(NoSessionMessage, statusNotice(NoSessionMessage))
+    assertEquals(ChipLive, statusConnectionLabel(ChipLive, NoSessionMessage))
+    assertEquals(ChipLive, statusConnectionLabel(ChipLive, "auth"))
+    assertEquals(ChipOffline, statusConnectionLabel(ChipOffline, ""))
   }
 
   @Test

@@ -109,6 +109,8 @@ Type
     Procedure SendError(Const RefId, Reason, MessageText: String);
     Function HostId: String;
     Function OpenForm: TProjectAssistantForm;
+    { True while the window is still opening. A resume waits instead of saying it is missing. }
+    Function ResumeFormPending(Command: TMonitorQueuedCommand): Boolean;
     Procedure ApplyHostFlags(Const View: TAssistantMonitorView);
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure PublishSamplingLists(Form: TProjectAssistantForm);
@@ -427,14 +429,41 @@ Function TAssistantMonitorBridge.OpenForm: TProjectAssistantForm;
 Var
   I: Integer;
   Form: TCustomForm;
+
+  Function Usable(Candidate: TCustomForm): Boolean;
+  Begin
+    Result := (Candidate Is TProjectAssistantForm) And (Not (csDestroying In Candidate.ComponentState));
+  End;
+
 Begin
-  Result := Nil;
+  Result := OpenProjectAssistantForm;
+  If Assigned(Result) Then
+    Exit;
   For I := 0 To Screen.CustomFormCount - 1 Do
     Begin
       Form := Screen.CustomForms[I];
-      If (Form Is TProjectAssistantForm) And (Not (csDestroying In Form.ComponentState)) Then
+      If Usable(Form) Then
         Exit(TProjectAssistantForm(Form));
     End;
+  For I := 0 To Screen.FormCount - 1 Do
+    Begin
+      Form := Screen.Forms[I];
+      If Usable(Form) Then
+        Exit(TProjectAssistantForm(Form));
+    End;
+End;
+
+Function TAssistantMonitorBridge.ResumeFormPending(Command: TMonitorQueuedCommand): Boolean;
+Var
+  Form: TProjectAssistantForm;
+  Age: QWord;
+Begin
+  Form := OpenForm;
+  If Assigned(Form) And Form.MonitorScreenReady Then
+    Exit(False);
+  Age := GetTickCount64 - Command.QueuedAt;
+  { The window may still be opening. Do not tell the phone it is missing yet. }
+  Result := Age < 8000;
 End;
 
 Procedure TAssistantMonitorBridge.ApplyHostFlags(Const View: TAssistantMonitorView);
@@ -674,12 +703,13 @@ Begin
   If Not Assigned(Session) Then
     Exit;
   FillSnapshot(Form, Snapshot);
-  Session.ObserveSnapshot(Snapshot);
   Id := RefId;
   If Id = '' Then
     Id := HostId;
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
+  { BeginStream clears a new epoch. Copy the open turn after that, or the phone gets an empty page. }
+  Session.ObserveSnapshot(Snapshot);
   If Not Session.SendMirrorPages(Id) Then
     WorkflowLogger.Warning('AssistantMonitor', 'snapshot did not fit');
 End;
@@ -1525,6 +1555,12 @@ Begin
           Exit;
         { A modal is not a reason to answer host_busy. The timer retries after it closes. }
         If AssistantModalDepth > 0 Then
+          Begin
+            Command.Defer := True;
+            Exit;
+          End;
+        { The open conversation is not loaded yet. Waiting here is what puts it on the phone. }
+        If ResumeFormPending(Command) Then
           Begin
             Command.Defer := True;
             Exit;

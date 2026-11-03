@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -55,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -78,6 +80,7 @@ import computing.michell.monitor.ui.MainTabs
 import computing.michell.monitor.ui.MonitorViewModel
 import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
+import computing.michell.monitor.ui.statusNotice
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.ui.planLoaded
 import computing.michell.monitor.ui.planSectionCaption
@@ -162,6 +165,13 @@ private fun MonitorShell(model: MonitorViewModel) {
   val conversationCap by model.conversationCapText.collectAsState()
   val imageBudget by model.imageBudgetText.collectAsState()
   val showSettings = ui.settingsOpen
+  val context = LocalContext.current
+  val statusNoticeText = statusNotice(ui.banner)
+  // A missing window or a rejected sign-in is a toast. It is not a status chip.
+  LaunchedEffect(statusNoticeText) {
+    if (statusNoticeText.isEmpty()) return@LaunchedEffect
+    Toast.makeText(context, statusNoticeText, Toast.LENGTH_LONG).show()
+  }
   val cacheListOpen by model.cacheListOpen.collectAsState()
   val cacheRows by model.cacheRows.collectAsState()
   val cacheBackToList by model.cacheBackToList.collectAsState()

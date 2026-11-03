@@ -380,6 +380,7 @@ Type
     FFooterMenu: TPopupMenu;
     FPlanWriteThisTurn: Boolean;
     FOpenBindPending: Boolean; { True until the first BindToActiveProject after Show. }
+    FMonitorBound: Boolean; { True after that bind has loaded or cleared the open conversation. }
     FDeferLastTurn: Boolean; { First open: paint empty chrome, then last-turn markdown. }
     FOpenBusy: Boolean; { Busy cursor while first-open conversation markdown runs. }
     Function ComposerHasImages: Boolean;
@@ -586,6 +587,8 @@ Type
     Procedure FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
     /// Reads a stored turn, or the live turn when TurnIndex is LiveConversationMarker. Does not change the selection.
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
+    /// False until the open conversation has been loaded. A phone resume waits for this.
+    Function MonitorScreenReady: Boolean;
     /// Copies BuildSections. Does not write the plan file.
     Procedure FillMonitorPlan(Out Rows: TAssistantMonitorPlanRows);
     /// Whole active-plan Markdown for the phone cache. Empty when none is loaded or the file cannot be read.
@@ -650,6 +653,8 @@ Procedure NotifyOpenProjectAssistantFormsConnectionChanged;
 Procedure NotifyOpenProjectAssistantFormsAccountUsage;
 /// True when Tasks… should be shown. An open window wins; otherwise the streamed action.
 Function AssistantTasksActionVisible: Boolean;
+/// The open Project Assistant window, or nil. Does not create one.
+Function OpenProjectAssistantForm: TProjectAssistantForm;
 
 Var
   { AssistantMain assigns this so the IDE Tasks item follows TasksAction.Visible. }
@@ -669,6 +674,16 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
   AssistantFileDrop, AssistantTaskNoteForm, LResources;
+
+Var
+  RegisteredAssistantForm: TProjectAssistantForm;
+
+Function OpenProjectAssistantForm: TProjectAssistantForm;
+Begin
+  Result := RegisteredAssistantForm;
+  If Assigned(Result) And (csDestroying In Result.ComponentState) Then
+    Result := Nil;
+End;
 
 Function ClassifyFormFault(Form: TProjectAssistantForm; Origin: TAssistantFaultOrigin; Const Area: String;
   E: Exception; OwnsTurn: Boolean): TAssistantRecoveryAction; Forward;
@@ -1039,6 +1054,7 @@ Begin
       AssistantClient.OnContinuationQuery := @QueryContinuation;
     End;
   WorkflowLogger.Info('ProjectAssistant', 'Project Assistant window created');
+  RegisteredAssistantForm := Self;
   AssistantSessionObserve.AssistantSessionObserve(asnSession);
 End;
 
@@ -1820,6 +1836,8 @@ End;
 
 Procedure TProjectAssistantForm.FormDestroy(Sender: TObject);
 Begin
+  If RegisteredAssistantForm = Self Then
+    RegisteredAssistantForm := Nil;
   Try
     AssistantSessionObserve.AssistantSessionObserve(asnSession);
   Except
@@ -9632,6 +9650,8 @@ Procedure TProjectAssistantForm.BindToActiveProject;
 Var
   Key, Title, Root, Saved, Note: String;
 Begin
+  { A phone resume must not copy this window until Load has finished. }
+  FMonitorBound := False;
   If Not FTargetRestored Then
     Begin
       FTargetRestored := True;
@@ -9726,6 +9746,7 @@ Begin
       RefreshActivePlanChoices(Nil);
     End;
   UpdateStatusFooter;
+  FMonitorBound := True;
   If Root <> '' Then
     WorkflowLogger.Info('ProjectAssistant', 'Bound to project: ' + Title + ' root=' + Root)
   Else
@@ -10580,6 +10601,11 @@ Begin
     ErrorText := 'This task is disabled.'
   Else
     Result := False;
+End;
+
+Function TProjectAssistantForm.MonitorScreenReady: Boolean;
+Begin
+  Result := FMonitorBound And (Not (csDestroying In ComponentState));
 End;
 
 Procedure TProjectAssistantForm.FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);

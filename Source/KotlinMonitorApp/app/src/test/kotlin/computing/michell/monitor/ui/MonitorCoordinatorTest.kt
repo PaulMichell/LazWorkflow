@@ -187,6 +187,27 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aMissingWindowKeepsTheCachedTurnAndStopsSyncing() {
+    val coordinator = open()
+    val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "conversation-1",
+      turns = listOf(WireTurn(1, "turn-1", "build", "", "the prompt", "", blocks = listOf(prompt)))
+    ))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 4, "conversation-1", "/work", "Chat", "")
+    ))))
+    assertTrue(coordinator.state.catchingUp)
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeError("e1", "no_session", "The Project Assistant window is not open.", "c1")
+    )))
+    assertFalse(coordinator.state.catchingUp)
+    assertEquals("the prompt", coordinator.state.turns.single().blocks.single().body)
+    assertEquals("The Project Assistant window is not open.", coordinator.state.banner)
+    assertEquals(ChipLive, statusConnectionLabel(ChipLive, coordinator.state.banner))
+  }
+
+  @Test
   fun helloAsksForTheOpenScreenNotTheSavedCursor() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
