@@ -12,7 +12,7 @@ Kotlin `ProtocolV3FixtureTest` check every fixture against the catalogue, and ch
 constants in each code base. If this document and `catalogue.json` disagree, fix whichever is wrong in the same commit.
 Neither one wins by default.
 
-Status: target; the live wire is still catalogue 2 until item 7.1.
+Status: catalogue 3 is the live content wire. Catalogue 2 content frames are not sent or applied.
 
 ## 1. Transport
 

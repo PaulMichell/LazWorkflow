@@ -1111,7 +1111,8 @@ class LanSession(
     val sync = decodeSyncEnvelope(frame.json)
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
-      if (!events.offer(sync.event, sync.wireBytes)) refusedEvents.trySend(sync.event)
+      val accepted = events.offer(sync.event, sync.wireBytes)
+      if (events.takeOverflow() || !accepted) refusedEvents.trySend(sync.event)
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
       return
     }

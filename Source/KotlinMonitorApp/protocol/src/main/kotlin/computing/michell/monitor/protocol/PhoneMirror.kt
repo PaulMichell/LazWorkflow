@@ -105,23 +105,10 @@ fun notePhoneEpoch(screen: PhoneScreen, epoch: String): PhoneScreen {
   return screen.copy(catchingUp = true, announcedEpoch = epoch, fileClosedId = file)
 }
 
-fun applyPhonePatch(screen: PhoneScreen, patch: WirePatch): PhoneScreen {
-  if (patch.epoch.isEmpty()) return screen.copy(fileClosedId = "")
-  if (screen.catchingUp) return screen.copy(fileClosedId = "")
-  if (screen.epoch.isNotEmpty() && patch.epoch != screen.epoch) return notePhoneEpoch(screen, patch.epoch)
-  val incomplete = screen.patchOpenCursor != 0L && screen.patchParts.size < screen.patchPartCount
-  val acceptSame = incomplete && patch.cursor == screen.cursor && screen.patchOpenCursor == patch.cursor
-  val acceptNext = patch.cursor == screen.cursor + 1L &&
-    (screen.patchOpenCursor == 0L || screen.patchOpenCursor == patch.cursor)
-  if (patch.cursor < screen.cursor + 1L && !acceptSame) return screen.copy(fileClosedId = "")
-  if (!acceptNext && !acceptSame) {
-    if (screen.resumeOnce) return screen.copy(fileClosedId = "")
-    return screen.copy(resumeOnce = true, fileClosedId = "")
-  }
-  return storePart(screen, patch)
-}
+/** Catalogue 2 content is not applied. The screen stays with the store. */
+fun applyPhonePatch(screen: PhoneScreen, patch: WirePatch): PhoneScreen = screen
 
-/** Catchup is the only step that replaces the turns. */
+/** Catalogue 2 catchup is not applied. An empty page does not replace the conversation. */
 fun applyPhoneCatchup(
   screen: PhoneScreen,
   epoch: String,
@@ -131,25 +118,7 @@ fun applyPhoneCatchup(
   title: String,
   turns: List<WireTurn>,
   live: WireTurn?
-): PhoneScreen {
-  if (epoch.isEmpty()) return screen.copy(fileClosedId = "")
-  return screen.copy(
-    epoch = epoch,
-    cursor = cursor,
-    catchingUp = false,
-    announcedEpoch = "",
-    turns = turns,
-    live = live,
-    patchOpenCursor = 0,
-    patchPartCount = 0,
-    patchParts = emptyMap(),
-    resumeOnce = false,
-    fileClosedId = "",
-    conversationId = if (conversationId.isNotEmpty()) conversationId else screen.conversationId,
-    projectRoot = if (projectRoot.isNotEmpty()) projectRoot else screen.projectRoot,
-    title = if (title.isNotEmpty()) title else screen.title
-  )
-}
+): PhoneScreen = screen
 
 private fun storePart(screen: PhoneScreen, patch: WirePatch): PhoneScreen {
   if (patch.part < 1 || patch.partCount < 1 || patch.part > patch.partCount) return screen.copy(fileClosedId = "")

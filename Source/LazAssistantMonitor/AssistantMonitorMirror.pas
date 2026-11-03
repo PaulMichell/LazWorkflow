@@ -150,6 +150,7 @@ Type
     Function BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
     Function FetchTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
     Function FetchBlock(Const BlockId: String; Out Body: String): Boolean;
+    Function BlockRevision(Const BlockId: String): Integer;
     Function DroppedThrough: Int64;
     Function Head: Int64;
     Function ByteCount: Int64;
@@ -307,11 +308,40 @@ Begin
     End;
 End;
 
-Function TurnOutlineJson(Const Turn: TAssistantMonitorTurn): String;
+Function OutlineHash(Const Text: RawByteString): String;
+Var
+  Hash: UInt64;
+  Index: Integer;
 Begin
+  {$PUSH}{$Q-}{$R-}
+  Hash := UInt64(14695981039346656037);
+  For Index := 1 To Length(Text) Do
+    Begin
+      Hash := Hash Xor Ord(Text[Index]);
+      Hash := Hash * UInt64(1099511628211);
+    End;
+  {$POP}
+  Result := LowerCase(HexStr(Hash, 16));
+End;
+
+Function TurnOutlineJson(Const Turn: TAssistantMonitorTurn): String;
+Var
+  Index: Integer;
+  Blocks: String;
+Begin
+  Blocks := '';
+  For Index := 0 To High(Turn.Blocks) Do
+    Begin
+      If Blocks <> '' Then
+        Blocks := Blocks + ',';
+      Blocks := Blocks + '{"block_id":"' + JsonEscape(Turn.Blocks[Index].BlockId) + '","kind":"' +
+        JsonEscape(Turn.Blocks[Index].Kind) + '","revision":' + IntToStr(Turn.Blocks[Index].Revision) +
+        ',"body_bytes":' + IntToStr(Length(UTF8String(Turn.Blocks[Index].Body))) + ',"hash":"' +
+        OutlineHash(UTF8String(Turn.Blocks[Index].Body)) + '"}';
+    End;
   Result := '{"turn_index":' + IntToStr(Turn.TurnIndex) + ',"turn_id":"' + JsonEscape(Turn.Id) + '","mode":"' +
     JsonEscape(Turn.Mode) + '","prompt_preview":"' + JsonEscape(Turn.PromptPreview) + '","created_at":"' +
-    JsonEscape(Turn.CreatedAt) + '","duration_ms":' + IntToStr(Turn.DurationMs) + '}';
+    JsonEscape(Turn.CreatedAt) + '","duration_ms":' + IntToStr(Turn.DurationMs) + ',"blocks":[' + Blocks + ']}';
 End;
 
 Function BlockFitsInline(Const Block: TAssistantMonitorBlock): Boolean;
@@ -790,6 +820,7 @@ Begin
           End
         Else If Stored.Blocks[BlockIndex].Body <> Turn.Blocks[BlockIndex].Body Then
           Begin
+            Turn.Blocks[BlockIndex].Revision := Stored.Blocks[BlockIndex].Revision + 1;
             If Stored.Blocks[BlockIndex].Body = '' Then
               EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(Turn.Blocks[BlockIndex].Body), 0)
             Else If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Turn.Blocks[BlockIndex].Body, EventJson, Index) Then
@@ -1033,6 +1064,28 @@ Begin
             Body := FTurns[Index].Blocks[BlockIndex].Body;
             Exit(True);
           End;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.BlockRevision(Const BlockId: String): Integer;
+Var
+  Index, BlockIndex: Integer;
+Begin
+  Result := 0;
+  If BlockId = '' Then
+    Exit;
+  EnterCriticalSection(FLock);
+  Try
+    If FHasLive Then
+      For BlockIndex := 0 To High(FLive.Blocks) Do
+        If FLive.Blocks[BlockIndex].BlockId = BlockId Then
+          Exit(Integer(FLive.Blocks[BlockIndex].Revision));
+    For Index := 0 To High(FTurns) Do
+      For BlockIndex := 0 To High(FTurns[Index].Blocks) Do
+        If FTurns[Index].Blocks[BlockIndex].BlockId = BlockId Then
+          Exit(Integer(FTurns[Index].Blocks[BlockIndex].Revision));
   Finally
     LeaveCriticalSection(FLock);
   End;

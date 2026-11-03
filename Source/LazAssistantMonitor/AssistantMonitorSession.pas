@@ -962,17 +962,11 @@ Begin
   Lane := HostLane(Json);
   SetLength(One, 1);
   One[0] := Bytes;
+  { Catalogue 2 live patches are not sent. Events travel on the log lane. }
   If Lane = hlLive Then
     Begin
-      If Not FOutbox.ReplaceState('live', One, Replaced) Then
-        CloseForQueueFailure(Json)
-      Else
-        Begin
-          If Replaced > 0 Then
-            Inc(FFramesDropped, Replaced);
-          FHasLivePatch := True;
-          Result := True;
-        End;
+      Inc(FFramesDropped);
+      Result := True;
       Exit;
     End;
   If Lane = hlPlan Then
@@ -2722,12 +2716,14 @@ Var
   Obj, Payload: TJSONObject;
   BlockId, Body, Piece: String;
   Bytes: UTF8String;
-  Offset, Total, Taken: Integer;
-  Last: Boolean;
+  Offset, Total, Taken, AskedRevision, HeldRevision: Integer;
+  Last, HasRevision: Boolean;
 Begin
   Data := Nil;
   BlockId := '';
   Offset := 0;
+  AskedRevision := 0;
+  HasRevision := False;
   Try
     Data := GetJSON(PayloadJson);
   Except
@@ -2744,12 +2740,22 @@ Begin
     BlockId := Obj.Get('block_id', '');
     If Assigned(Obj.Find('offset')) And (Obj.Find('offset').JSONType = jtNumber) Then
       Offset := Obj.Find('offset').AsInteger;
+    HasRevision := Assigned(Obj.Find('revision')) And (Obj.Find('revision').JSONType = jtNumber);
+    If HasRevision Then
+      AskedRevision := Obj.Find('revision').AsInteger;
   Finally
     Data.Free;
   End;
   If (BlockId = '') Or (Offset < 0) Or (Not Assigned(FMirror)) Or (Not FMirror.FetchBlock(BlockId, Body)) Then
     Begin
       QueueSend(EncodeMonitorError(NewHostId, 'not_found', 'Block was not found.', Id));
+      Exit;
+    End;
+  HeldRevision := FMirror.BlockRevision(BlockId);
+  If HasRevision And (AskedRevision <> HeldRevision) Then
+    Begin
+      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"revision_changed","payload":{"ref":"' + Id +
+        '","block_id":"' + BlockId + '","revision":' + IntToStr(HeldRevision) + '}}');
       Exit;
     End;
   Bytes := UTF8String(Body);
@@ -2776,7 +2782,7 @@ Begin
       Payload.Add('text', Piece);
       Payload.Add('total_bytes', Total);
       Payload.Add('last', Last);
-      QueueSend('{"v":2,"id":"' + NewHostId + '","type":"block_data","payload":' + Payload.AsJSON + '}');
+      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"block_data","payload":' + Payload.AsJSON + '}');
     Finally
       Payload.Free;
     End;

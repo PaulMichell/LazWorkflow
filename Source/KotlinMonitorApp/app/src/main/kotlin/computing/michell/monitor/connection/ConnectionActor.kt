@@ -75,15 +75,18 @@ class ConnectionWriter(private val write: suspend (ByteArray) -> Boolean) {
 class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong()) {
   private val channel = Channel<CountedEvent>(Channel.UNLIMITED)
   private val queued = java.util.concurrent.atomic.AtomicLong(0)
+  private val overflow = java.util.concurrent.atomic.AtomicBoolean(false)
 
   val queuedBytes: Long get() = queued.get()
 
+  /** True when the event is queued, or the window overflowed and a resume is owed. */
   fun offer(event: MonitorEvent, bytes: Int): Boolean {
     if (bytes < 0) return false
     val next = queued.addAndGet(bytes.toLong())
     if (next > budgetBytes) {
       queued.addAndGet(-bytes.toLong())
-      return false
+      overflow.set(true)
+      return true
     }
     if (!channel.trySend(CountedEvent(event, bytes)).isSuccess) {
       queued.addAndGet(-bytes.toLong())
@@ -101,6 +104,8 @@ class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong(
   fun close() {
     channel.close()
   }
+
+  fun takeOverflow(): Boolean = overflow.getAndSet(false)
 }
 
 private data class CountedEvent(val event: MonitorEvent, val bytes: Int)

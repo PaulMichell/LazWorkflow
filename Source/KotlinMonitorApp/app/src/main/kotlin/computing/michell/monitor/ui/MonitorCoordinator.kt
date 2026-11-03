@@ -129,19 +129,11 @@ class MonitorCoordinator(
   /** Pages for this id arrived after New. They are the conversation that was just left. */
   private var closedAwaitId = ""
   private val visibleTurns = HashSet<Int>()
-  private val requestedBlocks = HashSet<String>()
-  private val blockPieces = HashMap<String, TreeMap<Int, String>>()
-  private var pointId = ""
-  private var pointTurn: WireTurn? = null
-  private var desktopMatched = false
   private var resumeConversation = ""
   private var resumeStream = ""
   private var resumeSeq = 0L
   /** Last time an empty screen asked the desktop for the open turn. */
   private var screenAskedAt = 0L
-  private var heldOutline: List<WireTurn> = emptyList()
-  private val backgroundPages = ArrayDeque<String>()
-  private val askedTurns = HashSet<Int>()
   /** Live until the first status, so an idle form can send before that frame. */
   private var linkPhase = LinkPhase.Live
   /** Send or New tapped while Syncing, before the socket can take it. */
@@ -247,7 +239,7 @@ class MonitorCoordinator(
   fun flush(current: MonitorUi): List<MonitorEffect>? = synchronized(gate) {
     if (!commandsReady()) return null
     val board = content.current()
-    if (desktopMatched || board.turns.isNotEmpty() || board.live != null) {
+    if (board.turns.isNotEmpty() || board.live != null) {
       screenAskedAt = 0L
       return null
     }
@@ -520,318 +512,14 @@ class MonitorCoordinator(
     return effects
   }
 
-  private fun applySnapshot(snapshot: WireSnapshot?) {
-    if (snapshot == null) return
-    val live = snapshot.live?.takeIf { turn -> turn.live }
-    content.replace(contentHost, local.conversationId, snapshot.storedTurns, live)
-    local = local.copy(
-      catchingUp = false,
-      reviewingOffline = false,
-      view = snapshot.view.copy(model = keptModel(local.view.model, snapshot.view.model, snapshot.view.signedIn)),
-      planPath = snapshot.planPath,
-      planTitle = snapshot.planTitle,
-      planRunning = snapshot.planRunning,
-      planRows = snapshot.planRows,
-      planBody = keptPlanBody(local.planPath, local.planBody, snapshot.planPath, ""),
-      disconnected = false,
-      reachedLive = true,
-      banner = if (linkBanner(local.banner)) "" else local.banner
-    )
-  }
-
-  /** The host no longer sends a snapshot frame. Pages are the conversation.
-      The cache stays until the desktop's current turn is complete. Older pages wait. */
-  private fun applySnapshotPage(message: MonitorMessage): List<MonitorEffect> {
-    val payload = message.payloadJson
-    val seq = snapshotPageSeq(payload)
-    val pageConversation = snapshotPageConversationId(payload)
-    val pageEpoch = snapshotPageStreamId(payload)
-    if (awaitingConversation && closedAwaitId.isNotEmpty() && pageConversation == closedAwaitId) return emptyList()
-    if (pageConversation.isNotEmpty() && (local.conversationId.isEmpty() || desktopMatched)) {
-      if (desktopMatched && pageStartsFresh(pageConversation)) resetMatch()
-      if (local.conversationId.isEmpty()) local = local.copy(conversationId = pageConversation)
-    }
-    if (pageEpoch.isNotEmpty()) local = local.copy(hostEpoch = pageEpoch)
-    val outline = snapshotPageOutline(payload)
-    if (outline != null) {
-      heldOutline = outline
-      val named = snapshotPagePointId(payload)
-      pointId = named.ifEmpty { outline.lastOrNull()?.id.orEmpty() }
-      if (seq > local.hostCursor) local = local.copy(hostCursor = seq)
-      // No turns means this page is the whole conversation. Waiting for a point page never ends.
-      if (outline.isEmpty() && (local.catchingUp || awaitingConversation)) {
-        finishEmptyConversation(pageConversation, seq)
-        return emptyList()
-      }
-      // The point page can be too large for the inbound credit and never arrive. Show the prompts now.
-      val board = content.current()
-      if (outline.isNotEmpty() && board.turns.isEmpty() && board.live == null) seedOutline(outline, pageConversation)
-      return emptyList()
-    }
-    val turn = snapshotPageTurn(payload) ?: return emptyList()
-    if (!desktopMatched && isDesktopPoint(payload, turn)) {
-      absorbPoint(turn)
-      // A marked point without point_end is one block of a split turn. The cache stays until the last block.
-      val split = snapshotPageIsPoint(payload) && !snapshotPagePointEnd(payload) && turn.blocks.size == 1
-      if (split) return emptyList()
-      return paintDesktopPoint(pageConversation, seq)
-    }
-    if (!desktopMatched) {
-      val shown = if (pointTurn != null) paintDesktopPoint(pageConversation, seq) else emptyList()
-      backgroundPages.addLast(payload)
-      return shown + flushBackground()
-    }
-    backgroundPages.addLast(payload)
-    return flushBackground()
-  }
-
-  private fun isDesktopPoint(payload: String, turn: WireTurn): Boolean {
-    if (snapshotPageIsPoint(payload) || snapshotPagePointEnd(payload) || turn.live) return true
-    return pointId.isNotEmpty() && turn.id == pointId
-  }
-
-  private fun absorbPoint(turn: WireTurn) {
-    val current = pointTurn
-    pointId = turn.id.ifEmpty { pointId }
-    if (current == null || current.id != turn.id) {
-      pointTurn = turn
-      return
-    }
-    val blocks = if (turn.blocks.size > 1) turn.blocks else mergeTurnBlocks(current.blocks, turn.blocks)
-    pointTurn = current.copy(blocks = blocks, live = turn.live || current.live, turnIndex = turn.turnIndex)
-  }
-
-  /** Replaces the cache with the turn the desktop is showing. Older pages are not on screen yet. */
-  private fun paintDesktopPoint(pageConversation: String, seq: Long): List<MonitorEffect> {
-    val point = pointTurn ?: return emptyList()
-    desktopMatched = true
-    awaitingConversation = false
-    val id = pageConversation.ifEmpty { local.conversationId }
-    val index = if (heldOutline.isEmpty()) listOf(point.copy(live = false))
-      else turnsFromDesktopOutline(listOf(point), point, heldOutline)
-    val stored = index.map { row ->
-      if (row.id != point.id) row
-      else point.copy(turnIndex = row.turnIndex, live = false, promptPreview = row.promptPreview.ifEmpty { point.promptPreview })
-    }
-    val turns = if (point.live) stored.filter { row -> row.id != point.id } else stored
-    val preview = stored.firstOrNull { row -> row.id == point.id }?.promptPreview.orEmpty()
-    val live = if (point.live) point.copy(promptPreview = preview.ifEmpty { point.promptPreview }) else null
-    content.replace(contentHost, id, turns, live)
-    content.sealHostPaint()
-    if (id.isNotEmpty()) local = local.copy(conversationId = id)
-    local = local.copy(desktopPoint = local.desktopPoint + 1)
-    noteCaughtUp(seq)
-    return deferredFetches(point.blocks) + backgroundTurnFetches()
-  }
-
-  /** Older turns after the desktop point. A few at a time, so the link is not filled again. */
-  private fun backgroundTurnFetches(): List<MonitorEffect> {
-    if (!desktopMatched || local.pendingPrompt.isNotEmpty()) return emptyList()
-    val board = content.current()
-    val have = board.turns.map { turn -> turn.turnIndex }.toMutableSet()
-    board.live?.let { live -> have += live.turnIndex }
-    val effects = ArrayList<MonitorEffect>()
-    var asked = 0
-    for (row in heldOutline.asReversed()) {
-      if (row.id == pointId || row.turnIndex in have || row.turnIndex in askedTurns) continue
-      if (row.turnIndex < 0) continue
-      askedTurns += row.turnIndex
-      effects += MonitorEffect.Send(encodeTurnRequest(session.nextCommandId(), row.turnIndex))
-      asked += 1
-      if (asked >= 2) break
-    }
-    return effects
-  }
-
-  private fun flushBackground(): List<MonitorEffect> {
-    if (!desktopMatched || backgroundPages.isEmpty()) return emptyList()
-    val effects = ArrayList<MonitorEffect>()
-    while (backgroundPages.isNotEmpty()) {
-      val payload = backgroundPages.removeFirst()
-      val board = content.current()
-      val applied = applySnapshotPageJson(board.turns, board.live, payload) ?: continue
-      val id = snapshotPageConversationId(payload).ifEmpty { local.conversationId }
-      content.replace(contentHost, id, applied.first, applied.second)
-      val shown = content.current()
-      effects += deferredFetches(shown.turns.flatMap { turn -> turn.blocks } + (shown.live?.blocks ?: emptyList()))
-    }
-    return effects + backgroundTurnFetches()
-  }
-
   private fun resetMatch() {
-    pointId = ""
-    pointTurn = null
-    desktopMatched = false
-    heldOutline = emptyList()
-    backgroundPages.clear()
-    askedTurns.clear()
     content.unsealHostPaint()
-    requestedBlocks.clear()
-    blockPieces.clear()
-  }
-
-  /** A body over the inline limit arrives empty. Ask for the text the desktop is showing. */
-  private fun deferredFetches(blocks: List<WireBlock>): List<MonitorEffect> {
-    val conversationId = local.conversationId
-    if (conversationId.isEmpty()) return emptyList()
-    val effects = ArrayList<MonitorEffect>()
-    for (block in blocks) {
-      if (!block.deferred || block.body.isNotEmpty() || block.blockId.isEmpty()) continue
-      if (!requestedBlocks.add(block.blockId)) continue
-      effects += MonitorEffect.Send(encodeBlockGet(session.nextCommandId(), conversationId, block.blockId))
-    }
-    return effects
-  }
-
-  private fun applyBlockData(message: MonitorMessage) {
-    val data = decodeBlockData(message.payloadJson) ?: return
-    if (data.blockId.isEmpty()) return
-    val pieces = blockPieces.getOrPut(data.blockId) { TreeMap() }
-    pieces[data.offset] = data.text
-    val body = joinBlockPieces(pieces)
-    if (data.last) blockPieces.remove(data.blockId)
-    val board = content.current()
-    val live = board.live
-    val liveBlocks = if (live == null) null else fillBlockBody(live.blocks, data.blockId, body, data.last)
-    val turns = board.turns.map { turn ->
-      if (turn.blocks.none { block -> block.blockId == data.blockId }) turn
-      else turn.copy(blocks = fillBlockBody(turn.blocks, data.blockId, body, data.last))
-    }
-    val nextLive = if (liveBlocks == null || live == null) live else live.copy(blocks = liveBlocks)
-    if (nextLive == live && turns == board.turns) return
-    content.replace(contentHost, board.conversationId, turns, nextLive)
-  }
-
-  /** The outline is the desktop list. Cached bodies fill it until each turn page arrives. */
-  private fun seedOutline(outline: List<WireTurn>, pageConversation: String) {
-    val board = content.current()
-    val foreign = board.conversationId.isNotEmpty() && pageConversation.isNotEmpty() &&
-      board.conversationId != pageConversation && (board.turns.isNotEmpty() || board.live != null)
-    if (foreign) return
-    val id = pageConversation.ifEmpty { local.conversationId }
-    content.replace(contentHost, id, turnsFromDesktopOutline(board.turns, board.live, outline), null)
-  }
-
-  /** A new id or epoch is a new cache copy. The previous turns are not a prefix. */
-  private fun pageStartsFresh(pageConversation: String): Boolean {
-    if (awaitingConversation) return true
-    val board = content.current()
-    if (pageConversation.isNotEmpty() && board.conversationId.isNotEmpty() && pageConversation != board.conversationId) return true
-    return pageConversation.isNotEmpty() && local.conversationId.isNotEmpty() && pageConversation != local.conversationId
-  }
-
-  private fun applyCatchup(catchup: WireCatchup) {
-    if (catchup.mode == "snapshot") {
-      if (pageStartsFresh(catchup.conversationId)) {
-        awaitingConversation = false
-        val id = catchup.conversationId.ifEmpty { local.conversationId }
-        content.replace(contentHost, id, emptyList(), null)
-        local = local.copy(conversationId = id, conversationTitle = "")
-      }
-      if (catchup.conversationId.isNotEmpty()) local = local.copy(conversationId = catchup.conversationId)
-      if (catchup.projectRoot.isNotEmpty()) local = local.copy(projectRoot = catchup.projectRoot)
-      if (catchup.title.isNotEmpty()) local = local.copy(conversationTitle = catchup.title)
-      if (catchup.epoch.isNotEmpty()) local = local.copy(hostEpoch = catchup.epoch)
-      applySnapshot(catchup.snapshot)
-      noteCaughtUp(catchup.cursor)
-      return
-    }
-    if (catchup.mode != "events") return
-    if (awaitingConversation || (catchup.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && catchup.epoch != local.hostEpoch)) return
-    // No patches means the cursor matched. It does not mean this screen is the desktop's.
-    if (catchup.patches.isEmpty()) return
-    for (patch in catchup.patches) applyPatch(patch)
-    local = local.copy(
-      conversationId = catchup.conversationId.ifEmpty { local.conversationId },
-      projectRoot = catchup.projectRoot.ifEmpty { local.projectRoot },
-      conversationTitle = catchup.title.ifEmpty { local.conversationTitle }
-    )
-    noteCaughtUp(catchup.cursor)
-    if (catchup.epoch.isNotEmpty()) local = local.copy(hostEpoch = catchup.epoch)
-  }
-
-  private fun finishEmptyConversation(pageConversation: String, seq: Long) {
-    val id = pageConversation.ifEmpty { local.conversationId }
-    content.replace(contentHost, id, emptyList(), null)
-    if (id.isNotEmpty()) local = local.copy(conversationId = id)
-    noteCaughtUp(seq)
-  }
-
-  private fun noteCaughtUp(seq: Long) {
-    awaitingConversation = false
-    closedAwaitId = ""
-    local = local.copy(
-      catchingUp = false,
-      reviewingOffline = false,
-      disconnected = false,
-      reachedLive = true,
-      hostCursor = if (seq > 0L) seq else local.hostCursor,
-      banner = if (linkBanner(local.banner)) "" else local.banner
-    )
   }
 
   /** Snapshot pages do not carry rows. This frame is the phone's plan. */
   private fun applyPlan(message: MonitorMessage) {
     val plan = (message.inbound as? InboundPayload.Plan)?.value ?: decodePlan(message.payloadJson) ?: return
     local = applyPlanMessage(local, plan)
-  }
-
-  private fun applyPatch(patch: WirePatch) {
-    if (awaitingConversation) return
-    if (patch.epoch.isNotEmpty() && local.hostEpoch.isNotEmpty() && patch.epoch != local.hostEpoch) {
-      // The saved cursor is not this chat. Paint the turn the desktop is sending.
-      if (desktopMatched && !local.catchingUp) {
-        local = local.copy(catchingUp = true, announcedEpoch = patch.epoch)
-        return
-      }
-      resetMatch()
-      local = local.copy(hostEpoch = patch.epoch, catchingUp = true, announcedEpoch = "")
-    }
-    val board = content.current()
-    val previous = board.live?.takeIf { turn -> turn.id == patch.turnId || turn.turnIndex == patch.turnIndex }
-      ?: board.turns.firstOrNull { turn -> turn.id == patch.turnId || turn.turnIndex == patch.turnIndex }
-    val merged = mergePatchBlocks(previous?.blocks.orEmpty(), patch.blocks).blocks
-    val live = WireTurn(
-      if (patch.turnIndex != 0) patch.turnIndex else previous?.turnIndex ?: -2,
-      patch.turnId.ifEmpty { previous?.id.orEmpty() },
-      previous?.mode.orEmpty(),
-      previous?.createdAt.orEmpty(),
-      previous?.promptPreview.orEmpty(),
-      "",
-      live = true,
-      blocks = merged,
-      durationMs = if (patch.elapsedMs > 0) patch.elapsedMs else previous?.durationMs ?: 0
-    )
-    val kept = board.turns.filter { turn -> turn.id != live.id && turn.turnIndex != live.turnIndex }
-    content.replace(contentHost, local.conversationId, kept, live)
-    // Room must not replace this turn with an older copy that does not have it yet.
-    content.sealHostPaint()
-    val flagged = local.view.copy(
-      busy = patch.busy,
-      sending = patch.sending,
-      planRunning = patch.planRunning,
-      canSend = patch.canSend,
-      canSteer = patch.canSteer,
-      canStop = patch.canStop,
-      elapsedMs = patch.elapsedMs,
-      phase = patch.phase
-    )
-    val viewed = if (patch.hasView) {
-      flagged.copy(
-        model = keptModel(local.view.model, patch.model, patch.signedIn),
-        signedIn = patch.signedIn,
-        statusText = patch.statusText
-      )
-    } else {
-      flagged
-    }
-    val view = settleFinishedTurn(viewed, merged)
-    local = local.copy(
-      view = view,
-      hostEpoch = patch.epoch.ifEmpty { local.hostEpoch },
-      hostCursor = patch.cursor,
-      planRunning = patch.planRunning
-    )
   }
 
   private fun applyError(message: MonitorMessage): MonitorEffect? {

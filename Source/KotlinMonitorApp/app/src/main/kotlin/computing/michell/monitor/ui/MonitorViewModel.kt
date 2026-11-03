@@ -311,7 +311,7 @@ fun statusNotice(banner: String): String {
     "auth" -> "The desktop did not accept this phone."
     "revoked" -> "This phone was revoked on the desktop."
     "expired" -> "The desktop sign-in expired. Pair again."
-    "protocol" -> "The desktop rejected the connection."
+    "protocol" -> "Update the app or the IDE: the desktop and this app are not speaking the same protocol."
     "pair_code" -> "The pair code was not accepted."
     "fingerprint" -> "The desktop certificate did not match."
     "busy" -> "The Project Assistant is busy."
@@ -1143,11 +1143,16 @@ private fun applyInsertResult(state: MonitorUi, payloadJson: String): MonitorUi 
   return state.copy(draft = text)
 }
 
+fun protocolUpdateText(hostVersion: Int, clientVersion: Int): String {
+  return "Update the app or the IDE: this IDE speaks protocol $hostVersion, the app speaks protocol $clientVersion."
+}
+
 private fun applyRejected(state: MonitorUi, message: MonitorMessage): MonitorUi {
   val rejected = decodeRejected(message.payloadJson)
   val reason = rejected?.reason ?: message.reason
   val hold = reason == "protocol" || reason == "pair_code" || reason == "fingerprint"
-  return state.copy(disconnected = true, banner = reason, pairHold = hold || state.pairHold)
+  val banner = if (reason == "protocol" && rejected != null) protocolUpdateText(rejected.hostVersion, rejected.clientVersion) else reason
+  return state.copy(disconnected = true, banner = banner, pairHold = hold || state.pairHold)
 }
 
 private fun applyError(state: MonitorUi, payloadJson: String): MonitorUi {

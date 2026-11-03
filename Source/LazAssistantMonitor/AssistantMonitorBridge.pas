@@ -85,7 +85,6 @@ Type
     FPumpedMirror: Int64;
     FPlanStamp: String;
     FSentEpoch: String;
-    FSentBlocks: Array Of TAssistantMonitorBlock;
     FSentFlagsValid: Boolean;
     FSentBusy: Boolean;
     FSentSending: Boolean;
@@ -607,7 +606,6 @@ Begin
     End;
   FSentEpoch := '';
   FPlanStamp := '';
-  SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
 End;
 
@@ -802,9 +800,8 @@ Begin
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
   { BeginStream clears a new epoch. Copy the open turn after that, or the phone gets an empty page. }
+  { The outline goes out on resume. A body page is not a second content path. }
   Session.ObserveSnapshot(Snapshot);
-  If Not Session.SendMirrorPages(Id) Then
-    WorkflowLogger.Warning('AssistantMonitor', 'snapshot did not fit');
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
@@ -913,8 +910,6 @@ Begin
   If Not SnapshotHasOpenTurn(Snapshot) Then
     Exit;
   Session.ObserveSnapshot(Snapshot);
-  If Not Session.SendMirrorPoint(HostId) Then
-    Exit;
   FDeliveredScreen := Key;
 End;
 
@@ -1044,19 +1039,12 @@ Begin
   If FormConversationMoved(Form, Session) Then
     PublishEpoch;
   Turn := Default(TAssistantMonitorTurn);
-  If Full Then
-    Begin
-      If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
-        Turn := Default(TAssistantMonitorTurn);
-    End
-  Else If Not Form.FillMonitorLiveChanges(FSentBlocks, Turn, ErrorText) Then
+  If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
   If Turn.Id <> '' Then
     Session.ObserveTurn(Turn);
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
-  { The cheap fill compares lengths against the last observation. That is not a sent mark. }
-  FSentBlocks := Turn.Blocks;
   If Session.MirrorEpoch <> '' Then
     FSentEpoch := Session.MirrorEpoch;
   { Status is state. It does not allocate a content sequence. }
