@@ -60,7 +60,8 @@ class GrainSyncTest {
   @Test
   fun aLargePlanIsNotReplacedByAnErrorSentence() {
     val body = "x".repeat(5 * 1024 * 1024)
-    val text = planCacheText("Documents/Plan.md", "Big", emptyList(), 0, body)
+    val text = planCacheText("Documents/Plan.md", "Big", emptyList(), 0)
+    assertFalse("7.1 the markdown is not stored in the row", text.contains(body))
     assertFalse("7.1 the error sentence is absent", text.contains("too large to cache"))
     assertFalse("7.1 the desktop sentence is absent", text.contains("The rest of the plan is on the desktop."))
     val stored = storedPlanOf("Documents/Plan.md", "Big", 0, text)

@@ -234,7 +234,11 @@ data class MonitorUi(
   val lastSyncMs: Long = 0,
   val syncHead: Long = 0,
   val desktopPoint: Int = 0,
-  val planBody: String = ""
+  val planBody: String = "",
+  val planRevision: String = "",
+  val planReceived: Long = 0,
+  val planTotal: Long = 0,
+  val planIncomplete: Boolean = false
 )
 
 /** Clears conversation identity. Keeps display preferences. An unsent draft is kept only when clearDraft is false. */
@@ -1427,9 +1431,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
         coordinator.restoreOffline(seeded)
       }
-      if (cachedPlan != null) coordinator.noteCachedPlan(
-        cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected, cachedPlan.body
-      )
+      if (cachedPlan != null) {
+        coordinator.noteCachedPlan(cachedPlan.path, cachedPlan.title, cachedPlan.rows, cachedPlan.selected, "")
+        val file = planFiles.state(record.hostId, cachedPlan.path)
+        if (file != null) {
+          val body = if (file.complete && file.total <= computing.michell.monitor.data.PlanInlineBytes) {
+            planFiles.readReview(record.hostId, cachedPlan.path, computing.michell.monitor.data.PlanInlineBytes)
+          } else ""
+          coordinator.notePlanFile(cachedPlan.path, file.revision, file.received, file.total, file.incomplete, body)
+        }
+      }
       if (open != null) {
         coordinator.noteResumeCursor(open.id, open.streamId, open.seq)
         watchScreen(open.host, open.id)
@@ -1976,17 +1987,61 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun acceptPlanPiece(effect: computing.michell.monitor.data.SyncEffect.PlanPiece) {
     val host = store.load().hostId
     if (host.isEmpty()) return
-    val written = planFiles.append(host, effect.path, effect.revision, effect.offset, effect.text, effect.totalBytes, effect.last)
-      ?: return
-    if (!effect.last) return
-    if (written.complete) {
-      val review = planFiles.readReview(host, effect.path, 256 * 1024)
-      uiState.value = coordinator.noteSyncedChrome(uiState.value.copy(planBody = review, planPath = effect.path))
-      sendFetchGrants(screenFetch.finished("plan:" + effect.path))
-    } else {
+    val written = try {
+      planFiles.append(host, effect.path, effect.revision, effect.offset, effect.text, effect.totalBytes, effect.last)
+    } catch (error: Exception) {
+      null
+    }
+    if (written == null || (effect.last && !written.complete)) {
       planFiles.noteDrop(host, effect.path)
+      publishPlanFile(effect.path, effect.revision, written?.received ?: 0L, effect.totalBytes, true, "")
       uiState.value = coordinator.noteSyncNote(computing.michell.monitor.data.PlanIncompleteLabel)
       screenFetch.notePlanDropped()
+      return
+    }
+    val body = if (written.complete && written.total <= computing.michell.monitor.data.PlanInlineBytes) {
+      planFiles.readReview(host, effect.path, computing.michell.monitor.data.PlanInlineBytes)
+    } else ""
+    publishPlanFile(effect.path, written.revision, written.received, written.total, false, body)
+    if (written.complete) sendFetchGrants(screenFetch.finished("plan:" + effect.path))
+  }
+
+  private fun publishPlanFile(path: String, revision: String, received: Long, total: Long, incomplete: Boolean, body: String) {
+    uiState.value = coordinator.notePlanFile(path, revision, received, total, incomplete, body)
+    val shown = uiState.value
+    viewModelScope.launch(Dispatchers.IO) {
+      conversations.savePlan(
+        store.load().hostId, path, shown.planTitle, shown.planRows, shown.selectedPlan,
+        System.currentTimeMillis(), revision, received, total, incomplete
+      )
+    }
+  }
+
+  fun cancelPlanFetch() {
+    screenFetch.cancelPlan()
+    val host = store.load().hostId
+    val path = uiState.value.planPath
+    val dropped = if (host.isEmpty() || path.isEmpty()) null else planFiles.noteDrop(host, path)
+    publishPlanFile(path, uiState.value.planRevision, dropped?.received ?: uiState.value.planReceived, dropped?.total ?: uiState.value.planTotal, true, "")
+    uiState.value = coordinator.noteSyncNote(computing.michell.monitor.data.PlanIncompleteLabel)
+  }
+
+  fun continuePlanFetch() {
+    val host = store.load().hostId
+    val path = uiState.value.planPath
+    val file = if (host.isEmpty()) null else planFiles.state(host, path)
+    sendFetchGrants(screenFetch.continuePlan(
+      path, uiState.value.planRevision, file != null, file?.revision.orEmpty(), file?.received ?: 0L
+    ))
+  }
+
+  suspend fun readPlanWindow(row: computing.michell.monitor.protocol.PlanRow?): String {
+    val host = store.load().hostId
+    val path = uiState.value.planPath
+    if (host.isEmpty() || path.isEmpty()) return ""
+    return withContext(Dispatchers.IO) {
+      if (row == null) planFiles.readWindow(host, path, "", 0)
+      else planFiles.readWindow(host, path, row.title, row.level)
     }
   }
 
@@ -2043,6 +2098,20 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (state.disconnected || !state.view.canChangeMode || path == state.planPath ||
       state.planChoices.none { it.path == path }) return
     session.sendCatalogue(encodePath(MessageKind.SelectPlan, session.nextCommandId(), path))
+    shownPlanPath = path
+    shownPlanRevision = ""
+    viewModelScope.launch(Dispatchers.IO) {
+      val host = store.load().hostId
+      val file = if (host.isEmpty()) null else planFiles.state(host, path)
+      val body = if (file != null && file.complete && file.total <= computing.michell.monitor.data.PlanInlineBytes) {
+        planFiles.readReview(host, path, computing.michell.monitor.data.PlanInlineBytes)
+      } else ""
+      withContext(Dispatchers.Main) {
+        uiState.value = coordinator.notePlanFile(
+          path, file?.revision.orEmpty(), file?.received ?: 0L, file?.total ?: 0L, file?.incomplete == true, body
+        )
+      }
+    }
   }
 
   fun selectPlan(index: Int) {
@@ -2108,8 +2177,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           runBlocking {
             if (afterHas) {
               conversations.savePlan(
-                hostId, after.planPath, after.planTitle, after.planRows, after.selectedPlan, after.planBody,
-                System.currentTimeMillis()
+                hostId, after.planPath, after.planTitle, after.planRows, after.selectedPlan,
+                System.currentTimeMillis(), after.planRevision, after.planReceived, after.planTotal, after.planIncomplete
               )
             } else {
               conversations.deletePlan(hostId)

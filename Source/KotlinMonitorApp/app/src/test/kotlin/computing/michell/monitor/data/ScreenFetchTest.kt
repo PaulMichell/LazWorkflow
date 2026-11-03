@@ -59,6 +59,29 @@ class ScreenFetchTest {
     root.deleteRecursively()
   }
 
+  @Test
+  fun cancelStopsThePlanFetchUntilContinue() {
+    val fetch = ScreenFetch()
+    fetch.notePlan("/work/Plan.md", "rev-2", false, "", 0L, true)
+    fetch.cancelPlan()
+    assertTrue(fetch.notePlan("/work/Plan.md", "rev-2", false, "", 0L, true).isEmpty())
+    val again = fetch.continuePlan("/work/Plan.md", "rev-2", false, "", 0L)
+    assertTrue(again.single() is FetchGrant.Plan)
+  }
+
+  @Test
+  fun aLargeWindowDoesNotKeepTheWholeFile() {
+    val root = File("build/plan-window-test")
+    root.deleteRecursively()
+    val files = PlanFiles(root)
+    val body = "# One\n\nStatus: not started\n\n" + "x".repeat(80 * 1024) + "\n## Two\n\nkept\n"
+    files.append("host-1", "/work/Plan.md", "rev-1", 0L, body, body.toByteArray().size.toLong(), true)
+    val window = files.readWindow("host-1", "/work/Plan.md", "Two", 2)
+    assertEquals("## Two\n\nkept", window)
+    assertTrue(window.length < body.length)
+    root.deleteRecursively()
+  }
+
   private fun turn(index: Int, id: String, deferred: Boolean, running: Boolean): WireTurn {
     val block = WireBlock("answer", "b-$index", "", "", "", "stored", running, true, 0, emptyList(), deferred = deferred)
     return WireTurn(index, id, "build", "", "prompt", "", live = running, blocks = listOf(block))

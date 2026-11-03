@@ -325,10 +325,28 @@ class MonitorCoordinator(
       activityStartedMs = next.activityStartedMs,
       projectRoot = next.projectRoot.ifEmpty { local.projectRoot },
       conversationTitle = next.conversationTitle.ifEmpty { local.conversationTitle },
-      conversationId = next.conversationId.ifEmpty { local.conversationId }
+      conversationId = next.conversationId.ifEmpty { local.conversationId },
+      planRevision = next.planRevision,
+      planReceived = next.planReceived,
+      planTotal = next.planTotal,
+      planIncomplete = next.planIncomplete,
+      planBody = shownPlanBody(next.planTotal, next.planBody)
     )
     published()
   }
+
+  fun notePlanFile(path: String, revision: String, received: Long, total: Long, incomplete: Boolean, body: String): MonitorUi =
+    synchronized(gate) {
+      local = local.copy(
+        planPath = path.ifEmpty { local.planPath },
+        planRevision = revision.ifEmpty { local.planRevision },
+        planReceived = received,
+        planTotal = total,
+        planIncomplete = incomplete,
+        planBody = shownPlanBody(total, body)
+      )
+      published()
+    }
 
   fun noteSyncNote(text: String): MonitorUi = synchronized(gate) {
     if (text.isNotEmpty()) local = local.copy(banner = text)

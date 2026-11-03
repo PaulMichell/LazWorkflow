@@ -33,6 +33,7 @@ class ScreenFetch {
   private var planOffset = 0L
   private var planWanted = false
   private var planFlying = false
+  private var planHeld = false
 
   fun offerRepair(fetch: BlockFetch, open: Boolean): List<FetchGrant> {
     owed[fetch.blockId] = OwedBlock(fetch, owed[fetch.blockId]?.turnIndex ?: -1, open || owed[fetch.blockId]?.open == true)
@@ -73,12 +74,25 @@ class ScreenFetch {
   }
 
   fun notePlan(path: String, revision: String, filePresent: Boolean, fileRevision: String, fileLength: Long, showing: Boolean): List<FetchGrant> {
+    if (planHeld) return emptyList()
     planPath = path
     planRevision = revision
     planWanted = showing && path.isNotEmpty() && revision.isNotEmpty() && (!filePresent || fileRevision != revision)
     planOffset = if (filePresent && fileRevision == revision) fileLength else 0L
     if (!planWanted) planFlying = false
     return release()
+  }
+
+  fun cancelPlan() {
+    planWanted = false
+    planFlying = false
+    planHeld = true
+    inFlight.remove(planKey())
+  }
+
+  fun continuePlan(path: String, revision: String, filePresent: Boolean, fileRevision: String, fileLength: Long): List<FetchGrant> {
+    planHeld = false
+    return notePlan(path, revision, filePresent, fileRevision, fileLength, true)
   }
 
   fun isFlying(key: String): Boolean = key in inFlight

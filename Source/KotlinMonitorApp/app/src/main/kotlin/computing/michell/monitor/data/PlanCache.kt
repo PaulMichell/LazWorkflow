@@ -22,8 +22,8 @@ fun hasStoredPlan(path: String, title: String, rows: List<PlanRow>): Boolean {
   return path.isNotEmpty() || title.isNotEmpty() || rows.isNotEmpty()
 }
 
-fun planCacheText(path: String, title: String, rows: List<PlanRow>, selected: Int, body: String = ""): String {
-  return encodeOfflineCache(OfflineCacheDocument(emptyList(), emptyList(), null, path, title, rows, selected, "", body))
+fun planCacheText(path: String, title: String, rows: List<PlanRow>, selected: Int): String {
+  return encodeOfflineCache(OfflineCacheDocument(emptyList(), emptyList(), null, path, title, rows, selected, "", ""))
 }
 
 /** Columns win when they are set. A damaged row list still keeps the title. */
@@ -38,5 +38,5 @@ fun storedPlanOf(path: String, title: String, selected: Int, rowsJson: String): 
   val keptTitle = if (title.isNotEmpty()) title else decoded?.planTitle.orEmpty()
   val keptSelected = if (selected >= 0) selected else decoded?.selectedPlan ?: -1
   if (!hasStoredPlan(keptPath, keptTitle, rows)) return null
-  return StoredPlan(keptPath, keptTitle, rows, keptSelected, decoded?.planBody.orEmpty())
+  return StoredPlan(keptPath, keptTitle, rows, keptSelected, "")
 }

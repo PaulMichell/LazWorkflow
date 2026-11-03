@@ -195,7 +195,11 @@ data class PlanRecord(
   val title: String,
   val rowsJson: String,
   val selected: Int,
-  val updatedAt: Long
+  val updatedAt: Long,
+  val revision: String = "",
+  val receivedBytes: Long = 0,
+  val totalBytes: Long = 0,
+  val incomplete: Boolean = false
 )
 
 @Entity(tableName = "outbox")

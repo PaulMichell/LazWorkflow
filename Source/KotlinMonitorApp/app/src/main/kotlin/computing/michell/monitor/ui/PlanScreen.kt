@@ -5,6 +5,7 @@ package computing.michell.monitor.ui
    Headings stay plain. Run becomes Stop while a run is going.
    Open previews the plan document. A long press previews that section. (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.data.PlanIncompleteLabel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -74,6 +75,19 @@ fun planHostButtonEnabled(loaded: Boolean, online: Boolean, running: Boolean): B
 fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !running
 
 fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
+
+const val PlanInlineBytes = computing.michell.monitor.data.PlanInlineBytes
+
+fun shownPlanBody(total: Long, body: String): String {
+  if (total > PlanInlineBytes) return ""
+  if (body.toByteArray(Charsets.UTF_8).size > PlanInlineBytes) return ""
+  return body
+}
+
+fun planFetchVisible(total: Long, received: Long, incomplete: Boolean): Boolean {
+  if (total <= PlanInlineBytes) return false
+  return incomplete || received < total
+}
 
 /** Same caption the desktop uses for a double-clicked row. */
 fun planSectionCaption(row: PlanRow): String {
@@ -178,7 +192,9 @@ fun PlanScreen(
   onNew: () -> Unit,
   onClose: () -> Unit,
   onPreview: () -> Unit,
-  onPreviewSection: (PlanRow) -> Unit
+  onPreviewSection: (PlanRow) -> Unit,
+  onCancelFetch: () -> Unit = {},
+  onContinueFetch: () -> Unit = {}
 ) {
   val loaded = planLoaded(ui.planPath)
   val running = ui.planRunning || ui.view.planRunning
@@ -213,6 +229,9 @@ fun PlanScreen(
       Button(onClick = onNew, enabled = planNewEnabled(online, running)) { Text("New") }
       Button(onClick = onPreview, enabled = planOpenEnabled(loaded, running)) { Text("Open") }
       Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online, running)) { Text("Close") }
+    }
+    if (planFetchVisible(ui.planTotal, ui.planReceived, ui.planIncomplete)) {
+      PlanFetchCard(ui.planReceived, ui.planTotal, ui.planIncomplete, onCancelFetch, onContinueFetch)
     }
   }
 }
@@ -277,6 +296,15 @@ fun PlanPreviewPanel(
         Button(onClick = onDismiss) { Text("Close") }
       }
     }
+  }
+}
+
+@Composable
+private fun PlanFetchCard(received: Long, total: Long, incomplete: Boolean, onCancel: () -> Unit, onContinue: () -> Unit) {
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(if (incomplete) PlanIncompleteLabel else "$received / $total")
+    if (incomplete) Button(onClick = onContinue) { Text("Continue") }
+    else Button(onClick = onCancel) { Text("Cancel") }
   }
 }
 

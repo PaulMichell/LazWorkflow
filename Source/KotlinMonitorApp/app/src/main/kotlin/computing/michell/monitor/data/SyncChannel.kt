@@ -404,6 +404,7 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
         planTitle = title,
         planRunning = running,
         planRows = rows,
+        planRevision = value.textField("revision") ?: ui.planRevision,
         view = ui.view.copy(planPath = path, planTitle = title, planRunning = running)
       )
     }

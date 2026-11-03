@@ -82,6 +82,7 @@ import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
 import computing.michell.monitor.ui.statusNotice
 import computing.michell.monitor.protocol.PlanRow
+import computing.michell.monitor.ui.PlanInlineBytes
 import computing.michell.monitor.ui.planLoaded
 import computing.michell.monitor.ui.planSectionCaption
 import computing.michell.monitor.ui.planSectionExcerpt
@@ -334,29 +335,35 @@ private fun MonitorShell(model: MonitorViewModel) {
                       onPreviewSection = { row ->
                         sectionPreview = row
                         planPreviewOpen = false
-                      }
+                      },
+                      onCancelFetch = model::cancelPlanFetch,
+                      onContinueFetch = model::continuePlanFetch
                     )
                   }
                 }
               }
               val shownSection = sectionPreview
+              var planWindow by remember { mutableStateOf("") }
+              LaunchedEffect(planPreviewOpen, shownSection, ui.planPath, ui.planBody, ui.planTotal) {
+                planWindow = if (ui.planTotal > PlanInlineBytes) model.readPlanWindow(shownSection)
+                else if (shownSection == null) ui.planBody
+                else planSectionExcerpt(ui.planBody, shownSection)
+              }
               if ((planPreviewOpen || shownSection != null) && planLoaded(ui.planPath) && tabForPage(pagerState.currentPage) == AppTab.Plan) {
-                if (shownSection == null) {
-                  PlanPreviewPanel(
-                    ui.planTitle, ui.planPath, ui.planBody, ui.planRows,
-                    onDismiss = { planPreviewOpen = false },
-                    modifier = Modifier.fillMaxSize()
-                  )
-                } else {
-                  val excerpt = planSectionExcerpt(ui.planBody, shownSection).ifEmpty {
-                    "This section is not in the loaded plan text yet."
-                  }
-                  PlanPreviewPanel(
-                    planSectionCaption(shownSection), ui.planPath, excerpt, emptyList(),
-                    onDismiss = { sectionPreview = null },
-                    modifier = Modifier.fillMaxSize()
-                  )
+                val text = if (shownSection == null) planWindow.ifEmpty { ui.planBody } else planWindow.ifEmpty {
+                  "This section is not in the loaded plan text yet."
                 }
+                PlanPreviewPanel(
+                  if (shownSection == null) ui.planTitle else planSectionCaption(shownSection),
+                  ui.planPath,
+                  text,
+                  if (shownSection == null) ui.planRows else emptyList(),
+                  onDismiss = {
+                    planPreviewOpen = false
+                    sectionPreview = null
+                  },
+                  modifier = Modifier.fillMaxSize()
+                )
               }
             }
             // Below the pager, so Conversation and Plan both keep the same status line.
