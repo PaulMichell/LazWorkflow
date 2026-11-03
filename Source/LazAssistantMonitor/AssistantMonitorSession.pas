@@ -30,7 +30,8 @@ Interface
 
 Uses
   SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
-  AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantMonitorSync, AssistantSessionObserve;
+  AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantMonitorSync, AssistantMonitorPlanFetch,
+  AssistantSessionObserve;
 
 Const
   MonitorPairCodeLength = 10;
@@ -159,6 +160,7 @@ Type
     FLiveCursor: Int64;
     FHasLivePatch: Boolean;
     FMirror: TMonitorMirror;
+    FPlanFetch: TMonitorPlanFetch;
     FCredit: TMonitorLogCredit;
     FObserved: TMonitorSnapshot;
     FHasObserved: Boolean;
@@ -235,6 +237,8 @@ Type
     Function GetConnectedClientName: String;
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure FillLogLane;
+    Procedure PullPlanSlice;
+    Procedure PlanFetchReady;
     Procedure QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
     Procedure RememberState(Const Key, ValueJson: String);
     Procedure PublishRememberedState;
@@ -276,6 +280,8 @@ Type
     { IDE thread. Copies one turn into the model and appends the events that describe the change. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
+    { IDE thread. The file timer already hashed the file. Does not read it. }
+    Procedure NotePlanCachedRevision(Const Path, Revision: String);
     Function HasMirrorModel: Boolean;
     Function CopyMirrorTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
     Function FetchMirrorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
@@ -529,6 +535,8 @@ Begin
   Inherited Create;
   InitCriticalSection(FLock);
   FMirror := TMonitorMirror.Create;
+  FPlanFetch := TMonitorPlanFetch.Create;
+  FPlanFetch.OnReady := @PlanFetchReady;
   FCredit := TMonitorLogCredit.Create;
   FOutbox := TMonitorOutbox.Create;
   FIntake := TMonitorCommandIntake.Create;
@@ -609,6 +617,7 @@ End;
 Destructor TMonitorSession.Destroy;
 Begin
   AttachCarrier(Nil);
+  FreeAndNil(FPlanFetch);
   FreeAndNil(FIntake);
   FreeAndNil(FOutbox);
   FreeAndNil(FCredit);
@@ -1102,6 +1111,8 @@ Begin
     End;
   FHasLivePatch := False;
   FLiveCursor := 0;
+  If Assigned(FPlanFetch) Then
+    FPlanFetch.Cancel;
 End;
 
 Procedure TMonitorSession.CloseToListening;
@@ -1806,6 +1817,14 @@ Begin
         RejectLocked('auth', True)
       Else
         ServeBlockGet(Message.Id, Message.PayloadJson);
+      Exit;
+    End;
+  If Message.TypeName = 'plan_get' Then
+    Begin
+      If (FState <> mssLive) And (FState <> mssBusy) Then
+        RejectLocked('auth', True)
+      Else If Assigned(FPlanFetch) Then
+        FPlanFetch.BeginGet(Message.Id, Message.PayloadJson, FProjectRoot);
       Exit;
     End;
   If (FState <> mssLive) And (FState <> mssBusy) Then
@@ -3124,6 +3143,8 @@ Function TMonitorSession.TakeOutboundFrame(Out Bytes: RawByteString): Boolean;
 Var
   Lane: TMonitorOutboxLane;
 Begin
+  If FLinkPulls Then
+    PullPlanSlice;
   FillLogLane;
   Bytes := '';
   Result := Assigned(FOutbox) And FOutbox.Take(Bytes, Lane);
@@ -3146,6 +3167,40 @@ Begin
     Result := 0;
 End;
 
+Procedure TMonitorSession.PlanFetchReady;
+Begin
+  If Assigned(FOutbox) Then
+    FOutbox.Notify;
+End;
+
+Procedure TMonitorSession.NotePlanCachedRevision(Const Path, Revision: String);
+Begin
+  If Assigned(FPlanFetch) Then
+    FPlanFetch.NoteCachedRevision(Path, Revision);
+End;
+
+Procedure TMonitorSession.PullPlanSlice;
+Var
+  Json: String;
+Begin
+  If Not Assigned(FPlanFetch) Or Not FPlanFetch.Ready Then
+    Exit;
+  { One slice in the bulk lane. A larger plan must not fill the 4 MiB budget. }
+  If FLinkPulls And ((Not Assigned(FOutbox)) Or (FOutbox.LaneCount(molBulk) > 0)) Then
+    Exit;
+  LockSession;
+  Try
+    If (FState <> mssLive) And (FState <> mssBusy) Then
+      Exit;
+    If Not FPlanFetch.Take(Json) Then
+      Exit;
+    If Not QueueSend(Json) Then
+      FPlanFetch.Cancel;
+  Finally
+    UnlockSession;
+  End;
+End;
+
 Procedure TMonitorSession.DrainOutbound;
 Var
   Bytes: RawByteString;
@@ -3153,6 +3208,8 @@ Var
   Frame: TMonitorFrame;
   Status: TMonitorFrameStatus;
 Begin
+  If Not FLinkPulls Then
+    PullPlanSlice;
   FillLogLane;
   { The link takes the outbox. Wake it; do not also send. }
   If FLinkPulls Then

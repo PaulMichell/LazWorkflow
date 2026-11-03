@@ -67,6 +67,9 @@ Function AssistantDocumentDirective(Const DocumentPath: String): String;
 Function AssistantPlanDirective(Const PlanPath: String): String;
 Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
+{ Same rules as ResolvePlanPath, but Root is explicit and an empty path does not fall back. }
+Function ResolvePlanPathUnder(Const Root, RelativeOrAbsolute: String; Out Resolved: String;
+  Out ErrorText: String): Boolean;
 Function IsMarkdownPath(Const Path: String): Boolean;
 Function ProjectRelativePath(Const AbsolutePath: String): String;
 Function IsAssistantPlanGeneratedLine(Const Line: String): Boolean;
@@ -383,6 +386,43 @@ Begin
       Resolved := '';
       Exit;
     End;
+  Result := True;
+End;
+
+Function ResolvePlanPathUnder(Const Root, RelativeOrAbsolute: String; Out Resolved: String;
+  Out ErrorText: String): Boolean;
+Var
+  Cand: String;
+Begin
+  Result := False;
+  Resolved := '';
+  ErrorText := '';
+  If Trim(Root) = '' Then
+    Begin
+      ErrorText := 'No active Lazarus project is open.';
+      Exit;
+    End;
+  Cand := Trim(RelativeOrAbsolute);
+  If Cand = '' Then
+    Begin
+      ErrorText := 'Plan path is empty.';
+      Exit;
+    End;
+  If FilenameIsAbsolute(Cand) Then
+    Cand := ExpandFileName(Cand)
+  Else
+    Cand := ExpandFileName(IncludeTrailingPathDelimiter(Root) + Cand);
+  If Not PlanIsUnderRoot(Root, Cand) Then
+    Begin
+      ErrorText := 'Path is outside the active project root: ' + Cand;
+      Exit;
+    End;
+  If Not IsMarkdownPath(Cand) Then
+    Begin
+      ErrorText := 'Plan tools only allow Markdown paths (.md): ' + Cand;
+      Exit;
+    End;
+  Resolved := Cand;
   Result := True;
 End;
 

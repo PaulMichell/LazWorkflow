@@ -717,6 +717,7 @@ Begin
       End;
     Session.PublishState('plan', '{"path":"' + View.PlanPath + '","title":"' + View.PlanTitle + '","running":' +
       JsonBool(View.PlanRunning) + ',"revision":"' + Form.PlanDocumentRevision + '","rows":[' + PlanRows + ']}');
+    Session.NotePlanCachedRevision(View.PlanPath, Form.PlanDocumentRevision);
     Form.FillMonitorTasks(Tasks);
     TaskRows := '';
     For Index := 0 To High(Tasks) Do

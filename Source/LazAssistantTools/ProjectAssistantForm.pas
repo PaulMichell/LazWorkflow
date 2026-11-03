@@ -2745,7 +2745,10 @@ Begin
   FPlanDiskPendingAge := Age;
   FPlanDiskBytes := Bytes;
   FPlanDiskPendingBytes := Bytes;
-  FPlanDocumentRevision := AssistantPlanDocumentRevision(PlanRel);
+  If Bytes > AssistantPlanInlineHashBytes Then
+    FPlanDocumentRevision := AssistantPlanCachedRevision(PlanRel, Age, Bytes)
+  Else
+    FPlanDocumentRevision := AssistantPlanFileRevision(PlanRel);
   FPlanHashTick := GetTickCount64;
 End;
 
@@ -2791,11 +2794,19 @@ Begin
     Begin
       FPlanDiskPendingAge := Age;
       FPlanDiskPendingBytes := Bytes;
+      { A large file is hashed off this thread. The timer only notices the cache. }
+      If Bytes > AssistantPlanInlineHashBytes Then
+        Begin
+          Revision := AssistantPlanCachedRevision(PlanRel, Age, Bytes);
+          If (Revision <> '') And (Revision <> FPlanDocumentRevision) Then
+            RefreshBuildTodos;
+          Exit;
+        End;
       { Same-second saves can keep the timestamp. Hash once a second while a plan is open. }
       If (FPlanHashTick <> 0) And (GetTickCount64 - FPlanHashTick < 1000) Then
         Exit;
       FPlanHashTick := GetTickCount64;
-      Revision := AssistantPlanDocumentRevision(PlanRel);
+      Revision := AssistantPlanFileRevision(PlanRel);
       If Revision = FPlanDocumentRevision Then
         Exit;
       RefreshBuildTodos;
