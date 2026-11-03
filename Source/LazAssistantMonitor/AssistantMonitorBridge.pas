@@ -9,9 +9,8 @@ Unit AssistantMonitorBridge;
   Size note: exceeds the 1000 line preference. The command pump, live patch,
   and resume catchup share the form and the session. Splitting them would
   duplicate the snapshot fill.
-  Reviewed 2026-11-02: snapshot pages still replace snapshot frames. A status notice
-  sends the view again, because a patch can miss the idle flags or blank the model.
-  A plan push sends the whole document. A later edit replaces that unsent set.
+  Reviewed 2026-11-03: the 1 s timer is a backstop. A counter wake queues one pump,
+  coalesced to 20 ms. The change pump publishes plan rows and does not read the plan file.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -80,6 +79,9 @@ Type
     FStatusQueued: Boolean;
     FStatusDirty: Boolean;
     FMirrorTimer: TTimer;
+    FCoalesceTimer: TTimer;
+    FPumpPending: Boolean;
+    FCoalesceUntil: QWord;
     FPumpedMirror: Int64;
     FPlanStamp: String;
     FSentEpoch: String;
@@ -132,8 +134,13 @@ Type
     Procedure PushReasoning(Form: TProjectAssistantForm);
     Procedure PushPermissions(Form: TProjectAssistantForm);
     Procedure MirrorTimerTimer(Sender: TObject);
+    Procedure NoteMirrorWake;
+    Procedure SchedulePump(Data: PtrInt);
+    Procedure QueuedPump(Data: PtrInt);
+    Procedure CoalesceTimerTimer(Sender: TObject);
     Procedure DeliverOpenScreen;
-    Procedure PumpMirror(Seen: Int64);
+    Procedure PumpMirror(Seen: Int64; Full: Boolean);
+    Procedure PublishPlanRows(Form: TProjectAssistantForm);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
     Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id, PayloadJson: String;
@@ -229,13 +236,18 @@ Begin
   { Not owned by a form, so the designer cannot stream it. }
   FMirrorTimer := TTimer.Create(Nil);
   FMirrorTimer.Enabled := False;
-  FMirrorTimer.Interval := 150;
+  FMirrorTimer.Interval := 1000;
   FMirrorTimer.OnTimer := @MirrorTimerTimer;
+  FCoalesceTimer := TTimer.Create(Nil);
+  FCoalesceTimer.Enabled := False;
+  FCoalesceTimer.Interval := 20;
+  FCoalesceTimer.OnTimer := @CoalesceTimerTimer;
 End;
 
 Destructor TAssistantMonitorBridge.Destroy;
 Begin
   Detach;
+  FreeAndNil(FCoalesceTimer);
   FreeAndNil(FMirrorTimer);
   FreeAndNil(FOutstanding);
   DoneCriticalSection(FLock);
@@ -354,6 +366,7 @@ Begin
       Session.SetApprovalCloseHandler(@HandleApprovalClosed);
     End;
   PublishEpoch;
+  SetAssistantMirrorWake(@NoteMirrorWake);
   If Assigned(FMirrorTimer) Then
     FMirrorTimer.Enabled := Assigned(Session);
 End;
@@ -362,6 +375,11 @@ Procedure TAssistantMonitorBridge.Detach;
 Var
   Session: TMonitorSession;
 Begin
+  SetAssistantMirrorWake(Nil);
+  FPumpPending := False;
+  FCoalesceUntil := 0;
+  If Assigned(FCoalesceTimer) Then
+    FCoalesceTimer.Enabled := False;
   If Assigned(FMirrorTimer) Then
     FMirrorTimer.Enabled := False;
   LockBridge;
@@ -764,7 +782,7 @@ Begin
   FSentEpoch := '';
   SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
-  PumpMirror(AssistantMirrorCounter);
+  PumpMirror(AssistantMirrorCounter, True);
 End;
 
 Procedure TAssistantMonitorBridge.AnswerResume(Const Id, PayloadJson: String);
@@ -948,6 +966,82 @@ Begin
   FDeliveredScreen := Key;
 End;
 
+Procedure TAssistantMonitorBridge.NoteMirrorWake;
+Begin
+  LockBridge;
+  Try
+    If FPumpPending Then
+      Exit;
+    FPumpPending := True;
+  Finally
+    UnlockBridge;
+  End;
+  If GetCurrentThreadId = MainThreadID Then
+    SchedulePump(0)
+  Else
+    Application.QueueAsyncCall(@SchedulePump, 0);
+End;
+
+Procedure TAssistantMonitorBridge.SchedulePump(Data: PtrInt);
+Var
+  NowMs, WaitMs: QWord;
+Begin
+  LockBridge;
+  Try
+    If Not Assigned(FSession) Then
+      Begin
+        FPumpPending := False;
+        Exit;
+      End;
+  Finally
+    UnlockBridge;
+  End;
+  NowMs := GetTickCount64;
+  If (FCoalesceUntil <> 0) And (NowMs < FCoalesceUntil) Then
+    Begin
+      WaitMs := FCoalesceUntil - NowMs;
+      If WaitMs < 1 Then
+        WaitMs := 1;
+      If WaitMs > 20 Then
+        WaitMs := 20;
+      If Assigned(FCoalesceTimer) Then
+        Begin
+          FCoalesceTimer.Enabled := False;
+          FCoalesceTimer.Interval := WaitMs;
+          FCoalesceTimer.Enabled := True;
+        End;
+      Exit;
+    End;
+  FCoalesceUntil := NowMs + 20;
+  Application.QueueAsyncCall(@QueuedPump, 0);
+End;
+
+Procedure TAssistantMonitorBridge.QueuedPump(Data: PtrInt);
+Var
+  Seen: Int64;
+Begin
+  If Assigned(FCoalesceTimer) Then
+    FCoalesceTimer.Enabled := False;
+  Seen := AssistantMirrorCounter;
+  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
+    PumpMirror(Seen, False);
+  LockBridge;
+  Try
+    FPumpPending := False;
+  Finally
+    UnlockBridge;
+  End;
+  If AssistantMirrorCounter <> FPumpedMirror Then
+    NoteMirrorWake;
+End;
+
+Procedure TAssistantMonitorBridge.CoalesceTimerTimer(Sender: TObject);
+Begin
+  If Assigned(FCoalesceTimer) Then
+    FCoalesceTimer.Enabled := False;
+  Application.QueueAsyncCall(@QueuedPump, 0);
+End;
+
 Procedure TAssistantMonitorBridge.MirrorTimerTimer(Sender: TObject);
 Var
   Seen: Int64;
@@ -956,10 +1050,9 @@ Begin
     Exit;
   RetryDeferredResumes;
   Seen := AssistantMirrorCounter;
-  { An idle window still has to reach a phone that connected after the last trace tick. }
+  { Backstop only. A missed wake, or a phone that connected after the last tick. }
   If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
-    PumpMirror(Seen);
-  { Resume can be answered before the conversation is loaded. Push the open turn once it is. }
+    PumpMirror(Seen, True);
   DeliverOpenScreen;
 End;
 
@@ -971,7 +1064,7 @@ Begin
     (SentModel <> View.Model) Or (SentStatus <> View.StatusText);
 End;
 
-Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64);
+Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64; Full: Boolean);
 Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
@@ -1004,7 +1097,12 @@ Begin
   If FormConversationMoved(Form, Session) Then
     PublishEpoch;
   Turn := Default(TAssistantMonitorTurn);
-  If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
+  If Full Then
+    Begin
+      If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
+        Turn := Default(TAssistantMonitorTurn);
+    End
+  Else If Not Form.FillMonitorLiveChanges(FSentBlocks, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
   If Turn.Id <> '' Then
     Session.ObserveTurn(Turn);
@@ -1091,13 +1189,45 @@ Begin
   PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
   If PlanStamp <> FPlanStamp Then
     Begin
-      PushPlan(Form);
+      PublishPlanRows(Form);
       FPlanStamp := PlanStamp;
     End;
   FPumpedMirror := Seen;
   NoteOpenLogPosition;
   Finally
     FPumping := False;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishPlanRows(Form: TProjectAssistantForm);
+Var
+  Paths, Captions: TStringList;
+  View: TAssistantMonitorView;
+  Rows: TAssistantMonitorPlanRows;
+  Session: TMonitorSession;
+  Frames: TStringArray;
+Begin
+  If Not Assigned(Form) Then
+    Exit;
+  LockBridge;
+  Try
+    Session := FSession;
+  Finally
+    UnlockBridge;
+  End;
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorPlanChoices(Paths, Captions);
+    Form.FillMonitorView(View);
+    Form.FillMonitorPlan(Rows);
+    PackMonitorPlanFrames(HostId, View.PlanPath, View.PlanTitle, View.PlanRunning, Rows, Paths, Captions, '', True,
+      Frames);
+    If Assigned(Session) And (Length(Frames) > 0) Then
+      Session.ReplacePlanFrames(Frames);
+  Finally
+    Captions.Free;
+    Paths.Free;
   End;
 End;
 

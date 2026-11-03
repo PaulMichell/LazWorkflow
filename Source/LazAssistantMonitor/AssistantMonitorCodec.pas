@@ -2110,6 +2110,7 @@ Begin
   View.Phase := '';
   View.StatusText := '';
   View.ElapsedMs := 0;
+  View.StartedAt := '';
   View.Model := '';
   View.Backend := '';
   View.SignedIn := False;
@@ -2142,6 +2143,7 @@ Begin
   Obj.Add('phase', View.Phase);
   Obj.Add('status_text', View.StatusText);
   Obj.Add('elapsed_ms', View.ElapsedMs);
+  Obj.Add('started_at', View.StartedAt);
   Obj.Add('model', View.Model);
   Obj.Add('backend', View.Backend);
   Obj.Add('signed_in', View.SignedIn);
@@ -2181,6 +2183,9 @@ Begin
         Result := False;
       If View.ElapsedMs < 0 Then
         View.ElapsedMs := 0;
+      View.StartedAt := '';
+      If Not ReadString(Obj, 'started_at', False, View.StartedAt) Then
+        Result := False;
       If Not ReadString(Obj, 'usage_caption', False, View.UsageCaption) Then
         Result := False;
       If Not ReadString(Obj, 'usage_hint', False, View.UsageHint) Then

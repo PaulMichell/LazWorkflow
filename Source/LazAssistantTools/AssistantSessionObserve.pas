@@ -30,6 +30,7 @@ Type
   );
 
   TAssistantSessionListener = Procedure(Kind: TAssistantSessionNoticeKind) Of Object;
+  TAssistantMirrorWake = Procedure Of Object;
 
   TAssistantMonitorImage = Record
     Id: String;
@@ -102,8 +103,11 @@ Type
     Mode: String;
     Phase: String;
     StatusText: String;
-    { Milliseconds since this turn started. Zero when nothing is sending. }
+    { Milliseconds since this turn started. Zero when nothing is sending.
+      Not a change. The phone computes elapsed from StartedAt and its own clock. }
     ElapsedMs: Integer;
+    { UTC timestamp of the live turn. Empty when nothing is sending. }
+    StartedAt: String;
     Model: String;
     Backend: String;
     SignedIn: Boolean;
@@ -154,9 +158,11 @@ Function AssistantSessionListenerAssigned: Boolean;
 /// Main thread only. Returns False immediately when the listener is nil. Copies the method and calls it outside the lock.
 Function AssistantSessionObserve(Kind: TAssistantSessionNoticeKind): Boolean;
 { Increments under the observe lock and returns. A nil listener still counts.
-  Does not build JSON and does not queue a thread. }
+  Does not build JSON. After the increment it calls the wake, if one is set. }
 Procedure TouchAssistantMirror;
 Function AssistantMirrorCounter: Int64;
+{ The bridge sets this. Called outside the lock after the counter advances. }
+Procedure SetAssistantMirrorWake(Wake: TAssistantMirrorWake);
 
 /// Stores the notice, then notifies before return on the main thread. Any other thread queues.
 Procedure PublishAssistantApproval(Const Notice: TAssistantApprovalNotice);
@@ -203,6 +209,7 @@ Var
   ApprovalEvent: PRTLEvent;
   ApprovalDecision: TAssistantApprovalDecision;
   MirrorCounter: Int64;
+  MirrorWake: TAssistantMirrorWake;
 
 Function CopySessionListener: TAssistantSessionListener;
 Begin
@@ -289,10 +296,25 @@ Begin
 End;
 
 Procedure TouchAssistantMirror;
+Var
+  Wake: TAssistantMirrorWake;
 Begin
   EnterCriticalSection(ObserveLock);
   Try
     Inc(MirrorCounter);
+    Wake := MirrorWake;
+  Finally
+    LeaveCriticalSection(ObserveLock);
+  End;
+  If Assigned(Wake) Then
+    Wake;
+End;
+
+Procedure SetAssistantMirrorWake(Wake: TAssistantMirrorWake);
+Begin
+  EnterCriticalSection(ObserveLock);
+  Try
+    MirrorWake := Wake;
   Finally
     LeaveCriticalSection(ObserveLock);
   End;

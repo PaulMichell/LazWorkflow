@@ -587,6 +587,9 @@ Type
     Procedure FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
     /// Reads a stored turn, or the live turn when TurnIndex is LiveConversationMarker. Does not change the selection.
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
+    { Live turn only. Copies a block body when its length or running flag differs from SentBlocks. }
+    Function FillMonitorLiveChanges(Const SentBlocks: Array Of TAssistantMonitorBlock; Out Turn: TAssistantMonitorTurn;
+      Out ErrorText: String): Boolean;
     /// False until the open conversation has been loaded. A phone resume waits for this.
     Function MonitorScreenReady: Boolean;
     /// Copies BuildSections. Does not write the plan file.
@@ -10650,11 +10653,13 @@ Begin
   View.PlanRunning := FPlanAgentRunning;
   View.Mode := AssistantModeToStr(ActiveMode);
   View.ElapsedMs := 0;
+  View.StartedAt := '';
   View.Phase := '';
   If FSending Then
     Begin
       View.Phase := AssistantProgressPhase(FStatusPhase);
       View.ElapsedMs := CurrentStreamDurationMs;
+      View.StartedAt := FTurnStartedAt;
       View.StatusText := FormatElapsedStatus(View.Phase);
     End
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
@@ -10905,6 +10910,97 @@ Begin
     Trace.Free;
     Seen.Free;
   End;
+End;
+
+Function TProjectAssistantForm.FillMonitorLiveChanges(Const SentBlocks: Array Of TAssistantMonitorBlock;
+  Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
+Var
+  I, J: Integer;
+  Block: TTraceBlock;
+  Found: Boolean;
+
+  Function SameFace(Const Left: TAssistantMonitorBlock; Const Right: TTraceBlock): Boolean;
+  Begin
+    Result := (Length(Left.Body) = Length(Right.Body)) And (Left.Running = Right.Running);
+  End;
+
+Begin
+  Result := False;
+  ErrorText := '';
+  { Idle and stored turns are not the streaming path. The full copy is cheap there. }
+  If (Not FSending) And (Not (FStreamingActive And (Not FTurnRecorded))) And (Not FPlanAgentRunning) Then
+    Begin
+      Result := FillMonitorTurn(LiveConversationMarker, Turn, ErrorText);
+      Exit;
+    End;
+  Turn.TurnIndex := LiveConversationMarker;
+  Turn.Live := True;
+  Turn.Id := 'live';
+  Turn.Mode := AssistantModeToStr(ActiveMode);
+  Turn.Prompt := FLiveUser;
+  If Turn.Prompt = '' Then
+    Turn.Prompt := FDisplayUser;
+  Turn.Thinking := FLiveThinking;
+  If Turn.Thinking = '' Then
+    Turn.Thinking := FAssistantThinking;
+  Turn.Response := FLiveContent;
+  If Turn.Response = '' Then
+    Turn.Response := FAssistantContent;
+  Turn.ErrorText := '';
+  Turn.CreatedAt := FTurnStartedAt;
+  Turn.DurationMs := 0;
+  If FSending Then
+    Turn.DurationMs := CurrentStreamDurationMs;
+  Turn.PromptPreview := ShortPreview(Turn.Prompt);
+  SetLength(Turn.Images, 0);
+  If Not Assigned(FTrace) Then
+    Begin
+      SetLength(Turn.Blocks, 0);
+      Result := True;
+      Exit;
+    End;
+  SetLength(Turn.Blocks, FTrace.Count);
+  For I := 0 To FTrace.Count - 1 Do
+    Begin
+      Block := FTrace[I];
+      Turn.Blocks[I].Kind := TraceKindName(Block.Kind);
+      Turn.Blocks[I].BlockId := Block.ID;
+      Turn.Blocks[I].Title := Block.Title;
+      Turn.Blocks[I].ToolName := Block.ToolName;
+      Turn.Blocks[I].ToolId := Block.ToolId;
+      Turn.Blocks[I].Running := Block.Running;
+      Turn.Blocks[I].Ok := Block.Ok;
+      Turn.Blocks[I].DurationMs := Block.DurationMs;
+      Turn.Blocks[I].Revision := Block.Revision;
+      SetLength(Turn.Blocks[I].Images, Length(Block.ImageRefs));
+      For J := 0 To High(Block.ImageRefs) Do
+        Begin
+          Turn.Blocks[I].Images[J].Id := Block.ImageRefs[J].Id;
+          Turn.Blocks[I].Images[J].Name := Block.ImageRefs[J].Name;
+          Turn.Blocks[I].Images[J].Mime := '';
+          Turn.Blocks[I].Images[J].Width := Block.ImageRefs[J].Width;
+          Turn.Blocks[I].Images[J].Height := Block.ImageRefs[J].Height;
+          Turn.Blocks[I].Images[J].DisplayPath := Block.ImageRefs[J].DisplayPath;
+          Turn.Blocks[I].Images[J].Missing := False;
+        End;
+      Found := False;
+      For J := 0 To High(SentBlocks) Do
+        If SentBlocks[J].BlockId = Block.ID Then
+          Begin
+            Found := True;
+            If SameFace(SentBlocks[J], Block) Then
+              Begin
+                Turn.Blocks[I].Body := SentBlocks[J].Body;
+                Turn.Blocks[I].Images := SentBlocks[J].Images;
+              End
+            Else
+              Turn.Blocks[I].Body := Block.Body;
+            Break;
+          End;
+      If Not Found Then
+        Turn.Blocks[I].Body := Block.Body;
+    End;
+  Result := True;
 End;
 
 Procedure TProjectAssistantForm.FillMonitorPlanChoices(Paths, Captions: TStrings);
