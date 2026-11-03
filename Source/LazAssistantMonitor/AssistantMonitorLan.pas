@@ -2,9 +2,9 @@ Unit AssistantMonitorLan;
 
 { Host-listens LAN carrier for monitor frames (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. The carrier queues and the
-  accept loop are still one unit. The per-socket SSL loop has moved to
-  AssistantMonitorLink. Reviewed 2026-11-03: no form code and no relay class.
+  Size note: exceeds the 1000 line preference. This unit keeps accept, the
+  simultaneous cap, and bind. The socket loop is AssistantMonitorLink.
+  Reviewed 2026-11-03: no form code and no relay class.
 
   The listen thread keeps TInetServer for accept and the simultaneous cap. It
   hands each accepted socket to a link thread and does not read or write it.

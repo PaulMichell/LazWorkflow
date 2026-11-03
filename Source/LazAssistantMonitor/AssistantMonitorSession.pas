@@ -15,11 +15,10 @@ Unit AssistantMonitorSession;
   MonitorDeadSessionMs with nothing received. Pong is answered on the control lane
   from the carrier thread. The phone's MonitorLimits holds the same two values.
 
-  Size note: exceeds the 1000 line preference. Pairing, reconnect auth, command
-  gates, approval, the in-memory carrier, the resume ring, and the outbound lanes
-  are one state machine.
-  Reviewed 2026-10-27: select_conversation is busy only while a reply is sending.
-  No socket or form code in this unit. }
+  Size note: exceeds the 1000 line preference. What remains is connection state,
+  command intake, and approval. Catalogue 2 live-patch and log-credit helpers
+  stay because the session and mirror tests still call them.
+  Reviewed 2026-11-03: no socket or form code in this unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -228,8 +227,6 @@ Type
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
     Procedure AdoptRunningHost;
     Procedure QueueBulkFramesLocked(Const Frames: TStringArray);
-    { Caller holds the session lock. Does not drain. }
-    Function QueueMirrorPagesLocked(Const Id: String; PointOnly: Boolean = False): Boolean;
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
     Function GetLastError: String;
@@ -337,10 +334,6 @@ Type
     Procedure SendPackedFrames(Const Frames: TStringArray);
     { One snapshot page for a turn the phone asked for. Does not send turn_data. }
     Procedure SendTurnPage(Const Id: String; Const Turn: TAssistantMonitorTurn);
-    { Snapshot pages for the open model. False when the mirror has no stream. }
-    Function SendMirrorPages(Const Id: String): Boolean;
-    { Outline and the desktop's current turn only. Older turns stay for a later fetch. }
-    Function SendMirrorPoint(Const Id: String): Boolean;
     Property State: TMonitorSessionState Read FState;
     Property Carrier: IMonitorCarrier Read FCarrier;
     Property OnCommand: TMonitorCommandHandler Read FOnCommand Write FOnCommand;
@@ -2790,60 +2783,6 @@ Begin
   Until Last;
 End;
 
-Function PageIsOutline(Const Json: String): Boolean;
-Begin
-  Result := Pos('"turns":', Json) > 0;
-End;
-
-Function PageIsPoint(Const Json: String): Boolean;
-Begin
-  Result := Pos('"point":true', Json) > 0;
-End;
-
-Function PageEndsPoint(Const Json: String): Boolean;
-Begin
-  Result := Pos('"point_end":true', Json) > 0;
-End;
-
-Function TMonitorSession.QueueMirrorPagesLocked(Const Id: String; PointOnly: Boolean): Boolean;
-Var
-  Pages: TMonitorSnapshotPageArray;
-  Frames: TStringArray;
-  ReadyFrames: Array Of TStringArray;
-  Index, Count: Integer;
-  SawPoint: Boolean;
-Begin
-  Result := False;
-  SetLength(Pages, 0);
-  SetLength(Frames, 0);
-  SetLength(ReadyFrames, 0);
-  If (Not Assigned(FMirror)) Or (FEpoch = '') Then
-    Exit;
-  If Not FMirror.BuildSnapshotPages(FEpoch, FCommittedCursor, Pages) Then
-    Exit;
-  { Pack every page before queueing. An outline that arrives alone is the blank chat. }
-  SawPoint := False;
-  Count := 0;
-  For Index := 0 To High(Pages) Do
-    Begin
-      If PointOnly And (Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)) And SawPoint Then
-        Break;
-      If Not PackMonitorBulkItem(Id, 'snapshot_page', Pages[Index].Json, Frames) Then
-        Exit;
-      SetLength(ReadyFrames, Count + 1);
-      ReadyFrames[Count] := Copy(Frames);
-      Inc(Count);
-      If PageIsPoint(Pages[Index].Json) Then
-        SawPoint := True;
-      If PointOnly And (PageEndsPoint(Pages[Index].Json) Or
-        ((Not PageIsOutline(Pages[Index].Json)) And (Not PageIsPoint(Pages[Index].Json)))) Then
-        Break;
-    End;
-  For Index := 0 To Count - 1 Do
-    QueueBulkFramesLocked(ReadyFrames[Index]);
-  Result := Count > 0;
-End;
-
 Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
 Var
   TurnIndex: Integer;
@@ -3032,30 +2971,6 @@ Begin
     UnlockSession;
   End;
   DrainOutbound;
-End;
-
-Function TMonitorSession.SendMirrorPages(Const Id: String): Boolean;
-Begin
-  LockSession;
-  Try
-    Result := QueueMirrorPagesLocked(Id);
-  Finally
-    UnlockSession;
-  End;
-  If Result Then
-    DrainOutbound;
-End;
-
-Function TMonitorSession.SendMirrorPoint(Const Id: String): Boolean;
-Begin
-  LockSession;
-  Try
-    Result := QueueMirrorPagesLocked(Id, True);
-  Finally
-    UnlockSession;
-  End;
-  If Result Then
-    DrainOutbound;
 End;
 
 Function TMonitorSession.SecondsSinceFrame: Integer;

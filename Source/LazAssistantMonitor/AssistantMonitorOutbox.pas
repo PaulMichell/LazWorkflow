@@ -12,8 +12,10 @@ Unit AssistantMonitorOutbox;
   budget it reports LogOverflowed, and the link closes so the phone resumes from
   the log. Each lane is a ring buffer.
 
-  Thread safe. Producers call the add methods from any thread, and the link thread
-  calls Take. OnWake runs after a successful add, outside the lock.
+  Thread safe. Producers call the add methods from any thread. OnWake is the
+  link-thread wake: AssistantMonitorLink sets it to write one byte on the wake
+  handle. Acknowledge is the credit return: it releases every log frame whose
+  sequence is at or below the phone's ack. The link thread is the only Take caller.
   No socket, TLS, or JSON code in this unit. }
 
 {$IFDEF FPC}

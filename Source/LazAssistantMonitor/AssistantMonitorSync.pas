@@ -1,10 +1,12 @@
 Unit AssistantMonitorSync;
 
-{ Frames stored mirror events for the log lane (c) 2026 Michell Computing.
+{ Resume decisions, slice framing, state classification, and the baseline
+  (c) 2026 Michell Computing.
 
   The mirror is the producer and the replay store. This unit does not read the
   assistant form and does not allocate a content sequence. A status or plan
-  change is state, not an event. }
+  change is state, not an event. Stay under 1000 lines; split a sibling before
+  crossing that line. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

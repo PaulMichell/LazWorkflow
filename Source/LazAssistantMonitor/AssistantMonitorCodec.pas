@@ -10,14 +10,12 @@ Unit AssistantMonitorCodec;
   AssistantModeToStr. Image bytes use the frames unit's FCL base64 helpers.
   Frame length stays in AssistantMonitorFrames (htonl / ntohl).
 
-  Size note: exceeds the 1000 line preference. The catalogue is one table of
-  message types, payload fields, and limits. Splitting it would hide a type.
-  Reviewed 2026-10-30: snapshot pages and image chunks stay in this table. The old snapshot,
-  transcript, and turn_data encoders remain so a catchup can still embed a snapshot object.
-  Chunk packing stays one pass: a resume publishes those pages on the IDE thread.
-  usage_caption and usage_hint are optional status fields, omitted when empty.
-  No socket, TLS, or form code in this unit.
-  v2 adds resume, patch, catchup, and conversation_closed to that same table. }
+  Size note: exceeds the 1000 line preference. Framing, command codecs, and state
+  codecs are still one table because the envelope and the payload types are one
+  catalogue. Uncalled transcript packing and the turn_data encoder are gone.
+  Catalogue 2 patch, catchup, and snapshot encoders remain: the codec tests still
+  assert them, and deleting them would change those assertions.
+  Reviewed 2026-11-03: no socket, TLS, or form code in this unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -37,7 +35,6 @@ Const
   MonitorMaxSendChars = 65536;
   { Same cap as MaxToolEventChars in AssistantActor.pas. }
   MonitorMaxToolBodyChars = 4000;
-  MonitorMaxBodyPartBytes = 200000;
   MonitorMaxImagePartBytes = 190000;
   { 4 * ceil(190000 / 3). With the envelope budget the frame stays under 262144. }
   MonitorImagePartBase64Chars = 253336;
@@ -486,7 +483,6 @@ Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
 Function DecodeMonitorApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
 
 Function MonitorToolBodyForWire(Const Body: String; Out Truncated: Boolean): String;
-Function SplitMonitorBody(Const Body: String; Revision: Integer): TMonitorBodyPartArray;
 Function MonitorBlockToJson(Const Block: TAssistantMonitorBlock; Part, PartCount, Revision: Integer): TJSONObject;
 Function TryMonitorBlockFromJson(Obj: TJSONObject; Out Block: TAssistantMonitorBlock; Out Truncated: Boolean): Boolean;
 Function MonitorViewToJson(Const View: TAssistantMonitorView): TJSONObject;
@@ -495,7 +491,6 @@ Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
 Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
 Function MonitorTurnToJson(Const Turn: TAssistantMonitorTurn; IndexOnly: Boolean): TJSONObject;
 Function TryMonitorTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: TAssistantMonitorTurn): Boolean;
-Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
@@ -509,11 +504,6 @@ Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; O
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
 Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
 Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
-{ Splits answer and thinking bodies that exceed 200000 bytes. Each part has part, part_count, and revision. }
-Function SplitMonitorTranscript(Const Source: TMonitorTranscript): TMonitorTranscriptArray;
-{ One frame when it fits. Otherwise several frames of the same blocks, in order. }
-Function PackMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript): TStringArray;
-Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
 Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
 
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
@@ -539,9 +529,6 @@ Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, C
   Const Snapshot: TMonitorSnapshot): String;
 Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
 Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
-
-Function MonitorTurnIndexRow(TurnIndex: Integer; Const Id, Mode, CreatedAt, PromptPreview, ErrorText: String): TJSONObject;
-Function LimitMonitorStoredTurns(Const Turns: TJSONArray): TJSONArray;
 
 { True when the host must send image_unavailable and keep the socket open. }
 Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
@@ -1938,44 +1925,6 @@ Begin
     Result := 1;
 End;
 
-Function SplitMonitorBody(Const Body: String; Revision: Integer): TMonitorBodyPartArray;
-Var
-  StartAt, NextAt, Take, I: Integer;
-Begin
-  Result := Nil;
-  SetLength(Result, 0);
-  If Length(Body) <= MonitorMaxBodyPartBytes Then
-    Begin
-      SetLength(Result, 1);
-      Result[0].Part := 1;
-      Result[0].PartCount := 1;
-      Result[0].Revision := Revision;
-      Result[0].Text := Body;
-      Exit;
-    End;
-  StartAt := 1;
-  While StartAt <= Length(Body) Do
-    Begin
-      NextAt := StartAt + MonitorMaxBodyPartBytes;
-      If NextAt > Length(Body) + 1 Then
-        NextAt := Length(Body) + 1
-      Else
-        NextAt := Utf8Boundary(Body, NextAt);
-      If NextAt <= StartAt Then
-        NextAt := StartAt + 1;
-      Take := NextAt - StartAt;
-      SetLength(Result, Length(Result) + 1);
-      Result[High(Result)].Text := Copy(Body, StartAt, Take);
-      Result[High(Result)].Revision := Revision;
-      StartAt := NextAt;
-    End;
-  For I := 0 To High(Result) Do
-    Begin
-      Result[I].Part := I + 1;
-      Result[I].PartCount := Length(Result);
-    End;
-End;
-
 Function ImageToJson(Const Image: TAssistantMonitorImage): TJSONObject;
 Begin
   Result := TJSONObject.Create;
@@ -2348,11 +2297,6 @@ Begin
   Result := ReadString(Obj, 'prompt', True, Turn.Prompt) And ReadString(Obj, 'thinking', True, Turn.Thinking) And
     ReadString(Obj, 'response', True, Turn.Response) And ReadInt(Obj, 'duration_ms', True, Turn.DurationMs) And
     ReadBool(Obj, 'live', True, Turn.Live) And TryReadBlocks(Obj.Find('blocks'), Turn) And TryReadImages(Obj.Find('images'), Turn);
-End;
-
-Function EncodeMonitorTurnData(Const Id: String; Const Turn: TAssistantMonitorTurn): String;
-Begin
-  Result := EncodeWith(mmkTurnData, Id, MonitorTurnToJson(Turn, False));
 End;
 
 Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
@@ -2770,271 +2714,6 @@ Begin
   End;
 End;
 
-Function CopyBlock(Const Block: TAssistantMonitorBlock): TAssistantMonitorBlock;
-Begin
-  Result := Block;
-End;
-
-Function SplitMonitorTranscript(Const Source: TMonitorTranscript): TMonitorTranscriptArray;
-Var
-  Pieces: Array Of TAssistantMonitorBlock;
-  PiecePart, PieceCount: Array Of Integer;
-  PieceN, I, J, MaxParts, FrameCount: Integer;
-  Parts: TMonitorBodyPartArray;
-  Slice: TAssistantMonitorBlock;
-Begin
-  Result := Nil;
-  Pieces := Nil;
-  PiecePart := Nil;
-  PieceCount := Nil;
-  SetLength(Result, 0);
-  SetLength(Pieces, 0);
-  SetLength(PiecePart, 0);
-  SetLength(PieceCount, 0);
-  MaxParts := 1;
-  For I := 0 To High(Source.Blocks) Do
-    Begin
-      If (Source.Blocks[I].Kind = 'answer') Or (Source.Blocks[I].Kind = 'thinking') Then
-        Parts := SplitMonitorBody(Source.Blocks[I].Body, Source.Revision)
-      Else
-        Begin
-          SetLength(Parts, 1);
-          Parts[0].Part := 1;
-          Parts[0].PartCount := 1;
-          Parts[0].Revision := Source.Revision;
-          Parts[0].Text := Source.Blocks[I].Body;
-        End;
-      If Parts[0].PartCount > MaxParts Then
-        MaxParts := Parts[0].PartCount;
-      For J := 0 To High(Parts) Do
-        Begin
-          Slice := CopyBlock(Source.Blocks[I]);
-          Slice.Body := Parts[J].Text;
-          SetLength(Pieces, Length(Pieces) + 1);
-          SetLength(PiecePart, Length(Pieces));
-          SetLength(PieceCount, Length(Pieces));
-          Pieces[High(Pieces)] := Slice;
-          PiecePart[High(Pieces)] := Parts[J].Part;
-          PieceCount[High(Pieces)] := Parts[J].PartCount;
-        End;
-    End;
-  If Length(Source.Blocks) = 0 Then
-    MaxParts := 1;
-  FrameCount := MaxParts;
-  SetLength(Result, FrameCount);
-  For I := 0 To FrameCount - 1 Do
-    Begin
-      Result[I].TurnIndex := Source.TurnIndex;
-      Result[I].Revision := Source.Revision;
-      Result[I].Phase := Source.Phase;
-      Result[I].StatusText := Source.StatusText;
-      Result[I].DurationMs := Source.DurationMs;
-      Result[I].Part := I + 1;
-      Result[I].PartCount := FrameCount;
-      SetLength(Result[I].Blocks, 0);
-      SetLength(Result[I].BlockPart, 0);
-      SetLength(Result[I].BlockPartCount, 0);
-    End;
-  For PieceN := 0 To High(Pieces) Do
-    Begin
-      I := PiecePart[PieceN] - 1;
-      If (I < 0) Or (I > High(Result)) Then
-        Continue;
-      If (PieceCount[PieceN] <= 1) And (I > 0) Then
-        Continue;
-      SetLength(Result[I].Blocks, Length(Result[I].Blocks) + 1);
-      SetLength(Result[I].BlockPart, Length(Result[I].Blocks));
-      SetLength(Result[I].BlockPartCount, Length(Result[I].Blocks));
-      Result[I].Blocks[High(Result[I].Blocks)] := Pieces[PieceN];
-      Result[I].BlockPart[High(Result[I].Blocks)] := PiecePart[PieceN];
-      Result[I].BlockPartCount[High(Result[I].Blocks)] := PieceCount[PieceN];
-    End;
-End;
-
-Function TranscriptPayload(Const Transcript: TMonitorTranscript): TJSONObject;
-Var
-  Blocks: TJSONArray;
-  I, Part, PartCount: Integer;
-Begin
-  Result := TJSONObject.Create;
-  Result.Add('turn_index', Transcript.TurnIndex);
-  Result.Add('revision', Transcript.Revision);
-  Result.Add('part', Transcript.Part);
-  Result.Add('part_count', Transcript.PartCount);
-  Result.Add('phase', Transcript.Phase);
-  Result.Add('status_text', Transcript.StatusText);
-  Result.Add('duration_ms', Transcript.DurationMs);
-  Blocks := TJSONArray.Create;
-  For I := 0 To High(Transcript.Blocks) Do
-    Begin
-      Part := 1;
-      PartCount := 1;
-      If (I <= High(Transcript.BlockPart)) And (I <= High(Transcript.BlockPartCount)) Then
-        Begin
-          Part := Transcript.BlockPart[I];
-          PartCount := Transcript.BlockPartCount[I];
-          If Part < 1 Then
-            Part := 1;
-          If PartCount < 1 Then
-            PartCount := 1;
-        End;
-      Blocks.Add(MonitorBlockToJson(Transcript.Blocks[I], Part, PartCount, Transcript.Revision));
-    End;
-  Result.Add('blocks', Blocks);
-End;
-
-Function TryEncodeMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript; Out Json: String): Boolean;
-Var
-  Payload: TJSONObject;
-Begin
-  Payload := TranscriptPayload(Transcript);
-  Try
-    Json := EncodeMonitorEnvelope(mmkTranscript, Id, Payload);
-    Result := Json <> '';
-  Finally
-    Payload.Free;
-  End;
-End;
-
-Function PackMonitorTranscript(Const Id: String; Const Transcript: TMonitorTranscript): TStringArray;
-Type
-  TTranscriptPiece = Record
-    Block: TAssistantMonitorBlock;
-    Part: Integer;
-    PartCount: Integer;
-  End;
-  TTranscriptPieceArray = Array Of TTranscriptPiece;
-
-  Function EncodePieces(Const Pieces: TTranscriptPieceArray; FromIndex, ToIndex, FramePart, FrameCount: Integer): String;
-  Var
-    Frame: TMonitorTranscript;
-    I, N: Integer;
-  Begin
-    Frame := Transcript;
-    Frame.Part := FramePart;
-    Frame.PartCount := FrameCount;
-    Result := '';
-    N := 0;
-    SetLength(Frame.Blocks, ToIndex - FromIndex + 1);
-    SetLength(Frame.BlockPart, Length(Frame.Blocks));
-    SetLength(Frame.BlockPartCount, Length(Frame.Blocks));
-    For I := FromIndex To ToIndex Do
-      Begin
-        Frame.Blocks[N] := Pieces[I].Block;
-        Frame.BlockPart[N] := Pieces[I].Part;
-        Frame.BlockPartCount[N] := Pieces[I].PartCount;
-        Inc(N);
-      End;
-    If Not TryEncodeMonitorTranscript(Id, Frame, Result) Then
-      Result := '';
-  End;
-
-  Procedure AddPiece(Var Pieces: TTranscriptPieceArray; Const Block: TAssistantMonitorBlock; Part, PartCount: Integer);
-  Begin
-    SetLength(Pieces, Length(Pieces) + 1);
-    Pieces[High(Pieces)].Block := Block;
-    Pieces[High(Pieces)].Part := Part;
-    Pieces[High(Pieces)].PartCount := PartCount;
-  End;
-
-  Function PieceFits(Const Block: TAssistantMonitorBlock; Part, PartCount: Integer): Boolean;
-  Var
-    Pieces: TTranscriptPieceArray;
-  Begin
-    SetLength(Pieces, 1);
-    Pieces[0].Block := Block;
-    Pieces[0].Part := Part;
-    Pieces[0].PartCount := PartCount;
-    Result := EncodePieces(Pieces, 0, 0, 1, 1) <> '';
-  End;
-
-  Procedure AppendFitted(Var Pieces: TTranscriptPieceArray; Block: TAssistantMonitorBlock);
-  Var
-    SliceAt, PartNo, First, Count: Integer;
-    Slice: TAssistantMonitorBlock;
-  Begin
-    If PieceFits(Block, 1, 1) Then
-      Begin
-        AddPiece(Pieces, Block, 1, 1);
-        Exit;
-      End;
-    If (Block.Kind = 'thinking') Or (Block.Kind = 'answer') Or (Block.Kind = 'user') Then
-      Begin
-        First := Length(Pieces);
-        SliceAt := 1;
-        PartNo := 0;
-        While SliceAt <= Length(Block.Body) Do
-          Begin
-            Slice := Block;
-            Slice.Body := Copy(Block.Body, SliceAt, 50000);
-            Inc(PartNo);
-            If Not PieceFits(Slice, PartNo, PartNo) Then
-              Slice.Body := Copy(Slice.Body, 1, 2000);
-            AddPiece(Pieces, Slice, PartNo, 0);
-            Inc(SliceAt, 50000);
-          End;
-        Count := Length(Pieces) - First;
-        For PartNo := First To High(Pieces) Do
-          Pieces[PartNo].PartCount := Count;
-        Exit;
-      End;
-    Block.Body := Copy(Block.Body, 1, 2000);
-    If Not PieceFits(Block, 1, 1) Then
-      Begin
-        Block.Body := Copy(Block.Body, 1, 240);
-        SetLength(Block.Images, 0);
-      End;
-    If PieceFits(Block, 1, 1) Then
-      AddPiece(Pieces, Block, 1, 1);
-  End;
-
-Var
-  Pieces: TTranscriptPieceArray;
-  Ends: Array Of Integer;
-  I, Start, Last, FrameCount: Integer;
-  Json: String;
-Begin
-  Result := Nil;
-  If TryEncodeMonitorTranscript(Id, Transcript, Json) Then
-    Begin
-      SetLength(Result, 1);
-      Result[0] := Json;
-      Exit;
-    End;
-  SetLength(Pieces, 0);
-  For I := 0 To High(Transcript.Blocks) Do
-    AppendFitted(Pieces, Transcript.Blocks[I]);
-  If Length(Pieces) = 0 Then
-    Exit;
-  SetLength(Ends, 0);
-  Start := 0;
-  While Start <= High(Pieces) Do
-    Begin
-      Last := Start;
-      While Last < High(Pieces) Do
-        Begin
-          If EncodePieces(Pieces, Start, Last + 1, 1, 1) = '' Then
-            Break;
-          Inc(Last);
-        End;
-      SetLength(Ends, Length(Ends) + 1);
-      Ends[High(Ends)] := Last;
-      Start := Last + 1;
-    End;
-  FrameCount := Length(Ends);
-  Start := 0;
-  For I := 0 To High(Ends) Do
-    Begin
-      Json := EncodePieces(Pieces, Start, Ends[I], I + 1, FrameCount);
-      If Json <> '' Then
-        Begin
-          SetLength(Result, Length(Result) + 1);
-          Result[High(Result)] := Json;
-        End;
-      Start := Ends[I] + 1;
-    End;
-End;
-
 Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
 Var
   Data: TJSONData;
@@ -3096,48 +2775,6 @@ Begin
     Result := True;
   Finally
     Data.Free;
-  End;
-End;
-
-Function MonitorTurnIndexRow(TurnIndex: Integer; Const Id, Mode, CreatedAt, PromptPreview, ErrorText: String): TJSONObject;
-Begin
-  Result := TJSONObject.Create;
-  Result.Add('turn_index', TurnIndex);
-  Result.Add('id', Id);
-  Result.Add('mode', Mode);
-  Result.Add('created_at', CreatedAt);
-  Result.Add('prompt_preview', PromptPreview);
-  Result.Add('error_text', ErrorText);
-End;
-
-Function LimitMonitorStoredTurns(Const Turns: TJSONArray): TJSONArray;
-Var
-  Kept: TJSONArray;
-  StartAt, Index: Integer;
-  Item: TJSONObject;
-Begin
-  Result := TJSONArray.Create;
-  If Not Assigned(Turns) Then
-    Exit;
-  Kept := TJSONArray.Create;
-  Try
-    For Index := 0 To Turns.Count - 1 Do
-      Begin
-        If Not (Turns[Index] Is TJSONObject) Then
-          Continue;
-        Item := TJSONObject(Turns[Index]);
-        If Item.Get('live', False) Then
-          Continue;
-        Kept.Add(MonitorTurnIndexRow(Item.Get('turn_index', 0), Item.Get('id', ''), Item.Get('mode', ''),
-          Item.Get('created_at', ''), Item.Get('prompt_preview', ''), Item.Get('error_text', '')));
-      End;
-    StartAt := 0;
-    If Kept.Count > MonitorSnapshotStoredTurns Then
-      StartAt := Kept.Count - MonitorSnapshotStoredTurns;
-    For Index := StartAt To Kept.Count - 1 Do
-      Result.Add(TJSONObject(TJSONObject(Kept[Index]).Clone));
-  Finally
-    Kept.Free;
   End;
 End;
 

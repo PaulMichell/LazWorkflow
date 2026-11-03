@@ -13,10 +13,11 @@ Unit AssistantMonitorMirror;
   those frames. A patch larger than the budget is not stored.
   Resume behind a dropped record needs a snapshot.
 
-  Size note: exceeds the 1000 line preference. The log, the materialised model,
-  and the page JSON are one conversation mirror. Splitting the page writer
-  would hide the budget that decides a deferred body.
-  Reviewed 2026-10-30: JSON escaping is one pass because those pages are built
+  Size note: exceeds the 1000 line preference. What remains is the log, the
+  materialised model, and the slice split. Page writers that still have a caller
+  stay with that model. The log-credit class stays because the mirror test
+  still constructs it.
+  Reviewed 2026-11-03: JSON escaping is one pass because those pages are built
   on the IDE thread. }
 
 {$IFDEF FPC}

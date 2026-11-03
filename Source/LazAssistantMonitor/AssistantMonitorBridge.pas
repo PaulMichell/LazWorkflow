@@ -6,9 +6,8 @@ Unit AssistantMonitorBridge;
   command: it stays queued until the IDE thread can fill the catchup.
   It does not build provider JSON and does not replace the form trace handler.
 
-  Size note: exceeds the 1000 line preference. The command pump, live patch,
-  and resume catchup share the form and the session. Splitting them would
-  duplicate the snapshot fill.
+  Size note: exceeds the 1000 line preference. What remains is the change-triggered
+  observation and the IDE command pump. Dirty-block patch construction is gone.
   Reviewed 2026-11-03: the 1 s timer is a backstop. A counter wake queues one pump,
   coalesced to 20 ms. The change pump publishes plan rows and does not read the plan file.
   No provider or socket code in this unit.
