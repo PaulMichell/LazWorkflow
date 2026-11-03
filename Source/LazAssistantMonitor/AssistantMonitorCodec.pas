@@ -947,7 +947,8 @@ Begin
         Exit;
       End;
     Root := TJSONObject(Data);
-    If Root.Get('v', 0) <> MonitorCatalogueVersion Then
+    { Catalogue 2 stays. Catalogue 3 is the event resume. Catalogue 1 is rejected. }
+    If (Root.Get('v', 0) <> MonitorCatalogueVersion) And (Root.Get('v', 0) <> 3) Then
       Begin
         ErrorText := 'Unsupported catalogue version.';
         Exit;
@@ -3719,6 +3720,7 @@ Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorR
 Var
   Data: TJSONData;
   Obj: TJSONObject;
+  HasCursor, HasEpoch: Boolean;
 Begin
   Result := False;
   ResumeMsg.Epoch := '';
@@ -3727,8 +3729,15 @@ Begin
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
-    Result := ReadString(Obj, 'epoch', True, ResumeMsg.Epoch) And ReadInt64(Obj, 'cursor', ResumeMsg.Cursor) And
-      ReadCommandIds(Obj, ResumeMsg.Commands);
+    HasCursor := ReadInt64(Obj, 'cursor', ResumeMsg.Cursor);
+    If Not HasCursor Then
+      HasCursor := ReadInt64(Obj, 'seq', ResumeMsg.Cursor);
+    HasEpoch := Obj.IndexOfName('epoch') >= 0;
+    If HasEpoch Then
+      ReadString(Obj, 'epoch', False, ResumeMsg.Epoch)
+    Else
+      HasEpoch := ReadString(Obj, 'stream_id', False, ResumeMsg.Epoch) And (ResumeMsg.Epoch <> '');
+    Result := HasEpoch And HasCursor And ReadCommandIds(Obj, ResumeMsg.Commands);
   Finally
     Data.Free;
   End;

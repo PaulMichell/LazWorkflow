@@ -37,6 +37,8 @@ Const
   MonitorBlockDataBytes = 24 * 1024;
   MonitorCreditWindowBytes = 524288;
   MonitorAckIntervalMs = 250;
+  { One block_append slice. A larger new body is one deferred block_replace. }
+  MonitorAppendSliceBytes = 4096;
 
 { True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
 Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
@@ -644,12 +646,87 @@ Begin
     Move(Source.Images[0], Dest.Images[0], Length(Source.Images) * SizeOf(TAssistantMonitorImage));
 End;
 
+Function Utf8Step(Const Text: RawByteString; Index: Integer): Integer;
+Var
+  Lead: Byte;
+Begin
+  Result := 1;
+  If (Index < 1) Or (Index > Length(Text)) Then
+    Exit;
+  Lead := Ord(Text[Index]);
+  If Lead < $80 Then
+    Exit;
+  If (Lead And $E0) = $C0 Then
+    Result := 2
+  Else If (Lead And $F0) = $E0 Then
+    Result := 3
+  Else If (Lead And $F8) = $F0 Then
+    Result := 4;
+  If Index + Result - 1 > Length(Text) Then
+    Result := 1;
+End;
+
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
   Index, BlockIndex: Integer;
   Stored: TAssistantMonitorTurn;
   Found: Boolean;
   EventJson: String;
+
+  Function SliceFits(Const BlockId: String; Offset: Integer; Const Slice: RawByteString): Boolean;
+  Var
+    Data: String;
+  Begin
+    Data := '{"block_id":"' + JsonEscape(BlockId) + '","offset":' + IntToStr(Offset) + ',"text":"' +
+      JsonEscape(String(Slice)) + '"}';
+    { The framed event adds a short envelope around this object. }
+    Result := Length(Data) + 256 <= MonitorSnapshotPageBytes;
+  End;
+
+  Procedure EmitAppends(Const BlockId: String; Const Text: RawByteString; StartOffset: Integer);
+  Var
+    At, Taken, Step: Integer;
+    Slice: RawByteString;
+    Data: String;
+  Begin
+    At := 1;
+    While At <= Length(Text) Do
+      Begin
+        Taken := 0;
+        While At + Taken <= Length(Text) Do
+          Begin
+            Step := Utf8Step(Text, At + Taken);
+            If (Taken > 0) And ((Taken + Step > MonitorAppendSliceBytes) Or
+              (Not SliceFits(BlockId, StartOffset + At - 1, Copy(Text, At, Taken + Step)))) Then
+              Break;
+            If Taken + Step > MonitorAppendSliceBytes Then
+              Break;
+            Inc(Taken, Step);
+          End;
+        If Taken = 0 Then
+          Taken := Utf8Step(Text, At);
+        Slice := Copy(Text, At, Taken);
+        Data := '{"block_id":"' + JsonEscape(BlockId) + '","offset":' + IntToStr(StartOffset + At - 1) + ',"text":"' +
+          JsonEscape(String(Slice)) + '"}';
+        AppendLocked(FHead + 1, 'block_append', Data);
+        Inc(At, Taken);
+      End;
+  End;
+
+  Procedure EmitReplace(Const Block: TAssistantMonitorBlock);
+  Var
+    Body: RawByteString;
+    Data: String;
+  Begin
+    Body := UTF8String(Block.Body);
+    If (Length(Body) > MonitorAppendSliceBytes) Or (Not SliceFits(Block.BlockId, 0, Body)) Then
+      Data := '{"block_id":"' + JsonEscape(Block.BlockId) + '","deferred":true,"revision":' + IntToStr(Block.Revision) +
+        ',"body_bytes":' + IntToStr(Length(Body)) + '}'
+    Else
+      Data := '{"block_id":"' + JsonEscape(Block.BlockId) + '","body":"' + JsonEscape(Block.Body) + '"}';
+    AppendLocked(FHead + 1, 'block_replace', Data);
+  End;
+
 Begin
   EnterCriticalSection(FLock);
   Try
@@ -681,17 +758,27 @@ Begin
         If BlockIndex <= High(Stored.Blocks) Then
           Found := Stored.Blocks[BlockIndex].BlockId = Turn.Blocks[BlockIndex].BlockId;
         If Not Found Then
-          AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-            '","turn_id":"' + JsonEscape(Turn.Id) + '","kind":"' + JsonEscape(Turn.Blocks[BlockIndex].Kind) +
-            '","ordinal":' + IntToStr(BlockIndex) + '}')
+          Begin
+            AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
+              '","turn_id":"' + JsonEscape(Turn.Id) + '","kind":"' + JsonEscape(Turn.Blocks[BlockIndex].Kind) +
+              '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscape(Turn.Blocks[BlockIndex].Title) + '"}');
+            EventJson := Turn.Blocks[BlockIndex].Body;
+            If EventJson <> '' Then
+              Begin
+                If Length(UTF8String(EventJson)) > MonitorAppendSliceBytes Then
+                  EmitReplace(Turn.Blocks[BlockIndex])
+                Else
+                  EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0);
+              End;
+          End
         Else If Stored.Blocks[BlockIndex].Body <> Turn.Blocks[BlockIndex].Body Then
           Begin
-            If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Turn.Blocks[BlockIndex].Body, EventJson, Index) Then
-              AppendLocked(FHead + 1, 'block_append', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-                '","offset":' + IntToStr(Index) + ',"text":"' + JsonEscape(EventJson) + '"}')
+            If Stored.Blocks[BlockIndex].Body = '' Then
+              EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(Turn.Blocks[BlockIndex].Body), 0)
+            Else If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Turn.Blocks[BlockIndex].Body, EventJson, Index) Then
+              EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index)
             Else
-              AppendLocked(FHead + 1, 'block_replace', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-                '","body":"' + JsonEscape(Turn.Blocks[BlockIndex].Body) + '"}');
+              EmitReplace(Turn.Blocks[BlockIndex]);
           End;
         If Not Turn.Blocks[BlockIndex].Running Then
           Begin

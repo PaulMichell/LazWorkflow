@@ -137,6 +137,11 @@ Type
     { True when the attached carrier's link takes the outbox. DrainOutbound must not also send. }
     FLinkPulls: Boolean;
     FIntake: TMonitorCommandIntake;
+    { Highest event sequence the phone has acknowledged, and the highest put in the log lane. }
+    FPhoneAcked: Int64;
+    FQueuedLogSeq: Int64;
+    { Set when a resume names this stream. Catalogue 2 drains do not frame the log. }
+    FLogResume: Boolean;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -225,6 +230,7 @@ Type
     Function GetBoundAddress: String;
     Function GetConnectedClientName: String;
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure FillLogLane;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -365,7 +371,7 @@ Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; 
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings;
+  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings, AssistantMonitorSync;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -518,6 +524,9 @@ Begin
   FCredit := TMonitorLogCredit.Create;
   FOutbox := TMonitorOutbox.Create;
   FIntake := TMonitorCommandIntake.Create;
+  FPhoneAcked := 0;
+  FQueuedLogSeq := 0;
+  FLogResume := False;
   FSendPending := False;
   FActiveCommandId := '';
   FActiveCommandKind := 0;
@@ -813,9 +822,19 @@ Begin
     Exit;
   If Assigned(FMirror) Then
     FMirror.NoteAck(StreamId, Seq);
+  If Assigned(FOutbox) Then
+    FOutbox.Acknowledge(Seq);
+  LockSession;
+  Try
+    If Seq > FPhoneAcked Then
+      FPhoneAcked := Seq;
+  Finally
+    UnlockSession;
+  End;
   If Assigned(FCredit) Then
     FCredit.NoteAck(Seq);
   ReleaseHeldLog;
+  FillLogLane;
 End;
 
 Function FrameIsBye(Const Json: String): Boolean;
@@ -1600,6 +1619,22 @@ Begin
     End;
   If Length(ResumeMsg.Commands) > 0 Then
     QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
+  { A named resume drops the previous generation. An empty epoch stays on the old path. }
+  If ResumeMsg.Epoch <> '' Then
+    Begin
+      FPhoneAcked := ResumeMsg.Cursor;
+      FQueuedLogSeq := ResumeMsg.Cursor;
+      FLogResume := LowerCase(ResumeMsg.Epoch) = LowerCase(FEpoch);
+      If Assigned(FOutbox) Then
+        Begin
+          FOutbox.ClearLog;
+          FOutbox.DiscardBulk;
+        End;
+      If FLogResume And Assigned(FMirror) Then
+        FMirror.NoteAck(ResumeMsg.Epoch, ResumeMsg.Cursor);
+      If FLogResume And MonitorSyncCanReplay(FMirror, ResumeMsg.Cursor) Then
+        Exit;
+    End;
   { The log or the materialised model answers on this thread. An empty model still waits for the IDE thread. }
   If ServeResumeFromMirror(Id, ResumeMsg) Then
     Begin
@@ -2128,6 +2163,7 @@ Begin
   LockSession;
   Try
     FEpoch := LowerCase(Epoch);
+    FLogResume := False;
     If ConversationId = 'current' Then
       FConversationId := ''
     Else
@@ -2391,6 +2427,29 @@ Procedure TMonitorSession.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Begin
   If Assigned(FMirror) Then
     FMirror.ObserveTurn(Turn);
+  If Assigned(FOutbox) Then
+    FOutbox.Notify;
+End;
+
+Procedure TMonitorSession.FillLogLane;
+Var
+  CloseLink: Boolean;
+  Queued, Acked: Int64;
+Begin
+  CloseLink := False;
+  LockSession;
+  Try
+    If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
+      Exit;
+    Queued := FQueuedLogSeq;
+    Acked := FPhoneAcked;
+    MonitorSyncFill(FMirror, FOutbox, FConversationId, FEpoch, Acked, Queued, CloseLink);
+    FQueuedLogSeq := Queued;
+    If CloseLink Then
+      CloseToListening;
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Procedure TMonitorSession.ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean;
@@ -2922,12 +2981,14 @@ Function TMonitorSession.TakeOutboundFrame(Out Bytes: RawByteString): Boolean;
 Var
   Lane: TMonitorOutboxLane;
 Begin
+  FillLogLane;
   Bytes := '';
   Result := Assigned(FOutbox) And FOutbox.Take(Bytes, Lane);
 End;
 
 Function TMonitorSession.OutboxPending: Boolean;
 Begin
+  FillLogLane;
   Result := OutboundCount > 0;
 End;
 
@@ -2949,6 +3010,7 @@ Var
   Frame: TMonitorFrame;
   Status: TMonitorFrameStatus;
 Begin
+  FillLogLane;
   { The link takes the outbox. Wake it; do not also send. }
   If FLinkPulls Then
     Begin

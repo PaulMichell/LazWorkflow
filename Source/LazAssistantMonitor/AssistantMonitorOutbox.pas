@@ -100,6 +100,8 @@ Type
     Procedure Acknowledge(UpTo: Int64);
     { Offers every held log entry again from the oldest. }
     Procedure RewindLog;
+    { Drops the log lane. Control, state, and bulk stay. }
+    Procedure ClearLog;
     { Drops unsent snapshot pages. Control, state, and the log stay. }
     Procedure DiscardBulk;
     Procedure Clear;
@@ -495,6 +497,20 @@ Begin
   Try
     Rings[molBulk].Clear;
     LaneBytes[molBulk] := 0;
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+End;
+
+Procedure TMonitorOutbox.ClearLog;
+Begin
+  EnterCriticalSection(OutboxLock);
+  Try
+    Rings[molLog].Clear;
+    LaneBytes[molLog] := 0;
+    LogSent := 0;
+    LastLogSeq := 0;
+    FLogOverflowed := False;
   Finally
     LeaveCriticalSection(OutboxLock);
   End;

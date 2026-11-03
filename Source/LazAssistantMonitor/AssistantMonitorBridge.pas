@@ -1025,13 +1025,8 @@ Var
   Session: TMonitorSession;
   View: TAssistantMonitorView;
   Turn: TAssistantMonitorTurn;
-  Patch: TMonitorPatch;
   Rows: TAssistantMonitorPlanRows;
-  Frames: TStringArray;
-  ErrorText, Stamp, PlanStamp, Suffix: String;
-  Cursor: Int64;
-  I, J, Offset: Integer;
-  FirstPatch, NeedPatch: Boolean;
+  ErrorText, PlanStamp: String;
 Begin
   If FPumping Then
     Exit;
@@ -1063,81 +1058,25 @@ Begin
     Session.ObserveTurn(Turn);
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
-  FirstPatch := Session.MirrorEpoch <> FSentEpoch;
-  If FirstPatch Then
+  { The cheap fill compares lengths against the last observation. That is not a sent mark. }
+  FSentBlocks := Turn.Blocks;
+  If Session.MirrorEpoch <> '' Then
+    FSentEpoch := Session.MirrorEpoch;
+  { Status is state. It does not allocate a content sequence. }
+  If FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
+    FSentCanStop, FSentPhase, FSentModel, FSentStatusText) Then
     Begin
-      SetLength(FSentBlocks, 0);
-      FSentFlagsValid := False;
-    End;
-  Patch := Default(TMonitorPatch);
-  Patch.Epoch := Session.MirrorEpoch;
-  Patch.TurnIndex := Turn.TurnIndex;
-  Patch.TurnId := Turn.Id;
-  Patch.Blocks := SelectDirtyMonitorBlocks(FSentBlocks, Turn.Blocks, FirstPatch);
-  SetLength(Patch.AppendOffsets, Length(Patch.Blocks));
-  For I := 0 To High(Patch.Blocks) Do
-    Begin
-      Patch.AppendOffsets[I] := -1;
-      If FirstPatch Then
-        Continue;
-      For J := 0 To High(FSentBlocks) Do
-        If FSentBlocks[J].BlockId = Patch.Blocks[I].BlockId Then
-          Begin
-            If MonitorAppendSuffix(FSentBlocks[J].Body, Patch.Blocks[I].Body, Suffix, Offset) Then
-              Begin
-                Patch.Blocks[I].Body := Suffix;
-                Patch.AppendOffsets[I] := Offset;
-              End;
-            Break;
-          End;
-    End;
-  Patch.Busy := View.Busy;
-  Patch.Sending := View.Sending;
-  Patch.PlanRunning := View.PlanRunning;
-  Patch.Phase := View.Phase;
-  Patch.CanSend := View.CanSend;
-  Patch.CanSteer := View.CanSteer;
-  Patch.CanStop := View.CanStop;
-  Patch.ElapsedMs := View.ElapsedMs;
-  Patch.HasView := True;
-  Patch.Model := View.Model;
-  Patch.SignedIn := View.SignedIn;
-  Patch.StatusText := View.StatusText;
-  Patch.Part := 1;
-  Patch.PartCount := 1;
-  NeedPatch := (Patch.Epoch <> '') And (FirstPatch Or (Length(Patch.Blocks) > 0) Or
-    FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
-    FSentCanStop, FSentPhase, FSentModel, FSentStatusText));
-  If NeedPatch Then
-    Begin
-      Stamp := Patch.Epoch + #1 + Patch.TurnId + #1 + Patch.Phase + #1 + BoolToStr(Patch.Busy, True) +
-        BoolToStr(Patch.Sending, True) + BoolToStr(Patch.PlanRunning, True) + #1 + Patch.Model + #1 + Patch.StatusText;
-      For I := 0 To High(Patch.Blocks) Do
-        Stamp := Stamp + #1 + Patch.Blocks[I].BlockId + #1 + Patch.Blocks[I].Title + #1 + Patch.Blocks[I].Body + #1 +
-          BoolToStr(Patch.Blocks[I].Running, True) + BoolToStr(Patch.Blocks[I].Ok, True);
-      If Session.CommitMirrorCursor(Stamp, Cursor) Then
-        Begin
-          Patch.Cursor := Cursor;
-          Frames := PackMonitorPatch(HostId, Patch);
-          If Length(Frames) > 0 Then
-            Begin
-              Session.ReplaceLivePatch(Cursor, Frames);
-              Session.FlushLivePatch;
-              Session.RememberHandedPatch(Cursor, MonitorPatchPayloadJson(Patch));
-              FSentEpoch := Patch.Epoch;
-              FSentBlocks := Turn.Blocks;
-              FSentFlagsValid := True;
-              FSentBusy := View.Busy;
-              FSentSending := View.Sending;
-              FSentPlanRunning := View.PlanRunning;
-              FSentPhase := View.Phase;
-              FSentCanSend := View.CanSend;
-              FSentCanSteer := View.CanSteer;
-              FSentCanStop := View.CanStop;
-              FSentModel := View.Model;
-              FSentStatusText := View.StatusText;
-            End;
-        End;
+      FSentFlagsValid := True;
+      FSentBusy := View.Busy;
+      FSentSending := View.Sending;
+      FSentPlanRunning := View.PlanRunning;
+      FSentPhase := View.Phase;
+      FSentCanSend := View.CanSend;
+      FSentCanSteer := View.CanSteer;
+      FSentCanStop := View.CanStop;
+      FSentModel := View.Model;
+      FSentStatusText := View.StatusText;
+      PushStatus(Form);
     End;
   Form.FillMonitorPlan(Rows);
   Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
