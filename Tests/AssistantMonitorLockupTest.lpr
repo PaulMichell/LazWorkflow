@@ -6,9 +6,8 @@ Program AssistantMonitorLockupTest;
   faults and pass on today's code. Item 3.2 changes this behaviour; these checks
   then fail and are rewritten to assert the fix.
 
-  - A catchup queued while the session bulk lane holds 32 frames is dropped. The
-    bridge answers a resume through SendJson, which is SendHostJson and has no
-    result, so only FramesDropped records the loss. No error reaches the phone.
+  - A bulk frame the outbox cannot hold is refused. The phone gets a retryable
+    overloaded error. It is not counted in FramesDropped.
   - A catchup snapshot that is still over the frame cap after every compaction
     level encodes to nothing. TAssistantMonitorBridge.SendCatchupSnapshot then logs
     a warning and sends nothing at all. That method is private and needs the IDE
@@ -77,28 +76,41 @@ Begin
   Result.View.Mode := 'build';
 End;
 
-Procedure TestCatchupDroppedBehindFullBulkLane;
+Function OverloadedSent: Boolean;
+Var
+  Index: Integer;
+  Message: TMonitorMessage;
+  Body: TMonitorErrorBody;
+  ErrorText: String;
+Begin
+  Result := False;
+  For Index := 0 To Carrier.SentCount - 1 Do
+    If TryDecodeMonitorEnvelope(Carrier.SentJson(Index), Message, ErrorText) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, Body) And (Body.Reason = 'overloaded') Then
+      Exit(True);
+End;
+
+Procedure TestCatchupRefusedIsAnError;
 Var
   Index, Queued, Before: Integer;
-  Epoch, ConversationId, ProjectRoot, Title, Json: String;
-  Cursor: Int64;
+  Huge: String;
 Begin
   Session.DrainOutbound;
   Carrier.ClearSent;
   Queued := 0;
-  For Index := 1 To MonitorOutboundQueueLimit Do
+  For Index := 1 To 2 Do
     If Session.TryQueueHostJson(BulkFrame(Index)) Then
       Inc(Queued);
-  Check('the bulk lane holds 32 frames', Queued = MonitorOutboundQueueLimit);
-  Session.CopyMirrorIdentity(Epoch, ConversationId, ProjectRoot, Title, Cursor);
-  Json := EncodeResumeSnapshot('resume-1', 1, Epoch, ConversationId, ProjectRoot, Title, SmallSnapshot);
-  Check('the resume catchup encodes', Json <> '');
+  Check('small bulk frames are queued', Queued = 2);
+  Huge := '{"v":2,"id":"huge-1","type":"snapshot_page","payload":{"body":"' + StringOfChar('x', 40000) + '"}}';
   Before := Session.FramesDropped;
-  Session.SendHostJson(Json);
-  Check('the catchup is dropped and only counted', Session.FramesDropped = Before + 1);
-  Check('the queued bulk frames still reach the carrier', CountSentKind(mmkSnapshot) = MonitorOutboundQueueLimit);
-  Check('the catchup never reaches the carrier', CountSentKind(mmkCatchup) = 0);
-  Check('no error tells the phone its resume was lost', CountSentKind(mmkError) = 0);
+  Check('a frame the outbox cannot hold is refused', Not Session.TryQueueHostJson(Huge));
+  Check('a refused bulk frame is not counted as sent', Session.FramesDropped = Before);
+  Session.DrainOutbound;
+  Check('the queued bulk frames still reach the carrier', CountSentKind(mmkSnapshot) = 2);
+  Check('the refused page is not sent', CountSentKind(mmkSnapshotPage) = 0);
+  Check('the phone is told to ask again', CountSentKind(mmkError) = 1);
+  Check('the refusal is overloaded', OverloadedSent);
 End;
 
 Procedure TestCatchupThatDoesNotFit;
@@ -148,7 +160,7 @@ Begin
     Try
       Session.AttachCarrier(CarrierRef);
       Session.BeginMirrorEpoch(MintMonitorEpoch, 'lockup', '/work', 'Lockup');
-      TestCatchupDroppedBehindFullBulkLane;
+      TestCatchupRefusedIsAnError;
       TestCatchupThatDoesNotFit;
     Except
       On E: Exception Do

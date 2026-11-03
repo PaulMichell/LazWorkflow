@@ -84,10 +84,16 @@ Type
     Function AddControl(Const Frame: RawByteString): Boolean;
     { Replaces an unsent entry with the same key in its place. A new key queues at the back. }
     Function PutState(Const Key: String; Const Frame: RawByteString): Boolean;
+    { Replaces every unsent part of Key (and Key plus a colon suffix) with Frames.
+      Part keys are Key, Key:1, Key:2. Replaced is how many parts were removed.
+      An empty Frames clears the set. False when a part does not fit; the lane is unchanged. }
+    Function ReplaceState(Const Key: String; Const Frames: Array Of RawByteString; Out Replaced: Integer): Boolean;
     { Seq must not fall. The chunks of one event share its Seq. Never refused for size. }
     Function AppendLog(Seq: Int64; Const Frame: RawByteString): Boolean;
-    { Every chunk of one item, or none. False when the lane would pass its budget. }
+    { Every chunk of one item, or none. False when the lane would pass its budget.
+      Does not wake. The caller wakes when the burst is finished. }
     Function AddBulk(Const Chunks: Array Of RawByteString): Boolean;
+    Procedure Notify;
     { Next frame by lane priority. A log frame stays held until Acknowledge. }
     Function Take(Out Frame: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
     { Releases every log entry with Seq <= UpTo, taken or not. }
@@ -315,6 +321,65 @@ Begin
   Wake;
 End;
 
+Function StateKeyMatches(Const Key, EntryKey: String): Boolean;
+Begin
+  Result := (EntryKey = Key) Or ((Length(EntryKey) > Length(Key)) And (Copy(EntryKey, 1, Length(Key) + 1) = Key + ':'));
+End;
+
+Function TMonitorOutbox.ReplaceState(Const Key: String; Const Frames: Array Of RawByteString; Out Replaced: Integer): Boolean;
+Var
+  Ring: TMonitorOutboxRing;
+  Index, Kept: Integer;
+  Entry: TMonitorOutboxEntry;
+  KeptEntries: Array Of TMonitorOutboxEntry;
+  PartKey: String;
+Begin
+  Replaced := 0;
+  Result := Key <> '';
+  If Not Result Then
+    Exit;
+  For Index := 0 To High(Frames) Do
+    If Not FrameFits(Frames[Index]) Then
+      Exit(False);
+  KeptEntries := Nil;
+  EnterCriticalSection(OutboxLock);
+  Try
+    Ring := Rings[molState];
+    SetLength(KeptEntries, Ring.Count);
+    Kept := 0;
+    For Index := 0 To Ring.Count - 1 Do
+      Begin
+        Entry := Ring.Peek(Index);
+        If StateKeyMatches(Key, Entry.Key) Then
+          Begin
+            Dec(LaneBytes[molState], Length(Entry.Bytes));
+            Inc(Replaced);
+          End
+        Else
+          Begin
+            KeptEntries[Kept] := Entry;
+            Inc(Kept);
+          End;
+      End;
+    Ring.Clear;
+    For Index := 0 To Kept - 1 Do
+      Ring.Push(KeptEntries[Index]);
+    For Index := 0 To High(Frames) Do
+      Begin
+        If Index = 0 Then
+          PartKey := Key
+        Else
+          PartKey := Key + ':' + IntToStr(Index);
+        Ring.Push(NewEntry(Frames[Index], PartKey, 0));
+        Inc(LaneBytes[molState], Length(Frames[Index]));
+      End;
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+  If (Replaced > 0) Or (Length(Frames) > 0) Then
+    Wake;
+End;
+
 Function TMonitorOutbox.AppendLog(Seq: Int64; Const Frame: RawByteString): Boolean;
 Begin
   Result := (Seq > 0) And FrameFits(Frame);
@@ -366,8 +431,11 @@ Begin
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
-  If Result Then
-    Wake;
+End;
+
+Procedure TMonitorOutbox.Notify;
+Begin
+  Wake;
 End;
 
 Function TMonitorOutbox.Take(Out Frame: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;

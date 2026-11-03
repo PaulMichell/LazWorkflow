@@ -4,8 +4,9 @@ Program AssistantMonitorLinkTest;
 
   Starts a real TMonitorLanCarrier on 127.0.0.1 with a test certificate, pairs an
   OpenSSL client socket, and measures three things: outbound frames per second,
-  ping to pong while 32 bulk frames are queued, and the time to deliver a resume
-  answer. The resume answer has the bridge's shape: a catchup snapshot, a status,
+  ping to pong while 32 bulk snapshot pages are queued, and the time to deliver a
+  resume answer. Plan frames coalesce, so the throughput workload is snapshot
+  pages. The resume answer has the bridge's shape: a catchup snapshot, a status,
   a plan and the five menu lists. It is built on the main thread after a
   TThread.Queue hop, as the bridge does on the IDE thread.
 
@@ -34,7 +35,7 @@ Uses
   AssistantMonitorSettings, WorkflowSettings;
 
 Const
-  { The session bulk lane and the carrier queue both hold 32 frames. }
+  { Workload size for the harness, not a queue cap. }
   LinkBulkFrames = 32;
   LinkBulkTitleBytes = 2000;
   LinkResumeFrames = 8;
@@ -359,6 +360,8 @@ Begin
   End;
   If (RefId = '') Or Not Assigned(Session) Then
     Exit;
+  { Set before the build. A resume that is not answered must not leave the clock unset. }
+  AnsweredMs := GetTickCount64;
   Frames := ResumeAnswerFrames(RefId, Cursor);
   Built := Length(Frames);
   For I := 0 To High(Frames) Do
@@ -366,6 +369,14 @@ Begin
   If Cursor > 0 Then
     Session.NoteMirrorHanded(Cursor);
   AnsweredMs := GetTickCount64;
+End;
+
+Function ClockDelta(Later, Earlier: QWord): String;
+Begin
+  If Later = 0 Then
+    Result := 'unset'
+  Else
+    Result := IntToStr(Later - Earlier);
 End;
 
 Function WaitSession(Expected: TMonitorSessionState; Ms: Integer): Boolean;
@@ -383,12 +394,9 @@ Begin
 End;
 
 Function BulkFrame(Index: Integer): String;
-Var
-  Rows: Array Of TAssistantMonitorPlanRow;
 Begin
-  Rows := Nil;
-  Result := EncodeMonitorPlan(Session.AllocateHostId, 'Documents/Bulk' + IntToStr(Index) + '.md',
-    StringOfChar('b', LinkBulkTitleBytes), False, Rows);
+  Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot_page","payload":{"page":' + IntToStr(Index) +
+    ',"title":"' + StringOfChar('b', LinkBulkTitleBytes) + '"}}';
 End;
 
 Function QueueBulk(Count: Integer): Integer;
@@ -516,7 +524,7 @@ Begin
           WriteLn('detail throughput ', ErrorText, ' received=', Received);
           Break;
         End;
-      If Message.Kind = mmkPlan Then
+      If Message.Kind = mmkSnapshotPage Then
         Begin
           If FirstAt = 0 Then
             FirstAt := GetTickCount64;
@@ -557,7 +565,7 @@ Begin
           WriteLn('detail ping ', ErrorText, ' bulk=', Received, ' pong=', BoolToStr(GotPong, True));
           Break;
         End;
-      If Message.Kind = mmkPlan Then
+      If Message.Kind = mmkSnapshotPage Then
         Begin
           Inc(Received);
           If Not GotPong Then
@@ -612,8 +620,9 @@ Begin
     CatchupAt := GetTickCount64;
   If LastAt = 0 Then
     LastAt := GetTickCount64;
-  WriteLn('metric resume frames=', Received, ' heard_ms=', Answerer.HeardMs - Sent, ' answered_ms=',
-    Answerer.AnsweredMs - Sent, ' catchup_ms=', CatchupAt - Sent, ' complete_ms=', LastAt - Sent);
+  WriteLn('metric resume frames=', Received, ' heard_ms=', ClockDelta(Answerer.HeardMs, Sent), ' answered_ms=',
+    ClockDelta(Answerer.AnsweredMs, Sent), ' catchup_ms=', ClockDelta(CatchupAt, Sent), ' complete_ms=',
+    ClockDelta(LastAt, Sent));
 End;
 
 { Item 4.2 turns these green. Do not loosen the bounds to match the hybrid.
@@ -690,18 +699,25 @@ End;
 
 Procedure TestNoDrops(Client: TLoopClient);
 Var
-  DroppedBefore, Queued, Received: Integer;
+  DroppedBefore, Queued, Received, FirstSerial, PageNo: Integer;
   Deadline: QWord;
   Message: TMonitorMessage;
   ErrorText: String;
 Begin
+  Session.DiscardUnsentBulk;
+  While Client.ReadMessage(After(40), Message, ErrorText) Do;
   DroppedBefore := Session.FramesDropped;
+  FirstSerial := BulkSerial + 1;
   Queued := QueueBulkLane(64);
   Received := 0;
   Deadline := After(3000);
   While GetTickCount64 < Deadline Do
     If Client.ReadMessage(After(200), Message, ErrorText) And (Message.Kind = mmkSnapshotPage) Then
-      Inc(Received);
+      Begin
+        PageNo := StrToIntDef(Copy(Message.Id, 2, 20), 0);
+        If (PageNo >= FirstSerial) And (PageNo < FirstSerial + Queued) Then
+          Inc(Received);
+      End;
   Check('4.2 no frame of any lane is dropped while the client keeps reading',
     (Queued = 64) And (Received = 64) And (Session.FramesDropped = DroppedBefore));
   WriteLn('detail no_drop queued=', Queued, ' received=', Received, ' dropped=', Session.FramesDropped - DroppedBefore);
@@ -725,7 +741,7 @@ End;
 
 Procedure TestAnswerClock(Client: TLoopClient);
 Var
-  Sent: QWord;
+  Sent, Deadline: QWord;
 Begin
   { A short resume that is not answered must still set the clock. Subtracting an unset
     clock overflowed the 2026-10-29 metric (LinkResumeFrames). }
@@ -733,7 +749,10 @@ Begin
   Answerer.HeardMs := 0;
   Sent := GetTickCount64;
   Check('4.2 timeout resume write', Client.WriteJson(EncodeMonitorResume('resume-timeout', '', 0), After(3000)));
-  Sleep(30);
+  Deadline := GetTickCount64 + 200;
+  Repeat
+    CheckSynchronize(1);
+  Until (Answerer.AnsweredMs <> 0) Or (GetTickCount64 >= Deadline);
   Check('4.2 the answer clock is set on a timeout path', (Answerer.AnsweredMs <> 0) And (Answerer.AnsweredMs >= Sent));
   If Answerer.AnsweredMs <> 0 Then
     WriteLn('detail answer_clock_ms=', Answerer.AnsweredMs - Sent)

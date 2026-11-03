@@ -41,8 +41,9 @@ Type
   TMonitorLinkHost = Class(TInterfacedObject)
   Public
     Function IsController(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
-    Function TakeOutbound(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Virtual; Abstract;
+    Function TakeSessionFrame(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Virtual; Abstract;
     Function OutboundPending(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
+    Function OutboundCount(Link: TMonitorLinkThread): Integer; Virtual; Abstract;
     Procedure DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame); Virtual; Abstract;
     Procedure NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean); Virtual; Abstract;
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Virtual; Abstract;
@@ -850,7 +851,7 @@ Begin
     End;
   If Replacing Or Not ControllerLink Or Not Assigned(Host) Then
     Exit;
-  Result := Host.TakeOutbound(Self, Bytes);
+  Result := Host.TakeSessionFrame(Self, Bytes);
 End;
 
 Procedure TMonitorLinkThread.AppendPending(Var Buffer: RawByteString; Buf: Pointer; Count: Integer);
@@ -1078,7 +1079,10 @@ Begin
 End;
 
 Procedure TMonitorLinkThread.RunLink;
+Var
+  HeldOff: Boolean;
 Begin
+  HeldOff := False;
   If Not WakeOpen Then
     Begin
       DropReason := 'wake handle failed';
@@ -1102,6 +1106,16 @@ Begin
         QueueReplaceBye;
       PollWait(NextTimeout, WantsWrite);
       DrainWake;
+      { One queued frame is sent at once. A burst waits briefly so a ping that follows
+        the queue is read before the first bulk write. }
+      If (Not HeldOff) And FrameReady And Not WriteOwed And Not ReadOwed And Assigned(Host) And
+        (Host.OutboundCount(Self) > 1) Then
+        Begin
+          PollWait(80, False);
+          HeldOff := True;
+        End;
+      If Not FrameReady Then
+        HeldOff := False;
       If ControllerLink And Assigned(Host) Then
         Host.NoteTime(Self, GetTickCount64);
       ServiceOnce;

@@ -60,7 +60,6 @@ Type
     FBoundPort: Word;
     FLastError: String;
     FJoined: Boolean;
-    FOutboundQueue: Array Of RawByteString;
     FInboundQueue: Array Of TMonitorFrame;
     Procedure LockCarrier;
     Procedure UnlockCarrier;
@@ -90,8 +89,9 @@ Type
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
     Function IsController(Link: TMonitorLinkThread): Boolean; Override;
-    Function TakeOutbound(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Override;
+    Function TakeSessionFrame(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Override;
     Function OutboundPending(Link: TMonitorLinkThread): Boolean; Override;
+    Function OutboundCount(Link: TMonitorLinkThread): Integer; Override;
     Procedure DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame); Override;
     Procedure NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean); Override;
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Override;
@@ -164,7 +164,6 @@ Uses
   sockets, AssistantHttps, AssistantMonitorCodec, AssistantMonitorTls, WorkflowLog;
 
 Const
-  MonitorOutboundCap = 32;
   MonitorBindWaitMs = 10000;
   { Keepalive probes start after the heartbeat's dead-link time, so the heartbeat normally acts first. }
   MonitorKeepAliveIdleSeconds = MonitorDeadSessionMs Div 1000;
@@ -288,14 +287,6 @@ Begin
   Result := NToHs(Addr.sin_port);
 End;
 
-Function EncodeFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
-Var
-  Status: TMonitorFrameStatus;
-Begin
-  Bytes := '';
-  Result := (Json <> '') And TryEncodeMonitorFrame(Json, Bytes, Status);
-End;
-
 { TMonitorLanCarrier }
 
 Constructor TMonitorLanCarrier.Create(Const BindAddress: String; Port: Integer; Const CertificatePath, KeyPath: String);
@@ -317,7 +308,6 @@ Begin
   FBoundPort := 0;
   FLastError := '';
   FJoined := False;
-  SetLength(FOutboundQueue, 0);
   SetLength(FInboundQueue, 0);
 End;
 
@@ -376,7 +366,6 @@ Procedure TMonitorLanCarrier.NoteControllerDropped;
 Begin
   LockCarrier;
   Try
-    SetLength(FOutboundQueue, 0);
     If FState = mcsConnected Then
       FState := mcsListening;
   Finally
@@ -390,7 +379,6 @@ Begin
   Try
     FState := mcsClosed;
     FBoundPort := 0;
-    SetLength(FOutboundQueue, 0);
     SetLength(FInboundQueue, 0);
   Finally
     UnlockCarrier;
@@ -450,35 +438,23 @@ Begin
 End;
 
 Function TMonitorLanCarrier.OutboundEmpty: Boolean;
+Var
+  Session: TMonitorSession;
 Begin
-  LockCarrier;
-  Try
-    Result := Length(FOutboundQueue) = 0;
-  Finally
-    UnlockCarrier;
-  End;
+  Session := CopySession;
+  Result := Not Assigned(Session) Or Not Session.OutboxPending;
 End;
 
-Function TMonitorLanCarrier.TakeOutbound(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean;
+Function TMonitorLanCarrier.TakeSessionFrame(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean;
 Var
-  Index: Integer;
+  Session: TMonitorSession;
 Begin
   Bytes := '';
   Result := False;
-  LockCarrier;
-  Try
-    If FController <> Link Then
-      Exit;
-    Result := Length(FOutboundQueue) > 0;
-    If Not Result Then
-      Exit;
-    Bytes := FOutboundQueue[0];
-    For Index := 0 To High(FOutboundQueue) - 1 Do
-      FOutboundQueue[Index] := FOutboundQueue[Index + 1];
-    SetLength(FOutboundQueue, Length(FOutboundQueue) - 1);
-  Finally
-    UnlockCarrier;
-  End;
+  If Not IsController(Link) Then
+    Exit;
+  Session := CopySession;
+  Result := Assigned(Session) And Session.TakeOutboundFrame(Bytes);
 End;
 
 Function TMonitorLanCarrier.Start(Out ErrorText: String): Boolean;
@@ -591,7 +567,6 @@ Begin
     FJoined := False;
     FState := mcsClosed;
     FBoundPort := 0;
-    SetLength(FOutboundQueue, 0);
     SetLength(FInboundQueue, 0);
   Finally
     UnlockCarrier;
@@ -600,15 +575,10 @@ End;
 
 Function TMonitorLanCarrier.Send(Const Frame: TMonitorFrame; Out ErrorText: String): Boolean;
 Var
-  Bytes: RawByteString;
+  Session: TMonitorSession;
 Begin
   ErrorText := '';
   Result := False;
-  If Not EncodeFrame(Frame.Json, Bytes) Then
-    Begin
-      ErrorText := 'Could not encode the monitor frame.';
-      Exit;
-    End;
   LockCarrier;
   Try
     If (FState = mcsIdle) Or (FState = mcsClosed) Then
@@ -616,19 +586,18 @@ Begin
         ErrorText := 'The monitor listener is not running.';
         Exit;
       End;
-    If Length(FOutboundQueue) >= MonitorOutboundCap Then
-      Begin
-        ErrorText := 'The monitor outbound queue is full.';
-        Exit;
-      End;
-    SetLength(FOutboundQueue, Length(FOutboundQueue) + 1);
-    FOutboundQueue[High(FOutboundQueue)] := Bytes;
-    Result := True;
   Finally
     UnlockCarrier;
   End;
-  If Result Then
-    WakeController;
+  Session := CopySession;
+  If Not Assigned(Session) Then
+    Begin
+      ErrorText := 'No session is attached.';
+      Exit;
+    End;
+  Result := Session.TryQueueHostJson(Frame.Json);
+  If Not Result Then
+    ErrorText := 'The frame was not queued.';
 End;
 
 Function TMonitorLanCarrier.State: TMonitorCarrierState;
@@ -643,20 +612,18 @@ End;
 
 Procedure TMonitorLanCarrier.DiscardUnsent;
 Begin
-  LockCarrier;
-  Try
-    SetLength(FOutboundQueue, 0);
-  Finally
-    UnlockCarrier;
-  End;
+  { The session outbox is the queue. DiscardUnsentBulk already cleared it. }
 End;
 
 Procedure TMonitorLanCarrier.SetFrameHandler(Handler: TMonitorFrameHandler);
 Var
   Method: TMethod;
+  Previous: TMonitorSession;
 Begin
+  Previous := Nil;
   LockCarrier;
   Try
+    Previous := FSession;
     FHandler := Handler;
     Method := TMethod(Handler);
     If TObject(Method.Data) Is TMonitorSession Then
@@ -666,6 +633,10 @@ Begin
   Finally
     UnlockCarrier;
   End;
+  If Assigned(Previous) And (Previous <> FSession) Then
+    Previous.NoteLinkPulls(False);
+  If Assigned(FSession) Then
+    FSession.NoteLinkPulls(True);
 End;
 
 Procedure TMonitorLanCarrier.AttachSession(Session: TMonitorSession);
@@ -736,7 +707,10 @@ Begin
     Exit;
   Session := CopySession;
   If Assigned(Session) Then
-    Session.NoteSocketClosed;
+    Begin
+      Session.SetOutboundWake(Nil);
+      Session.NoteSocketClosed;
+    End;
   NoteControllerDropped;
 End;
 
@@ -753,6 +727,18 @@ End;
 Function TMonitorLanCarrier.OutboundPending(Link: TMonitorLinkThread): Boolean;
 Begin
   Result := IsController(Link) And Not OutboundEmpty;
+End;
+
+Function TMonitorLanCarrier.OutboundCount(Link: TMonitorLinkThread): Integer;
+Var
+  Session: TMonitorSession;
+Begin
+  Result := 0;
+  If Not IsController(Link) Then
+    Exit;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Result := Session.OutboundCount;
 End;
 
 Procedure TMonitorLanCarrier.DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame);
@@ -844,6 +830,8 @@ Begin
 End;
 
 Procedure TMonitorLanCarrier.AdoptController(Link: TMonitorLinkThread);
+Var
+  Session: TMonitorSession;
 Begin
   LockCarrier;
   Try
@@ -852,6 +840,9 @@ Begin
     UnlockCarrier;
   End;
   NoteConnected;
+  Session := CopySession;
+  If Assigned(Session) And Assigned(Link) Then
+    Session.SetOutboundWake(@WakeController);
 End;
 
 Function TMonitorLanCarrier.ReleaseController(Link: TMonitorLinkThread): Boolean;
@@ -870,7 +861,10 @@ Begin
     Exit;
   Session := CopySession;
   If Assigned(Session) Then
-    Session.NoteSocketClosed;
+    Begin
+      Session.SetOutboundWake(Nil);
+      Session.NoteSocketClosed;
+    End;
   NoteControllerDropped;
 End;
 

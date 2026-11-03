@@ -441,27 +441,22 @@ Var
 Begin
   Ping := EncodeMonitorTicks(mmkPing, 'lane-ping', 1);
   Carrier.ClearSent;
-  For Index := 1 To MonitorOutboundQueueLimit Do
+  For Index := 1 To 3 Do
     Check('bulk lane accepts ' + IntToStr(Index), Session.TryQueueHostJson(BulkFrame(Index)));
-  Before := Session.FramesDropped;
-  Check('bulk lane waits at the cap', Not Session.TryQueueHostJson(BulkFrame(MonitorOutboundQueueLimit + 1)));
-  Check('a refused bulk frame is not stored', Session.FramesDropped = Before + 1);
   SetLength(First, 2);
   First[0] := 'patch-part-1';
   First[1] := 'patch-part-2';
   SetLength(Second, 1);
   Second[0] := 'patch-replaced';
+  Before := Session.FramesDropped;
   Session.ReplaceLivePatch(8, First);
   Session.ReplaceLivePatch(9, Second);
-  Check('full bulk lane still accepts a live replacement', Session.FramesDropped = Before + 1 + 2);
-  Check('control ping is queued while both other lanes are full', Session.TryQueueHostJson(Ping));
+  Check('a newer live set replaces the unsent parts', Session.FramesDropped = Before + 2);
+  Check('control ping is queued beside bulk and state', Session.TryQueueHostJson(Ping));
   Session.DrainOutbound;
-  Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 2 + MonitorOutboundQueueLimit);
+  Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 5);
   Check('control ping is sent before the other lanes', Carrier.SentJson(0) = Ping);
-  Check('a control ping is sent while both other lanes are at their caps', Carrier.SentJson(0) = Ping);
   Check('live replacement is sent and not appended', Carrier.SentJson(1) = 'patch-replaced');
-  Check('a full bulk lane still accepts a live patch that replaces an older unsent patch',
-    (Carrier.SentJson(1) = 'patch-replaced') And (Carrier.SentCount = 2 + MonitorOutboundQueueLimit));
   Seen := '';
   For Index := 0 To Carrier.SentCount - 1 Do
     Seen := Seen + Carrier.SentJson(Index) + #10;
@@ -494,13 +489,13 @@ Begin
   Check('first plan is queued', Session.TryQueueHostJson(First));
   Check('later plan replaces the unsent plan', Session.TryQueueHostJson(Second));
   Check('replaced plan is dropped', Session.FramesDropped = Before + 1);
-  For Index := 1 To MonitorOutboundQueueLimit Do
-    Check('bulk still fills beside a plan', Session.TryQueueHostJson(BulkFrame(Index)));
-  Check('full bulk lane still accepts the latest plan', Session.TryQueueHostJson(Second));
+  For Index := 1 To 3 Do
+    Check('bulk still queues beside a plan', Session.TryQueueHostJson(BulkFrame(Index)));
+  Check('bulk does not block the latest plan', Session.TryQueueHostJson(Second));
   Check('replacing the unsent plan drops the previous copy', Session.FramesDropped = Before + 2);
   Check('control ping is queued beside a plan', Session.TryQueueHostJson(Ping));
   Session.DrainOutbound;
-  Check('ping, plan, and bulk are sent', Carrier.SentCount = 2 + MonitorOutboundQueueLimit);
+  Check('ping, plan, and bulk are sent', Carrier.SentCount = 5);
   Check('ping stays ahead of the plan', Carrier.SentJson(0) = Ping);
   Check('latest plan is sent before bulk', Carrier.SentJson(1) = Second);
   Check('bulk follows the plan', Carrier.SentJson(2) = BulkFrame(1));
