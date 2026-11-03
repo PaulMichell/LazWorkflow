@@ -10,11 +10,10 @@ Unit AssistantMonitorCodec;
   AssistantModeToStr. Image bytes use the frames unit's FCL base64 helpers.
   Frame length stays in AssistantMonitorFrames (htonl / ntohl).
 
-  Size note: exceeds the 1000 line preference. Framing, command codecs, and state
-  codecs are still one table because the envelope and the payload types are one
-  catalogue. Uncalled transcript packing and the turn_data encoder are gone.
-  Catalogue 2 patch, catchup, and snapshot encoders remain: the codec tests still
-  assert them, and deleting them would change those assertions.
+  Size note: exceeds the 1000 line preference. Handshake, send, and mode codecs
+  have moved to AssistantMonitorCommands. State codecs and the tested catalogue 2
+  content tables are still here. Those tables stay because the codec tests still
+  assert them.
   Reviewed 2026-11-03: no socket, TLS, or form code in this unit. }
 
 {$IFDEF FPC}
@@ -408,6 +407,16 @@ Function MonitorImageUnavailableReasonIsKnown(Const Reason: String): Boolean;
 Function MonitorModeName(Mode: TAssistantMode): String;
 Function MonitorModeIsKnown(Const ModeText: String): Boolean;
 
+{ Shared by the command and state units. Not a second catalogue. }
+Function ParseMonitorObject(Const Json: String; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
+Function ReadMonitorString(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: String): Boolean;
+Function ReadMonitorInt(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Integer): Boolean;
+Function ReadMonitorInt64(Obj: TJSONObject; Const Name: String; Out Value: Int64): Boolean;
+Function ReadMonitorBool(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Boolean): Boolean;
+Function EncodeMonitorWith(Kind: TMonitorMessageKind; Const Id: String; Payload: TJSONObject): String;
+Function EncodeMonitorOneString(Kind: TMonitorMessageKind; Const Id, Field, Value: String): String;
+Function DecodeMonitorOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+
 { Empty when the id is unsafe or the object would exceed the frame cap. }
 Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
 Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
@@ -551,7 +560,7 @@ Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Fr
 Implementation
 
 Uses
-  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames, AssistantMonitorOutbox;
+  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames, AssistantMonitorOutbox, AssistantMonitorCommands;
 
 {$IF MonitorListenPort <> GrokOAuthRedirectPort + 1}
   {$ERROR Listen port must stay one above GrokOAuthRedirectPort}
@@ -837,6 +846,46 @@ Begin
   End;
 End;
 
+Function ParseMonitorObject(Const Json: String; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
+Begin
+  Result := ParseObject(Json, Data, Obj);
+End;
+
+Function ReadMonitorString(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: String): Boolean;
+Begin
+  Result := ReadString(Obj, Name, Required, Value);
+End;
+
+Function ReadMonitorInt(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Integer): Boolean;
+Begin
+  Result := ReadInt(Obj, Name, Required, Value);
+End;
+
+Function ReadMonitorInt64(Obj: TJSONObject; Const Name: String; Out Value: Int64): Boolean;
+Begin
+  Result := ReadInt64(Obj, Name, Value);
+End;
+
+Function ReadMonitorBool(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Boolean): Boolean;
+Begin
+  Result := ReadBool(Obj, Name, Required, Value);
+End;
+
+Function EncodeMonitorWith(Kind: TMonitorMessageKind; Const Id: String; Payload: TJSONObject): String;
+Begin
+  Result := EncodeWith(Kind, Id, Payload);
+End;
+
+Function EncodeMonitorOneString(Kind: TMonitorMessageKind; Const Id, Field, Value: String): String;
+Begin
+  Result := EncodeOneString(Kind, Id, Field, Value);
+End;
+
+Function DecodeMonitorOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+Begin
+  Result := DecodeOneString(PayloadJson, Field, Value);
+End;
+
 Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): String;
 Var
   Payload: TJSONObject;
@@ -980,110 +1029,38 @@ Begin
 End;
 
 Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('client_name', ClientName);
-  Payload.Add('client_version', ClientVersion);
-  If ClientId <> '' Then
-    Payload.Add('client_id', ClientId);
-  Result := EncodeWith(mmkHello, Id, Payload);
+  Result := EncodeCommandHello(Id, ClientName, ClientVersion, ClientId);
 End;
 
 Function DecodeMonitorHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
-Var
-  Data: TJSONData;
-  Payload: TJSONObject;
 Begin
-  Result := False;
-  Hello.ClientName := '';
-  Hello.ClientVersion := '';
-  Hello.ClientId := '';
-  Hello.HasClientId := False;
-  If Not ParseObject(PayloadJson, Data, Payload) Then
-    Exit;
-  Try
-    Hello.HasClientId := Assigned(Payload.Find('client_id'));
-    Result := ReadString(Payload, 'client_name', True, Hello.ClientName) And
-      ReadString(Payload, 'client_version', True, Hello.ClientVersion);
-    If Result And Hello.HasClientId Then
-      Result := ReadString(Payload, 'client_id', True, Hello.ClientId);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandHello(PayloadJson, Hello);
 End;
 
 Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('code', Code);
-  Payload.Add('fingerprint', Fingerprint);
-  Result := EncodeWith(mmkPair, Id, Payload);
+  Result := EncodeCommandPair(Id, Code, Fingerprint);
 End;
 
 Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  Pair.Code := '';
-  Pair.Fingerprint := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'code', True, Pair.Code) And ReadString(Obj, 'fingerprint', True, Pair.Fingerprint);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandPair(PayloadJson, Pair);
 End;
 
 Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('client_id', ClientId);
-  Payload.Add('session_token', SessionToken);
-  Result := EncodeWith(mmkPairOk, Id, Payload);
+  Result := EncodeCommandPairOk(Id, ClientId, SessionToken);
 End;
 
 Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  PairOk.ClientId := '';
-  PairOk.SessionToken := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'client_id', True, PairOk.ClientId) And
-      ReadString(Obj, 'session_token', True, PairOk.SessionToken);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandPairOk(PayloadJson, PairOk);
 End;
 
 Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('nonce', HelloOk.Nonce);
-  Payload.Add('server_name', HelloOk.ServerName);
-  Payload.Add('epoch', HelloOk.Epoch);
-  Payload.Add('cursor', HelloOk.Cursor);
-  Payload.Add('conversation_id', HelloOk.ConversationId);
-  Payload.Add('project_root', HelloOk.ProjectRoot);
-  Payload.Add('title', HelloOk.Title);
-  If MonitorHostIdIsValid(HelloOk.HostId) Then
-    Payload.Add('host_id', HelloOk.HostId);
-  Result := EncodeWith(mmkHelloOk, Id, Payload);
+  Result := EncodeCommandHelloOk(Id, HelloOk);
 End;
 
 Function MonitorHostIdIsValid(Const HostId: String): Boolean;
@@ -1103,208 +1080,88 @@ Begin
 End;
 
 Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  HelloOk.Nonce := '';
-  HelloOk.ServerName := '';
-  HelloOk.Epoch := '';
-  HelloOk.Cursor := 0;
-  HelloOk.ConversationId := '';
-  HelloOk.ProjectRoot := '';
-  HelloOk.Title := '';
-  HelloOk.HostId := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'nonce', True, HelloOk.Nonce) And ReadString(Obj, 'server_name', True, HelloOk.ServerName) And
-      ReadString(Obj, 'epoch', True, HelloOk.Epoch) And ReadInt64(Obj, 'cursor', HelloOk.Cursor) And
-      ReadString(Obj, 'conversation_id', True, HelloOk.ConversationId) And
-      ReadString(Obj, 'project_root', True, HelloOk.ProjectRoot) And ReadString(Obj, 'title', True, HelloOk.Title);
-    If Result Then
-      Begin
-        If Not ReadString(Obj, 'host_id', False, HelloOk.HostId) Then
-          Result := False
-        Else If (HelloOk.HostId <> '') And (Not MonitorHostIdIsValid(HelloOk.HostId)) Then
-          Result := False;
-      End;
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandHelloOk(PayloadJson, HelloOk);
 End;
 
 Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('client_id', ClientId);
-  Payload.Add('hmac', Hmac);
-  Result := EncodeWith(mmkAuth, Id, Payload);
+  Result := EncodeCommandAuth(Id, ClientId, Hmac);
 End;
 
 Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  Auth.ClientId := '';
-  Auth.Hmac := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'client_id', True, Auth.ClientId) And ReadString(Obj, 'hmac', True, Auth.Hmac);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandAuth(PayloadJson, Auth);
 End;
 
 Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Result := '';
-  If Not MonitorRejectedReasonIsKnown(Reason) Then
-    Exit;
-  Payload := TJSONObject.Create;
-  Payload.Add('reason', Reason);
-  Payload.Add('host_version', HostVersion);
-  Payload.Add('client_version', ClientVersion);
-  Result := EncodeWith(mmkRejected, Id, Payload);
+  Result := EncodeCommandRejected(Id, Reason, HostVersion, ClientVersion);
 End;
 
 Function DecodeMonitorRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  Rejected.Reason := '';
-  Rejected.HostVersion := 0;
-  Rejected.ClientVersion := 0;
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'reason', True, Rejected.Reason) And
-      ReadInt(Obj, 'host_version', True, Rejected.HostVersion) And
-      ReadInt(Obj, 'client_version', True, Rejected.ClientVersion) And
-      MonitorRejectedReasonIsKnown(Rejected.Reason);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandRejected(PayloadJson, Rejected);
 End;
 
 Function EncodeMonitorBye(Const Id, Reason: String): String;
 Begin
-  Result := EncodeOneString(mmkBye, Id, 'reason', Reason);
+  Result := EncodeCommandBye(Id, Reason);
 End;
 
 Function DecodeMonitorBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
 Begin
-  Bye.Reason := '';
-  Result := DecodeOneString(PayloadJson, 'reason', Bye.Reason);
-End;
-
-Function TryEncodeLimitedText(Kind: TMonitorMessageKind; Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Begin
-  Result := False;
-  Json := '';
-  ErrorJson := '';
-  If Length(Text) > MonitorMaxSendChars Then
-    Begin
-      ErrorJson := EncodeMonitorError(Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Id);
-      Exit;
-    End;
-  Json := EncodeOneString(Kind, Id, 'text', Text);
-  Result := Json <> '';
+  Result := DecodeCommandBye(PayloadJson, Bye);
 End;
 
 Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
 Begin
-  Result := TryEncodeLimitedText(mmkSend, Id, Text, Json, ErrorJson);
+  Result := TryEncodeCommandSend(Id, Text, Json, ErrorJson);
 End;
 
 Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
 Begin
-  Result := TryEncodeLimitedText(mmkSteer, Id, Text, Json, ErrorJson);
+  Result := TryEncodeCommandSteer(Id, Text, Json, ErrorJson);
 End;
 
 Function DecodeMonitorText(Const PayloadJson: String; Out Text: String): Boolean;
 Begin
-  Result := DecodeOneString(PayloadJson, 'text', Text) And (Length(Text) <= MonitorMaxSendChars);
+  Result := DecodeCommandText(PayloadJson, Text);
 End;
 
 Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
 Begin
-  Result := EncodeMonitorEnvelope(Kind, Id, Nil);
+  Result := EncodeCommandEmpty(Kind, Id);
 End;
 
 Function EncodeMonitorSetMode(Const Id, Mode: String): String;
 Begin
-  Result := '';
-  If Not MonitorModeIsKnown(Mode) Then
-    Exit;
-  Result := EncodeOneString(mmkSetMode, Id, 'mode', Mode);
+  Result := EncodeCommandSetMode(Id, Mode);
 End;
 
 Function DecodeMonitorSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
 Begin
-  Result := DecodeOneString(PayloadJson, 'mode', Mode) And MonitorModeIsKnown(Mode);
+  Result := DecodeCommandSetMode(PayloadJson, Mode);
 End;
 
 Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('mode', Mode);
-  Payload.Add('locked', Locked);
-  Result := EncodeWith(mmkMode, Id, Payload);
+  Result := EncodeCommandMode(Id, Mode, Locked);
 End;
 
 Function DecodeMonitorMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  ModeMessage.Mode := '';
-  ModeMessage.Locked := False;
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadString(Obj, 'mode', True, ModeMessage.Mode) And ReadBool(Obj, 'locked', True, ModeMessage.Locked);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandMode(PayloadJson, ModeMessage);
 End;
 
 Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
-Var
-  Payload: TJSONObject;
 Begin
-  Payload := TJSONObject.Create;
-  Payload.Add('turn_index', TurnIndex);
-  Result := EncodeWith(mmkTurn, Id, Payload);
+  Result := EncodeCommandTurnRequest(Id, TurnIndex);
 End;
 
 Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
-Var
-  Data: TJSONData;
-  Obj: TJSONObject;
 Begin
-  Result := False;
-  TurnIndex := 0;
-  If Not ParseObject(PayloadJson, Data, Obj) Then
-    Exit;
-  Try
-    Result := ReadInt(Obj, 'turn_index', True, TurnIndex);
-  Finally
-    Data.Free;
-  End;
+  Result := DecodeCommandTurnRequest(PayloadJson, TurnIndex);
 End;
 
 Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
