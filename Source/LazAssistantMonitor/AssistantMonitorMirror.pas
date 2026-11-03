@@ -62,6 +62,21 @@ Type
   TMonitorMirrorTurnArray = Array Of TAssistantMonitorTurn;
   TMonitorMirrorPlanArray = Array Of TAssistantMonitorPlanRow;
 
+  TMonitorResumeSource = Record
+    Found: Boolean;
+    Observed: Boolean;
+    ConversationId: String;
+    StreamId: String;
+    ProjectRoot: String;
+    Title: String;
+    Head: Int64;
+    DroppedThrough: Int64;
+    HasLive: Boolean;
+    Live: TAssistantMonitorTurn;
+    Turns: Array Of TAssistantMonitorTurn;
+    Events: TMonitorMirrorEventArray;
+  End;
+
   TMonitorMirrorPark = Record
     ConversationId: String;
     StreamId: String;
@@ -129,6 +144,8 @@ Type
     { Stored turns or the live turn. A plan alone is not the open conversation. }
     Function HasConversation: Boolean;
     Function CopyTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
+    { One locked copy of the open or parked conversation. Encode after this returns. }
+    Function CaptureResume(Const ConversationId: String; Out Source: TMonitorResumeSource): Boolean;
     Function CopyPlan(Out PlanPath, PlanTitle: String; Out PlanRunning: Boolean; Out Rows: TMonitorMirrorPlanArray): Boolean;
     Function BuildSnapshotPages(Const StreamId: String; HeadSeq: Int64; Out Pages: TMonitorSnapshotPageArray): Boolean;
     Function FetchTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
@@ -858,6 +875,66 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Result := FHasLive Or (Length(FTurns) > 0);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.CaptureResume(Const ConversationId: String; Out Source: TMonitorResumeSource): Boolean;
+Var
+  Index, TurnIndex: Integer;
+  Parked: Boolean;
+Begin
+  Source := Default(TMonitorResumeSource);
+  Result := False;
+  EnterCriticalSection(FLock);
+  Try
+    Parked := False;
+    If (ConversationId <> '') And (ConversationId <> FConversationId) Then
+      Begin
+        For Index := 0 To High(FParked) Do
+          If FParked[Index].ConversationId = ConversationId Then
+            Begin
+              Source.Found := True;
+              Source.ConversationId := FParked[Index].ConversationId;
+              Source.StreamId := FParked[Index].StreamId;
+              Source.ProjectRoot := FParked[Index].ProjectRoot;
+              Source.Title := FParked[Index].Title;
+              Source.Head := FParked[Index].Head;
+              Source.DroppedThrough := FParked[Index].DroppedThrough;
+              Source.HasLive := FParked[Index].HasLive;
+              If Source.HasLive Then
+                CopyTurn(FParked[Index].Live, Source.Live);
+              SetLength(Source.Turns, Length(FParked[Index].Turns));
+              For TurnIndex := 0 To High(FParked[Index].Turns) Do
+                CopyTurn(FParked[Index].Turns[TurnIndex], Source.Turns[TurnIndex]);
+              Source.Events := Copy(FParked[Index].Events);
+              Source.Observed := Source.HasLive Or (Length(Source.Turns) > 0);
+              Parked := True;
+              Break;
+            End;
+        If Not Parked Then
+          Exit;
+      End
+    Else
+      Begin
+        Source.Found := FConversationId <> '';
+        Source.ConversationId := FConversationId;
+        Source.StreamId := FStreamId;
+        Source.ProjectRoot := FProjectRoot;
+        Source.Title := FTitle;
+        Source.Head := FHead;
+        Source.DroppedThrough := FDroppedThrough;
+        Source.HasLive := FHasLive;
+        If FHasLive Then
+          CopyTurn(FLive, Source.Live);
+        SetLength(Source.Turns, Length(FTurns));
+        For TurnIndex := 0 To High(FTurns) Do
+          CopyTurn(FTurns[TurnIndex], Source.Turns[TurnIndex]);
+        Source.Events := Copy(FEvents);
+        Source.Observed := FHasLive Or (Length(FTurns) > 0);
+      End;
+    Result := True;
   Finally
     LeaveCriticalSection(FLock);
   End;

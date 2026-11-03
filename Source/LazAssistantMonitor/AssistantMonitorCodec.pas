@@ -338,6 +338,7 @@ Type
   TMonitorResume = Record
     Epoch: String;
     Cursor: Int64;
+    ConversationId: String;
     Commands: TStringArray;
   End;
 
@@ -3725,6 +3726,7 @@ Begin
   Result := False;
   ResumeMsg.Epoch := '';
   ResumeMsg.Cursor := 0;
+  ResumeMsg.ConversationId := '';
   SetLength(ResumeMsg.Commands, 0);
   If Not ParseObject(PayloadJson, Data, Obj) Then
     Exit;
@@ -3735,8 +3737,12 @@ Begin
     HasEpoch := Obj.IndexOfName('epoch') >= 0;
     If HasEpoch Then
       ReadString(Obj, 'epoch', False, ResumeMsg.Epoch)
-    Else
-      HasEpoch := ReadString(Obj, 'stream_id', False, ResumeMsg.Epoch) And (ResumeMsg.Epoch <> '');
+    Else If Obj.IndexOfName('stream_id') >= 0 Then
+      Begin
+        ReadString(Obj, 'stream_id', False, ResumeMsg.Epoch);
+        HasEpoch := True;
+      End;
+    ReadString(Obj, 'conversation_id', False, ResumeMsg.ConversationId);
     Result := HasEpoch And HasCursor And ReadCommandIds(Obj, ResumeMsg.Commands);
   Finally
     Data.Free;

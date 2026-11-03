@@ -119,8 +119,7 @@ Type
     Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
     Procedure PublishSamplingLists(Form: TProjectAssistantForm);
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
-    Procedure SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String; PointOnly: Boolean = False);
-    Procedure AnswerResume(Const Id, PayloadJson: String);
+
     Procedure RetryDeferredResumes;
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PushLiveState;
@@ -609,10 +608,6 @@ Begin
   FPlanStamp := '';
   SetLength(FSentBlocks, 0);
   FSentFlagsValid := False;
-  { The connected client learns the new epoch from this catchup. Cursor 0 was the empty start.
-    An unbound window has no turns yet. Sending that page is the blank chat. }
-  If HadEpoch And Assigned(Form) And Form.MonitorScreenReady Then
-    SendCatchupSnapshot(Form, '', True);
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -696,117 +691,6 @@ Begin
   Session.ObserveSnapshot(Snapshot);
   If Not Session.SendMirrorPages(Id) Then
     WorkflowLogger.Warning('AssistantMonitor', 'snapshot did not fit');
-End;
-
-Procedure TAssistantMonitorBridge.SendCatchupSnapshot(Form: TProjectAssistantForm; Const RefId: String; PointOnly: Boolean);
-Var
-  Snapshot: TMonitorSnapshot;
-  Session: TMonitorSession;
-  Id: String;
-  Sent: Boolean;
-Begin
-  If Not Assigned(Form) Then
-    Exit;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  If (Not Assigned(Session)) Or (Session.MirrorEpoch = '') Then
-    Exit;
-  FillSnapshot(Form, Snapshot);
-  { The store has this chat. Do not publish the empty page the phone files as the conversation. }
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) And
-    (Not SnapshotHasOpenTurn(Snapshot)) Then
-    Exit;
-  Session.ObserveSnapshot(Snapshot);
-  Id := RefId;
-  If Id = '' Then
-    Id := HostId;
-  If PointOnly Then
-    Sent := Session.SendMirrorPoint(Id)
-  Else
-    Sent := Session.SendMirrorPages(Id);
-  If Not Sent Then
-    Begin
-      WorkflowLogger.Warning('AssistantMonitor', 'catchup snapshot did not fit');
-      Exit;
-    End;
-  { Pages replace the snapshot frame. Forget the sent blocks and pump once more
-    so the next cursor carries the trace the phone has not seen. }
-  FSentEpoch := '';
-  SetLength(FSentBlocks, 0);
-  FSentFlagsValid := False;
-  PumpMirror(AssistantMirrorCounter, True);
-End;
-
-Procedure TAssistantMonitorBridge.AnswerResume(Const Id, PayloadJson: String);
-Var
-  ResumeMsg: TMonitorResume;
-  Catchup: TMonitorCatchup;
-  Session: TMonitorSession;
-  Form: TProjectAssistantForm;
-  Json: String;
-Begin
-  If Not DecodeMonitorResume(PayloadJson, ResumeMsg) Then
-    Begin
-      SendError(Id, 'protocol', 'Resume payload is not valid.');
-      Exit;
-    End;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  If Not Assigned(Session) Then
-    Begin
-      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
-      Exit;
-    End;
-  Session.FlushLivePatch;
-  { A cursor still in the ring does not fill the form. An events frame that does not fit falls through.
-    An empty events list means the client is at the committed cursor. It does not mean the client has
-    the model, the signed-in flag, or the live blocks. That is a snapshot, the same repair New uses. }
-  If Not ResumeNeedsFormSnapshot(Session, ResumeMsg.Epoch, ResumeMsg.Cursor) Then
-    Begin
-      If Session.TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) And (Length(Catchup.Patches) > 0) Then
-        Begin
-          Json := EncodeMonitorCatchup(Id, Catchup);
-          If Json <> '' Then
-            Begin
-              SendJson(Json);
-              Form := OpenForm;
-              If Assigned(Form) Then
-                Begin
-                  PushStatus(Form);
-                  PushModels(Form);
-                  PushPlan(Form);
-                End;
-              Exit;
-            End;
-        End;
-    End;
-  Form := OpenForm;
-  If Not Assigned(Form) Then
-    Begin
-      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
-      Exit;
-    End;
-  If Session.MirrorEpoch = '' Then
-    PublishEpoch;
-  If Session.MirrorEpoch = '' Then
-    Begin
-      SendError(Id, MonitorNoSessionReason, MonitorNoSessionMessage);
-      Exit;
-    End;
-  { Status, the model list, and the plan go out before the history pages, or they wait behind the replay. }
-  PushStatus(Form);
-  PushModels(Form);
-  PushPlan(Form);
-  { The head, not the older turns. The phone asks for those after the desktop point is on screen. }
-  SendCatchupSnapshot(Form, Id, True);
 End;
 
 Procedure TAssistantMonitorBridge.RetryDeferredResumes;
@@ -911,9 +795,8 @@ Begin
   If Key = FDeliveredScreen Then
     Exit;
   FillSnapshot(Form, Snapshot);
-  { The store has this chat. An empty page is not a delivery. }
-  If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.TurnCount > 0) And
-    (Not SnapshotHasOpenTurn(Snapshot)) Then
+  { An empty page is not a conversation. The link thread sends a baseline once turns exist. }
+  If Not SnapshotHasOpenTurn(Snapshot) Then
     Exit;
   Session.ObserveSnapshot(Snapshot);
   If Not Session.SendMirrorPoint(HostId) Then
@@ -1661,11 +1544,9 @@ Begin
   End;
   If Command.Defer Or (Not Command.Claimed) Then
     Exit;
+  { Resume is answered on the link thread. A queued copy is not a second answer. }
   If Command.Kind = Ord(mmkResume) Then
-    Begin
-      AnswerResume(Command.ClientId, Command.Payload);
-      Exit;
-    End;
+    Exit;
   LockBridge;
   Try
     If Assigned(FSession) Then

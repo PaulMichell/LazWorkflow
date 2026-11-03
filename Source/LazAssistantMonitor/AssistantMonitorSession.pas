@@ -30,7 +30,7 @@ Interface
 
 Uses
   SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
-  AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantSessionObserve;
+  AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantMonitorSync, AssistantSessionObserve;
 
 Const
   MonitorPairCodeLength = 10;
@@ -142,6 +142,8 @@ Type
     FQueuedLogSeq: Int64;
     { Set when a resume names this stream. Catalogue 2 drains do not frame the log. }
     FLogResume: Boolean;
+    { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
+    FAwaitingObservation: Boolean;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -203,7 +205,7 @@ Type
     Procedure HandleResume(Const Id, PayloadJson: String);
     Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
     Procedure PublishCommandState(Const Id, State, Reason, DoneText: String);
-    Function ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
+
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
     Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
@@ -231,6 +233,7 @@ Type
     Function GetConnectedClientName: String;
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure FillLogLane;
+    Procedure QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -371,7 +374,7 @@ Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; 
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings, AssistantMonitorSync;
+  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -1606,6 +1609,9 @@ End;
 Procedure TMonitorSession.HandleResume(Const Id, PayloadJson: String);
 Var
   ResumeMsg: TMonitorResume;
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
 Begin
   If (FState <> mssLive) And (FState <> mssBusy) Then
     Begin
@@ -1617,33 +1623,49 @@ Begin
       QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
       Exit;
     End;
+  If Assigned(FOutbox) Then
+    Begin
+      FOutbox.ClearLog;
+      FOutbox.DiscardBulk;
+    End;
+  Source := Default(TMonitorResumeSource);
+  If Assigned(FMirror) Then
+    FMirror.CaptureResume(ResumeMsg.ConversationId, Source);
+  Status := Default(TMonitorSyncStatus);
+  Status.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+  Status.Sending := FHostFlags.Sending;
+  Status.PlanRunning := FHostFlags.PlanAgentRunning;
+  Status.CanSend := FHostFlags.CanSend;
+  Status.CanSteer := FHostFlags.CanSteer;
+  Status.CanStop := FHostFlags.CanStop;
+  Status.CanChangeMode := FHostFlags.CanChangeMode;
+  Status.ApprovalActive := FRemoteApproval And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
+  Status.ApprovalToolId := FPendingApprovalId;
+  Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
+  QueueResumeAnswer(Answer);
+  FPhoneAcked := ResumeMsg.Cursor;
+  If Answer.Replay Then
+    Begin
+      FLogResume := True;
+      FQueuedLogSeq := ResumeMsg.Cursor;
+      FAwaitingObservation := False;
+      If Assigned(FMirror) Then
+        FMirror.NoteAck(ResumeMsg.Epoch, ResumeMsg.Cursor);
+    End
+  Else If Answer.NotReady Then
+    Begin
+      FLogResume := False;
+      FQueuedLogSeq := 0;
+      FAwaitingObservation := (ResumeMsg.ConversationId = '') Or (ResumeMsg.ConversationId = FConversationId);
+    End
+  Else
+    Begin
+      FLogResume := True;
+      FQueuedLogSeq := Answer.Head;
+      FAwaitingObservation := False;
+    End;
   If Length(ResumeMsg.Commands) > 0 Then
     QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
-  { A named resume drops the previous generation. An empty epoch stays on the old path. }
-  If ResumeMsg.Epoch <> '' Then
-    Begin
-      FPhoneAcked := ResumeMsg.Cursor;
-      FQueuedLogSeq := ResumeMsg.Cursor;
-      FLogResume := LowerCase(ResumeMsg.Epoch) = LowerCase(FEpoch);
-      If Assigned(FOutbox) Then
-        Begin
-          FOutbox.ClearLog;
-          FOutbox.DiscardBulk;
-        End;
-      If FLogResume And Assigned(FMirror) Then
-        FMirror.NoteAck(ResumeMsg.Epoch, ResumeMsg.Cursor);
-      If FLogResume And MonitorSyncCanReplay(FMirror, ResumeMsg.Cursor) Then
-        Exit;
-    End;
-  { The log or the materialised model answers on this thread. An empty model still waits for the IDE thread. }
-  If ServeResumeFromMirror(Id, ResumeMsg) Then
-    Begin
-      { The head pages are already queued. Status and the plan are not in that dump,
-        and a running plan must not wait for the next row change. }
-      QueueCommand(Ord(mmkRefresh), NewHostId, '{"text":"live"}');
-      Exit;
-    End;
-  QueueCommand(Ord(mmkResume), Id, PayloadJson);
 End;
 
 Function TMonitorSession.ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
@@ -2431,14 +2453,54 @@ Begin
     FOutbox.Notify;
 End;
 
+Procedure TMonitorSession.QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
+Var
+  Index: Integer;
+  Bytes: RawByteString;
+Begin
+  If Not Assigned(FOutbox) Then
+    Exit;
+  For Index := 0 To High(Answer.Frames) Do
+    Begin
+      If Not EncodeHostFrame(Answer.Frames[Index].Json, Bytes) Then
+        Continue;
+      Case Answer.Frames[Index].Kind Of
+        mskBulk: FOutbox.AddGeneratedBulk(Bytes, Answer.Generation);
+        mskBarrier: FOutbox.HoldBarrier(Bytes, Answer.Generation);
+      Else
+        FOutbox.AddControl(Bytes);
+      End;
+    End;
+End;
+
 Procedure TMonitorSession.FillLogLane;
 Var
   CloseLink: Boolean;
   Queued, Acked: Int64;
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
 Begin
   CloseLink := False;
   LockSession;
   Try
+    If FAwaitingObservation And Assigned(FMirror) And FMirror.HasConversation And Assigned(FOutbox) Then
+      Begin
+        Source := Default(TMonitorResumeSource);
+        FMirror.CaptureResume('', Source);
+        Status := Default(TMonitorSyncStatus);
+        Status.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+        Status.Sending := FHostFlags.Sending;
+        Status.CanSend := FHostFlags.CanSend;
+        Answer := MonitorSyncResumeAnswer(Source, FConversationId, '', 'observed', 0, Status);
+        If Not Answer.NotReady Then
+          Begin
+            QueueResumeAnswer(Answer);
+            FAwaitingObservation := False;
+            FLogResume := True;
+            FQueuedLogSeq := Answer.Head;
+          End;
+      End;
     If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
       Exit;
     Queued := FQueuedLogSeq;
@@ -2669,31 +2731,6 @@ Begin
     Exit;
   QueueBulkFramesLocked(Frames);
   Result := True;
-End;
-
-Function TMonitorSession.ServeResumeFromMirror(Const Id: String; Const ResumeMsg: TMonitorResume): Boolean;
-Var
-  Catchup: TMonitorCatchup;
-  Json: String;
-Begin
-  Result := False;
-  { An empty event list means the cursor matched. It does not mean the phone has this screen.
-    Fall through and send the mirror pages, which are the open conversation. }
-  If TryResumeEvents(ResumeMsg.Epoch, ResumeMsg.Cursor, Catchup) And (Length(Catchup.Patches) > 0) Then
-    Begin
-      Json := EncodeMonitorCatchup(Id, Catchup);
-      If Json <> '' Then
-        Begin
-          QueueSend(Json);
-          Result := True;
-          Exit;
-        End;
-    End;
-  { An empty mirror is not the open conversation. The form may already be showing
-    turns this model has not observed. Those pages are filled on the IDE thread. }
-  If (Not Assigned(FMirror)) Or (FEpoch = '') Or (Not FMirror.HasConversation) Then
-    Exit;
-  Result := QueueMirrorPagesLocked(Id, True);
 End;
 
 Function TMonitorSession.CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;

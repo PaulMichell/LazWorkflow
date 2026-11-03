@@ -72,8 +72,11 @@ Type
     LogSent: Integer;
     LastLogSeq: Int64;
     FLogOverflowed: Boolean;
+    FBarrierFrame: RawByteString;
+    FBarrierGeneration: Int64;
     FOnWake: TMonitorOutboxWake;
     Function GetLogOverflowed: Boolean;
+    Function BulkHasGeneration(Generation: Int64): Boolean;
     Function GetOnWake: TMonitorOutboxWake;
     Procedure SetOnWake(Handler: TMonitorOutboxWake);
     Procedure Wake;
@@ -102,6 +105,10 @@ Type
     Procedure RewindLog;
     { Drops the log lane. Control, state, and bulk stay. }
     Procedure ClearLog;
+    { A bulk page of one resume generation. Seq tags the generation. }
+    Procedure AddGeneratedBulk(Const Frame: RawByteString; Generation: Int64);
+    { Held until no bulk entry of that generation remains. }
+    Procedure HoldBarrier(Const Frame: RawByteString; Generation: Int64);
     { Drops unsent snapshot pages. Control, state, and the log stay. }
     Procedure DiscardBulk;
     Procedure Clear;
@@ -443,14 +450,24 @@ End;
 Function TMonitorOutbox.Take(Out Frame: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
 Var
   Entry: TMonitorOutboxEntry;
+  Counted: Boolean;
 Begin
   Result := False;
   Frame := '';
   Lane := molControl;
+  Counted := True;
   EnterCriticalSection(OutboxLock);
   Try
     If Rings[molControl].Pop(Entry) Then
       Lane := molControl
+    Else If (FBarrierFrame <> '') And (Not BulkHasGeneration(FBarrierGeneration)) Then
+      Begin
+        Entry.Bytes := FBarrierFrame;
+        FBarrierFrame := '';
+        FBarrierGeneration := 0;
+        Lane := molControl;
+        Counted := False;
+      End
     Else If Rings[molState].Pop(Entry) Then
       Lane := molState
     Else If LogSent < Rings[molLog].Count Then
@@ -464,8 +481,8 @@ Begin
     Else
       Exit;
     Frame := Entry.Bytes;
-    { Log bytes stay counted until the phone acknowledges them. }
-    If Lane <> molLog Then
+    { Log bytes stay counted until the phone acknowledges them. The barrier was never counted. }
+    If Counted And (Lane <> molLog) Then
       Dec(LaneBytes[Lane], Length(Frame));
     Result := True;
   Finally
@@ -502,6 +519,49 @@ Begin
   End;
 End;
 
+Function TMonitorOutbox.BulkHasGeneration(Generation: Int64): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  If Generation = 0 Then
+    Exit;
+  For Index := 0 To Rings[molBulk].Count - 1 Do
+    If Rings[molBulk].Peek(Index).Seq = Generation Then
+      Exit(True);
+End;
+
+Procedure TMonitorOutbox.AddGeneratedBulk(Const Frame: RawByteString; Generation: Int64);
+Var
+  Entry: TMonitorOutboxEntry;
+Begin
+  If Not FrameFits(Frame) Then
+    Exit;
+  Entry := NewEntry(Frame, '', Generation);
+  EnterCriticalSection(OutboxLock);
+  Try
+    Rings[molBulk].Push(Entry);
+    Inc(LaneBytes[molBulk], Length(Frame));
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+  Wake;
+End;
+
+Procedure TMonitorOutbox.HoldBarrier(Const Frame: RawByteString; Generation: Int64);
+Begin
+  If Not FrameFits(Frame) Then
+    Exit;
+  EnterCriticalSection(OutboxLock);
+  Try
+    FBarrierFrame := Frame;
+    FBarrierGeneration := Generation;
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+  Wake;
+End;
+
 Procedure TMonitorOutbox.ClearLog;
 Begin
   EnterCriticalSection(OutboxLock);
@@ -511,6 +571,8 @@ Begin
     LogSent := 0;
     LastLogSeq := 0;
     FLogOverflowed := False;
+    FBarrierFrame := '';
+    FBarrierGeneration := 0;
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
@@ -545,6 +607,8 @@ Begin
     LogSent := 0;
     LastLogSeq := 0;
     FLogOverflowed := False;
+    FBarrierFrame := '';
+    FBarrierGeneration := 0;
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
