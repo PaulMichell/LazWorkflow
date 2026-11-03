@@ -37,7 +37,16 @@ sealed class SyncEffect {
     val blockId: String,
     val offset: Int = 0,
     val prefixHash: String = "",
-    val requestId: String = ""
+    val requestId: String = "",
+    val open: Boolean = false
+  ) : SyncEffect()
+  data class PlanPiece(
+    val path: String,
+    val revision: String,
+    val offset: Long,
+    val text: String,
+    val totalBytes: Long,
+    val last: Boolean
   ) : SyncEffect()
   data class Ack(val conversationId: String, val streamId: String, val seq: Long) : SyncEffect()
   data class StateApplied(val key: String, val valueJson: String) : SyncEffect()
@@ -70,6 +79,7 @@ interface SyncStore {
   suspend fun saveState(hostId: String, key: String, valueJson: String, nowMs: Long) {}
   suspend fun pendingFetches(hostId: String): List<BlockFetch> = emptyList()
   suspend fun noteRevisionChanged(hostId: String, ref: String, nowMs: Long): BlockFetch? = null
+  suspend fun commitTurnPage(hostId: String, conversationId: String, turn: computing.michell.monitor.protocol.WireTurn, nowMs: Long) {}
 }
 
 class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
@@ -147,6 +157,35 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
       if (plan.repairs.isNotEmpty()) dao.upsertRepairs(plan.repairs.map { it.toRecord() })
       for (blockId in plan.clearRepairIds) dao.deleteRepair(hostId, commit.conversationId, blockId)
       plan
+    }
+  }
+
+  override suspend fun commitTurnPage(
+    hostId: String,
+    conversationId: String,
+    turn: computing.michell.monitor.protocol.WireTurn,
+    nowMs: Long
+  ) {
+    if (conversationId.isEmpty() || turn.id.isEmpty()) return
+    database.withWriteTransaction {
+      val dao = database.sync()
+      if (dao.findHost(hostId) == null) dao.insertHost(HostRecord(hostId, "", ""))
+      val existing = dao.loadBlocks(hostId, conversationId).filter { block -> block.turn == turn.id }.associateBy { block -> block.blockId }
+      val row = TurnRecord(
+        hostId, conversationId, turn.id, turn.turnIndex, turn.mode, turn.prompt.ifEmpty { turn.promptPreview }, turn.createdAt,
+        if (turn.live) "running" else "ok", turn.durationMs, turn.errorText
+      )
+      dao.upsertTurns(listOf(row))
+      val blocks = turn.blocks.mapIndexed { index, block ->
+        val kept = existing[block.blockId]
+        val body = if (block.deferred && block.body.isEmpty()) kept?.body.orEmpty() else block.body
+        if (body.isNotEmpty() && !block.deferred) dao.deleteRepair(hostId, conversationId, block.blockId)
+        BlockRecord(
+          hostId, conversationId, turn.id, block.blockId, index, block.kind, block.title, body,
+          if (block.running) "running" else if (block.ok) "ok" else "failed"
+        )
+      }
+      if (blocks.isNotEmpty()) dao.upsertBlocks(blocks)
     }
   }
 
@@ -280,18 +319,6 @@ class SyncApplier(
   }
 
   fun start(scope: CoroutineScope): Job = scope.launch {
-    val owed = try {
-      store.pendingFetches(hostId)
-    } catch (error: CancellationException) {
-      throw error
-    } catch (error: Exception) {
-      emptyList()
-    }
-    if (owed.isNotEmpty()) {
-      deliver(owed.map { fetch ->
-        SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId)
-      })
-    }
     while (isActive) {
       val wait = gate.withLock { nextWaitMs(nowMs()) }
       delay(wait.coerceAtLeast(1L))
@@ -332,7 +359,7 @@ class SyncApplier(
       acks.note(applied, now)?.let { effects += it }
     }
     for (fetch in result.fetches) {
-      effects += SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId)
+      effects += SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId, true)
     }
     for (gap in result.gaps) resume.onGap(gap, now)?.let { effects += it }
     if (result.applied.isNotEmpty()) effects += SyncEffect.CacheReady
@@ -376,7 +403,10 @@ class SyncApplier(
         effects
       }
       is SyncFrame.SnapshotPage -> {
-        if (frame.turn != null && frame.turns.isEmpty()) return emptyList()
+        if (frame.turn != null && frame.turns.isEmpty()) {
+          commitTurnPage(frame)
+          return listOf(SyncEffect.CacheReady)
+        }
         baseline.page(frame)
         emptyList()
       }
@@ -391,10 +421,16 @@ class SyncApplier(
         } ?: return listOf(SyncEffect.CacheReady)
         committed[plan.conversation.id] = AppliedCursor(plan.conversation.id, plan.conversation.streamId, plan.conversation.seq)
         plan.fetches.map { fetch ->
-          SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId)
+          SyncEffect.FetchBlock(
+            fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId,
+            fetch.blockId == plan.openBlockId
+          )
         } + SyncEffect.CacheReady
       }
       is SyncFrame.BlockData -> applyBlockData(frame)
+      is SyncFrame.PlanData -> listOf(SyncEffect.PlanPiece(
+        frame.path, frame.revision, frame.offset, frame.text, frame.totalBytes, frame.last
+      ))
       is SyncFrame.NotReady -> listOf(SyncEffect.Note("The desktop has not observed this conversation yet."), SyncEffect.CacheReady)
       is SyncFrame.ResumeOk -> listOf(SyncEffect.CacheReady)
       is SyncFrame.RevisionChanged -> {
@@ -409,6 +445,19 @@ class SyncApplier(
         if (fetch == null) emptyList()
         else listOf(SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId))
       }
+    }
+  }
+
+  private suspend fun commitTurnPage(frame: SyncFrame.SnapshotPage) {
+    val turn = frame.turn ?: return
+    val conversationId = frame.conversationId.ifEmpty { turn.id }
+    if (conversationId.isEmpty()) return
+    try {
+      store.commitTurnPage(hostId, frame.conversationId, turn, nowMs())
+    } catch (error: CancellationException) {
+      throw error
+    } catch (error: Exception) {
+      // A failed turn page leaves the stored turn. The next visible pass can ask again.
     }
   }
 

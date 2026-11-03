@@ -1477,8 +1477,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     screenState.value = tab
     // The cached plan is already on screen. This only asks for a newer copy.
-    if (tab == AppTab.Plan && !uiState.value.disconnected)
+    if (tab == AppTab.Plan && !uiState.value.disconnected) {
       session.sendCatalogue(encodePlanChoices(session.nextCommandId()))
+      considerPlanFetch()
+    }
   }
 
   fun updateDraft(text: String) {
@@ -1853,6 +1855,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         val live = document.live
         val stored = if (live == null) document.turns else document.turns.filter { turn -> turn.id != live.id }
         storedBoardState.value = BoardContent(hostId, conversationId, stored, live)
+        val grants = screenFetch.replaceBoard(conversationId, stored, live)
+        withContext(Dispatchers.Main) { sendFetchGrants(grants) }
         val row = read.row
         if (row != null) {
           coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
@@ -1924,12 +1928,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           if (effect.hold) session.queueSyncResume(json) else session.sendCatalogue(json)
         }
         computing.michell.monitor.data.SyncEffect.Reconnect -> session.reconnect()
-        is computing.michell.monitor.data.SyncEffect.FetchBlock -> {
-          val id = effect.requestId.ifEmpty { session.nextCommandId() }
-          session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncBlockGet(
-            id, effect.conversationId, effect.blockId, effect.offset, effect.prefixHash
-          ))
-        }
+        is computing.michell.monitor.data.SyncEffect.FetchBlock -> acceptBlockFetch(effect)
+        is computing.michell.monitor.data.SyncEffect.PlanPiece -> acceptPlanPiece(effect)
         is computing.michell.monitor.data.SyncEffect.StateApplied -> {
           val next = if (effect.key == "approval") {
             computing.michell.monitor.data.applyApprovalState(coordinator.state, effect.valueJson)
@@ -1937,6 +1937,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
             computing.michell.monitor.data.applyStateValue(coordinator.state, effect.key, effect.valueJson)
           }
           uiState.value = coordinator.noteSyncedChrome(next)
+          if (effect.key == "plan") {
+            shownPlanPath = next.planPath
+            shownPlanRevision = computing.michell.monitor.data.planStateRevision(effect.valueJson)
+            considerPlanFetch()
+          }
         }
         is computing.michell.monitor.data.SyncEffect.Note -> uiState.value = coordinator.noteSyncNote(effect.text)
         computing.michell.monitor.data.SyncEffect.CacheReady -> uiState.value = coordinator.noteCacheReadable()
@@ -1945,6 +1950,71 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private var syncApplier: computing.michell.monitor.data.SyncApplier? = null
+  private val screenFetch = computing.michell.monitor.data.ScreenFetch()
+  private val planFiles = computing.michell.monitor.data.PlanFiles(File(imageRoot, "plans"))
+  private var shownPlanPath = ""
+  private var shownPlanRevision = ""
+
+  private fun acceptBlockFetch(effect: computing.michell.monitor.data.SyncEffect.FetchBlock) {
+    if (screenFetch.isFlying(effect.blockId)) {
+      sendBlockGet(effect)
+      return
+    }
+    sendFetchGrants(screenFetch.offerRepair(computing.michell.monitor.data.BlockFetch(
+      effect.conversationId, effect.blockId, effect.offset, effect.prefixHash, effect.requestId
+    ), effect.open))
+  }
+
+  private fun sendFetchGrants(grants: List<computing.michell.monitor.data.FetchGrant>) {
+    for (grant in grants) {
+      when (grant) {
+        is computing.michell.monitor.data.FetchGrant.Block -> sendBlockGet(computing.michell.monitor.data.SyncEffect.FetchBlock(
+          grant.fetch.conversationId, grant.fetch.blockId, grant.fetch.offset, grant.fetch.prefixHash, grant.fetch.requestId, grant.open
+        ))
+        is computing.michell.monitor.data.FetchGrant.Turn -> session.sendCatalogue(
+          computing.michell.monitor.protocol.encodeTurnRequest(session.nextCommandId(), grant.index)
+        )
+        is computing.michell.monitor.data.FetchGrant.Plan -> session.sendCatalogue(
+          computing.michell.monitor.protocol.encodePlanGet(session.nextCommandId(), grant.path, grant.offset, grant.revision)
+        )
+      }
+    }
+  }
+
+  private fun sendBlockGet(effect: computing.michell.monitor.data.SyncEffect.FetchBlock) {
+    val id = effect.requestId.ifEmpty { session.nextCommandId() }
+    session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncBlockGet(
+      id, effect.conversationId, effect.blockId, effect.offset, effect.prefixHash
+    ))
+  }
+
+  private fun considerPlanFetch() {
+    if (screenState.value != AppTab.Plan) return
+    val path = shownPlanPath.ifEmpty { uiState.value.planPath }
+    if (path.isEmpty()) return
+    val host = store.load().hostId
+    val file = if (host.isEmpty()) null else planFiles.state(host, path)
+    sendFetchGrants(screenFetch.notePlan(
+      path, shownPlanRevision, file != null, file?.revision.orEmpty(), file?.received ?: 0L, true
+    ))
+  }
+
+  private fun acceptPlanPiece(effect: computing.michell.monitor.data.SyncEffect.PlanPiece) {
+    val host = store.load().hostId
+    if (host.isEmpty()) return
+    val written = planFiles.append(host, effect.path, effect.revision, effect.offset, effect.text, effect.totalBytes, effect.last)
+      ?: return
+    if (!effect.last) return
+    if (written.complete) {
+      val review = planFiles.readReview(host, effect.path, 256 * 1024)
+      uiState.value = coordinator.noteSyncedChrome(uiState.value.copy(planBody = review, planPath = effect.path))
+      sendFetchGrants(screenFetch.finished("plan:" + effect.path))
+    } else {
+      planFiles.noteDrop(host, effect.path)
+      uiState.value = coordinator.noteSyncNote(computing.michell.monitor.data.PlanIncompleteLabel)
+      screenFetch.notePlanDropped()
+    }
+  }
 
   private fun retentionLimits(): RetentionLimits {
     val cap = displayPrefs.getInt(ConversationCapKey, DefaultConversationCap)
@@ -1954,9 +2024,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun noteVisibleTurns(indices: Set<Int>) {
-    val effects = coordinator.noteVisibleTurns(uiState.value, indices)
-    if (effects.isEmpty()) return
-    applyUiEffects(effects)
+    coordinator.noteVisibleTurns(uiState.value, indices)
+    sendFetchGrants(screenFetch.noteVisible(indices))
   }
 
   fun noteViewWidth(px: Int) {
@@ -2204,6 +2273,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (effects != null) applyUiEffects(effects)
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) {
       askedStatusModel = false
+      val host = store.load().hostId
+      val path = shownPlanPath.ifEmpty { uiState.value.planPath }
+      if (host.isNotEmpty() && path.isNotEmpty()) {
+        val dropped = planFiles.noteDrop(host, path)
+        if (dropped != null && dropped.incomplete) uiState.value = coordinator.noteSyncNote(computing.michell.monitor.data.PlanIncompleteLabel)
+      }
+      screenFetch.notePlanDropped()
     }
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Connecting) {
       watchScreen(watchedHost, watchedConversation)

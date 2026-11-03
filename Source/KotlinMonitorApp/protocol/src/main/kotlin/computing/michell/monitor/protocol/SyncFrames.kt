@@ -33,6 +33,14 @@ fun encodeSyncBlockGet(id: String, conversationId: String, blockId: String, offs
   return encodeEnvelope(MessageKind.BlockGet, id, payload.build())
 }
 
+fun encodePlanGet(id: String, path: String, offset: Long, revision: String): String {
+  val payload = JsonObjectBuilder()
+  payload.add("path", path)
+  payload.add("offset", offset)
+  payload.add("revision", revision)
+  return encodeNamedEnvelope("plan_get", id, payload.build())
+}
+
 fun encodeSyncResume(id: String, conversationId: String, streamId: String, seq: Long): String {
   val payload = JsonObjectBuilder()
   payload.add("conversation_id", conversationId)
@@ -105,6 +113,14 @@ sealed class SyncFrame {
   data class NotReady(val conversationId: String) : SyncFrame()
   data class ResumeOk(val conversationId: String, val streamId: String, val fromSeq: Long) : SyncFrame()
   data class RevisionChanged(val ref: String) : SyncFrame()
+  data class PlanData(
+    val path: String,
+    val revision: String,
+    val offset: Long,
+    val text: String,
+    val totalBytes: Long,
+    val last: Boolean
+  ) : SyncFrame()
   data class StateChunk(val key: String, val part: Int, val partCount: Int, val data: String) : SyncFrame()
 }
 
@@ -127,6 +143,7 @@ fun decodeSyncEnvelope(json: String): SyncFrame? {
     "snapshot_page" -> decodeSyncSnapshotPage(payload)
     "snapshot_end" -> decodeSnapshotEnd(payload)
     "block_data" -> decodeSyncBlockData(payload)
+    "plan_data" -> decodePlanData(payload)
     "not_ready" -> {
       val id = payload.readString("conversation_id", false)
       if (!id.ok) null else SyncFrame.NotReady(id.value)
@@ -242,6 +259,17 @@ private fun decodeSnapshotEnd(payload: JsonValue.Obj): SyncFrame.SnapshotEnd? {
   val seq = payload.readLong("seq", true)
   if (!id.ok || !stream.ok || !seq.ok) return null
   return SyncFrame.SnapshotEnd(id.value, stream.value, seq.value)
+}
+
+private fun decodePlanData(payload: JsonValue.Obj): SyncFrame.PlanData? {
+  val path = payload.readString("path", true)
+  val revision = payload.readString("revision", true)
+  val offset = payload.readLong("offset", true)
+  val text = payload.readString("text", false)
+  val total = payload.readLong("total_bytes", true)
+  val last = payload.readBool("last", true)
+  if (!path.ok || !revision.ok || !offset.ok || !text.ok || !total.ok || !last.ok || offset.value < 0) return null
+  return SyncFrame.PlanData(path.value, revision.value, offset.value, text.value, total.value, last.value)
 }
 
 private fun decodeSyncBlockData(payload: JsonValue.Obj): SyncFrame.BlockData? {

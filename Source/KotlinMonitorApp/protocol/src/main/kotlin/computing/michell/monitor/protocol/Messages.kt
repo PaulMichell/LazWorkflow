@@ -376,10 +376,15 @@ private fun blankMessage(): MonitorMessage {
 
 fun encodeEnvelope(kind: MessageKind, id: String, payload: JsonValue.Obj?): String {
   if (kind == MessageKind.Unknown || !messageIdIsSafe(id)) return ""
+  return encodeNamedEnvelope(kind.wireName, id, payload)
+}
+
+fun encodeNamedEnvelope(typeName: String, id: String, payload: JsonValue.Obj?): String {
+  if (typeName.isEmpty() || !messageIdIsSafe(id)) return ""
   val root = JsonObjectBuilder()
   root.add("v", MonitorLimits.CatalogueVersion)
   root.add("id", id)
-  root.add("type", kind.wireName)
+  root.add("type", typeName)
   root.add("payload", payload ?: JsonValue.Obj(emptyList()))
   val text = root.build().toFpJson()
   if (utf8Length(text) > MonitorLimits.MaxPayloadBytes) return ""

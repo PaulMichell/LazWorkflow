@@ -79,7 +79,8 @@ data class BaselinePlan(
   val deleteBlockIds: List<String>,
   val repairs: List<BlockRepair>,
   val clearRepairIds: List<String>,
-  val fetches: List<BlockFetch>
+  val fetches: List<BlockFetch>,
+  val openBlockId: String = ""
 )
 
 sealed class FetchFinish {
@@ -249,7 +250,12 @@ fun reconcileBaseline(
     nowMs,
     existing?.pinned ?: false
   )
-  return BaselinePlan(row, upsertTurns, upsertBlocks, deleteTurns, deleteBlocks, repairs, clearRepairs, fetches)
+  return BaselinePlan(row, upsertTurns, upsertBlocks, deleteTurns, deleteBlocks, repairs, clearRepairs, fetches, open?.blockId.orEmpty())
+}
+
+fun planStateRevision(valueJson: String): String {
+  val value = jsonObject(valueJson) ?: return ""
+  return value.textField("revision").orEmpty()
 }
 
 fun finishFetch(
