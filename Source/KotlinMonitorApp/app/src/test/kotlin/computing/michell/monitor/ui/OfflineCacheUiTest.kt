@@ -4,6 +4,7 @@ package computing.michell.monitor.ui
 
 import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.StoredPlan
+import computing.michell.monitor.data.applyStateValue
 import computing.michell.monitor.protocol.OfflineCacheDocument
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
@@ -179,5 +180,26 @@ class OfflineCacheUiTest {
     assertEquals("Release layout", restored.planTitle)
     assertEquals(NoAddressBanner, restored.banner)
     assertTrue(restored.disconnected)
+  }
+
+  @Test
+  fun aNewTapDoesNotKeepTheRoomPageJustLeft() {
+    val open = MonitorUi(conversationId = "chat-a", turns = listOf(WireTurn(1, "t", "build", "", "Old", "")))
+    val stored = BoardContent("host", "chat-a", open.turns, null)
+    assertEquals("Old", shownConversation(open, stored).turns.single().promptPreview)
+    val cleared = open.copy(conversationId = "")
+    assertTrue(shownConversation(cleared, stored).turns.isEmpty())
+    val next = cleared.copy(conversationId = "chat-b")
+    assertTrue(shownConversation(next, stored).turns.isEmpty())
+    assertEquals("Old", shownConversation(next, BoardContent()).turns.single().promptPreview)
+  }
+
+  @Test
+  fun theOpenChatIdIsNotTheHistoryCurrentSlot() {
+    val named = applyStateValue(MonitorUi(), "conversation", """{"id":"11111111-1111-1111-1111-111111111111"}""")
+    assertEquals("11111111-1111-1111-1111-111111111111", named.conversationId)
+    val slot = applyStateValue(named, "conversations", """{"current":"","choices":[]}""")
+    assertEquals(named.conversationId, slot.conversationId)
+    assertEquals("", slot.conversationCurrent)
   }
 }

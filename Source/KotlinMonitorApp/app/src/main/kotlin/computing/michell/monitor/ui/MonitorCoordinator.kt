@@ -265,6 +265,17 @@ class MonitorCoordinator(
 
   fun revealHeldLink(current: MonitorUi, status: LinkStatus): List<MonitorEffect>? = null
 
+  /** The desktop named the chat New and Send write. Drop a board that belongs to another id. */
+  fun noteHostConversation(id: String): MonitorUi = synchronized(gate) {
+    if (!conversationIdIsIdentity(id)) return published()
+    if (id == local.conversationId && content.current().conversationId == id) return published()
+    awaitingConversation = false
+    closedAwaitId = ""
+    if (content.current().conversationId != id) content.replace(contentHost, id, emptyList(), null)
+    local = local.copy(conversationId = id, reviewingOffline = false)
+    published()
+  }
+
   /** Chrome from a state frame. The conversation board stays with the store. */
   fun noteSyncedChrome(next: MonitorUi): MonitorUi = synchronized(gate) {
     local = local.copy(

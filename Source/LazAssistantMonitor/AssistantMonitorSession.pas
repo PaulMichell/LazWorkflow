@@ -1704,6 +1704,8 @@ Begin
     PublishState('approval', '{"active":true,"tool_id":"' + Status.ApprovalToolId + '"}')
   Else
     PublishState('approval', '{"active":false}');
+  If (FConversationId <> '') And (FConversationId <> 'current') Then
+    PublishState('conversation', '{"id":"' + FConversationId + '"}');
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
   FPhoneAcked := ResumeMsg.Cursor;

@@ -90,3 +90,16 @@ fun MonitorUi.withBoard(board: BoardContent): MonitorUi {
     history = board.turns.associateBy { turn -> turn.turnIndex }
   )
 }
+
+/**
+ * Room is the screen only for the open chat. A New tap clears that id, and a stored
+ * page for the chat just left must not stay in front of Send or the empty new chat.
+ */
+fun shownConversation(ui: MonitorUi, stored: BoardContent): MonitorUi {
+  if (stored.conversationId.isNotEmpty() && stored.conversationId == ui.conversationId) return ui.withBoard(stored)
+  // New and conversation_closed clear the id. The page just left must not stay up.
+  if (ui.conversationId.isEmpty()) return ui.copy(turns = emptyList(), live = null, history = emptyMap())
+  // Room has not emitted for this open yet. Keep the coordinator copy.
+  if (stored.conversationId.isEmpty()) return ui
+  return ui.copy(turns = emptyList(), live = null, history = emptyMap())
+}

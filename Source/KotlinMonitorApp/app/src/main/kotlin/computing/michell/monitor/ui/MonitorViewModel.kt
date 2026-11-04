@@ -133,6 +133,7 @@ import computing.michell.monitor.protocol.TargetChoice
 import computing.michell.monitor.protocol.TargetsMessage
 import computing.michell.monitor.protocol.decodeConversations
 import computing.michell.monitor.protocol.encodeSelectConversation
+import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.hostIdIsValid
 import computing.michell.monitor.protocol.encodeNewPlan
 import computing.michell.monitor.protocol.encodePath
@@ -1771,6 +1772,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     leaveDictation()
     val effects = coordinator.onEvent(MonitorEvent.NewConversation(uiState.value)) ?: return
     applyUiEffects(effects)
+    // The old Room page is not the chat New just opened.
+    if (coordinator.state.conversationId.isEmpty()) watchScreen("", "")
   }
 
   fun setMode(mode: String) {
@@ -1813,6 +1816,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val repairs: List<computing.michell.monitor.data.BlockRepairRecord>,
     val row: ConversationRecord?
   )
+
+  /** Send and New write the desktop's open chat. The screen has to be that chat. */
+  private fun followHostConversation(id: String) {
+    if (!conversationIdIsIdentity(id)) return
+    if (uiState.value.disconnected) return
+    val record = store.load()
+    val host = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
+    if (host.isEmpty()) return
+    uiState.value = coordinator.noteHostConversation(id)
+    if (id == watchedConversation && contentWatch?.isActive == true) return
+    watchScreen(host, id)
+  }
 
   private fun watchScreen(hostId: String, conversationId: String) {
     if (hostId.isEmpty() || conversationId.isEmpty()) {
@@ -1923,6 +1938,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
             computing.michell.monitor.data.applyStateValue(coordinator.state, effect.key, effect.valueJson)
           }
           uiState.value = coordinator.noteSyncedChrome(next)
+          if (effect.key == "conversation") followHostConversation(next.conversationId)
           if (effect.key == "plan") {
             shownPlanPath = next.planPath
             shownPlanRevision = computing.michell.monitor.data.planStateRevision(effect.valueJson)
@@ -2238,6 +2254,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
+    if (status.phase == computing.michell.monitor.connection.LinkPhase.Live) followHostConversation(uiState.value.conversationId)
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) {
       askedStatusModel = false
       val host = store.load().hostId
@@ -2294,8 +2311,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun applyUiEffects(effects: List<MonitorEffect>) {
+    val beforeId = uiState.value.conversationId
     val before = uiState.value
     uiState.value = coordinator.state
+    val opened = uiState.value.conversationId
+    if (opened != beforeId) {
+      if (opened.isEmpty()) watchScreen("", "")
+      else followHostConversation(opened)
+    }
     rememberShownModel(uiState.value.view.model)
     if (planChromeChanged(before, uiState.value)) rememberPlan(before, uiState.value, false)
     dropCachedBitmaps(imageCache.retain(uiState.value.hostGeneration, snapshotImageTurns(uiState.value)))

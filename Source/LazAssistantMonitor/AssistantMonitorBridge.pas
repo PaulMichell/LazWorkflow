@@ -643,7 +643,7 @@ Var
   Rows: TAssistantMonitorPlanRows;
   Tasks: TAssistantMonitorTaskRows;
   Paths, Captions, Ids, Titles: TStringList;
-  Current, Backend, Note, PlanRows, TaskRows: String;
+  Current, Backend, Note, PlanRows, TaskRows, ConversationId, ProjectRoot, Title: String;
   Index: Integer;
   Truncated: Boolean;
 Begin
@@ -657,6 +657,10 @@ Begin
   End;
   If Not Assigned(Session) Then
     Exit;
+  { History current is empty for the open chat. The mirror id is what New and Send write. }
+  Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
+  If (ConversationId <> '') And (ConversationId <> 'current') Then
+    Session.PublishState('conversation', '{"id":"' + ConversationId + '"}');
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);

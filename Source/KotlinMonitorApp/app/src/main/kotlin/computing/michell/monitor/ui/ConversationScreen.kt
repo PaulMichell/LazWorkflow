@@ -123,7 +123,7 @@ fun ConversationScreen(
   onRetry: () -> Unit = {},
   stored: BoardContent? = null
 ) {
-  val shown = if (stored == null) ui else ui.withBoard(stored)
+  val shown = shownConversation(ui, stored ?: BoardContent())
   val activity = LocalContext.current as? Activity
   val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
     onPermissionResult(granted)

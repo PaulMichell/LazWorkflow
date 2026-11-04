@@ -384,6 +384,11 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
       targetCurrent = value.textField("current") ?: ui.targetCurrent,
       targetChoices = choicePaths(value) ?: ui.targetChoices
     )
+    "conversation" -> {
+      val id = value.textField("id")
+      if (id.isNullOrEmpty() || id == "current") ui
+      else ui.copy(conversationId = id, conversationTitle = value.textField("title") ?: ui.conversationTitle)
+    }
     "conversations" -> ui.copy(
       conversationCurrent = value.textField("current") ?: ui.conversationCurrent,
       conversationsTruncated = value.flagField("truncated") ?: ui.conversationsTruncated,
