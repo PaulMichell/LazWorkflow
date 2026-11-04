@@ -111,9 +111,9 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
             dao.insertHost(HostRecord(hostId, "", ""))
             hostReady = true
           }
-          dao.upsertConversation(commit.conversation)
-          if (commit.turns.isNotEmpty()) dao.upsertTurns(commit.turns)
-          if (commit.blocks.isNotEmpty()) dao.upsertBlocks(commit.blocks)
+          dao.saveConversation(commit.conversation)
+          if (commit.turns.isNotEmpty()) dao.saveTurns(commit.turns)
+          if (commit.blocks.isNotEmpty()) dao.saveBlocks(commit.blocks)
           if (commit.images.isNotEmpty()) dao.upsertImages(commit.images)
           if (commit.repairs.isNotEmpty()) dao.upsertRepairs(commit.repairs.map { it.toRecord() })
           for (blockId in commit.clearRepairIds) dao.deleteRepair(hostId, id, blockId)
@@ -145,9 +145,9 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
         dao.loadBlocks(hostId, commit.conversationId),
         commit
       ) ?: return@withWriteTransaction null
-      dao.upsertConversation(plan.conversation)
-      if (plan.upsertTurns.isNotEmpty()) dao.upsertTurns(plan.upsertTurns)
-      if (plan.upsertBlocks.isNotEmpty()) dao.upsertBlocks(plan.upsertBlocks)
+      dao.saveConversation(plan.conversation)
+      if (plan.upsertTurns.isNotEmpty()) dao.saveTurns(plan.upsertTurns)
+      if (plan.upsertBlocks.isNotEmpty()) dao.saveBlocks(plan.upsertBlocks)
       for (blockId in plan.deleteBlockIds) {
         dao.deleteHeldBlock(hostId, commit.conversationId, blockId)
         dao.deleteRepair(hostId, commit.conversationId, blockId)
@@ -175,7 +175,7 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
         hostId, conversationId, turn.id, turn.turnIndex, turn.mode, turn.prompt.ifEmpty { turn.promptPreview }, turn.createdAt,
         if (turn.live) "running" else "ok", turn.durationMs, turn.errorText
       )
-      dao.upsertTurns(listOf(row))
+      dao.saveTurns(listOf(row))
       val blocks = turn.blocks.mapIndexed { index, block ->
         val kept = existing[block.blockId]
         val body = if (block.deferred && block.body.isEmpty()) kept?.body.orEmpty() else block.body
@@ -185,7 +185,7 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
           if (block.running) "running" else if (block.ok) "ok" else "failed"
         )
       }
-      if (blocks.isNotEmpty()) dao.upsertBlocks(blocks)
+      if (blocks.isNotEmpty()) dao.saveBlocks(blocks)
     }
   }
 
@@ -211,7 +211,7 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
       val finished = finishFetch(block, repair, held, pieces, revision, hasRevision, totalBytes, ref, nowMs)
       when (finished) {
         is FetchFinish.Applied -> {
-          if (block != null) dao.upsertBlocks(listOf(block.copy(body = finished.body)))
+          if (block != null) dao.saveBlocks(listOf(block.copy(body = finished.body)))
           val next = repair.copy(
             revision = finished.revision,
             expectedLength = utf8Length(finished.body),

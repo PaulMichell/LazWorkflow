@@ -60,4 +60,5 @@ dependencies {
   implementation(libs.sqlite.framework)
   ksp(libs.room.compiler)
   testImplementation(libs.junit)
+  testImplementation(libs.sqlite.jdbc)
 }

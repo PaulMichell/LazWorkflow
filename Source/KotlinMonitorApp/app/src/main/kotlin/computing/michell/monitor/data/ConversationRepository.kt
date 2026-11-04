@@ -187,7 +187,7 @@ class ConversationRepository(
   private suspend fun commit(host: String, stored: StoredScreen, images: List<ImageRecord>) {
     database.withWriteTransaction {
       database.hosts().insertIfAbsent(HostRecord(host, host, ""))
-      database.sync().upsertConversation(stored.conversation)
+      database.sync().saveConversation(stored.conversation)
       database.content().replace(host, stored.conversation.id, stored.turns, stored.blocks)
       val previous = database.sync().loadImages(host, stored.conversation.id)
       val kept = images.map { image -> image.id }.toSet()

@@ -154,14 +154,39 @@ abstract class SyncDao {
   @Query("SELECT * FROM held_append WHERE host = :host AND conversation = :conversation AND blockId IN (:blockIds) ORDER BY seq")
   abstract suspend fun loadHeld(host: String, conversation: String, blockIds: List<String>): List<HeldAppendRecord>
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
-  abstract suspend fun upsertConversation(row: ConversationRecord)
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  abstract suspend fun insertConversation(row: ConversationRecord): Long
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
-  abstract suspend fun upsertTurns(rows: List<TurnRecord>)
+  @Query(
+    "UPDATE conversation SET projectRoot = :projectRoot, title = :title, streamId = :streamId, seq = :seq, " +
+      "updatedAt = :updatedAt, pinned = :pinned WHERE host = :host AND id = :id"
+  )
+  abstract suspend fun updateConversation(
+    host: String, id: String, projectRoot: String, title: String, streamId: String, seq: Long, updatedAt: Long, pinned: Boolean
+  ): Int
 
-  @Insert(onConflict = OnConflictStrategy.REPLACE)
-  abstract suspend fun upsertBlocks(rows: List<BlockRecord>)
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  abstract suspend fun insertTurns(rows: List<TurnRecord>): List<Long>
+
+  @Query(
+    "UPDATE turn SET ordinal = :ordinal, mode = :mode, prompt = :prompt, createdAt = :createdAt, outcome = :outcome, " +
+      "durationMs = :durationMs, errorText = :errorText WHERE host = :host AND conversationId = :conversationId AND turnId = :turnId"
+  )
+  abstract suspend fun updateTurn(
+    host: String, conversationId: String, turnId: String, ordinal: Int, mode: String, prompt: String, createdAt: String,
+    outcome: String, durationMs: Int, errorText: String
+  ): Int
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  abstract suspend fun insertBlocks(rows: List<BlockRecord>): List<Long>
+
+  @Query(
+    "UPDATE block SET turn = :turn, ordinal = :ordinal, kind = :kind, title = :title, body = :body, state = :state " +
+      "WHERE host = :host AND conversation = :conversation AND blockId = :blockId"
+  )
+  abstract suspend fun updateBlock(
+    host: String, conversation: String, blockId: String, turn: String, ordinal: Int, kind: String, title: String, body: String, state: String
+  ): Int
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   abstract suspend fun upsertImages(rows: List<ImageRecord>)
@@ -174,6 +199,9 @@ abstract class SyncDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   abstract suspend fun upsertState(row: HostStateRecord)
+
+  @Query("SELECT * FROM host_state WHERE host = :host AND key = :key LIMIT 1")
+  abstract suspend fun loadState(host: String, key: String): HostStateRecord?
 
   @Query("DELETE FROM block_repair WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
   abstract suspend fun deleteRepair(host: String, conversation: String, blockId: String)
@@ -222,4 +250,26 @@ interface PlanDao {
 
   @Query("DELETE FROM plan WHERE host = :host")
   suspend fun delete(host: String)
+}
+
+/** Update in place. REPLACE would delete the row and cascade to its children. */
+internal suspend fun SyncDao.saveConversation(row: ConversationRecord) {
+  val changed = updateConversation(row.host, row.id, row.projectRoot, row.title, row.streamId, row.seq, row.updatedAt, row.pinned)
+  if (changed == 0) insertConversation(row)
+}
+
+internal suspend fun SyncDao.saveTurns(rows: List<TurnRecord>) {
+  for (row in rows) {
+    val changed = updateTurn(
+      row.host, row.conversationId, row.turnId, row.ordinal, row.mode, row.prompt, row.createdAt, row.outcome, row.durationMs, row.errorText
+    )
+    if (changed == 0) insertTurns(listOf(row))
+  }
+}
+
+internal suspend fun SyncDao.saveBlocks(rows: List<BlockRecord>) {
+  for (row in rows) {
+    val changed = updateBlock(row.host, row.conversation, row.blockId, row.turn, row.ordinal, row.kind, row.title, row.body, row.state)
+    if (changed == 0) insertBlocks(listOf(row))
+  }
 }

@@ -207,15 +207,16 @@ fun reconcileBaseline(
     )
     for (named in outline.blocks) {
       val cached = blockById[named.blockId]
-      val inline = if (open != null && open.blockId == named.blockId) open else null
+      val delivered = open != null && open.blockId == named.blockId && openBlockDelivered(open)
       val cachedHash = if (cached == null) "" else prefixHash(cached.body)
       val hashMatches = named.hash.isNotEmpty() && cached != null && cachedHash == named.hash
       val body = when {
-        inline != null -> inline.body
-        hashMatches -> cached?.body.orEmpty()
+        delivered -> open?.body.orEmpty()
         else -> cached?.body.orEmpty()
       }
-      val missing = inline == null && !hashMatches
+      val isOpen = open != null && open.blockId == named.blockId
+      val missing = !delivered && !hashMatches
+      val requestOpen = isOpen && !delivered
       upsertBlocks += BlockRecord(
         host,
         commit.conversationId,
@@ -227,12 +228,14 @@ fun reconcileBaseline(
         body,
         named.state.ifEmpty { cached?.state ?: "ok" }
       )
-      if (missing) {
+      if (missing || requestOpen) {
+        val offset = if (hashMatches) utf8Length(cached?.body.orEmpty()) else 0
+        val hash = if (offset > 0) cachedHash else EmptyPrefixHash
         val request = fetchRequestId(named.blockId, commit.seq)
         repairs += BlockRepair(
-          host, commit.conversationId, named.blockId, named.revision, 0, true, EmptyPrefixHash, true, request, ""
+          host, commit.conversationId, named.blockId, named.revision, offset, true, hash, missing, request, ""
         )
-        fetches += BlockFetch(commit.conversationId, named.blockId, 0, EmptyPrefixHash, request)
+        fetches += BlockFetch(commit.conversationId, named.blockId, offset, hash, request)
       } else {
         clearRepairs += named.blockId
       }
@@ -251,6 +254,14 @@ fun reconcileBaseline(
     existing?.pinned ?: false
   )
   return BaselinePlan(row, upsertTurns, upsertBlocks, deleteTurns, deleteBlocks, repairs, clearRepairs, fetches, open?.blockId.orEmpty())
+}
+
+/** An omitted or truncated open block is not the stored body. The phone asks for it. */
+private fun openBlockDelivered(open: OpenBlockBody): Boolean {
+  if (open.body.isEmpty()) return false
+  if (open.bodyBytes > 0 && utf8Length(open.body) != open.bodyBytes) return false
+  if (open.hash.isNotEmpty() && prefixHash(open.body) != open.hash) return false
+  return true
 }
 
 fun planStateRevision(valueJson: String): String {
