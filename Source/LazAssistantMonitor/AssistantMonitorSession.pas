@@ -223,7 +223,6 @@ Type
     Procedure NoteLogAck(Const PayloadJson: String);
     Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: String);
-    Function MirrorDroppedThrough: Int64;
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
@@ -269,6 +268,12 @@ Type
     Procedure RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
     Function MirrorEpoch: String;
     Function MirrorCursor: Int64;
+    { Oldest sequence the log has folded away. Zero when the tail from the start is still held. }
+    Function MirrorDroppedThrough: Int64;
+    { The harness folds the log without an 8 MiB fill. A later append applies the budget. }
+    Procedure SetMirrorLogBudget(Bytes: Int64);
+    { Marks the stream acked through Seq so a later append may fold older events. }
+    Procedure NoteMirrorAck(Seq: Int64);
     { Same cursor while the bytes are unsent or already handed unchanged. }
     Function CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
     Procedure NoteMirrorHanded(Cursor: Int64);
@@ -2452,6 +2457,25 @@ Begin
     Result := FMirror.DroppedThrough
   Else
     Result := 0;
+End;
+
+Procedure TMonitorSession.SetMirrorLogBudget(Bytes: Int64);
+Begin
+  If Assigned(FMirror) Then
+    FMirror.SetLogBudget(Bytes);
+End;
+
+Procedure TMonitorSession.NoteMirrorAck(Seq: Int64);
+Begin
+  LockSession;
+  Try
+    If Seq > FPhoneAcked Then
+      FPhoneAcked := Seq;
+    If Assigned(FMirror) Then
+      FMirror.NoteAck(FEpoch, Seq);
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Procedure TMonitorSession.RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);

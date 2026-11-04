@@ -1111,7 +1111,14 @@ Begin
       If (Not HeldOff) And FrameReady And Not WriteOwed And Not ReadOwed And Assigned(Host) And
         (Host.OutboundCount(Self) > 1) Then
         Begin
-          PollWait(80, False);
+          { Read a ping that is already in TLS before the first bulk write of this burst. }
+          PollWait(20, False);
+          DrainReads;
+          If Not DropLink And Assigned(Ssl) And (TSSL(Ssl).Pending = 0) Then
+            Begin
+              PollWait(5, False);
+              DrainReads;
+            End;
           HeldOff := True;
         End;
       If Not FrameReady Then

@@ -3,18 +3,16 @@ Program AssistantMonitorLinkTest;
 { Throughput and latency harness for the monitor LAN link (c) 2026 Michell Computing.
 
   Starts a real TMonitorLanCarrier on 127.0.0.1 with a test certificate, pairs an
-  OpenSSL client socket, and measures three things: outbound frames per second,
-  ping to pong while 32 bulk snapshot pages are queued, and the time to deliver a
-  resume answer. Plan frames coalesce, so the throughput workload is snapshot
-  pages. The resume answer has the bridge's shape: a catchup snapshot, a status,
-  a plan and the five menu lists. It is built on the main thread after a
-  TThread.Queue hop, as the bridge does on the IDE thread.
+  OpenSSL client socket, and measures the catalogue 3 grain on that socket.
+  A baseline resume is status, approval, snapshot_begin, one outline page, and
+  snapshot_end. A tail resume is resume_ok and the events after the cursor.
+  Slice latency includes the pump rule: the first change after a quiet period is
+  queued at once, and a later change waits out the 20 ms coalesce, then
+  ObserveTurn runs on the main thread through TThread.Queue. The form is not in
+  this process. The link thread and the outbox wake are the real ones.
 
-  Each measurement prints one "metric" line. The checks require delivery, not
-  speed, so the harness passes on the slow baseline and on every later fix. The
-  numbers are recorded in Documents/MonitorLinkBaseline.md. The chaos fixture is
-  AssistantMonitorChaosTest, which drives TMonitorLinkThread and the mirror log
-  through Tests/Fixtures/Monitor/chaos-script.json.
+  Each measurement prints one "metric" line. Speed checks are the item 9.1
+  budgets. The numbers are recorded in Documents/MonitorLinkBaseline.md.
 
   No Interfaces unit. The runner writes this binary with a temporary -FU and -FE,
   never under Source/. Certificate and settings files are created under a temp
@@ -38,7 +36,12 @@ Const
   { Workload size for the harness, not a queue cap. }
   LinkBulkFrames = 32;
   LinkBulkTitleBytes = 2000;
-  LinkResumeFrames = 8;
+  { snapshot_begin, snapshot_page, snapshot_end. State frames precede them. }
+  LinkResumeFrames = 3;
+  LinkSampleCount = 20;
+  LinkCoalesceMs = 20;
+  LinkCreditBodyBytes = 800 * 1024;
+  LinkPlanBytes = 4 * 1024 * 1024 + 1;
   { One frame reaches the client per listen-thread pass. A pass is up to 250 ms. }
   LinkFrameWaitMs = 5000;
 
@@ -66,9 +69,19 @@ Type
     Procedure Answer;
   End;
 
+  { Main-thread observe, queued the way the pump is. Due is the coalesce deadline. }
+  TSliceFire = Class
+    Due: QWord;
+    Body: String;
+    Procedure Fire;
+  End;
+
 Var
   FailCount: Integer;
   SettingsRoot: String;
+  LiveBody: String;
+  LastPump: QWord;
+  LastAckSeq: Int64;
   Lan: TMonitorLanCarrier;
   LanRef: IMonitorCarrier;
   Session: TMonitorSession;
@@ -379,6 +392,137 @@ Begin
     Result := IntToStr(Later - Earlier);
 End;
 
+Procedure TSliceFire.Fire;
+Var
+  Turn: TAssistantMonitorTurn;
+Begin
+  While GetTickCount64 < Due Do
+    Sleep(1);
+  Turn := Default(TAssistantMonitorTurn);
+  Turn.TurnIndex := -2;
+  Turn.Id := 'live';
+  Turn.Live := True;
+  Turn.Mode := 'ask';
+  Turn.Prompt := 'link';
+  Turn.PromptPreview := 'link';
+  SetLength(Turn.Blocks, 1);
+  Turn.Blocks[0].Kind := 'answer';
+  Turn.Blocks[0].BlockId := 'live-block';
+  Turn.Blocks[0].Body := Body;
+  Turn.Blocks[0].Running := True;
+  Turn.Blocks[0].Ok := True;
+  If Assigned(Session) Then
+    Session.ObserveTurn(Turn);
+  LastPump := GetTickCount64;
+End;
+
+Function Percentile(Const Samples: Array Of QWord; Pct: Integer): QWord;
+Var
+  Sorted: Array Of QWord;
+  Index, Rank, Hole: Integer;
+  Value: QWord;
+Begin
+  Result := 0;
+  If Length(Samples) = 0 Then
+    Exit;
+  SetLength(Sorted, Length(Samples));
+  For Index := 0 To High(Samples) Do
+    Sorted[Index] := Samples[Index];
+  For Index := 1 To High(Sorted) Do
+    Begin
+      Value := Sorted[Index];
+      Hole := Index;
+      While (Hole > 0) And (Sorted[Hole - 1] > Value) Do
+        Begin
+          Sorted[Hole] := Sorted[Hole - 1];
+          Dec(Hole);
+        End;
+      Sorted[Hole] := Value;
+    End;
+  Rank := (Pct * Length(Sorted) + 99) Div 100;
+  If Rank < 1 Then
+    Rank := 1;
+  If Rank > Length(Sorted) Then
+    Rank := Length(Sorted);
+  Result := Sorted[Rank - 1];
+End;
+
+Function PayloadSeq(Const Json: String): Int64;
+Var
+  Token, Tail: String;
+  At, EndAt: Integer;
+Begin
+  Result := 0;
+  Token := '"seq":';
+  At := Pos(Token, Json);
+  If At = 0 Then
+    Exit;
+  Tail := Copy(Json, At + Length(Token), 24);
+  EndAt := 1;
+  While (EndAt <= Length(Tail)) And (Tail[EndAt] In ['0'..'9', '-']) Do
+    Inc(EndAt);
+  Result := StrToInt64Def(Copy(Tail, 1, EndAt - 1), 0);
+End;
+
+Procedure DrainClient(Client: TLoopClient; Ms: Integer);
+Var
+  Message: TMonitorMessage;
+  ErrorText: String;
+Begin
+  While Client.ReadMessage(After(Ms), Message, ErrorText) Do;
+End;
+
+Procedure AckSeq(Client: TLoopClient; Seq: Int64);
+Begin
+  If (Seq < 1) Or Not Assigned(Session) Then
+    Exit;
+  If Seq > LastAckSeq Then
+    LastAckSeq := Seq;
+  Client.WriteJson('{"v":3,"id":"ack-' + IntToStr(Seq) + '","type":"ack","payload":{"stream_id":"' +
+    Session.MirrorEpoch + '","seq":' + IntToStr(Seq) + '}}', After(1000));
+End;
+
+Procedure ObserveLive(Const Body: String);
+Var
+  Turn: TAssistantMonitorTurn;
+Begin
+  Turn := Default(TAssistantMonitorTurn);
+  Turn.TurnIndex := -2;
+  Turn.Id := 'live';
+  Turn.Live := True;
+  Turn.Mode := 'ask';
+  Turn.Prompt := 'link';
+  Turn.PromptPreview := 'link';
+  SetLength(Turn.Blocks, 1);
+  Turn.Blocks[0].Kind := 'answer';
+  Turn.Blocks[0].BlockId := 'live-block';
+  Turn.Blocks[0].Body := Body;
+  Turn.Blocks[0].Running := True;
+  Turn.Blocks[0].Ok := True;
+  Session.ObserveTurn(Turn);
+  LiveBody := Body;
+End;
+
+Procedure ObserveStored(Const TurnId, Body: String);
+Var
+  Turn: TAssistantMonitorTurn;
+Begin
+  Turn := Default(TAssistantMonitorTurn);
+  Turn.TurnIndex := 0;
+  Turn.Id := TurnId;
+  Turn.Live := False;
+  Turn.Mode := 'ask';
+  Turn.Prompt := 'stored';
+  Turn.PromptPreview := 'stored';
+  SetLength(Turn.Blocks, 1);
+  Turn.Blocks[0].Kind := 'answer';
+  Turn.Blocks[0].BlockId := TurnId + '-block';
+  Turn.Blocks[0].Body := Body;
+  Turn.Blocks[0].Running := False;
+  Turn.Blocks[0].Ok := True;
+  Session.ObserveTurn(Turn);
+End;
+
 Function WaitSession(Expected: TMonitorSessionState; Ms: Integer): Boolean;
 Var
   Deadline: QWord;
@@ -670,10 +814,16 @@ Var
   ErrorText: String;
   GotPong: Boolean;
 Begin
-  Queued := QueueBulkLane(64);
+  DrainClient(Client, 40);
+  { Queue without waking, so the ping is in the socket before the first bulk write. }
+  Queued := 0;
+  For Before := 1 To 64 Do
+    If Session.TryQueueHostJson(NextBulkFrame) Then
+      Inc(Queued);
   Check('4.2 sixty-four bulk frames stay queued', Queued = 64);
   Sent := GetTickCount64;
   Check('4.2 priority ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'priority-ping', 9), After(3000)));
+  Session.DrainOutbound;
   GotPong := False;
   Before := 0;
   PongAt := 0;
@@ -760,10 +910,507 @@ Begin
     WriteLn('detail answer_clock unset');
 End;
 
+Function ReadKind(Client: TLoopClient; Const TypeName: String; Deadline: QWord; Out Message: TMonitorMessage): Boolean;
+Var
+  ErrorText: String;
+Begin
+  Result := False;
+  Message := Default(TMonitorMessage);
+  While GetTickCount64 < Deadline Do
+    Begin
+      If Not Client.ReadMessage(Deadline, Message, ErrorText) Then
+        Exit;
+      If Message.TypeName = TypeName Then
+        Exit(True);
+      If Message.TypeName = 'event' Then
+        AckSeq(Client, PayloadSeq(Message.PayloadJson));
+      If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
+        Exit;
+    End;
+End;
+
+Procedure MeasureSliceLatency(Client: TLoopClient);
+Var
+  Samples: Array Of QWord;
+  Index: Integer;
+  Started, Arrived, Due: QWord;
+  Fire: TSliceFire;
+  Message: TMonitorMessage;
+  ErrorText, Marker: String;
+  Seen: Integer;
+Begin
+  SetLength(Samples, LinkSampleCount);
+  Seen := 0;
+  For Index := 1 To LinkSampleCount Do
+    Begin
+      Marker := 'slice-' + IntToStr(Index) + '-' + IntToStr(GetTickCount64);
+      LiveBody := LiveBody + Marker;
+      Started := GetTickCount64;
+      If (LastPump = 0) Or (Started >= LastPump + LinkCoalesceMs) Then
+        Due := Started
+      Else
+        Due := LastPump + LinkCoalesceMs;
+      Fire := TSliceFire.Create;
+      Fire.Due := Due;
+      Fire.Body := LiveBody;
+      { Queue from this thread runs the observe before the call returns. }
+      TThread.Queue(Nil, @Fire.Fire);
+      Session.DrainOutbound;
+      Arrived := 0;
+      While GetTickCount64 < Started + 1000 Do
+        Begin
+          If Not Client.ReadMessage(After(200), Message, ErrorText) Then
+            Begin
+              If Index = 1 Then
+                WriteLn('detail slice read ', ErrorText);
+              Break;
+            End;
+          If (Index = 1) And (Arrived = 0) And (Seen = 0) Then
+            WriteLn('detail slice type=', Message.TypeName, ' id=', Message.Id);
+          If Message.TypeName = 'event' Then
+            Begin
+              AckSeq(Client, PayloadSeq(Message.PayloadJson));
+              If Pos(Marker, Message.PayloadJson) > 0 Then
+                Begin
+                  Arrived := GetTickCount64;
+                  Break;
+                End;
+            End;
+        End;
+      Fire.Free;
+      If Arrived = 0 Then
+        Begin
+          Samples[Index - 1] := 1000;
+          Break;
+        End;
+      Samples[Index - 1] := Arrived - Started;
+      Inc(Seen);
+    End;
+  If Seen < LinkSampleCount Then
+    For Index := Seen + 1 To LinkSampleCount Do
+      Samples[Index - 1] := 1000;
+  Check('9.1 every slice sample reached the client', Seen = LinkSampleCount);
+  Check('9.1 mirror change to slice read is under 150 ms at p95',
+    (Seen = LinkSampleCount) And (Percentile(Samples, 95) < 150));
+  WriteLn('metric slice samples=', LinkSampleCount, ' seen=', Seen, ' clock=GetTickCount64 coalesce_ms=',
+    LinkCoalesceMs, ' p50=', Percentile(Samples, 50), ' p95=', Percentile(Samples, 95), ' p99=',
+    Percentile(Samples, 99));
+End;
+
+Procedure MeasureStateLatency(Client: TLoopClient);
+Var
+  Samples: Array Of QWord;
+  Index, Before: Integer;
+  Started, Arrived: QWord;
+  Message: TMonitorMessage;
+  ErrorText, Key: String;
+  Seen: Integer;
+Begin
+  SetLength(Samples, LinkSampleCount);
+  Seen := 0;
+  For Index := 1 To LinkSampleCount Do
+    Begin
+      Key := 'probe-' + IntToStr(Index);
+      LiveBody := LiveBody + 's';
+      ObserveLive(LiveBody);
+      Started := GetTickCount64;
+      Session.PublishState(Key, '{"n":' + IntToStr(Index) + '}');
+      Session.DrainOutbound;
+      Arrived := 0;
+      Before := 0;
+      While GetTickCount64 < Started + 500 Do
+        Begin
+          If Not Client.ReadMessage(After(100), Message, ErrorText) Then
+            Begin
+              If Index = 1 Then
+                WriteLn('detail state read ', ErrorText, ' state=', Ord(Session.State));
+              Break;
+            End;
+          If (Index = 1) And (Arrived = 0) Then
+            WriteLn('detail state type=', Message.TypeName);
+          If Message.TypeName = 'event' Then
+            Begin
+              Inc(Before);
+              AckSeq(Client, PayloadSeq(Message.PayloadJson));
+            End
+          Else If (Message.TypeName = 'state') And (Pos(Key, Message.PayloadJson) > 0) Then
+            Begin
+              Arrived := GetTickCount64;
+              Break;
+            End;
+        End;
+      If Arrived = 0 Then
+        Samples[Index - 1] := 500
+      Else
+        Begin
+          Samples[Index - 1] := Arrived - Started;
+          Inc(Seen);
+        End;
+      If Before > 8 Then
+        WriteLn('detail state key=', Key, ' events_before=', Before);
+    End;
+  Check('9.1 every state sample reached the client', Seen = LinkSampleCount);
+  Check('9.1 queued state to client read is under 50 ms at p95',
+    (Seen = LinkSampleCount) And (Percentile(Samples, 95) < 50));
+  WriteLn('metric state samples=', LinkSampleCount, ' seen=', Seen, ' clock=GetTickCount64 p50=',
+    Percentile(Samples, 50), ' p95=', Percentile(Samples, 95), ' p99=', Percentile(Samples, 99));
+End;
+
+Function QueueFatFetches(Out Bytes: Int64): Integer;
+Var
+  Index: Integer;
+  Frame: String;
+Begin
+  Result := 0;
+  Bytes := 0;
+  For Index := 1 To 120 Do
+    Begin
+      Frame := '{"v":3,"id":"fat-' + IntToStr(Index) + '","type":"snapshot_page","payload":{"page":' + IntToStr(Index) +
+        ',"title":"' + StringOfChar('f', 20000) + '"}}';
+      If Not Session.TryQueueHostJson(Frame) Then
+        Break;
+      Inc(Result);
+      Inc(Bytes, Length(Frame));
+    End;
+End;
+
+Procedure MeasureBulkPing(Client: TLoopClient; Const LabelName: String);
+Var
+  Message: TMonitorMessage;
+  Ticks: TMonitorTicks;
+  ErrorText: String;
+  Sent, PongAt: QWord;
+  Queued, Before: Integer;
+  Bytes: Int64;
+  GotPong: Boolean;
+Begin
+  LiveBody := LiveBody + StringOfChar('q', 4096);
+  ObserveLive(LiveBody);
+  Queued := QueueFatFetches(Bytes);
+  Check(LabelName + ' at least 2 MiB of fetches are queued', Bytes >= 2 * 1024 * 1024);
+  Sent := GetTickCount64;
+  Check(LabelName + ' ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'slices-ping', 77), After(3000)));
+  Session.DrainOutbound;
+  GotPong := False;
+  Before := 0;
+  PongAt := 0;
+  While Not GotPong Do
+    Begin
+      If Not Client.ReadMessage(After(200), Message, ErrorText) Then
+        Break;
+      If (Message.TypeName = 'snapshot_page') Or (Message.TypeName = 'event') Or (Message.TypeName = 'plan_data') Then
+        Begin
+          Inc(Before);
+          If Message.TypeName = 'event' Then
+            AckSeq(Client, PayloadSeq(Message.PayloadJson));
+        End
+      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 77) Then
+        Begin
+          GotPong := True;
+          PongAt := GetTickCount64;
+        End;
+    End;
+  Check(LabelName + ' pong is not after the queued frames', GotPong And (Before < Queued));
+  Check(LabelName + ' pong is under 100 ms', GotPong And (PongAt >= Sent) And (PongAt - Sent < 100));
+  If PongAt = 0 Then
+    WriteLn('metric ', LabelName, ' queued=', Queued, ' bytes=', Bytes, ' before_pong=', Before, ' pong_ms=unset')
+  Else
+    WriteLn('metric ', LabelName, ' queued=', Queued, ' bytes=', Bytes, ' before_pong=', Before, ' pong_ms=',
+      PongAt - Sent);
+  DrainClient(Client, 30);
+End;
+
+Procedure MeasurePlanPing(Client: TLoopClient);
+Var
+  Path, ErrorText: String;
+  Stream: TFileStream;
+  Buffer: Array[0..8191] Of Byte;
+  Left, Count: Integer;
+  Message: TMonitorMessage;
+  Ticks: TMonitorTicks;
+  Sent, PongAt: QWord;
+  Before, PlanFrames: Integer;
+  GotPong, SawPlan: Boolean;
+Begin
+  Path := IncludeTrailingPathDelimiter(SettingsRoot) + 'Documents';
+  ForceDirectories(Path);
+  Path := Path + PathDelim + 'Big.md';
+  FillChar(Buffer, SizeOf(Buffer), Ord('p'));
+  Stream := TFileStream.Create(Path, fmCreate);
+  Try
+    Left := LinkPlanBytes;
+    While Left > 0 Do
+      Begin
+        Count := SizeOf(Buffer);
+        If Count > Left Then
+          Count := Left;
+        Stream.WriteBuffer(Buffer, Count);
+        Dec(Left, Count);
+      End;
+  Finally
+    Stream.Free;
+  End;
+  Check('9.1 plan file is larger than 4 MiB', FileExists(Path));
+  Check('9.1 plan_get write', Client.WriteJson(
+    '{"v":3,"id":"plan-get-1","type":"plan_get","payload":{"path":"Documents/Big.md","offset":0,"revision":"none"}}',
+    After(3000)));
+  SawPlan := False;
+  PlanFrames := 0;
+  While (Not SawPlan) And (PlanFrames < 4) Do
+    Begin
+      If Not Client.ReadMessage(After(3000), Message, ErrorText) Then
+        Break;
+      If Message.TypeName = 'plan_data' Then
+        Begin
+          SawPlan := True;
+          Inc(PlanFrames);
+        End;
+    End;
+  Check('9.1 plan_data is the bulk traffic', SawPlan);
+  Sent := GetTickCount64;
+  Check('9.1 plan ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'plan-ping', 88), After(3000)));
+  GotPong := False;
+  Before := 0;
+  PongAt := 0;
+  While Not GotPong Do
+    Begin
+      If Not Client.ReadMessage(After(200), Message, ErrorText) Then
+        Break;
+      If Message.TypeName = 'plan_data' Then
+        Inc(Before)
+      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 88) Then
+        Begin
+          GotPong := True;
+          PongAt := GetTickCount64;
+        End;
+    End;
+  Check('9.1 pong during plan_data is not after the transfer', GotPong And (Before < 100));
+  Check('9.1 pong during a plan larger than 4 MiB is under 100 ms', GotPong And (PongAt >= Sent) And (PongAt - Sent < 100));
+  If PongAt = 0 Then
+    WriteLn('metric plan_ping plan_before_pong=', Before, ' pong_ms=unset clock=GetTickCount64')
+  Else
+    WriteLn('metric plan_ping plan_before_pong=', Before, ' pong_ms=', PongAt - Sent, ' clock=GetTickCount64');
+  DrainClient(Client, 20);
+End;
+
+Procedure MeasureCreditPing(Client: TLoopClient);
+Var
+  Message: TMonitorMessage;
+  Ticks: TMonitorTicks;
+  ErrorText: String;
+  Quiet, Sent, PongAt: QWord;
+  Events, QuietEvents: Integer;
+  GotPong: Boolean;
+Begin
+  LiveBody := LiveBody + StringOfChar('c', LinkCreditBodyBytes);
+  ObserveLive(LiveBody);
+  Events := 0;
+  Quiet := 0;
+  QuietEvents := 0;
+  Sent := GetTickCount64 + 2500;
+  While GetTickCount64 < Sent Do
+    Begin
+      If Not Client.ReadMessage(After(80), Message, ErrorText) Then
+        Begin
+          If (Events > 20) And (Quiet <> 0) And (GetTickCount64 > Quiet + 200) Then
+            Break;
+          Continue;
+        End;
+      If Message.TypeName = 'event' Then
+        Begin
+          Inc(Events);
+          Quiet := GetTickCount64;
+        End;
+    End;
+  { A second quiet read confirms the window stopped the tail. }
+  While Client.ReadMessage(After(40), Message, ErrorText) Do
+    If Message.TypeName = 'event' Then
+      Inc(QuietEvents);
+  Check('9.1 an unacknowledged client stops inside the credit window', (Events > 0) And (Events < 400) And
+    (QuietEvents = 0));
+  Sent := GetTickCount64;
+  Check('9.1 credit ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'credit-ping', 66), After(3000)));
+  GotPong := False;
+  PongAt := 0;
+  While Not GotPong Do
+    Begin
+      If Not Client.ReadMessage(After(200), Message, ErrorText) Then
+        Break;
+      If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 66) Then
+        Begin
+          GotPong := True;
+          PongAt := GetTickCount64;
+        End;
+    End;
+  Check('9.1 ping is answered while the credit window is full', GotPong And (PongAt >= Sent) And (PongAt - Sent < 100));
+  If PongAt = 0 Then
+    WriteLn('metric credit events=', Events, ' quiet=', QuietEvents, ' pong_ms=unset')
+  Else
+    WriteLn('metric credit events=', Events, ' quiet=', QuietEvents, ' pong_ms=', PongAt - Sent, ' clock=GetTickCount64');
+End;
+
+Procedure MeasureTailResume(Client: TLoopClient; Out Head: Int64);
+Var
+  Message: TMonitorMessage;
+  ErrorText: String;
+  Sent, Answered: QWord;
+  SawOk, SawBaseline: Boolean;
+Begin
+  Head := LastAckSeq;
+  If Head < 1 Then
+    Head := 0;
+  DrainClient(Client, 30);
+  ObserveLive(LiveBody + 'tail-near-head');
+  Sent := GetTickCount64;
+  Check('9.1 tail resume write',
+    Client.WriteJson(EncodeMonitorResume('resume-tail', Session.MirrorEpoch, Head), After(3000)));
+  SawOk := False;
+  SawBaseline := False;
+  Answered := 0;
+  While GetTickCount64 < Sent + 3000 Do
+    Begin
+      If Not Client.ReadMessage(After(200), Message, ErrorText) Then
+        Break;
+      If Message.TypeName = 'resume_ok' Then
+        Begin
+          SawOk := True;
+          If Answered = 0 Then
+            Answered := GetTickCount64;
+        End
+      Else If (Message.TypeName = 'snapshot_begin') Or (Message.TypeName = 'snapshot_page') Then
+        SawBaseline := True
+      Else If Message.TypeName = 'event' Then
+        Begin
+          If PayloadSeq(Message.PayloadJson) > Head Then
+            Head := PayloadSeq(Message.PayloadJson);
+          AckSeq(Client, PayloadSeq(Message.PayloadJson));
+          If Pos('tail-near-head', Message.PayloadJson) > 0 Then
+            Break;
+        End;
+    End;
+  Check('9.1 resume near the head is resume_ok', SawOk And Not SawBaseline);
+  Check('9.1 the tail resume clock is set', Answered <> 0);
+  WriteLn('metric resume_tail frames_ok=', BoolToStr(SawOk, True), ' head=', Head, ' heard_ms=',
+    ClockDelta(Answered, Sent), ' clock=GetTickCount64');
+End;
+
+Procedure MeasureBaselineResume(Client: TLoopClient);
+Var
+  Message: TMonitorMessage;
+  ErrorText, Page: String;
+  Sent, BeginAt, PageAt, EndAt: QWord;
+  Frames, HashAt: Integer;
+  Historical: String;
+Begin
+  Historical := 'HISTORICAL-BODY-9-1-' + StringOfChar('h', 80);
+  DrainClient(Client, 30);
+  ObserveStored('stored-hist', Historical);
+  { Unacked events cannot be folded. Ack through a high sequence, then tighten the budget. }
+  Check('9.1 fold ack write', Client.WriteJson('{"v":3,"id":"ack-fold","type":"ack","payload":{"stream_id":"' +
+    Session.MirrorEpoch + '","seq":1000000}}', After(1000)));
+  Sleep(50);
+  DrainClient(Client, 80);
+  Session.NoteMirrorAck(1000000);
+  Session.SetMirrorLogBudget(256);
+  ObserveStored('stored-fold', 'fold-a');
+  ObserveStored('stored-more', 'fold-b');
+  Check('9.1 the log has folded events the resume no longer holds', Session.MirrorDroppedThrough > 0);
+  If Session.MirrorDroppedThrough = 0 Then
+    WriteLn('detail dropped_through=0');
+  Session.DiscardUnsentBulk;
+  DrainClient(Client, 40);
+  Sent := GetTickCount64;
+  Check('9.1 baseline resume write', Client.WriteJson(EncodeMonitorResume('resume-base', Session.MirrorEpoch, 0), After(3000)));
+  Frames := 0;
+  BeginAt := 0;
+  PageAt := 0;
+  EndAt := 0;
+  HashAt := 0;
+  Page := '';
+  While EndAt = 0 Do
+    Begin
+      If Not Client.ReadMessage(After(LinkFrameWaitMs), Message, ErrorText) Then
+        Begin
+          WriteLn('detail baseline ', ErrorText, ' frames=', Frames, ' type=', Message.TypeName);
+          Break;
+        End;
+      If Message.TypeName = 'resume_ok' Then
+        WriteLn('detail baseline resume_ok');
+      If (Message.TypeName = 'snapshot_begin') Or (Message.TypeName = 'snapshot_page') Or
+        (Message.TypeName = 'snapshot_end') Then
+        Begin
+          Inc(Frames);
+          If Message.TypeName = 'snapshot_begin' Then
+            BeginAt := GetTickCount64;
+          If Message.TypeName = 'snapshot_page' Then
+            Begin
+              PageAt := GetTickCount64;
+              Page := Message.PayloadJson;
+              HashAt := Pos('"hash"', Page);
+            End;
+          If Message.TypeName = 'snapshot_end' Then
+            EndAt := GetTickCount64;
+        End;
+    End;
+  Check('9.1 baseline answer built in full', Frames = LinkResumeFrames);
+  Check('9.1 a dropped cursor is one baseline', (BeginAt <> 0) And (PageAt <> 0) And (EndAt <> 0) And (EndAt >= PageAt));
+  Check('9.1 the baseline page has hashes and no historical body', (HashAt > 0) And (Pos(Historical, Page) = 0) And
+    (Pos('HISTORICAL-BODY-9-1', Page) = 0));
+  If (HashAt = 0) Or (Pos('HISTORICAL-BODY-9-1', Page) > 0) Then
+    WriteLn('detail baseline page hash_at=', HashAt, ' body_at=', Pos('HISTORICAL-BODY-9-1', Page),
+      ' page_bytes=', Length(Page));
+  Check('9.1 the baseline resume clock is set', (BeginAt <> 0) And (EndAt >= Sent));
+  WriteLn('metric resume_baseline frames=', Frames, ' expected=', LinkResumeFrames, ' begin_ms=', ClockDelta(BeginAt, Sent),
+    ' page_ms=', ClockDelta(PageAt, Sent), ' end_ms=', ClockDelta(EndAt, Sent), ' clock=GetTickCount64');
+End;
+
+Procedure MeasureReplace(Client: TLoopClient);
+Var
+  Second: TLoopClient;
+  Message: TMonitorMessage;
+  Bye: TMonitorBye;
+  ErrorText: String;
+  SawBye, SawBusy: Boolean;
+Begin
+  Second := TLoopClient.Create;
+  Try
+    Check('9.1 second socket connects', Second.Open(Lan.BoundPort, 3000, ErrorText));
+    If ErrorText <> '' Then
+      WriteLn('detail replace ', ErrorText);
+    SawBye := False;
+    SawBusy := False;
+    While Not SawBye Do
+      Begin
+        If Not Client.ReadMessage(After(2000), Message, ErrorText) Then
+          Break;
+        If Message.Kind = mmkBye Then
+          Begin
+            SawBye := DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'replaced');
+            If Not SawBye Then
+              WriteLn('detail bye reason=', Message.Reason, ' payload=', Message.PayloadJson);
+          End
+        Else If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
+          SawBusy := True;
+      End;
+    While Second.ReadMessage(After(200), Message, ErrorText) Do
+      If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
+        SawBusy := True;
+    Check('9.1 the old link receives bye replaced', SawBye);
+    Check('9.1 the new link reaches accepted', WaitSession(mssAccepted, 3000));
+    Check('9.1 a second socket is not rejected busy', Not SawBusy);
+    WriteLn('metric replace bye=', BoolToStr(SawBye, True), ' busy=', BoolToStr(SawBusy, True), ' state=',
+      Ord(Session.State));
+  Finally
+    Second.Free;
+  End;
+End;
+
 Procedure RunChecks;
 Var
   Client: TLoopClient;
+  Message: TMonitorMessage;
   ErrorText: String;
+  Head: Int64;
 Begin
   Client := TLoopClient.Create;
   Try
@@ -776,7 +1423,6 @@ Begin
       Exit;
     MeasureThroughput(Client);
     MeasurePing(Client);
-    MeasureResume(Client);
     Check('no frame dropped', Session.FramesDropped = 0);
     If Session.FramesDropped <> 0 Then
       WriteLn('detail dropped=', Session.FramesDropped);
@@ -784,9 +1430,23 @@ Begin
     TestPriorityPing(Client);
     TestNoDrops(Client);
     TestPartialWrite(Client);
-    TestAnswerClock(Client);
-    Client.WriteJson(EncodeMonitorBye('bye1', 'client'), After(3000));
-    WaitSession(mssListening, 3000);
+    DrainClient(Client, 40);
+    ObserveLive('open-lane');
+    Check('9.1 log lane resume write', Client.WriteJson(EncodeMonitorResume('resume-open', Session.MirrorEpoch, 0), After(3000)));
+    If Not ReadKind(Client, 'resume_ok', After(3000), Message) Then
+      Check('9.1 the open resume is resume_ok', False)
+    Else
+      Check('9.1 the open resume is resume_ok', True);
+    DrainClient(Client, 40);
+    MeasureSliceLatency(Client);
+    MeasureStateLatency(Client);
+    DrainClient(Client, 20);
+    MeasureBulkPing(Client, '9.1 slices');
+    MeasurePlanPing(Client);
+    MeasureCreditPing(Client);
+    MeasureTailResume(Client, Head);
+    MeasureBaselineResume(Client);
+    MeasureReplace(Client);
   Finally
     Client.Free;
   End;
@@ -798,6 +1458,9 @@ Begin
   {$ENDIF}
   FailCount := 0;
   SettingsRoot := '';
+  LiveBody := '';
+  LastPump := 0;
+  LastAckSeq := 0;
   Lan := Nil;
   LanRef := Nil;
   Session := Nil;

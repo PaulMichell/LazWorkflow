@@ -146,6 +146,8 @@ Type
     Function CopyTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
     { Live block faces only. The pump reuses these bodies when length and running are unchanged. }
     Function CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
+    { Harness fold. A later append drops events that no longer fit. }
+    Procedure SetLogBudget(Bytes: Int64);
     { One locked copy of the open or parked conversation. Encode after this returns. }
     Function CaptureResume(Const ConversationId: String; Out Source: TMonitorResumeSource): Boolean;
     Function CopyPlan(Out PlanPath, PlanTitle: String; Out PlanRunning: Boolean; Out Rows: TMonitorMirrorPlanArray): Boolean;
@@ -1007,6 +1009,18 @@ Begin
     Live := Default(TAssistantMonitorTurn);
     CopyTurn(FLive, Live);
     Blocks := Live.Blocks;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Procedure TMonitorMirror.SetLogBudget(Bytes: Int64);
+Begin
+  If Bytes < 64 Then
+    Bytes := 64;
+  EnterCriticalSection(FLock);
+  Try
+    FBudget := Bytes;
   Finally
     LeaveCriticalSection(FLock);
   End;

@@ -74,7 +74,7 @@ Function MonitorSyncResumeAnswer(Const Source: TMonitorResumeSource; Const Reque
 Implementation
 
 Uses
-  AssistantSessionObserve;
+  AssistantSessionObserve, AssistantMonitorFrames;
 
 Function JsonEscape(Const Text: String): String;
 Var
@@ -161,9 +161,12 @@ Var
   NextSeq: Int64;
   Index: Integer;
   Frame: String;
+  Encoded: RawByteString;
+  Status: TMonitorFrameStatus;
 Begin
   CloseLink := False;
   Events := Nil;
+  Encoded := '';
   If Not Assigned(Mirror) Or Not Assigned(Outbox) Or (StreamId = '') Then
     Exit;
   Mirror.CopyEvents(Events);
@@ -176,7 +179,10 @@ Begin
       If UnackedBytes(Events, ConversationId, StreamId, PhoneAck, NextSeq) > MonitorCreditWindowBytes Then
         Exit;
       Frame := EventFrame(ConversationId, StreamId, Events[Index]);
-      If Not Outbox.AppendLog(NextSeq, Frame) Then
+      { The link writes these bytes. A raw JSON object is not a LAM1 frame. }
+      If Not TryEncodeMonitorFrame(Frame, Encoded, Status) Then
+        Exit;
+      If Not Outbox.AppendLog(NextSeq, Encoded) Then
         Exit;
       QueuedSeq := NextSeq;
       If Outbox.LogOverflowed Then
