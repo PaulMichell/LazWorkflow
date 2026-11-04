@@ -1386,11 +1386,6 @@ fun turnFromJson(obj: JsonValue.Obj, indexOnly: Boolean): WireTurn? {
 
 fun encodeTurnData(id: String, turn: WireTurn): String = encodeEnvelope(MessageKind.TurnData, id, turnToJson(turn, false))
 
-fun decodeTurnData(payloadJson: String): WireTurn? {
-  val obj = parseObject(payloadJson) ?: return null
-  return turnFromJson(obj, false)
-}
-
 private fun planRowToJson(row: PlanRow): JsonValue.Obj {
   val obj = JsonObjectBuilder()
   obj.add("index", row.index)
@@ -1492,17 +1487,6 @@ fun decodePlan(obj: JsonValue.Obj): PlanMessage? {
   val complete = obj.readBool("complete", false)
   if (!body.ok || !complete.ok) return null
   return PlanMessage(path.value, title.value, running.value, rows, choices, body.value, complete.value)
-}
-
-fun encodeTasks(id: String, rows: List<TaskRow>): String {
-  val payload = JsonObjectBuilder()
-  payload.add("rows", JsonValue.Arr(rows.map { taskRowToJson(it) }))
-  return encodeEnvelope(MessageKind.Tasks, id, payload.build())
-}
-
-fun decodeTasks(payloadJson: String): List<TaskRow>? {
-  val obj = parseObject(payloadJson) ?: return null
-  return rowsFrom(obj.field("rows")) { taskRowFromJson(it) }
 }
 
 private fun approvalToJson(notice: ApprovalNotice): JsonValue.Obj {
@@ -1721,14 +1705,6 @@ fun decodeTranscript(obj: JsonValue.Obj): WireTranscript? {
   )
 }
 
-fun limitStoredTurns(turns: List<WireTurn>): List<WireTurn> {
-  val kept = turns.filter { !it.live }
-  val start = if (kept.size > MonitorLimits.SnapshotStoredTurns) kept.size - MonitorLimits.SnapshotStoredTurns else 0
-  return kept.drop(start).map {
-    WireTurn(it.turnIndex, it.id, it.mode, it.createdAt, it.promptPreview, it.errorText)
-  }
-}
-
 fun imageFetchBlocked(missing: Boolean, refused: Boolean, decodedBytes: Long): String? {
   if (missing) return "missing"
   if (refused) return "refused"
@@ -1922,16 +1898,6 @@ fun snapshotPageTurn(payloadJson: String): WireTurn? {
   }
   val live = turn.readBool("live", false).value
   return WireTurn(index.value, id.value, "", "", "", "", "", "", "", 0, live, blocks)
-}
-
-fun snapshotPageTurnIndex(payloadJson: String): Int? = snapshotPageTurn(payloadJson)?.turnIndex
-
-/** Puts a fetched body into the block the desktop deferred. */
-fun fillBlockBody(blocks: List<WireBlock>, blockId: String, body: String, finished: Boolean): List<WireBlock> {
-  return blocks.map { block ->
-    if (block.blockId != blockId) block
-    else block.copy(body = body, deferred = !finished && block.deferred)
-  }
 }
 
 /** A later block page must not replace the turn with that one block. */

@@ -102,7 +102,6 @@ import computing.michell.monitor.protocol.decodeMode
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeRejected
 import computing.michell.monitor.protocol.WireSnapshot
-import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
 import computing.michell.monitor.protocol.decodeTargets
@@ -878,11 +877,6 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
   }
 }
 
-private fun applySnapshot(state: MonitorUi, payloadJson: String): MonitorUi {
-  val snapshot = decodeSnapshot(payloadJson) ?: return state
-  return applySnapshot(state, snapshot)
-}
-
 private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
   val incoming = snapshot.live
   if (incoming == null) {
@@ -1108,9 +1102,11 @@ internal fun keptPlanBody(
   nextBody: String,
   nextComplete: Boolean = false
 ): String {
-  if (nextComplete) return nextBody
-  if (nextBody.isNotEmpty()) return nextBody
-  if (nextPath.isNotEmpty() && nextPath == previousPath) return previousBody
+  val next = shownPlanBody(nextBody.toByteArray(Charsets.UTF_8).size.toLong(), nextBody)
+  val previous = shownPlanBody(previousBody.toByteArray(Charsets.UTF_8).size.toLong(), previousBody)
+  if (nextComplete) return next
+  if (next.isNotEmpty()) return next
+  if (nextPath.isNotEmpty() && nextPath == previousPath) return previous
   return ""
 }
 

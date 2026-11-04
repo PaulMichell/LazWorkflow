@@ -1,7 +1,8 @@
 package computing.michell.monitor.protocol
 
-/* Phone mirror rules. A patch updates named blocks. A new epoch waits for catchup.
-   No socket and no Android types. (c) 2026 Michell Computing. */
+/* Phone mirror rules. Catalogue 2 patch and catchup are not applied.
+   A new epoch still files the closed id. No socket and no Android types.
+   (c) 2026 Michell Computing. */
 
 data class PhoneScreen(
   val epoch: String = "",
@@ -22,8 +23,6 @@ data class PhoneScreen(
   val title: String = "",
   val blockFetchIds: List<String> = emptyList()
 )
-
-data class MergedBlocks(val blocks: List<WireBlock>, val fetchIds: List<String>)
 
 const val AckIntervalMs = 250L
 
@@ -60,39 +59,6 @@ fun paceAck(
   return AckDecision(pace.copy(pendingSeq = seq), "", AckIntervalMs - elapsed, json, seq)
 }
 
-/** True when offset is the stored UTF-8 length. A mismatch does not change the body. */
-fun applyBlockAppend(stored: String, offset: Int, text: String): Pair<String, Boolean> {
-  if (offset < 0 || utf8Length(stored) != offset) return stored to false
-  return stored + text to true
-}
-
-/** A stub that has not been opened. Load must not call open. */
-/** Replace a block with the same id. An append offset must match the stored UTF-8 length. */
-fun mergePatchBlocks(existing: List<WireBlock>, incoming: List<WireBlock>): MergedBlocks {
-  if (incoming.isEmpty()) return MergedBlocks(existing, emptyList())
-  val result = existing.toMutableList()
-  val fetches = mutableListOf<String>()
-  for (block in incoming) {
-    val index = if (block.blockId.isEmpty()) -1 else result.indexOfFirst { item ->
-      item.blockId == block.blockId && item.kind == block.kind
-    }
-    val offset = block.appendOffset
-    if (offset == null) {
-      if (index >= 0) result[index] = block else result += block
-    } else {
-      val stored = if (index >= 0) result[index].body else ""
-      val applied = applyBlockAppend(stored, offset, block.body)
-      if (!applied.second) {
-        if (block.blockId.isNotEmpty()) fetches += block.blockId
-      } else {
-        val updated = block.copy(body = applied.first, appendOffset = null)
-        if (index >= 0) result[index] = updated else result += updated
-      }
-    }
-  }
-  return MergedBlocks(result, fetches)
-}
-
 fun notePhoneClosed(screen: PhoneScreen, id: String, title: String): PhoneScreen {
   if (id.isEmpty()) return screen.copy(fileClosedId = "")
   return screen.copy(closedId = id, closedTitle = title, fileClosedId = "")
@@ -119,43 +85,6 @@ fun applyPhoneCatchup(
   turns: List<WireTurn>,
   live: WireTurn?
 ): PhoneScreen = screen
-
-private fun storePart(screen: PhoneScreen, patch: WirePatch): PhoneScreen {
-  if (patch.part < 1 || patch.partCount < 1 || patch.part > patch.partCount) return screen.copy(fileClosedId = "")
-  val sameOpen = screen.patchOpenCursor == patch.cursor
-  if (sameOpen && screen.patchPartCount != 0 && patch.partCount != screen.patchPartCount) return screen.copy(fileClosedId = "")
-  val prior = if (sameOpen) screen.patchParts else emptyMap()
-  val stored = if (prior.containsKey(patch.part)) prior else prior + (patch.part to patch.blocks)
-  val assembled = assembleParts(stored, patch.partCount)
-  val merged = mergePatchBlocks(screen.live?.blocks.orEmpty(), assembled)
-  val complete = (1..patch.partCount).all { part -> stored.containsKey(part) }
-  val previous = screen.live
-  val live = WireTurn(
-    turnIndex = if (patch.turnIndex != 0) patch.turnIndex else previous?.turnIndex ?: -2,
-    id = patch.turnId.ifEmpty { previous?.id ?: "" },
-    mode = previous?.mode ?: "",
-    createdAt = previous?.createdAt ?: "",
-    promptPreview = previous?.promptPreview ?: "",
-    errorText = previous?.errorText ?: "",
-    prompt = previous?.prompt ?: "",
-    thinking = previous?.thinking ?: "",
-    response = previous?.response ?: "",
-    live = true,
-    blocks = merged.blocks,
-    images = previous?.images ?: emptyList()
-  )
-  return screen.copy(
-    epoch = patch.epoch,
-    cursor = if (complete) patch.cursor else screen.cursor,
-    live = live,
-    patchOpenCursor = if (complete) 0L else patch.cursor,
-    patchPartCount = if (complete) 0 else patch.partCount,
-    patchParts = if (complete) emptyMap() else stored,
-    resumeOnce = if (complete) false else screen.resumeOnce,
-    fileClosedId = "",
-    blockFetchIds = merged.fetchIds
-  )
-}
 
 /** A block_data frame replaces from offset 0, or appends when offset is the stored length. */
 fun applyBlockDataJson(screen: PhoneScreen, payloadJson: String): PhoneScreen {
@@ -190,18 +119,4 @@ fun applyBlockData(screen: PhoneScreen, blockId: String, offset: Int, text: Stri
   )
 }
 
-private fun assembleParts(parts: Map<Int, List<WireBlock>>, count: Int): List<WireBlock> {
-  val blocks = mutableListOf<WireBlock>()
-  for (part in 1..count) {
-    val frame = parts[part] ?: continue
-    for (block in frame) {
-      val previous = blocks.lastOrNull()
-      if (previous != null && previous.blockId.isNotEmpty() && previous.blockId == block.blockId && previous.kind == block.kind) {
-        blocks[blocks.lastIndex] = previous.copy(body = previous.body + block.body)
-      } else {
-        blocks += block
-      }
-    }
-  }
-  return blocks
-}
+

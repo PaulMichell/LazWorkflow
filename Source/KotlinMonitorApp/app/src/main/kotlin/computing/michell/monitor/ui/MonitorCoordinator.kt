@@ -17,43 +17,20 @@ import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.PlanRow
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireCatchup
 import computing.michell.monitor.protocol.WireConversationClosed
-import computing.michell.monitor.protocol.WirePatch
-import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
-import computing.michell.monitor.protocol.applySnapshotPageJson
-import computing.michell.monitor.protocol.mergeTurnBlocks
-import computing.michell.monitor.protocol.snapshotPageTurn
-import computing.michell.monitor.protocol.mergePatchBlocks
 import computing.michell.monitor.protocol.conversationIdIsIdentity
-import computing.michell.monitor.protocol.decodeCatchup
 import computing.michell.monitor.protocol.decodeConversationClosed
 import computing.michell.monitor.protocol.NoSessionMessage
 import computing.michell.monitor.protocol.NoSessionReason
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodeModels
-import computing.michell.monitor.protocol.decodePatch
 import computing.michell.monitor.protocol.decodePlan
-import computing.michell.monitor.protocol.decodeSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.encodeClosedScreen
-import computing.michell.monitor.protocol.snapshotPageConversationId
-import computing.michell.monitor.protocol.snapshotPageIsPoint
-import computing.michell.monitor.protocol.snapshotPageOutline
-import computing.michell.monitor.protocol.snapshotPagePointEnd
-import computing.michell.monitor.protocol.snapshotPagePointId
-import computing.michell.monitor.protocol.snapshotPageSeq
-import computing.michell.monitor.protocol.snapshotPageStreamId
-import java.util.TreeMap
-import computing.michell.monitor.protocol.decodeBlockData
-import computing.michell.monitor.protocol.encodeBlockGet
-import computing.michell.monitor.protocol.fillBlockBody
-import computing.michell.monitor.protocol.joinBlockPieces
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeSyncResume
@@ -799,9 +776,6 @@ class MonitorCoordinator(
     val freshConversation: Boolean
   )
 
-  private fun snapshotFrom(message: MonitorMessage): WireSnapshot? {
-    return (message.inbound as? InboundPayload.Snapshot)?.value
-  }
 }
 
 

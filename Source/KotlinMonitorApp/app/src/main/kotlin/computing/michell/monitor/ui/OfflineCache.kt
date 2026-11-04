@@ -51,14 +51,6 @@ fun cursorCommitted(before: MonitorUi, after: MonitorUi): Boolean {
   return after.hostCursor > before.hostCursor
 }
 
-fun cacheTurnCount(document: OfflineCacheDocument): Int {
-  val indices = document.turns.map { turn -> turn.turnIndex }.toMutableSet()
-  var count = document.turns.size
-  val live = document.live
-  if (live != null && live.turnIndex !in indices) count += 1
-  return count
-}
-
 fun cacheTitle(title: String, turns: List<WireTurn>, live: WireTurn?, history: List<WireTurn>): String {
   if (title.isNotEmpty()) return title
   return firstUserPromptPreview(turns, live, history)
