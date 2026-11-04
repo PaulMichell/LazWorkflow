@@ -272,7 +272,10 @@ class MonitorCoordinator(
     awaitingConversation = false
     closedAwaitId = ""
     if (content.current().conversationId != id) content.replace(contentHost, id, emptyList(), null)
-    local = local.copy(conversationId = id, reviewingOffline = false)
+    resumeConversation = id
+    resumeStream = ""
+    resumeSeq = 0L
+    local = local.copy(conversationId = id, hostEpoch = "", hostCursor = 0L, reviewingOffline = false)
     published()
   }
 

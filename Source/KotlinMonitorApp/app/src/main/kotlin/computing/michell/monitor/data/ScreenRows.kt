@@ -69,8 +69,8 @@ fun documentFromRows(
   val pictures = images.map { image -> wireImage(image) }
   val byTurn = blocks.groupBy { block -> block.turn }
   val wire = turns.sortedBy { turn -> turn.ordinal }.map { turn ->
-    val turnRunning = turn.outcome == "running"
     val bodies = (byTurn[turn.turnId] ?: emptyList()).sortedBy { block -> block.ordinal }.map { block ->
+      val running = block.state == "running" || (turn.outcome == "running" && block.state.isEmpty())
       WireBlock(
         block.kind,
         block.blockId,
@@ -78,13 +78,14 @@ fun documentFromRows(
         "",
         "",
         block.body,
-        turnRunning && block.state == "running",
+        running,
         block.state == "ok",
         0,
         emptyList(),
         deferred = block.blockId in stale
       )
     }
+    val turnRunning = turn.outcome == "running" || bodies.any { block -> block.running }
     val response = bodies.firstOrNull { block -> block.kind == "answer" }?.body ?: ""
     WireTurn(
       turn.ordinal,

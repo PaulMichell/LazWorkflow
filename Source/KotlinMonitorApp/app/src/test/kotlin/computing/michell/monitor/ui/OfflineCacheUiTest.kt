@@ -190,7 +190,9 @@ class OfflineCacheUiTest {
     val cleared = open.copy(conversationId = "")
     assertTrue(shownConversation(cleared, stored).turns.isEmpty())
     val next = cleared.copy(conversationId = "chat-b")
-    assertTrue(shownConversation(next, stored).turns.isEmpty())
+    assertEquals("Old", shownConversation(next, stored).turns.single().promptPreview)
+    val arrived = BoardContent("host", "chat-b", listOf(WireTurn(1, "t2", "build", "", "Desktop", "")), null)
+    assertEquals("Desktop", shownConversation(next, arrived).turns.single().promptPreview)
     assertEquals("Old", shownConversation(next, BoardContent()).turns.single().promptPreview)
   }
 
@@ -201,5 +203,14 @@ class OfflineCacheUiTest {
     val slot = applyStateValue(named, "conversations", """{"current":"","choices":[]}""")
     assertEquals(named.conversationId, slot.conversationId)
     assertEquals("", slot.conversationCurrent)
+  }
+
+  @Test
+  fun aRunningThoughtStaysOnScreenBeforeTheStatusSaysSending() {
+    val thought = WireBlock("thinking", "thought", "Thinking", "", "", "", true, false, 0, emptyList())
+    val live = WireTurn(1, "turn", "build", "", "Ask", "", live = true, blocks = listOf(thought))
+    val rows = conversationRows(emptyList(), live, false, true, true)
+    assertEquals("thinking", rows.single().block?.kind)
+    assertTrue(blockShown(thought, true, true))
   }
 }

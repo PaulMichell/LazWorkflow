@@ -1684,6 +1684,9 @@ Begin
   Source := Default(TMonitorResumeSource);
   If Assigned(FMirror) Then
     FMirror.CaptureResume(ResumeMsg.ConversationId, Source);
+  { A cached id is not the chat on the desktop. Serve the open mirror, or the phone stays blank. }
+  If (Not Source.Found) And Assigned(FMirror) And (FConversationId <> '') Then
+    FMirror.CaptureResume('', Source);
   Status := Default(TMonitorSyncStatus);
   Status.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
   Status.Sending := FHostFlags.Sending;
@@ -1721,7 +1724,10 @@ Begin
     Begin
       FLogResume := False;
       FQueuedLogSeq := 0;
-      FAwaitingObservation := (ResumeMsg.ConversationId = '') Or (ResumeMsg.ConversationId = FConversationId);
+      { The open chat may still be loading. Push it when the mirror observes, even if the
+        phone asked for a cache id that is not this conversation. }
+      FAwaitingObservation := (ResumeMsg.ConversationId = '') Or (ResumeMsg.ConversationId = FConversationId) Or
+        (Not Source.Found) Or (Source.ConversationId = FConversationId);
     End
   Else
     Begin

@@ -1825,9 +1825,15 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val host = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
     if (host.isEmpty()) return
     uiState.value = coordinator.noteHostConversation(id)
+    if (id != resumedConversation) {
+      resumedConversation = id
+      session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume(session.nextCommandId(), id, "", 0L))
+    }
     if (id == watchedConversation && contentWatch?.isActive == true) return
     watchScreen(host, id)
   }
+
+  private var resumedConversation = ""
 
   private fun watchScreen(hostId: String, conversationId: String) {
     if (hostId.isEmpty() || conversationId.isEmpty()) {
@@ -1855,7 +1861,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         val document = documentFromRows(read.turns, read.blocks, read.repairs, read.images)
         val live = document.live
         val stored = if (live == null) document.turns else document.turns.filter { turn -> turn.id != live.id }
-        storedBoardState.value = BoardContent(hostId, conversationId, stored, live)
+        val next = BoardContent(hostId, conversationId, stored, live)
+        val current = storedBoardState.value
+        val nextHasRows = next.turns.isNotEmpty() || next.live != null
+        val currentHasRows = current.turns.isNotEmpty() || current.live != null
+        if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = next
         val grants = screenFetch.replaceBoard(conversationId, stored, live)
         withContext(Dispatchers.Main) { sendFetchGrants(grants) }
         val row = read.row

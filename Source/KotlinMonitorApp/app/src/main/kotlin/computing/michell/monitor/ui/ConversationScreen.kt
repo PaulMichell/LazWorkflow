@@ -187,7 +187,7 @@ private fun ConversationPane(
   onViewWidth: (Int) -> Unit,
   modifier: Modifier
 ) {
-  val showLive = ui.view.sending || ui.view.busy || ui.view.planRunning || ui.planRunning
+  val showLive = ui.view.sending || ui.view.busy || ui.view.planRunning || ui.planRunning || ui.live != null
   val rows = remember(ui.turns, ui.live, showLive, ui.showThinking, ui.showTools) {
     conversationRows(ui.turns, ui.live, showLive, ui.showThinking, ui.showTools)
   }

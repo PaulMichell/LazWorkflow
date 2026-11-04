@@ -101,5 +101,7 @@ fun shownConversation(ui: MonitorUi, stored: BoardContent): MonitorUi {
   if (ui.conversationId.isEmpty()) return ui.copy(turns = emptyList(), live = null, history = emptyMap())
   // Room has not emitted for this open yet. Keep the coordinator copy.
   if (stored.conversationId.isEmpty()) return ui
+  // The desktop id arrived before its rows. Keep the page already on screen.
+  if (stored.turns.isNotEmpty() || stored.live != null) return ui.withBoard(stored)
   return ui.copy(turns = emptyList(), live = null, history = emptyMap())
 }
