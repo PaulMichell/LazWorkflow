@@ -587,7 +587,8 @@ Type
     Procedure FillMonitorIdentity(Out ConversationId, ProjectRoot, Title: String);
     /// Reads a stored turn, or the live turn when TurnIndex is LiveConversationMarker. Does not change the selection.
     Function FillMonitorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
-    { Live turn only. Copies a block body when its length or running flag differs from SentBlocks. }
+    { Live turn only. Copies a block body when its length or running flag differs from SentBlocks.
+      A known image keeps its missing flag. A new image is checked once. }
     Function FillMonitorLiveChanges(Const SentBlocks: Array Of TAssistantMonitorBlock; Out Turn: TAssistantMonitorTurn;
       Out ErrorText: String): Boolean;
     /// False until the open conversation has been loaded. A phone resume waits for this.
@@ -10926,13 +10927,43 @@ End;
 Function TProjectAssistantForm.FillMonitorLiveChanges(Const SentBlocks: Array Of TAssistantMonitorBlock;
   Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
 Var
-  I, J: Integer;
+  I, J, ImageCount: Integer;
   Block: TTraceBlock;
   Found: Boolean;
+  StoreDir: String;
+  Seen: TStringList;
+  Known: TAssistantMonitorImage;
 
   Function SameFace(Const Left: TAssistantMonitorBlock; Const Right: TTraceBlock): Boolean;
   Begin
     Result := (Length(Left.Body) = Length(Right.Body)) And (Left.Running = Right.Running);
+  End;
+
+  Function KnownImage(Const ImageId: String; Out Image: TAssistantMonitorImage): Boolean;
+  Var
+    BlockIndex, ImageIndex: Integer;
+  Begin
+    Result := False;
+    Image := Default(TAssistantMonitorImage);
+    If ImageId = '' Then
+      Exit;
+    For BlockIndex := 0 To High(SentBlocks) Do
+      For ImageIndex := 0 To High(SentBlocks[BlockIndex].Images) Do
+        If SentBlocks[BlockIndex].Images[ImageIndex].Id = ImageId Then
+          Begin
+            Image := SentBlocks[BlockIndex].Images[ImageIndex];
+            Exit(True);
+          End;
+  End;
+
+  Procedure AddTurnImage(Const Image: TAssistantMonitorImage);
+  Begin
+    If (Image.Id = '') Or (Seen.IndexOf(Image.Id) >= 0) Then
+      Exit;
+    Seen.Add(Image.Id);
+    ImageCount := Length(Turn.Images);
+    SetLength(Turn.Images, ImageCount + 1);
+    Turn.Images[ImageCount] := Image;
   End;
 
 Begin
@@ -10970,48 +11001,59 @@ Begin
       Result := True;
       Exit;
     End;
-  SetLength(Turn.Blocks, FTrace.Count);
-  For I := 0 To FTrace.Count - 1 Do
-    Begin
-      Block := FTrace[I];
-      Turn.Blocks[I].Kind := TraceKindName(Block.Kind);
-      Turn.Blocks[I].BlockId := Block.ID;
-      Turn.Blocks[I].Title := Block.Title;
-      Turn.Blocks[I].ToolName := Block.ToolName;
-      Turn.Blocks[I].ToolId := Block.ToolId;
-      Turn.Blocks[I].Running := Block.Running;
-      Turn.Blocks[I].Ok := Block.Ok;
-      Turn.Blocks[I].DurationMs := Block.DurationMs;
-      Turn.Blocks[I].Revision := Block.Revision;
-      SetLength(Turn.Blocks[I].Images, Length(Block.ImageRefs));
-      For J := 0 To High(Block.ImageRefs) Do
-        Begin
-          Turn.Blocks[I].Images[J].Id := Block.ImageRefs[J].Id;
-          Turn.Blocks[I].Images[J].Name := Block.ImageRefs[J].Name;
-          Turn.Blocks[I].Images[J].Mime := '';
-          Turn.Blocks[I].Images[J].Width := Block.ImageRefs[J].Width;
-          Turn.Blocks[I].Images[J].Height := Block.ImageRefs[J].Height;
-          Turn.Blocks[I].Images[J].DisplayPath := Block.ImageRefs[J].DisplayPath;
-          Turn.Blocks[I].Images[J].Missing := False;
-        End;
-      Found := False;
-      For J := 0 To High(SentBlocks) Do
-        If SentBlocks[J].BlockId = Block.ID Then
+  StoreDir := '';
+  If Assigned(ProjectAssistantConversation) Then
+    StoreDir := ProjectAssistantConversation.AssistantDirectory;
+  Seen := TStringList.Create;
+  Try
+    Seen.CaseSensitive := True;
+    SetLength(Turn.Blocks, FTrace.Count);
+    For I := 0 To FTrace.Count - 1 Do
+      Begin
+        Block := FTrace[I];
+        Turn.Blocks[I].Kind := TraceKindName(Block.Kind);
+        Turn.Blocks[I].BlockId := Block.ID;
+        Turn.Blocks[I].Title := Block.Title;
+        Turn.Blocks[I].ToolName := Block.ToolName;
+        Turn.Blocks[I].ToolId := Block.ToolId;
+        Turn.Blocks[I].Running := Block.Running;
+        Turn.Blocks[I].Ok := Block.Ok;
+        Turn.Blocks[I].DurationMs := Block.DurationMs;
+        Turn.Blocks[I].Revision := Block.Revision;
+        SetLength(Turn.Blocks[I].Images, Length(Block.ImageRefs));
+        For J := 0 To High(Block.ImageRefs) Do
           Begin
-            Found := True;
-            If SameFace(SentBlocks[J], Block) Then
-              Begin
-                Turn.Blocks[I].Body := SentBlocks[J].Body;
-                Turn.Blocks[I].Images := SentBlocks[J].Images;
-              End
+            Turn.Blocks[I].Images[J].Id := Block.ImageRefs[J].Id;
+            Turn.Blocks[I].Images[J].Name := Block.ImageRefs[J].Name;
+            Turn.Blocks[I].Images[J].Mime := '';
+            Turn.Blocks[I].Images[J].Width := Block.ImageRefs[J].Width;
+            Turn.Blocks[I].Images[J].Height := Block.ImageRefs[J].Height;
+            Turn.Blocks[I].Images[J].DisplayPath := Block.ImageRefs[J].DisplayPath;
+            If KnownImage(Block.ImageRefs[J].Id, Known) Then
+              Turn.Blocks[I].Images[J].Missing := Known.Missing
             Else
-              Turn.Blocks[I].Body := Block.Body;
-            Break;
+              Turn.Blocks[I].Images[J].Missing := Not AssistantImageDisplayPresent(StoreDir, Block.ImageRefs[J].Id,
+                Block.ImageRefs[J].DisplayPath);
+            AddTurnImage(Turn.Blocks[I].Images[J]);
           End;
-      If Not Found Then
-        Turn.Blocks[I].Body := Block.Body;
-    End;
-  Result := True;
+        Found := False;
+        For J := 0 To High(SentBlocks) Do
+          If SentBlocks[J].BlockId = Block.ID Then
+            Begin
+              Found := True;
+              If SameFace(SentBlocks[J], Block) Then
+                Turn.Blocks[I].Body := SentBlocks[J].Body
+              Else
+                Turn.Blocks[I].Body := Block.Body;
+              Break;
+            End;
+        If Not Found Then
+          Turn.Blocks[I].Body := Block.Body;
+      End;
+    Result := True;
+  Finally
+    Seen.Free;
+  End;
 End;
 
 Procedure TProjectAssistantForm.FillMonitorPlanChoices(Paths, Captions: TStrings);

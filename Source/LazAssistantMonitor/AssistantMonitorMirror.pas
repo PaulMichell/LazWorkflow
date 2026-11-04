@@ -144,6 +144,8 @@ Type
     { Stored turns or the live turn. A plan alone is not the open conversation. }
     Function HasConversation: Boolean;
     Function CopyTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
+    { Live block faces only. The pump reuses these bodies when length and running are unchanged. }
+    Function CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
     { One locked copy of the open or parked conversation. Encode after this returns. }
     Function CaptureResume(Const ConversationId: String; Out Source: TMonitorResumeSource): Boolean;
     Function CopyPlan(Out PlanPath, PlanTitle: String; Out PlanRunning: Boolean; Out Rows: TMonitorMirrorPlanArray): Boolean;
@@ -987,6 +989,24 @@ Begin
     Else
       Live := Default(TAssistantMonitorTurn);
     Result := True;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
+Var
+  Live: TAssistantMonitorTurn;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    SetLength(Blocks, 0);
+    Result := FHasLive;
+    If Not Result Then
+      Exit;
+    Live := Default(TAssistantMonitorTurn);
+    CopyTurn(FLive, Live);
+    Blocks := Live.Blocks;
   Finally
     LeaveCriticalSection(FLock);
   End;

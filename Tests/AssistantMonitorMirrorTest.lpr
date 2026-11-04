@@ -148,10 +148,36 @@ Begin
   Check('other controls stay raw', (Pos(#1, Page) > 0) And (Pos('\u0001', Page) = 0));
 End;
 
+Procedure TestLiveBlocks;
+Var
+  Log: TMonitorMirror;
+  Turn: TAssistantMonitorTurn;
+  Blocks: TAssistantMonitorBlockArray;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    SetLength(Blocks, 1);
+    Check('no live turn has no blocks', (Not Log.CopyLiveBlocks(Blocks)) And (Length(Blocks) = 0));
+    Turn := SampleTurn('live', 'hello', -2);
+    Turn.Live := True;
+    Log.ObserveTurn(Turn);
+    Check('live blocks are the observed body', Log.CopyLiveBlocks(Blocks) And (Length(Blocks) = 1) And
+      (Blocks[0].BlockId = 'live-block') And (Blocks[0].Body = 'hello'));
+    Turn.Blocks[0].Body := 'hello!';
+    Log.ObserveTurn(Turn);
+    Check('a longer live body is the new face', Log.CopyLiveBlocks(Blocks) And (Length(Blocks) = 1) And
+      (Blocks[0].Body = 'hello!'));
+  Finally
+    Log.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFoldAndReplay;
   TestBodyEscape;
+  TestLiveBlocks;
   If FailCount = 0 Then
     WriteLn('AssistantMonitorMirrorTest passed')
   Else

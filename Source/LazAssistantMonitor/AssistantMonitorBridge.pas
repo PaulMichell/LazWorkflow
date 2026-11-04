@@ -10,6 +10,7 @@ Unit AssistantMonitorBridge;
   observation and the IDE command pump. Dirty-block patch construction is gone.
   Reviewed 2026-11-03: the 1 s timer is a backstop. A counter wake queues one pump,
   coalesced to 20 ms. The change pump publishes plan rows and does not read the plan file.
+  The live pump uses FillMonitorLiveChanges and does not copy an unchanged block body.
   No provider or socket code in this unit.
   (c) 2026 Michell Computing. }
 
@@ -137,7 +138,7 @@ Type
     Procedure QueuedPump(Data: PtrInt);
     Procedure CoalesceTimerTimer(Sender: TObject);
     Procedure DeliverOpenScreen;
-    Procedure PumpMirror(Seen: Int64; Full: Boolean);
+    Procedure PumpMirror(Seen: Int64);
     Procedure PublishPlanRows(Form: TProjectAssistantForm);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
@@ -970,7 +971,7 @@ Begin
     FCoalesceTimer.Enabled := False;
   Seen := AssistantMirrorCounter;
   If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
-    PumpMirror(Seen, False);
+    PumpMirror(Seen);
   LockBridge;
   Try
     FPumpPending := False;
@@ -998,7 +999,7 @@ Begin
   Seen := AssistantMirrorCounter;
   { Backstop only. A missed wake, or a phone that connected after the last tick. }
   If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
-    PumpMirror(Seen, True);
+    PumpMirror(Seen);
   DeliverOpenScreen;
 End;
 
@@ -1010,12 +1011,13 @@ Begin
     (SentModel <> View.Model) Or (SentStatus <> View.StatusText);
 End;
 
-Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64; Full: Boolean);
+Procedure TAssistantMonitorBridge.PumpMirror(Seen: Int64);
 Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
   View: TAssistantMonitorView;
   Turn: TAssistantMonitorTurn;
+  Sent: TAssistantMonitorBlockArray;
   Rows: TAssistantMonitorPlanRows;
   ErrorText, PlanStamp: String;
 Begin
@@ -1038,7 +1040,11 @@ Begin
   If FormConversationMoved(Form, Session) Then
     PublishEpoch;
   Turn := Default(TAssistantMonitorTurn);
-  If Not Form.FillMonitorTurn(MonitorLiveTurnIndex, Turn, ErrorText) Then
+  SetLength(Sent, 0);
+  { The mirror holds the last observation. Unchanged bodies are not copied again. }
+  If Not Session.CopyLiveBlocks(Sent) Then
+    SetLength(Sent, 0);
+  If Not Form.FillMonitorLiveChanges(Sent, Turn, ErrorText) Then
     Turn := Default(TAssistantMonitorTurn);
   If Turn.Id <> '' Then
     Session.ObserveTurn(Turn);

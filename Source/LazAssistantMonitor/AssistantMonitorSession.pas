@@ -283,6 +283,8 @@ Type
     Procedure NotePlanCachedRevision(Const Path, Revision: String);
     Function HasMirrorModel: Boolean;
     Function CopyMirrorTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
+    { Blocks the live pump already observed. Empty when the mirror has no live turn. }
+    Function CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
     Function FetchMirrorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
     Function BuildMirrorPages(Out Pages: TMonitorSnapshotPageArray): Boolean;
     { IDE thread. The connection thread copies this instead of reading the form. }
@@ -2650,6 +2652,15 @@ Begin
   If Not Assigned(FMirror) Then
     Exit;
   Result := FMirror.CopyTurns(Stored, Live, HasLive);
+End;
+
+Function TMonitorSession.CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
+Begin
+  SetLength(Blocks, 0);
+  Result := False;
+  If Not Assigned(FMirror) Then
+    Exit;
+  Result := FMirror.CopyLiveBlocks(Blocks);
 End;
 
 Function TMonitorSession.FetchMirrorTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
