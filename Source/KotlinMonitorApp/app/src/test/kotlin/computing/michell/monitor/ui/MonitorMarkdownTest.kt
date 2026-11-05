@@ -77,9 +77,9 @@ class MonitorMarkdownTest {
   }
 
   @Test
-  fun toolsAndSteerStayLiteral() {
+  fun toolsStayLiteral() {
     assertFalse(rendersMarkdown("tool"))
-    assertFalse(rendersMarkdown("steer"))
+    assertTrue(rendersMarkdown("steer"))
     assertTrue(rendersMarkdown("note"))
     assertTrue(rendersMarkdown("thinking"))
     assertTrue(rendersMarkdown("answer"))

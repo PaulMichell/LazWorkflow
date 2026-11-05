@@ -24,8 +24,8 @@ data class MarkdownBlock(
   val group: Int = 0
 )
 
-/** Tool output and steer stay literal. Everything else is the assistant's markdown path. */
-fun rendersMarkdown(kind: String): Boolean = kind != "tool" && kind != "steer"
+/** Tool output stays literal. A steer is a user prompt and uses the same markdown path. */
+fun rendersMarkdown(kind: String): Boolean = kind != "tool"
 
 /** Drop blank lines above the first line of a thought. The header already names it. */
 fun thinkingDisplayBody(body: String): String {

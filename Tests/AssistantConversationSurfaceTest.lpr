@@ -244,6 +244,9 @@ Begin
  Check('bubble padding is included in extent',View.Layout.Heights.Values[0]=View.Layout[0].FullHeight+2*View.Layout[0].Padding+10);
  Check('bubble text fits its measured width',View.Layout[0].Full.Width=View.Layout[0].OuterWidth-2*View.Layout[0].Padding);
  Check('body font has readable default size',View.Font.Size>=10);
+ Trace.AddSteer('Please look at the right edge'); Sync;
+ Check('steer uses the user prompt bubble',(View.Layout[2].Kind=tbkSteer) And (View.Layout[2].Left=View.Layout[0].Left) And
+   (View.Layout[2].OuterWidth=View.Layout[0].OuterWidth) And (View.Layout[2].Left>View.Layout[1].Left));
  Trace.Clear; View.Clear;
  Trace.StartThinking(0); Sync; Check('empty thinking takes no height',View.ContentHeight=0);
  Trace.CurrentThinking.Body:='Actual reasoning summary'; Sync; Check('received thinking appears',View.ContentHeight>0);

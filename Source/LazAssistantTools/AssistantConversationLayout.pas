@@ -105,7 +105,7 @@ Uses
 
 Function KeepsMarkdownFragment(Kind: TTraceBlockKind; Const Body: String; HasFull: Boolean): Boolean;
 Begin
-  Result := Not (Kind In [tbkTool, tbkSteer]) And (HasFull Or (Length(Body) >= 65536));
+  Result := (Kind <> tbkTool) And (HasFull Or (Length(Body) >= 65536));
 End;
 
 { A freshly parsed layout only knows one line per paragraph. Keep a taller
@@ -284,7 +284,7 @@ Var
 Begin
   SetLength(Section.Images, 0);
   If (Not Assigned(Block)) Or (Length(Block.ImageRefs) = 0) Then Exit;
-  If Not (Block.Kind In [tbkUser, tbkTool, tbkNote]) Then Exit;
+  If Not (Block.Kind In [tbkUser, tbkSteer, tbkTool, tbkNote]) Then Exit;
   SetLength(Section.Images, Length(Block.ImageRefs));
   For I := 0 To High(Block.ImageRefs) Do
     Section.Images[I] := Block.ImageRefs[I];
@@ -343,7 +343,7 @@ Begin
     Begin
       { Keep the last full document while a replacement parses. A first short
         message has no fragment yet. Collapsed thinking without one stays cheap.
-        Tool and steer blocks stay plain text. }
+        Tool blocks stay plain text. A steer is a user prompt. }
       If KeepsMarkdownFragment(Block.Kind, Block.Body, Assigned(Section.Full)) Then
         Begin
           FreeAndNil(Section.Short);
@@ -399,12 +399,12 @@ Begin
       Section.Left := 0;
       Section.OuterWidth := FWidth;
       Section.Padding := 0;
-      If Section.Kind In [tbkUser, tbkAnswer] Then
+      If Section.Kind In [tbkUser, tbkSteer, tbkAnswer] Then
         Begin
           Section.Padding := Min(Round(12 * FPixelsPerInch / 96), Max(0, (FWidth - 1) Div 4));
-          If Section.Kind = tbkUser Then Section.OuterWidth := Max(1, FWidth * 85 Div 100)
+          If Section.Kind In [tbkUser, tbkSteer] Then Section.OuterWidth := Max(1, FWidth * 85 Div 100)
           Else Section.OuterWidth := Max(1, FWidth * 95 Div 100);
-          If Section.Kind = tbkUser Then Section.Left := FWidth - Section.OuterWidth;
+          If Section.Kind In [tbkUser, tbkSteer] Then Section.Left := FWidth - Section.OuterWidth;
         End;
     End;
 End;
@@ -435,7 +435,7 @@ End;
 Function KeepsMeasuredFragment(Section: TConversationSection): Boolean;
 Begin
   Result := Assigned(Section) And Assigned(Section.Full) And (Length(Section.Body) >= 65536) And
-    Not (Section.Kind In [tbkTool, tbkSteer]);
+    (Section.Kind <> tbkTool);
 End;
 
 Procedure TConversationLayout.Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer);
@@ -540,7 +540,7 @@ Begin
   Else If Short And (Section.Kind = tbkThinking) And (Length(Text) > 2000) Then Text := Copy(Text, Length(Text) - 1999, 2000);
   If Text <> '' Then
     Begin
-      If Section.Kind In [tbkTool, tbkSteer] Then Part := StyledContentFromText(Text, Renderer.AddStyle(Style))
+      If Section.Kind = tbkTool Then Part := StyledContentFromText(Text, Renderer.AddStyle(Style))
       Else If Not Short And (Section.ParsedVersion > 0) And (Section.ParsedBaseSize = FBaseSize) Then
         Part := Copy(Section.BodyContent)
       Else
@@ -724,7 +724,7 @@ Begin
   If (Index < 0) Or (Index >= Count) Then Exit;
   Section := Sections[Index];
   If Not Section.Visible Then Exit;
-  MarkdownBody := Not Section.Collapsed And Not (Section.Kind In [tbkTool, tbkSteer]);
+  MarkdownBody := Not Section.Collapsed And (Section.Kind <> tbkTool);
   LargeBody := MarkdownBody And (Length(Section.Body) >= 65536);
   Pending := False;
   If MarkdownBody And ((Section.ParsedVersion <> Section.Version) Or (Section.ParsedBaseSize <> FBaseSize)) Then

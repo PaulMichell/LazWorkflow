@@ -912,12 +912,12 @@ Begin
       If Length(FLayout[I].Images) > 0 Then TileH := FLayout.ImageRowHeight(I);
       If FLayout[I].Visible And (Assigned(Fragment) Or (TileH > 0)) Then
         Begin
-          If FLayout[I].Kind In [tbkUser, tbkAnswer] Then
+          If FLayout[I].Kind In [tbkUser, tbkSteer, tbkAnswer] Then
             Begin
               Style := DefaultStyledBoxStyle;
               Style.CornerRadius := Scale96ToFont(12);
               Style.BorderWidth := 1;
-              If FLayout[I].Kind = tbkUser Then
+              If FLayout[I].Kind In [tbkUser, tbkSteer] Then
                 Begin
                   Style.Background := UserBubbleColor;
                   Style.BorderColor := $D5E4C5;
@@ -983,7 +983,7 @@ Begin
               Style := DefaultStyledBoxStyle;
               Style.BorderWidth := 1;
               Style.BorderColor := clHighlight;
-              If FLayout[I].Kind In [tbkUser, tbkAnswer] Then Style.CornerRadius := Scale96ToFont(12);
+              If FLayout[I].Kind In [tbkUser, tbkSteer, tbkAnswer] Then Style.CornerRadius := Scale96ToFont(12);
               SectionHeight := TileH + FLayout[I].Padding * 2;
               If Assigned(Fragment) Then SectionHeight := SectionHeight + Fragment.Height;
               Renderer.DrawBoxFrame(GetStyledBoxGeometry(OriginX + FLayout[I].Left,
@@ -1032,7 +1032,7 @@ Begin
   Result.ImageIndex := -1;
   I := FLayout.IndexOf(Result.Position.Key);
   If (I < 0) Or (Length(FLayout[I].Images) = 0) Then Exit;
-  If Not (FLayout[I].Kind In [tbkUser, tbkTool, tbkNote]) Then Exit;
+  If Not (FLayout[I].Kind In [tbkUser, tbkSteer, tbkTool, tbkNote]) Then Exit;
   ContentW := FLayout.ImageContentWidth(I);
   ContentLeft := ViewRect.Left + FLayout[I].Left + FLayout[I].Padding;
   If (X < ContentLeft) Or (X >= ContentLeft + ContentW) Then Exit;

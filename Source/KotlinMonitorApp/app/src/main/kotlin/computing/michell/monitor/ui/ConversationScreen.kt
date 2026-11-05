@@ -526,11 +526,10 @@ private fun RoleBlock(
   Column {
     if (block.deferred) Text(NotCurrentLabel, color = QuietText)
     when (displayKind(block)) {
-    "user" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons, fetchImages)
+    "user", "steer" -> BubbleBlock(block, hostGeneration, UserFill, UserEdge, Alignment.End, 0.85f, bitmaps, reasons, fetchImages)
     "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons, fetchImages)
     "thinking" -> ThinkingCard(foldKey, block, showThinking)
     "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration, fetchImages)
-    "steer" -> Text(block.body.ifEmpty { block.title }, modifier = Modifier.padding(horizontal = 4.dp))
     "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false, fetchImages)
     "worked" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, QuietText, true, fetchImages)
     else -> {
