@@ -19,7 +19,7 @@ Type
   Public
     Key, Source, ErrorText: String;
     Epoch, Identity, Version: QWord;
-    BaseSize, Width, Kind, PixelsPerInch: Integer;
+    BaseSize, Width, Kind, PixelsPerInch, LineHeight: Integer;
     OK, CountParse: Boolean;
     Stage: TAssistantMarkdownStage;
     Title, Footer: String;
@@ -103,7 +103,9 @@ Begin
   PreparedDocument := TStyledDocument.Create;
   PreparedDocument.Replace(StyledPosition(0, 0), PreparedDocument.EndPosition, Content);
   PreparedLayout := TStyledMemoLayout.Create(PreparedDocument, Nil);
-  PreparedLayout.Reset(Width, True, Round(24 * ScalePPI / 96));
+  If LineHeight < 1 Then LineHeight := Round(24 * ScalePPI / 96);
+  If LineHeight < 1 Then LineHeight := 24;
+  PreparedLayout.Reset(Width, True, LineHeight);
 End;
 
 Constructor TAssistantMarkdownWorker.Create;

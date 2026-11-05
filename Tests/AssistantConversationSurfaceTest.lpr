@@ -6,6 +6,7 @@ Procedure Check(Const Name:String; OK:Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ',Name); Halt(1); End; WriteLn('ok ',Name); End;
 Type
   TImageSurface=Class(TAssistantConversationSurface)
+  Public
     OpenedName:String;
     Procedure Press(Key:Word);
     Procedure PressShift(Key:Word; Shift:TShiftState);
@@ -85,6 +86,7 @@ Begin
  For J:=1 To 40 Do Body:=Body+LineEnding+LineEnding+'Paragraph '+IntToStr(J)+' stays below the picture.';
  Trace.Clear; View.Clear; Trace.AddUser(Body);
  Refs[0].Width:=100; Refs[0].Height:=400; Refs[0].Missing:=False; Trace.SetUserImageRefs(Refs); Sync;
+ View.JumpToStart;
  X:=View.ViewRect.Left+View.Layout[0].Left+View.Layout[0].Padding+4;
  Y:=View.ViewRect.Top+View.Layout[0].Padding+View.Layout.ImageRowHeight(0)+4;
  Hit:=View.PointerHit(X,Y);
@@ -262,7 +264,10 @@ Begin
  Check('hidden tools keep source',Trace.FindTool('1').Body='Tool result');
  View.ShowToolUse:=True; View.CompleteLayout; Check('show restores measured extent',View.ContentHeight=BeforeHeight);
  Key:=Trace[1].ID; View.NavigateTo(Key); View.ScrollTop:=View.ScrollTop+80;
- Host.Width:=620; Application.ProcessMessages; View.CompleteLayout;
+ BeforeHeight:=View.ContentHeight;
+ Host.Width:=620; Application.ProcessMessages;
+ Check('resize does not collapse to the initial line height',View.ContentHeight>BeforeHeight Div 2);
+ View.CompleteLayout;
  Check('width change keeps anchor in same block',View.Layout[View.Layout.AtY(View.ScrollTop)].Key=Key);
  A.Key:=Trace[1].ID; A.Text:=StyledPosition(1,0); B.Key:=Trace[3].ID; B.Text:=StyledPosition(1,10);
  View.SelectRange(A,B); Check('cross-message selection copies text',(Pos('Paragraph',View.SelectedText)>0) And (Pos('read_file',View.SelectedText)>0));

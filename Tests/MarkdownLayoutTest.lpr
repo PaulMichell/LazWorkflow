@@ -12,7 +12,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledTextDocument, StyledCanvas, StyledMarkdown, AssistantProtocol, AssistantSampler;
+  Interfaces, Graphics, Classes, SysUtils, StyledTextTypes, StyledTextDocument, StyledCanvas, StyledMemoLayout, StyledMarkdown,
+  AssistantProtocol, AssistantSampler;
 
 Var
   FailCount: Integer;
@@ -282,6 +283,77 @@ Begin
   Finally Whole.Free; Partial.Free; Canvas.Free; Bitmap.Free; End;
 End;
 
+Procedure TestReflowKeepsMeasuredHeight;
+Var
+  Bitmap: TBitmap;
+  Font: TFont;
+  Document: TStyledDocument;
+  Memo: TStyledMemoLayout;
+  Content: TStyledContent;
+  Before, After: Int64;
+Begin
+  Bitmap := TBitmap.Create;
+  Font := TFont.Create;
+  Document := TStyledDocument.Create;
+  Memo := Nil;
+  Try
+    Bitmap.SetSize(400, 200);
+    Font.Name := 'DejaVu Sans';
+    Font.Size := 12;
+    Renderer.Configure(Bitmap.Canvas, Font, Bitmap.Width, Bitmap.Height);
+    Content := StyledContentFromText('One two three four five six seven eight nine ten eleven twelve thirteen fourteen ' +
+      'fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two.');
+    Document.Replace(StyledPosition(0, 0), Document.EndPosition, Content);
+    Memo := TStyledMemoLayout.Create(Document, Renderer);
+    Memo.Reset(80, True, 24);
+    Memo.Ensure(0, True);
+    Before := HeightBefore(Memo.Heights, 1);
+    Check('narrow wrap is taller than two lines', Before > Int64(Renderer.LineHeight) * 2);
+    Memo.Reflow(220, Renderer.LineHeight);
+    After := HeightBefore(Memo.Heights, 1);
+    Check('reflow does not collapse to the initial line height', After > Int64(Renderer.LineHeight) * 2);
+    Check('reflow keeps the measured block', After = Before);
+  Finally
+    Memo.Free;
+    Document.Free;
+    Font.Free;
+    Bitmap.Free;
+  End;
+End;
+
+Procedure TestLineHeightFollowsSurface;
+Var
+  Bitmap: TBitmap;
+  Font: TFont;
+  FirstGeneration, SecondGeneration: QWord;
+  FirstHeight, SecondHeight: Integer;
+Begin
+  Bitmap := TBitmap.Create;
+  Font := TFont.Create;
+  Try
+    Font.Name := 'DejaVu Sans';
+    Font.Size := 12;
+    Bitmap.SetSize(8, 8);
+    Renderer.Configure(Bitmap.Canvas, Font, 8, 8);
+    FirstHeight := Renderer.LineHeight;
+    FirstGeneration := Renderer.Generation;
+    Bitmap.SetSize(400, 200);
+    Renderer.Configure(Bitmap.Canvas, Font, 400, 200);
+    SecondHeight := Renderer.LineHeight;
+    SecondGeneration := Renderer.Generation;
+    Check('resized surface still has a line height', SecondHeight > 1);
+    If SecondHeight <> FirstHeight Then
+      Check('a changed line height drops the cached metrics', SecondGeneration <> FirstGeneration)
+    Else
+      Check('an unchanged line height keeps the generation', SecondGeneration = FirstGeneration);
+    Renderer.Configure(Bitmap.Canvas, Font, 400, 200);
+    Check('repeated surface configure does not invalidate again', Renderer.Generation = SecondGeneration);
+  Finally
+    Font.Free;
+    Bitmap.Free;
+  End;
+End;
+
 Procedure TestListContinuation;
 Var Content: TStyledContent;
 Begin
@@ -311,6 +383,8 @@ Begin
     TestDetachedParsing;
     TestOversizedCluster;
     TestIncrementalTable;
+    TestReflowKeepsMeasuredHeight;
+    TestLineHeightFollowsSurface;
   Finally
     Renderer.Free;
   End;

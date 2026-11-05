@@ -69,6 +69,7 @@ Type
     BaseFont: TFont;
     FGeneration: QWord;
     FStats: TStyledCanvasStats;
+    FSurfaceWidth, FSurfaceHeight: Integer;
     ActiveStyle: Integer;
     Function GetStyle(Index: Integer): TStyledStyle;
     Function StyleAt(Const Paragraph: TStyledParagraph; Offset: Integer; Var Hint: Integer): Integer;
@@ -81,7 +82,8 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Configure(Canvas: TCanvas; Font: TFont);
+    Procedure Configure(Canvas: TCanvas; Font: TFont; SurfaceWidth: Integer = -1; SurfaceHeight: Integer = -1);
+    Function LineHeight: Integer;
     Function AddStyle(Const Style: TStyledStyle): Integer;
     Procedure BeginLayout(Layout: TStyledLayout; Const Paragraph: TStyledParagraph; Width: Integer; Wrap: TStyledWrap;
       RestartOffset: Integer = 0);
@@ -207,6 +209,8 @@ Begin
   Inherited Create;
   BaseFont := TFont.Create;
   ActiveStyle := -1;
+  FSurfaceWidth := -1;
+  FSurfaceHeight := -1;
   AddStyle(DefaultStyledStyle);
 End;
 
@@ -216,22 +220,53 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TStyledCanvas.Configure(Canvas: TCanvas; Font: TFont);
+Function MetricsDiffer(Const First, Second: TStyledMetrics): Boolean;
+Begin
+  Result := (First.Ascent <> Second.Ascent) Or (First.Descent <> Second.Descent) Or (First.Leading <> Second.Leading) Or
+    (First.SpaceWidth <> Second.SpaceWidth) Or (First.AverageWidth <> Second.AverageWidth);
+End;
+
+Procedure TStyledCanvas.Configure(Canvas: TCanvas; Font: TFont; SurfaceWidth: Integer; SurfaceHeight: Integer);
 Var
   Index: Integer;
+  FontChanged, SurfaceChanged, HadMetrics: Boolean;
+  Previous: TStyledMetrics;
 Begin
-  If (BaseFont.Name <> Font.Name) Or (BaseFont.Size <> Font.Size) Or (BaseFont.Style <> Font.Style) Or
-    (BaseFont.PixelsPerInch <> Font.PixelsPerInch) Or (BaseFont.Quality <> Font.Quality) Then
-    Begin
-      Inc(FGeneration);
-      For Index := 0 To High(MetricValid) Do MetricValid[Index] := False;
-    End;
+  FontChanged := (BaseFont.Name <> Font.Name) Or (BaseFont.Size <> Font.Size) Or (BaseFont.Style <> Font.Style) Or
+    (BaseFont.PixelsPerInch <> Font.PixelsPerInch) Or (BaseFont.Quality <> Font.Quality);
+  SurfaceChanged := (SurfaceWidth >= 0) And (SurfaceHeight >= 0) And
+    ((FSurfaceWidth <> SurfaceWidth) Or (FSurfaceHeight <> SurfaceHeight));
+  HadMetrics := (Length(MetricValid) > 0) And MetricValid[0];
+  If HadMetrics Then Previous := Metrics[0];
+  If FontChanged Or SurfaceChanged Then
+    For Index := 0 To High(MetricValid) Do MetricValid[Index] := False;
+  If FontChanged Then Inc(FGeneration);
   { LCL TFont.Assign preserves the destination DPI. Copy it explicitly so
     subsequent paints compare the same metrics and do not invalidate forever. }
   BaseFont.PixelsPerInch := Font.PixelsPerInch;
   BaseFont.Assign(Font);
   Target := Canvas;
   ActiveStyle := -1;
+  If SurfaceWidth >= 0 Then FSurfaceWidth := SurfaceWidth;
+  If SurfaceHeight >= 0 Then FSurfaceHeight := SurfaceHeight;
+  { A resize changes the measurement surface. Keep the first canvas's line
+    height only when the new surface measures the same. }
+  If SurfaceChanged And Not FontChanged And HadMetrics And Assigned(Target) Then
+    If MetricsDiffer(Previous, GetMetrics(0)) Then Inc(FGeneration);
+End;
+
+Function TStyledCanvas.LineHeight: Integer;
+Var
+  Body: TStyledMetrics;
+Begin
+  If Not Assigned(Target) Then
+    Begin
+      Result := Abs(BaseFont.Height);
+      If Result < 1 Then Result := 24;
+      Exit;
+    End;
+  Body := GetMetrics(0);
+  Result := Max(1, Body.Ascent + Body.Descent + Body.Leading + 1);
 End;
 
 Function TStyledCanvas.GetStyle(Index: Integer): TStyledStyle;

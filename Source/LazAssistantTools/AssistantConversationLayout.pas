@@ -27,6 +27,7 @@ Type
     Destructor Destroy; Override;
     Function Height: Int64;
     Function Prepare(Top, Bottom: Int64; Finish: Boolean; BudgetEnd: QWord = 0): Boolean;
+    Procedure Reflow(NewWidth, LineHeight: Integer; NewGeneration: QWord);
     Procedure EvictDrawings;
     Procedure RetainDrawings(First, Last: Integer);
   End;
@@ -43,7 +44,7 @@ Type
     BodyContent: TStyledContent;
     Images: TTraceImageRefArray;
     Destructor Destroy; Override;
-    Procedure Invalidate;
+    Procedure Invalidate(Placeholder: Integer = 0);
     Function Fragment: TConversationFragment;
   End;
   TConversationLayout = Class
@@ -66,6 +67,9 @@ Type
     Function GetPendingWork: Boolean;
     Function GetSection(Index: Integer): TConversationSection;
     Function BuildContent(Section: TConversationSection; Short: Boolean; BodyReady: Boolean = True): TStyledContent;
+    Function CurrentLineHeight: Integer;
+    Procedure ApplyFrames;
+    Procedure ReflowFragments;
   Public
     Heights: TStyledHeightIndex;
     Constructor Create(ARenderer: TStyledCanvas);
@@ -104,6 +108,21 @@ Begin
   Result := Not (Kind In [tbkTool, tbkSteer]) And (HasFull Or (Length(Body) >= 65536));
 End;
 
+{ A freshly parsed layout only knows one line per paragraph. Keep a taller
+  measured row until the new wrap replaces it, so a turn update does not jump
+  back to the line height cached when the view opened. }
+Procedure KeepTallerRows(OldFragment, NewFragment: TConversationFragment);
+Var
+  I, Limit: Integer;
+Begin
+  If (Not Assigned(OldFragment)) Or (Not Assigned(NewFragment)) Or (Not Assigned(OldFragment.Layout)) Or
+    (Not Assigned(NewFragment.Layout)) Then Exit;
+  Limit := Min(Length(OldFragment.Layout.Heights.Values), Length(NewFragment.Layout.Heights.Values));
+  For I := 0 To Limit - 1 Do
+    If OldFragment.Layout.Heights.Values[I] > NewFragment.Layout.Heights.Values[I] Then
+      SetHeight(NewFragment.Layout.Heights, I, OldFragment.Layout.Heights.Values[I]);
+End;
+
 Constructor TConversationFragment.Create(Renderer: TStyledCanvas; Const Content: TStyledContent; AWidth: Integer);
 Begin
   Inherited Create;
@@ -112,7 +131,7 @@ Begin
   Layout := TStyledMemoLayout.Create(Document, Renderer);
   Width := AWidth;
   Generation := Renderer.Generation;
-  Layout.Reset(Width, True, 24);
+  Layout.Reset(Width, True, Max(1, Renderer.LineHeight));
 End;
 
 Constructor TConversationFragment.CreatePrepared(Renderer: TStyledCanvas; ADocument: TStyledDocument;
@@ -124,6 +143,14 @@ Begin
   Layout := ALayout;
   Width := AWidth;
   Generation := Renderer.Generation;
+End;
+
+Procedure TConversationFragment.Reflow(NewWidth, LineHeight: Integer; NewGeneration: QWord);
+Begin
+  Width := Max(1, NewWidth);
+  Generation := NewGeneration;
+  NextMeasure := 0;
+  If Assigned(Layout) Then Layout.Reflow(Width, LineHeight);
 End;
 
 Destructor TConversationFragment.Destroy;
@@ -185,12 +212,13 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TConversationSection.Invalidate;
+Procedure TConversationSection.Invalidate(Placeholder: Integer);
 Begin
   FreeAndNil(Full);
   FreeAndNil(Short);
-  FullHeight := 28;
-  ShortHeight := 28;
+  If Placeholder < 1 Then Placeholder := 28;
+  FullHeight := Placeholder;
+  ShortHeight := Placeholder;
 End;
 
 Function TConversationSection.Fragment: TConversationFragment;
@@ -298,7 +326,7 @@ Begin
     Begin
       Section := TConversationSection.Create;
       Section.Key := Key;
-      Section.Invalidate;
+      Section.Invalidate(CurrentLineHeight);
       Inc(NextIdentity);
       Section.Identity := NextIdentity;
       Section.Version := 1;
@@ -310,7 +338,7 @@ Begin
   Section.Seen := SyncGeneration;
   If Section.Body <> Block.Body Then Inc(Section.Version);
   If (Section.Kind <> Block.Kind) Or (Section.Footer <> Block.Footer) Or
-    ((Section.Title = '') <> (DisplayTitle = '')) Then Section.Invalidate
+    ((Section.Title = '') <> (DisplayTitle = '')) Then Section.Invalidate(CurrentLineHeight)
   Else If Section.Body <> Block.Body Then
     Begin
       { Keep the last full document while a replacement parses. A first short
@@ -319,9 +347,9 @@ Begin
       If KeepsMarkdownFragment(Block.Kind, Block.Body, Assigned(Section.Full)) Then
         Begin
           FreeAndNil(Section.Short);
-          Section.ShortHeight := 28;
+          Section.ShortHeight := CurrentLineHeight;
         End
-      Else Section.Invalidate;
+      Else Section.Invalidate(CurrentLineHeight);
     End;
   If Section.Title <> DisplayTitle Then
     Begin
@@ -353,25 +381,87 @@ Begin
   Reindex;
 End;
 
-Procedure TConversationLayout.Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer);
+Function TConversationLayout.CurrentLineHeight: Integer;
+Begin
+  Result := 24;
+  If Assigned(Renderer) Then Result := Renderer.LineHeight;
+  If Result < 1 Then Result := 24;
+End;
+
+Procedure TConversationLayout.ApplyFrames;
 Var
   I: Integer;
+  Section: TConversationSection;
+Begin
+  For I := 0 To Count - 1 Do
+    Begin
+      Section := Sections[I];
+      Section.Left := 0;
+      Section.OuterWidth := FWidth;
+      Section.Padding := 0;
+      If Section.Kind In [tbkUser, tbkAnswer] Then
+        Begin
+          Section.Padding := Min(Round(12 * FPixelsPerInch / 96), Max(0, (FWidth - 1) Div 4));
+          If Section.Kind = tbkUser Then Section.OuterWidth := Max(1, FWidth * 85 Div 100)
+          Else Section.OuterWidth := Max(1, FWidth * 95 Div 100);
+          If Section.Kind = tbkUser Then Section.Left := FWidth - Section.OuterWidth;
+        End;
+    End;
+End;
+
+Procedure TConversationLayout.ReflowFragments;
+Var
+  I, ContentW, LineH: Integer;
+  Section: TConversationSection;
+Begin
+  LineH := CurrentLineHeight;
+  For I := 0 To Count - 1 Do
+    Begin
+      Section := Sections[I];
+      ContentW := Max(1, Section.OuterWidth - Section.Padding * 2);
+      If Assigned(Section.Full) Then
+        Begin
+          Section.Full.Reflow(ContentW, LineH, Renderer.Generation);
+          Section.FullHeight := Section.Full.Height;
+        End;
+      If Assigned(Section.Short) Then
+        Begin
+          Section.Short.Reflow(ContentW, LineH, Renderer.Generation);
+          Section.ShortHeight := Section.Short.Height;
+        End;
+    End;
+End;
+
+Function KeepsMeasuredFragment(Section: TConversationSection): Boolean;
+Begin
+  Result := Assigned(Section) And Assigned(Section.Full) And (Length(Section.Body) >= 65536) And
+    Not (Section.Kind In [tbkTool, tbkSteer]);
+End;
+
+Procedure TConversationLayout.Configure(Width, BaseSize: Integer; ShowThinking, ShowTools: Boolean; PixelsPerInch: Integer);
+Var
+  I, OldBase: Integer;
+  Changed: Boolean;
 Begin
   Width := Max(1, Width);
-  If (FWidth <> Width) Or (FBaseSize <> BaseSize) Or (FGeneration <> Renderer.Generation) Or (FPixelsPerInch <> PixelsPerInch) Then
+  PixelsPerInch := Max(1, PixelsPerInch);
+  OldBase := FBaseSize;
+  Changed := (FWidth <> Width) Or (OldBase <> BaseSize) Or (FGeneration <> Renderer.Generation) Or (FPixelsPerInch <> PixelsPerInch);
+  If Changed Then
     Begin
       FWidth := Width;
       FBaseSize := BaseSize;
       FGeneration := Renderer.Generation;
-      FPixelsPerInch := Max(1, PixelsPerInch);
-      For I := 0 To Count - 1 Do
-        If (Length(Sections[I].Body) >= 65536) And Assigned(Sections[I].Full) And
-          Not (Sections[I].Kind In [tbkTool, tbkSteer]) Then
-            Begin
-              FreeAndNil(Sections[I].Short);
-              Sections[I].ShortHeight := 28;
-            End
-        Else Sections[I].Invalidate;
+      FPixelsPerInch := PixelsPerInch;
+      ApplyFrames;
+      { A point-size change bakes new styles into short messages. A large reply
+        stays measured so a font or DPI change does not drop the reading point. }
+      If OldBase <> BaseSize Then
+        For I := 0 To Count - 1 Do
+          If Not KeepsMeasuredFragment(Sections[I]) Then Sections[I].Invalidate(CurrentLineHeight);
+      { Width and line height change the wrap, not the text. Keep measured
+        block heights instead of the line height cached at first show. }
+      ReflowFragments;
     End;
   FShowThinking := ShowThinking;
   FShowTools := ShowTools;
@@ -386,19 +476,10 @@ Var
 Begin
   ResetHeights(Heights, Count, 0);
   LastVisible := -1;
+  ApplyFrames;
   For I := 0 To Count - 1 Do
     Begin
       Section := Sections[I];
-      Section.Left := 0;
-      Section.OuterWidth := FWidth;
-      Section.Padding := 0;
-      If Section.Kind In [tbkUser, tbkAnswer] Then
-        Begin
-          Section.Padding := Min(Round(12 * FPixelsPerInch / 96), Max(0, (FWidth - 1) Div 4));
-          If Section.Kind = tbkUser Then Section.OuterWidth := Max(1, FWidth * 85 Div 100)
-          Else Section.OuterWidth := Max(1, FWidth * 95 Div 100);
-          If Section.Kind = tbkUser Then Section.Left := FWidth - Section.OuterWidth;
-        End;
       Section.Visible := Not ((Section.Kind = tbkThinking) And ((Not FShowThinking) Or (Trim(Section.Body) = ''))) And
         Not ((Section.Kind In [tbkTool, tbkSubagent]) And Not FShowTools) And
         Not ((Section.Kind = tbkAnswer) And (Trim(Section.Body) = '') And (Section.Footer = ''));
@@ -546,6 +627,7 @@ Var
   Frame: TStyledContent;
 Begin
   Job.PixelsPerInch := FPixelsPerInch;
+  Job.LineHeight := CurrentLineHeight;
   Job.Title := Section.Title;
   Job.Footer := Section.Footer;
   Job.OK := Section.OK;
@@ -598,7 +680,8 @@ Begin
         Exit;
       End;
     If (Job.PixelsPerInch <> FPixelsPerInch) Or (Job.Title <> Section.Title) Or (Job.Footer <> Section.Footer) Or (Job.OK <> Section.OK) Or
-      (Job.Width <> Max(1, Section.OuterWidth - Section.Padding * 2)) Then
+      (Job.Width <> Max(1, Section.OuterWidth - Section.Padding * 2)) Or
+      ((Job.LineHeight > 0) And (Job.LineHeight <> CurrentLineHeight)) Then
         Begin
           SubmitPreparation;
           Exit;
@@ -607,6 +690,7 @@ Begin
     NewFragment := TConversationFragment.CreatePrepared(Renderer, Job.PreparedDocument, Job.PreparedLayout, Job.Width);
     Job.PreparedDocument := Nil;
     Job.PreparedLayout := Nil;
+    KeepTallerRows(Section.Full, NewFragment);
     { Transfer the old value-only fragment to the worker for reclamation too.
       Its destruction does not access the borrowed renderer or a window handle. }
     Job.RetiredObject := Section.Full;

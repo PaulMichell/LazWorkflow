@@ -30,6 +30,7 @@ Type
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
     Procedure UpdateScrollbarBounds;
+    Procedure EnsureBuffer;
     Procedure DoScroll(Sender: TObject);
     Procedure SetScrollTop(Value: Int64);
     Procedure SetScrollLeft(Value: Integer);
@@ -136,9 +137,20 @@ Begin
   Result.Bottom := Max(Result.Top + 1, Result.Bottom);
 End;
 
+Procedure TStyledSurface.EnsureBuffer;
+Var
+  BufferW, BufferH: Integer;
+Begin
+  If Not Assigned(Bitmap) Then Exit;
+  BufferW := Max(1, ClientWidth);
+  BufferH := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
+  If (Bitmap.Width <> BufferW) Or (Bitmap.Height <> BufferH) Then Bitmap.SetSize(BufferW, BufferH);
+End;
+
 Procedure TStyledSurface.ConfigureCanvas;
 Begin
-  If Assigned(FRenderer) Then FRenderer.Configure(Bitmap.Canvas, Font);
+  If Assigned(FRenderer) And Assigned(Bitmap) Then
+    FRenderer.Configure(Bitmap.Canvas, Font, Bitmap.Width, Bitmap.Height);
 End;
 
 Procedure TStyledSurface.SetScrollbars(Vertical, Horizontal: Boolean);
@@ -236,6 +248,10 @@ Begin
   Inherited Resize;
   If Not Assigned(VerticalBar) Then Exit;
   UpdateScrollbarBounds;
+  { Measure on the resized surface before layout. The first canvas must not
+    keep its line height after the view changes size. }
+  EnsureBuffer;
+  ConfigureCanvas;
   GeometryChanged;
   SetExtent(FContentWidth, FContentHeight);
   Invalidate;
@@ -357,8 +373,8 @@ Begin
   Started := GetTickCount64;
   View := ViewRect;
   { At most 8 MiB per viewport. Normal desktop widths use horizontal strips. }
-  BufferHeight := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
-  If (Bitmap.Width <> Max(1, ClientWidth)) Or (Bitmap.Height <> BufferHeight) Then Bitmap.SetSize(Max(1, ClientWidth), BufferHeight);
+  EnsureBuffer;
+  BufferHeight := Max(1, Bitmap.Height);
   LogicalTop := 0;
   While LogicalTop < ClientHeight Do
     Begin

@@ -32,6 +32,9 @@ Type
       Attach its renderer only after exclusive ownership reaches the UI thread. }
     Procedure AttachRenderer(NewRenderer: TStyledCanvas);
     Procedure Reset(NewWidth: Integer; NewWordWrap: Boolean; Estimate: Integer);
+    { Drop drawing runs after a width or line-height change. Measured row
+      heights stay until the new wrap replaces them. }
+    Procedure Reflow(NewWidth, LineHeight: Integer);
     Function DocumentChanged(First, Removed, Added: Integer): Boolean;
     Procedure Ensure(Index: Integer; Finish: Boolean; Milliseconds: Integer = 8);
     Function Spacing(Index: Integer): TStyledInsets;
@@ -177,15 +180,50 @@ Begin
   If Result Then Reset(Width, WordWrap, EstimateHeight);
 End;
 
+Procedure TStyledMemoLayout.Reflow(NewWidth, LineHeight: Integer);
+Var
+  Index, OldEstimate: Integer;
+  Insets: TStyledInsets;
+  ContentH: Int64;
+  HadLayout: Boolean;
+Begin
+  NewWidth := Max(1, NewWidth);
+  If LineHeight < 1 Then LineHeight := Max(1, EstimateHeight);
+  OldEstimate := Max(1, EstimateHeight);
+  Width := NewWidth;
+  EstimateHeight := LineHeight;
+  RestartParagraph := -1;
+  For Index := 0 To High(Paragraphs) Do
+    Begin
+      HadLayout := Assigned(Paragraphs[Index]);
+      FreeAndNil(Paragraphs[Index]);
+      If (Index > High(Heights.Values)) Or HadLayout Then Continue;
+      Insets := Spacing(Index);
+      ContentH := Heights.Values[Index] - Insets.Top - Insets.Bottom;
+      { An unmeasured row still holds the line height from when the view was
+        created. A measured row keeps its height until the new wrap is ready. }
+      If ContentH <= OldEstimate Then
+        SetHeight(Heights, Index, Int64(LineHeight) + Insets.Top + Insets.Bottom);
+    End;
+End;
+
 Procedure TStyledMemoLayout.Ensure(Index: Integer; Finish: Boolean; Milliseconds: Integer);
 Var
   Wrap: TStyledWrap;
   Insets: TStyledInsets;
-  Estimate: Int64;
-  Restart: Integer;
+  Estimate, Previous: Int64;
+  Restart, LiveHeight, MeasuredBytes, Remaining, PerLine, Extra: Integer;
 Begin
+  If Assigned(Renderer) Then
+    Begin
+      LiveHeight := Renderer.LineHeight;
+      If LiveHeight > 0 Then EstimateHeight := LiveHeight;
+    End;
   If Not Assigned(Paragraphs[Index]) Then Paragraphs[Index] := TStyledLayout.Create;
   Insets := Spacing(Index);
+  Previous := 0;
+  If Index <= High(Heights.Values) Then Previous := Heights.Values[Index] - Insets.Top - Insets.Bottom;
+  If Previous < 0 Then Previous := 0;
   If WordWrap Or (Document[Index]^.Box.Group <> 0) Then Wrap := swWord Else Wrap := swNone;
   Restart := 0;
   If Index = RestartParagraph Then
@@ -198,7 +236,17 @@ Begin
   Else Renderer.ContinueLayout(Paragraphs[Index], Document[Index]^, Max(1,Milliseconds));
   Estimate := Paragraphs[Index].Height;
   If Not Paragraphs[Index].Complete Then
-    Estimate := Max(Estimate, Round(Estimate * (Length(Document[Index]^.Text) / Max(1, Paragraphs[Index].NextOffset))));
+    Begin
+      MeasuredBytes := Max(1, Paragraphs[Index].NextOffset);
+      Remaining := Length(Document[Index]^.Text) - Paragraphs[Index].NextOffset;
+      If Remaining < 0 Then Remaining := 0;
+      PerLine := Max(1, MeasuredBytes Div Max(1, Paragraphs[Index].LineCount));
+      Extra := (Remaining + PerLine - 1) Div PerLine;
+      { The remainder uses the view's current line height, not a scale of the
+        first measured line. }
+      Estimate := Estimate + Int64(Extra) * Max(1, EstimateHeight);
+      If Estimate < Previous Then Estimate := Previous;
+    End;
   SetHeight(Heights, Index, Estimate + Insets.Top + Insets.Bottom);
 End;
 
