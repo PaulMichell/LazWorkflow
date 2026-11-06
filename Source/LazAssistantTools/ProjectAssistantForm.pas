@@ -17,6 +17,8 @@ Unit ProjectAssistantForm;
   text after a picture is copied. The Run Plan end report is built in
   AssistantPlanRun. A dropped Codex or Claude transport waits in
   AssistantRecovery, then the same turn is started again.
+  A Claude plan item starts its own session. Only a continue of that same item passes --resume.
+  Reviewed 2026-11-06: that session is not the conversation session, and a fresh item is a new turn, not a replay.
   Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
   The list stays in AssistantTasksForm.
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
@@ -244,6 +246,8 @@ Type
     { Claude Code's session for this conversation. The key is connection, project and first turn. }
     FClaudeSessionId, FClaudeSessionKey, FClaudeSubmitText: String;
     FClaudeResume, FClaudeFreshRetried: Boolean;
+    { Plan-run session for the current item. A new item does not resume the conversation session. }
+    FClaudePlanItem: TClaudePlanItemSession;
     { Last rate-limit report applied to the footer, and the finished turn's usage for the usage log. }
     FClaudeRateLimitJson: String;
     FClaudeUsageReported: Boolean;
@@ -899,6 +903,7 @@ Begin
   FPlanAgentPackagesDone := 0;
   FPlanAgentMaxPackages := 25;
   FPlanAgentResumeIndex := -1;
+  FClaudePlanItem := Default(TClaudePlanItemSession);
   FPlanStallTimer := Nil;
   FPlanFileTimer := Nil;
   FPlanDiskAge := -1;
@@ -3195,6 +3200,7 @@ Var
   PlanRel, Err, Body, Prompt, Title, StatusText, ParentTitle: String;
   Idx: Integer;
   Section: TPlanSection;
+  ContinueSame: Boolean;
 Begin
   If FSending Then
     Begin
@@ -3242,17 +3248,19 @@ Begin
       RunAssistantModal('Could not load plan section:' + LineEnding + Err, mtError, [mbOK], 0);
       Exit;
     End;
-  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle,
-    FPlanAgentRunning And (Idx = FPlanAgentResumeIndex));
+  ContinueSame := FPlanAgentRunning And (Idx = FPlanAgentResumeIndex);
+  Prompt := BuildWorkPrompt(PlanRel, Title, StatusText, Body, ParentTitle, ContinueSame);
   FPlanAgentResumeIndex := -1;
   { Stay in Build mode (tools + prompt) while showing the chat turn surface. }
   BeginBuildWorkTracking(Idx, Title);
   ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
   SetBuildStatusFeedback('Working on: ' + Title);
+  PrepareClaudePlanItemSession(FClaudePlanItem, ContinueSame, FPlanAgentRunning, FUseClaude);
   SubmitUserText(Prompt, True);
   If Not FSending Then
     Begin
+      ReleaseClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey);
       UnlockModeAfterSend;
       ClearBuildWorkTracking;
     End;
@@ -3443,6 +3451,7 @@ Begin
   SetAssistantPlanViewerQuiet(True);
   FPlanAgentPackagesDone := 0;
   FPlanAgentResumeIndex := -1;
+  FClaudePlanItem.SessionId := '';
   FLastTurnHadError := False;
   FPlanNewChatThisStep := False;
   MarkPlanAgentAlive;
@@ -5337,17 +5346,19 @@ Begin
   FPendingTurnAttachments := '';
   FClaudeSubmitText := SubmitText;
   FClaudeFreshRetried := False;
-  If (FClaudeSessionId <> '') And (FClaudeSessionKey = ClaudeSessionKey) Then
-    Begin
-      FClaudeResume := True;
-      Prompt := SubmitText;
-    End
-  Else
-    Begin
-      FClaudeSessionId := NewClaudeSessionId;
-      FClaudeResume := False;
-      Prompt := ClaudeRecapPrompt(SubmitText);
-    End;
+  If Not ApplyClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey, FClaudeResume,
+    FPlanAgentRunning, SubmitText, Prompt) Then
+    If (FClaudeSessionId <> '') And (FClaudeSessionKey = ClaudeSessionKey) Then
+      Begin
+        FClaudeResume := True;
+        Prompt := SubmitText;
+      End
+    Else
+      Begin
+        FClaudeSessionId := NewClaudeSessionId;
+        FClaudeResume := False;
+        Prompt := ClaudeRecapPrompt(SubmitText);
+      End;
   { Do not copy this turn into the HTTP client. Claude Code keeps its own session. }
   SetCurrentUserDisplay(DisplayText, WithContext);
   FLiveUser := FDisplayUser;
@@ -5365,9 +5376,18 @@ Begin
   FClaudeUsageReported := False;
   SetSending(True);
   BeginAssistantReply;
+  If FClaudePlanItem.Active And Assigned(FTrace) Then
+    Begin
+      FTrace.AddNote(ClaudePlanItemSessionNote(FBuildWorkSectionTitle, FClaudeSessionId, FClaudeResume));
+      If FViewingLive And Assigned(FTraceView) Then
+        FTraceView.Sync(FTrace, True);
+      WorkflowLogger.Info('ProjectAssistant', FTrace[FTrace.Count - 1].Body);
+    End;
   Result := LaunchStoredClaudeRun;
   If (Not Result) And FSending And (Not FTransportWait) Then
     FinishAssistantReply('The run could not be restarted.');
+  If FClaudePlanItem.Active And (Not FSending) Then
+    ReleaseClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey);
   Result := FSending;
 End;
 
@@ -5502,11 +5522,21 @@ Begin
           waits and starts the same stored prompt again, a bounded number of times. }
         If (Snapshot.ToolCalls = 0) And ClaudeSessionMissing(Snapshot.ErrorText) And (Not FClaudeFreshRetried) Then
           Begin
-            { Claude Code no longer has this session. Start a new one once, with the recap in its place. }
+            { Claude Code no longer has this session. Start a new one once. A plan item is not replayed and
+              does not take the conversation recap. Only a turn that ran no tool reaches here. }
             FClaudeFreshRetried := True;
             FClaudeSessionId := NewClaudeSessionId;
             FClaudeResume := False;
-            FClaudeLaunchPrompt := ClaudeRecapPrompt(FClaudeSubmitText);
+            If FClaudePlanItem.Active Then
+              Begin
+                FClaudePlanItem.Resume := False;
+                FClaudePlanItem.SessionId := FClaudeSessionId;
+                FClaudeLaunchPrompt := FClaudeSubmitText;
+                If Assigned(FTrace) Then
+                  FTrace.AddNote(ClaudePlanItemSessionNote(FBuildWorkSectionTitle, FClaudeSessionId, False));
+              End
+            Else
+              FClaudeLaunchPrompt := ClaudeRecapPrompt(FClaudeSubmitText);
             ReleaseClaudeProcess;
             If Not LaunchStoredClaudeRun Then
               FinishAssistantReply('The run could not be restarted.');
@@ -5518,7 +5548,11 @@ Begin
             Inc(FClaudeRetries);
             { A first turn may have created its session; another --session-id with that id would be refused. }
             If Not FClaudeResume Then
-              FClaudeSessionId := NewClaudeSessionId;
+              Begin
+                FClaudeSessionId := NewClaudeSessionId;
+                If FClaudePlanItem.Active Then
+                  FClaudePlanItem.SessionId := FClaudeSessionId;
+              End;
             ReleaseClaudeProcess;
             Exit;
           End;
@@ -5526,9 +5560,10 @@ Begin
         If Snapshot.ErrorText = '' Then
           { The turn is recorded now, so the key includes this conversation's first turn. }
           FClaudeSessionKey := ClaudeSessionKey
-        Else If Not FClaudeResume Then
-          { The new session may not exist. The next turn starts another, with the recap. }
+        Else If (Not FClaudeResume) And (Not (FClaudePlanItem.Active And (Snapshot.ToolCalls > 0))) Then
+          { A new session that ran no tool may not exist. A plan item that ran tools is resumed, not replayed. }
           FClaudeSessionId := '';
+        ReleaseClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey);
       End
     Else If FSending And (FStatusPhase = '') Then
       SetStreamPhase(AssistantPhaseWaiting);
@@ -8233,6 +8268,7 @@ Begin
   RefreshConversationList;
   RefreshChatDisplay(True, True);
   PersistSession;
+  ReleaseClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey);
   If FPlanAgentRunning Then
     StopRunPlan(preUserStop, 'stream cancelled by user');
   WorkflowLogger.Info('ProjectAssistant', 'Stream cancelled by user');

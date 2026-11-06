@@ -75,6 +75,8 @@ Function PlanRunUnexplainedStall(AgentRunning, Sending, UserStopped: Boolean; Op
 Function PlanRunStallWaitNote(WaitSeconds: Integer): String;
 Function PlanRunStallResumeNote: String;
 Function PlanRunNewChatNote(UsagePercent: Integer): String;
+{ Trace line naming the Claude session for one plan item. Resumed is a continue turn of that item. }
+Function ClaudePlanItemSessionNote(Const ItemTitle, SessionId: String; Resumed: Boolean): String;
 { Work-item prompt. Claude names only tools present in ToolsJson. Native keeps the existing sentences. }
 Function PlanWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
   ContinueSameItem, Claude: Boolean; Const ToolsJson: String): String;
@@ -124,6 +126,24 @@ End;
 Function PlanRunNewChatNote(UsagePercent: Integer): String;
 Begin
   Result := Format('Context usage %d%%. Starting a new chat and continuing the plan.', [UsagePercent]);
+End;
+
+Function ClaudePlanItemSessionNote(Const ItemTitle, SessionId: String; Resumed: Boolean): String;
+Var
+  Action, Title, Identifier: String;
+Begin
+  If Resumed Then
+    Action := 'resumed'
+  Else
+    Action := 'started';
+  Title := Trim(ItemTitle);
+  Identifier := Trim(SessionId);
+  If Identifier = '' Then
+    Identifier := '(none)';
+  Result := 'Claude session ' + Identifier + ' ' + Action;
+  If Title <> '' Then
+    Result := Result + ' for "' + Title + '"';
+  Result := Result + '.';
 End;
 
 Function DefaultPlanRunReportFacts: TPlanRunReportFacts;

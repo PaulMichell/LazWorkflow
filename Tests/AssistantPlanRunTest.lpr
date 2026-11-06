@@ -9,7 +9,7 @@ Program AssistantPlanRunTest;
 
 Uses
   {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, AssistantPlanRun, AssistantTurnFinish, AssistantAcceptance,
-  AssistantToolBroker;
+  AssistantToolBroker, AssistantClaudeClient;
 
 Type
   TPromptWorkspace = Class(TAssistantWorkspaceAdapter)
@@ -181,9 +181,37 @@ Procedure CheckPrompts;
     End;
   End;
 
+Procedure CheckPlanItemSession;
+Var
+  Args: TStringList;
+  Note: String;
+Begin
+  Args := TStringList.Create;
+  Try
+    AppendClaudePlanItemArguments('sonnet', '', 'item-1', False, Args);
+    Check('a new plan item does not resume', Args.IndexOf('--resume') < 0);
+    Check('a new plan item names its session', (Args.IndexOf('--session-id') >= 0) And
+      (Args[Args.IndexOf('--session-id') + 1] = 'item-1'));
+    Args.Clear;
+    AppendClaudePlanItemArguments('sonnet', '', 'item-1', True, Args);
+    Check('a continue turn resumes its session', (Args.IndexOf('--resume') >= 0) And
+      (Args[Args.IndexOf('--resume') + 1] = 'item-1') And (Args.IndexOf('--session-id') < 0));
+    Args.Clear;
+    AppendClaudePlanItemArguments('sonnet', '', '', True, Args);
+    Check('a continue without a session does not resume', Args.IndexOf('--resume') < 0);
+  Finally
+    Args.Free;
+  End;
+  Note := ClaudePlanItemSessionNote('5.2 Fresh session', 'item-1', False);
+  Check('a started session note names the id', Has(Note, 'item-1') And Has(Note, 'started') And (Pos('resumed', Note) = 0));
+  Note := ClaudePlanItemSessionNote('5.2 Fresh session', 'item-1', True);
+  Check('a resumed session note names the id', Has(Note, 'item-1') And Has(Note, 'resumed'));
+End;
+
 Begin
   FailCount := 0;
   CheckPrompts;
+  CheckPlanItemSession;
   Check('empty plan counts match the list',
     AssistantPlanRunCountsLine(0, 0, 0, 0) = '0 not started · 0 in progress · 0 blocked · 0 complete  ·  no actionable items');
   Check('open counts match the list',

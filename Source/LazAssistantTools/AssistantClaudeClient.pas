@@ -50,6 +50,16 @@ Type
     Resume: Boolean;
   End;
 
+  { The Claude session for the plan item being sent. Holding means the conversation session was set aside. }
+  TClaudePlanItemSession = Record
+    Active: Boolean;
+    Resume: Boolean;
+    Holding: Boolean;
+    SessionId: String;
+    HeldSessionId: String;
+    HeldSessionKey: String;
+  End;
+
   TClaudeRunSnapshot = Record
     Content, ErrorText: String;
     { The claude process was started. A failure after that may follow edits or commands. }
@@ -112,6 +122,19 @@ Function ClaudeToolDisplayName(Const ToolName: String): String;
 /// leave those choices to Claude Code. No --permission-mode is passed: the turn has no Claude Code tool that
 /// needs approval, and the approval setting is applied by the broker to the Lazarus tools.
 Procedure AppendClaudeTurnArguments(Const Model, Effort, SessionId: String; Resume: Boolean; Args: TStrings);
+/// True when a continue turn of the same plan item still has a session to resume.
+Function ClaudePlanItemResumes(ContinueSameItem: Boolean; Const SessionId: String): Boolean;
+/// Print arguments for one plan-item turn. A new item does not pass --resume. A continue turn resumes
+/// SessionId. This builds arguments only: a fresh session is a new turn, not a replay of a turn that ran a tool.
+Procedure AppendClaudePlanItemArguments(Const Model, Effort, SessionId: String; ContinueSameItem: Boolean; Args: TStrings);
+/// A new plan item gets a new session. A continue turn keeps SessionId and may resume it.
+Procedure PrepareClaudePlanItemSession(Var Item: TClaudePlanItemSession; ContinueSameItem, PlanRunning, UseClaude: Boolean);
+/// Installs the plan-item session for this turn. False leaves the conversation session alone.
+/// A fresh item's prompt is SubmitText: not a recap, and not a replay of a turn that ran a tool.
+Function ApplyClaudePlanItemSession(Var Item: TClaudePlanItemSession; Var SessionId, SessionKey: String; Var Resume: Boolean;
+  PlanRunning: Boolean; Const SubmitText: String; Out Prompt: String): Boolean;
+/// Puts the conversation session back. Copies the item session out only when this turn had installed it.
+Procedure ReleaseClaudePlanItemSession(Var Item: TClaudePlanItemSession; Var SessionId, SessionKey: String);
 /// The models this sign-in offers, as Claude Code's own model picker lists them. No model call is made.
 Function ReadClaudeModels(Const Executable: String; Out ModelsJson, ErrorText: String): Boolean;
 /// A new lower-case UUID without braces, as --session-id requires. Empty on failure.
@@ -256,6 +279,78 @@ Begin
   Else
     Args.Add('--session-id');
   Args.Add(SessionId);
+End;
+
+Function ClaudePlanItemResumes(ContinueSameItem: Boolean; Const SessionId: String): Boolean;
+Begin
+  Result := ContinueSameItem And (SessionId <> '');
+End;
+
+Procedure AppendClaudePlanItemArguments(Const Model, Effort, SessionId: String; ContinueSameItem: Boolean; Args: TStrings);
+Begin
+  { A new item must not resume: that session still holds every earlier item's file dump.
+    Arguments only. The caller sends this turn's prompt and does not replay a turn that ran a tool. }
+  AppendClaudeTurnArguments(Model, Effort, SessionId, ClaudePlanItemResumes(ContinueSameItem, SessionId), Args);
+End;
+
+Procedure PrepareClaudePlanItemSession(Var Item: TClaudePlanItemSession; ContinueSameItem, PlanRunning, UseClaude: Boolean);
+Begin
+  Item.Active := PlanRunning And UseClaude;
+  Item.Resume := False;
+  If Not Item.Active Then
+    Exit;
+  { A new item is a new turn. Do not resume the previous item and do not replay its prompt. }
+  If ContinueSameItem And (Item.SessionId <> '') Then
+    Item.Resume := True
+  Else
+    Begin
+      Item.SessionId := NewClaudeSessionId;
+      Item.Resume := False;
+    End;
+End;
+
+Function ApplyClaudePlanItemSession(Var Item: TClaudePlanItemSession; Var SessionId, SessionKey: String; Var Resume: Boolean;
+  PlanRunning: Boolean; Const SubmitText: String; Out Prompt: String): Boolean;
+Begin
+  Result := Item.Active And PlanRunning;
+  If Not Result Then
+    Begin
+      ReleaseClaudePlanItemSession(Item, SessionId, SessionKey);
+      Exit;
+    End;
+  { Set the conversation session aside. A retry must not stash the item id over it. }
+  If Not Item.Holding Then
+    Begin
+      Item.HeldSessionId := SessionId;
+      Item.HeldSessionKey := SessionKey;
+      Item.Holding := True;
+    End;
+  If Not ClaudePlanItemResumes(Item.Resume, Item.SessionId) Then
+    Begin
+      If Item.SessionId = '' Then
+        Item.SessionId := NewClaudeSessionId;
+      Item.Resume := False;
+    End;
+  Resume := ClaudePlanItemResumes(Item.Resume, Item.SessionId);
+  SessionId := Item.SessionId;
+  { This turn's prompt only. No recap of earlier items, and no replay of a turn that ran a tool. }
+  Prompt := SubmitText;
+End;
+
+Procedure ReleaseClaudePlanItemSession(Var Item: TClaudePlanItemSession; Var SessionId, SessionKey: String);
+Begin
+  { Only a launched plan-item turn replaced the conversation session. An early exit must not copy it back. }
+  If Item.Holding Then
+    Begin
+      Item.SessionId := SessionId;
+      SessionId := Item.HeldSessionId;
+      SessionKey := Item.HeldSessionKey;
+      Item.Holding := False;
+      Item.HeldSessionId := '';
+      Item.HeldSessionKey := '';
+    End;
+  Item.Active := False;
+  Item.Resume := False;
 End;
 
 Procedure DrainPipe(Pipe: TInputPipeStream; Buffer: TStream);
