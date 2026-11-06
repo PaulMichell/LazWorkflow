@@ -17,7 +17,7 @@ Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
   Private
     FBuild, FTests: IAssistantBuildJob;
-    FTestBuildId, FTestCommand, FTestExecutable: String;
+    FTestBuildId, FTestCommand, FTestExecutable, FTestOnly: String;
     FBuildInputs, FBuildRoots: TBuildInputs;
     FDependencyEvidence: String;
     FDefineStep: Integer;
@@ -595,6 +595,7 @@ Begin
     FTests := Job;
     FTestBuildId := BuildId;
     FTestCommand := Command;
+    FTestOnly := OnlyJSON;
     FTestExecutable := Data.FindPath('executable').AsString;
     Value := FTests.Snapshot;
     ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","build_job_id":"' + JsonEscapeText(BuildId) + '"}';
@@ -608,7 +609,7 @@ End;
 Function TAssistantIDEWorkspace.TestStatus(Out ResultText, ErrorText: String): Boolean;
 Var
   Value: TBuildJobSnapshot;
-  Status, Note, Fingerprint, StaleReason: String;
+  Status, Note, Fingerprint, StaleReason, Current: String;
   Data: TJSONData;
   Stale: Boolean;
   Settings: TAssistantTestSettings;
@@ -666,7 +667,8 @@ Begin
         Try
           TJSONObject(Data).Add('executableFingerprint', Fingerprint);
           TJSONObject(Data).Add('build_job_id', FTestBuildId);
-          If Data.AsJSON <> FTestCommand Then
+          { FTestCommand carries the --only and --output-dir arguments, so apply the same selection before comparing. }
+          If Not ApplyTestOnly(Data.AsJSON, ProjectRootPath, FTestOnly, Current, Note) Or (Current <> FTestCommand) Then
             Begin
               Stale := True;
               If StaleReason = '' Then StaleReason := 'The configured test command changed.';
