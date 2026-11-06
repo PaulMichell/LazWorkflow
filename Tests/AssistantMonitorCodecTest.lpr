@@ -476,6 +476,19 @@ Begin
   AddSample('set-permissions', mmkSetPermissions, EncodeMonitorSetPermissions('set-permissions', 'auto'));
 End;
 
+{ One refused reply with a reason, so the optional field is in the stored frame. }
+Function SampleCommandStates: String;
+Var
+  Replies: Array Of TMonitorCommandStateReply;
+Begin
+  SetLength(Replies, 1);
+  Replies[0].Ref := 'steer-1';
+  Replies[0].State := 'refused';
+  Replies[0].Reason := 'busy';
+  Replies[0].Text := '';
+  Result := EncodeMonitorCommandStates('command-states', Replies);
+End;
+
 Procedure BuildSamples;
 Var
   View: TAssistantMonitorView;
@@ -588,6 +601,8 @@ Begin
   AddSample('turn', mmkTurn, EncodeMonitorTurnRequest('turn', 3));
   AddSample('snapshot-page', mmkSnapshotPage, '{"v":2,"id":"snapshot-page","type":"snapshot_page","payload":{"conversation_id":"c1","stream_id":"abc","seq":1,"turn":{"turn_id":"t1","turn_index":0,"blocks":[]}}}');
   AddSample('chunk', mmkChunk, '{"v":2,"id":"chunk-1","type":"chunk","payload":{"item_id":"img-1","part":1,"part_count":1,"item_type":"image_data","data":"{}"}}');
+  AddSample('command-state', mmkCommandState, EncodeMonitorCommandState('command-state', 'send-1', 'done', '', 'Sent.'));
+  AddSample('command-states', mmkCommandStates, SampleCommandStates);
   AddSample('mode', mmkMode, EncodeMonitorMode('mode', 'build', True));
   AddSample('set-mode', mmkSetMode, EncodeMonitorSetMode('set-mode', 'plan'));
   Json := '';
@@ -743,6 +758,19 @@ Begin
     mmkSnapshotPage, mmkChunk:
       Begin
         Check(Sample.Name + ' payload', PayloadObject(Sample.Json, Data, Payload));
+        Data.Free;
+      End;
+    mmkCommandState:
+      Begin
+        Check('command_state fields', PayloadObject(Sample.Json, Data, Payload) And (Payload.Get('ref', '') = 'send-1') And
+          (Payload.Get('state', '') = 'done') And (Payload.Get('text', '') = 'Sent.') And (Payload.Find('reason') = Nil));
+        Data.Free;
+      End;
+    mmkCommandStates:
+      Begin
+        Check('command_states fields', PayloadObject(Sample.Json, Data, Payload) And (Payload.Find('states') Is TJSONArray) And
+          (TJSONArray(Payload.Find('states')).Count = 1) And
+          (TJSONArray(Payload.Find('states')).Objects[0].Get('reason', '') = 'busy'));
         Data.Free;
       End;
     mmkMode:
