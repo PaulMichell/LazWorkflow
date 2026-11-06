@@ -1009,6 +1009,7 @@ Begin
 End;
 {$POP}
 
+{ True when Data now belongs to a link, or has already been freed through one. HandleConnect frees Data only on False. }
 Function TMonitorListenThread.Handoff(Data: TSocketStream): Boolean;
 Var
   Dup: cint;
@@ -1033,13 +1034,33 @@ Begin
       LogMonitor(3, 'wake handle failed bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Exit;
     End;
+  { The stream is handed over before Start. A link that finishes at once releases it in Execute's Finally, so
+    starting first could leave it unowned. From here the link owns Data, and Result stays True on every path:
+    a failure below frees the link, which releases Data. }
   Link.TakeAccepted(Data);
-  Index := Length(FSlots);
-  SetLength(FSlots, Index + 1);
-  FSlots[Index].Stream := Nil;
-  FSlots[Index].Link := Link;
   Result := True;
-  Link.Start;
+  Index := -1;
+  Try
+    Index := Length(FSlots);
+    SetLength(FSlots, Index + 1);
+    FSlots[Index].Stream := Nil;
+    FSlots[Index].Link := Link;
+    Link.Start;
+  Except
+    On E: Exception Do
+      Begin
+        ReportPluginException(MonitorLogArea, E);
+        { The slot is the last one, and only this thread changes FSlots. Drop it if it was added. }
+        If (Index >= 0) And (Index = High(FSlots)) And (FSlots[Index].Link = Link) Then
+          SetLength(FSlots, Index);
+        Try
+          Link.Free;
+        Except
+          On FreeError: Exception Do
+            LogMonitor(2, 'link release after failed hand-off ' + FreeError.Message);
+        End;
+      End;
+  End;
 End;
 
 Procedure TMonitorListenThread.HandleConnect(Sender: TObject; Data: TSocketStream);
