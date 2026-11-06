@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  SysUtils, AssistantTrace, AssistantEvents;
+  Interfaces, SysUtils, AssistantTrace, AssistantEvents;
 
 Var
   FailCount: Integer;
@@ -447,8 +447,44 @@ Begin
   End;
 End;
 
+Procedure TestPlanItemUsage;
+Const
+  Fixture = '{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":120,"output_tokens":30,' +
+    '"cache_read_input_tokens":800,"cache_creation_input_tokens":20}}';
+  NativeFixture = '{"response":{"usage":{"prompt_tokens":80,"completion_tokens":10}}}';
+Var
+  InputTokens, OutputTokens, Cached: Int64;
+  HasCached: Boolean;
+  First, Second, Summary, Notes: String;
+  Trace: TAssistantTrace;
+Begin
+  Check('fixture result event reports usage', PlanItemUsageFromResultEvent(Fixture, InputTokens, OutputTokens, Cached,
+    HasCached) And (InputTokens = 120) And (OutputTokens = 30) And HasCached And (Cached = 820));
+  First := PlanItemUsageLine('claude', '5.1 Name tools', InputTokens, OutputTokens, Cached, HasCached, 4500);
+  Check('trace line names the item and tokens', (Pos('claude', First) > 0) And (Pos('5.1 Name tools', First) > 0) And
+    (Pos('in 120', First) > 0) And (Pos('out 30', First) > 0) And (Pos('cached 820', First) > 0) And
+    (Pos('wall 4500ms', First) > 0));
+  Second := PlanItemUsageLine('grok', '5.2 Fresh session', 80, 10, 0, False, 1500);
+  Summary := PlanRunUsageSummary(First + LineEnding + Second);
+  Check('summary adds two items', (Pos('2 items', Summary) > 0) And (Pos('in 200', Summary) > 0) And
+    (Pos('out 40', Summary) > 0) And (Pos('cached 820', Summary) > 0) And (Pos('wall 6000ms', Summary) > 0));
+  Check('native response usage', PlanItemUsageFromResultEvent(NativeFixture, InputTokens, OutputTokens, Cached,
+    HasCached) And (InputTokens = 80) And (OutputTokens = 10) And (Not HasCached));
+  Trace := TAssistantTrace.Create;
+  Try
+    Notes := '';
+    RememberPlanItemUsage(Notes, Trace, '5.1 Name tools', True, False, True, True, False, 940, 30, 820, 0, 0, 4500);
+    Check('inclusive Claude input stores exclusive in', (Pos('in 120', Notes) > 0) And (Pos('cached 820', Notes) > 0));
+    Check('usage line is a trace note', (Trace.Count > 0) And (Trace[Trace.Count - 1].Kind = tbkNote) And
+      (Pos('in 120', Trace[Trace.Count - 1].Body) > 0));
+  Finally
+    Trace.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
+  TestPlanItemUsage;
   TestBlocks;
   TestImageRowTallerThanText;
   TestSteerImages;

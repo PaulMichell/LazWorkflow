@@ -2,10 +2,9 @@ Unit AssistantTrace;
 
 { In-memory current-turn block list for the Project Assistant trace (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. Replay, markdown export, and
-  JSON load/save are one trace surface. Reviewed 2026-09-23: user-block image
-  ids and the shared display-slot metrics stay here so export and the
-  conversation layout share one formula without a second trace unit. }
+  Size note: exceeds the 1000 line preference. Replay, markdown export, JSON
+  load/save, and plan-item usage lines are one trace surface. Reviewed 2026-11-06:
+  a plan item writes a usage line; the run summary adds those lines. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -141,6 +140,20 @@ Function FormatThoughtFooter(DurationMs: Integer): String;
 Function FormatWorkedFooter(DurationMs: Integer): String;
 Function ThinkingCardTitle(DurationMs: Integer; Running: Boolean): String;
 Function ToolCardCaption(Const ToolName, Args: String): String;
+{ Tokens from a result event. False when the text has no usage object with input and output counts.
+  Cached is set only when the event reports a cache field. Accepts Claude input_tokens and native prompt_tokens. }
+Function PlanItemUsageFromResultEvent(Const EventJson: String; Out InputTokens, OutputTokens, CachedInputTokens: Int64;
+  Out HasCached: Boolean): Boolean;
+{ One plan-item trace line. Cached is omitted when the backend did not report it. }
+Function PlanItemUsageLine(Const Backend, Heading: String; InputTokens, OutputTokens, CachedInputTokens: Int64;
+  HasCached: Boolean; WallMs: Integer): String;
+{ Adds the plan-item lines. Headings are not summed. }
+Function PlanRunUsageSummary(Const ItemLines: String): String;
+{ Writes one plan-item line into Notes and the live trace. Claude input may include cache; cached
+  tokens are then subtracted so the line's in and cached fields do not overlap. }
+Procedure RememberPlanItemUsage(Var Notes: String; Trace: TAssistantTrace; Const Heading: String;
+  UseClaude, UseCodex, ClaudeReported, ClaudeHasCached, NativeReported: Boolean;
+  ClaudeIn, ClaudeOut, ClaudeCached: Int64; NativeIn, NativeOut, WallMs: Integer);
 { True when the viewport is following the tail: everything fits, or Position is
   within Slop of max (ContentHeight - Page). Live updates should then keep the
   tail in view; otherwise they must not move Position. }
@@ -1439,6 +1452,218 @@ Begin
         Preview := Copy(Preview, 1, 37) + '…';
       Result := Result + '  ' + Preview;
     End;
+End;
+
+Function UsageObject(Root: TJSONObject): TJSONObject;
+Var
+  Node: TJSONData;
+Begin
+  Result := Nil;
+  If Not Assigned(Root) Then
+    Exit;
+  Node := Root.Find('usage');
+  If Node Is TJSONObject Then
+    Exit(TJSONObject(Node));
+  Node := Root.Find('response');
+  If Node Is TJSONObject Then
+    Begin
+      Node := TJSONObject(Node).Find('usage');
+      If Node Is TJSONObject Then
+        Exit(TJSONObject(Node));
+    End;
+End;
+
+Procedure AddCacheField(Usage: TJSONObject; Const Name: String; Var Total: Int64; Var Reported: Boolean);
+Var
+  Node: TJSONData;
+Begin
+  If Not Assigned(Usage) Then
+    Exit;
+  Node := Usage.Find(Name);
+  If Not Assigned(Node) Then
+    Exit;
+  Reported := True;
+  If Node Is TJSONNumber Then
+    Total := Total + Node.AsInt64;
+End;
+
+Function PlanItemUsageFromResultEvent(Const EventJson: String; Out InputTokens, OutputTokens, CachedInputTokens: Int64;
+  Out HasCached: Boolean): Boolean;
+Var
+  Data: TJSONData;
+  Usage, Details: TJSONObject;
+  InputNode, OutputNode: TJSONData;
+Begin
+  Result := False;
+  InputTokens := 0;
+  OutputTokens := 0;
+  CachedInputTokens := 0;
+  HasCached := False;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(EventJson);
+    Except
+      Exit;
+    End;
+    If Not (Data Is TJSONObject) Then
+      Exit;
+    Usage := UsageObject(TJSONObject(Data));
+    If Not Assigned(Usage) Then
+      Exit;
+    InputNode := Usage.Find('input_tokens');
+    If Not (InputNode Is TJSONNumber) Then
+      InputNode := Usage.Find('prompt_tokens');
+    OutputNode := Usage.Find('output_tokens');
+    If Not (OutputNode Is TJSONNumber) Then
+      OutputNode := Usage.Find('completion_tokens');
+    If Not (InputNode Is TJSONNumber) Or Not (OutputNode Is TJSONNumber) Then
+      Exit;
+    InputTokens := InputNode.AsInt64;
+    OutputTokens := OutputNode.AsInt64;
+    AddCacheField(Usage, 'cache_read_input_tokens', CachedInputTokens, HasCached);
+    AddCacheField(Usage, 'cache_creation_input_tokens', CachedInputTokens, HasCached);
+    AddCacheField(Usage, 'cached_tokens', CachedInputTokens, HasCached);
+    If Usage.Find('input_tokens_details') Is TJSONObject Then
+      Begin
+        Details := TJSONObject(Usage.Find('input_tokens_details'));
+        AddCacheField(Details, 'cached_tokens', CachedInputTokens, HasCached);
+      End;
+    If Usage.Find('prompt_tokens_details') Is TJSONObject Then
+      Begin
+        Details := TJSONObject(Usage.Find('prompt_tokens_details'));
+        AddCacheField(Details, 'cached_tokens', CachedInputTokens, HasCached);
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function PlanItemHeading(Const Heading: String): String;
+Begin
+  Result := StringReplace(Trim(Heading), '|', '/', [rfReplaceAll]);
+  Result := StringReplace(Result, LineEnding, ' ', [rfReplaceAll]);
+  If Result = '' Then
+    Result := '(untitled)';
+End;
+
+Function PlanItemUsageLine(Const Backend, Heading: String; InputTokens, OutputTokens, CachedInputTokens: Int64;
+  HasCached: Boolean; WallMs: Integer): String;
+Begin
+  If WallMs < 0 Then
+    WallMs := 0;
+  Result := 'Plan item | ' + Trim(Backend) + ' | ' + PlanItemHeading(Heading) + ' | in ' + IntToStr(InputTokens) +
+    ' | out ' + IntToStr(OutputTokens);
+  If HasCached Then
+    Result := Result + ' | cached ' + IntToStr(CachedInputTokens);
+  Result := Result + ' | wall ' + IntToStr(WallMs) + 'ms';
+End;
+
+Function MarkedInt(Const Line, Mark: String; Out Value: Int64): Boolean;
+Var
+  Start: Integer;
+  Digits: String;
+Begin
+  Result := False;
+  Value := 0;
+  Start := Pos(Mark, Line);
+  If Start < 1 Then
+    Exit;
+  Start := Start + Length(Mark);
+  Digits := '';
+  While (Start <= Length(Line)) And (Line[Start] In ['0'..'9']) Do
+    Begin
+      Digits := Digits + Line[Start];
+      Inc(Start);
+    End;
+  If Digits = '' Then
+    Exit;
+  Value := StrToInt64Def(Digits, 0);
+  Result := True;
+End;
+
+Function PlanRunUsageSummary(Const ItemLines: String): String;
+Var
+  Lines: TStringList;
+  Index, Count: Integer;
+  InSum, OutSum, CachedSum, WallSum, Value: Int64;
+  AnyCached: Boolean;
+Begin
+  Count := 0;
+  InSum := 0;
+  OutSum := 0;
+  CachedSum := 0;
+  WallSum := 0;
+  AnyCached := False;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := ItemLines;
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        If Copy(Lines[Index], 1, 12) <> 'Plan item | ' Then
+          Continue;
+        If Not MarkedInt(Lines[Index], ' | in ', Value) Then
+          Continue;
+        InSum := InSum + Value;
+        If MarkedInt(Lines[Index], ' | out ', Value) Then
+          OutSum := OutSum + Value;
+        If MarkedInt(Lines[Index], ' | cached ', Value) Then
+          Begin
+            AnyCached := True;
+            CachedSum := CachedSum + Value;
+          End;
+        If MarkedInt(Lines[Index], ' | wall ', Value) Then
+          WallSum := WallSum + Value;
+        Inc(Count);
+      End;
+  Finally
+    Lines.Free;
+  End;
+  Result := 'Plan run summary | ' + IntToStr(Count) + ' items | in ' + IntToStr(InSum) + ' | out ' + IntToStr(OutSum);
+  If AnyCached Then
+    Result := Result + ' | cached ' + IntToStr(CachedSum);
+  Result := Result + ' | wall ' + IntToStr(WallSum) + 'ms';
+End;
+
+Procedure RememberPlanItemUsage(Var Notes: String; Trace: TAssistantTrace; Const Heading: String;
+  UseClaude, UseCodex, ClaudeReported, ClaudeHasCached, NativeReported: Boolean;
+  ClaudeIn, ClaudeOut, ClaudeCached: Int64; NativeIn, NativeOut, WallMs: Integer);
+Var
+  Backend, Line: String;
+  InTok, OutTok, Cached: Int64;
+  HasCached: Boolean;
+Begin
+  If Trim(Heading) = '' Then
+    Exit;
+  If UseClaude Then
+    Backend := 'claude'
+  Else If UseCodex Then
+    Backend := 'codex'
+  Else
+    Backend := 'grok';
+  InTok := 0;
+  OutTok := 0;
+  Cached := 0;
+  HasCached := False;
+  If UseClaude And ClaudeReported Then
+    Begin
+      HasCached := ClaudeHasCached;
+      Cached := ClaudeCached;
+      InTok := ClaudeIn;
+      If HasCached And (InTok >= Cached) Then
+        InTok := InTok - Cached;
+      OutTok := ClaudeOut;
+    End
+  Else If NativeReported Then
+    Begin
+      InTok := NativeIn;
+      OutTok := NativeOut;
+    End;
+  Line := PlanItemUsageLine(Backend, Heading, InTok, OutTok, Cached, HasCached, WallMs);
+  Notes := Notes + Line + LineEnding;
+  If Assigned(Trace) Then
+    Trace.AddNote(Line);
 End;
 
 End.

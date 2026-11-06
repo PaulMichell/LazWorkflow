@@ -1,26 +1,9 @@
 Unit ProjectAssistantForm;
 
-{ Project Assistant main window — conversation and prompt on the left, sidebar on the right (c) 2026 Michell Computing.
+{ Project Assistant main window (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. The IDE dock shell owns mode chips,
-  history, plan/build tiles, and send/steer as one form. Trace paint lives in
-  AssistantTraceView. The prompt is ordinary text. Reviewed 2026-09-27: Chat is a
-  fourth mode with no project tools or skill; the mode bar is a label and combobox.
-  Composer paste stays here. AllowDropFiles and OnDropFiles are the LCL drop
-  facility. Native child arming lives in AssistantFileDrop.
-  Attach Image is on the memo popup, after Paste.
-  The image list holds pictures only;
-  attach, remove, save, and preview are its popup. Decode stays in AssistantImages.
-  The composer stack is positioned explicitly so showing the image list cannot
-  reorder the text, buttons, or status bar. Paste uses TClipboard. A second
-  clipboard object is required because the global one can still own the previous
-  text after a picture is copied. The Run Plan end report is built in
-  AssistantPlanRun. A dropped Codex or Claude transport waits in
-  AssistantRecovery, then the same turn is started again.
-  A Claude plan item starts a fresh session; a continue resumes it.
-  Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
-  The list stays in AssistantTasksForm.
-  Reviewed 2026-10-27: file drop, monitor fill, the trace timer, and plan pills stay here. }
+  Size note: exceeds the 1000 line preference. Reviewed 2026-11-06: a plan item writes a usage
+  line; the run summary adds those lines. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -246,7 +229,9 @@ Type
     { Last rate-limit report applied to the footer, and the finished turn's usage for the usage log. }
     FClaudeRateLimitJson: String;
     FClaudeUsageReported: Boolean;
-    FClaudeInputTokens, FClaudeOutputTokens: Int64;
+    FClaudeInputTokens, FClaudeOutputTokens, FClaudeCachedInputTokens: Int64;
+    FClaudeHasCached: Boolean;
+    FPlanItemUsage: String;
     FTransportWait: Boolean;
     FTransportWaitStart, FTransportWaitMs: QWord;
     FTransportBackend, FTransportConnectionId: String;
@@ -465,6 +450,7 @@ Type
     Function EndRunPlan(Kind: TPlanRunEndKind; Const Detail: String): String;
     Procedure PostPlanRunReport(Const Report: String);
     Procedure StopRunPlan(Kind: TPlanRunEndKind; Const Detail: String);
+    Procedure AppendPlanItemUsage;
     Procedure ContinueRunPlan(Data: PtrInt);
     Procedure EnablePlanStallTimer;
     Procedure MarkPlanAgentAlive;
@@ -956,9 +942,7 @@ Destructor TProjectAssistantForm.Destroy;
 Var
   OwnWrite: Boolean;
 Begin
-  { BeforeDestruction takes the write lock and sets csDestroying. A failed
-    constructor skips BeforeDestruction, so take the lock here or TCustomForm.Destroy
-    calls EndWrite with no matching BeginWrite and the real error is lost. }
+  { A failed constructor skips BeforeDestruction, so take the write lock here or Destroy loses the error. }
   OwnWrite := Not (csDestroying In ComponentState);
   If OwnWrite Then
     GlobalNameSpace.BeginWrite;
@@ -3331,6 +3315,8 @@ Begin
   RefreshBuildTodos;
   Facts := CollectPlanRunReportFacts(Kind, Detail);
   Result := AssistantPlanRunReport(Facts);
+  If FPlanItemUsage <> '' Then
+    Result := Result + LineEnding + PlanRunUsageSummary(FPlanItemUsage);
   SetBuildStatusFeedback('Plan run ended: ' + AssistantPlanRunWhy(Facts));
   UpdateStatusFooter;
   WorkflowLogger.Info('ProjectAssistant', 'Plan run ended: ' + AssistantPlanRunWhy(Facts));
@@ -3452,6 +3438,7 @@ Begin
   FPlanAgentPackagesDone := 0;
   FPlanAgentResumeIndex := -1;
   FClaudePlanItem.SessionId := '';
+  FPlanItemUsage := '';
   FLastTurnHadError := False;
   FPlanNewChatThisStep := False;
   MarkPlanAgentAlive;
@@ -5520,6 +5507,8 @@ Begin
         FClaudeUsageReported := Snapshot.UsageState = ClaudeUsageReported;
         FClaudeInputTokens := Snapshot.InputTokens;
         FClaudeOutputTokens := Snapshot.OutputTokens;
+        FClaudeCachedInputTokens := Snapshot.CachedInputTokens;
+        FClaudeHasCached := Snapshot.HasCached;
         { A turn that ran a tool may already have edited files or run commands, so only a turn that ran none
           waits and starts the same stored prompt again, a bounded number of times. }
         If (Snapshot.ToolCalls = 0) And ClaudeSessionMissing(Snapshot.ErrorText) And (Not FClaudeFreshRetried) Then
@@ -7955,6 +7944,27 @@ Begin
   End;
 End;
 
+Procedure TProjectAssistantForm.AppendPlanItemUsage;
+Var
+  InN, OutN, ReasonN: Integer;
+  HasReasoning, Native: Boolean;
+Begin
+  If (Not FPlanAgentRunning) Or (FBuildWorkSectionTitle = '') Then
+    Exit;
+  InN := 0;
+  OutN := 0;
+  ReasonN := 0;
+  HasReasoning := False;
+  Native := False;
+  If (Not FUseClaude) And (Not FUseCodex) And Assigned(AssistantClient) Then
+    Native := AssistantClient.TakeReportedUsage(InN, OutN, ReasonN, HasReasoning);
+  If Native Then
+    AssistantClient.NoteReportedUsage(InN, OutN, ReasonN, HasReasoning);
+  RememberPlanItemUsage(FPlanItemUsage, FTrace, FBuildWorkSectionTitle, FUseClaude, FUseCodex, FClaudeUsageReported,
+    FClaudeHasCached, Native, FClaudeInputTokens, FClaudeOutputTokens, FClaudeCachedInputTokens, InN, OutN,
+    CurrentStreamDurationMs);
+End;
+
 Procedure TProjectAssistantForm.FinishAssistantReply(Const ErrorText: String);
 Var
   ResolvedError, TraceNote, Settlement, AskedNote: String;
@@ -8092,7 +8102,7 @@ Begin
   If TraceNote <> '' Then
     FDisplaySystemNote := TraceNote;
   FinishLiveTrace(TraceNote, WorkedMs);
-  { Record from live buffers so a browsed-away pane still saves the real answer. }
+  AppendPlanItemUsage;
   RecordCurrentTurn(ResolvedError);
   If ResolvedError = '' Then
     RecordCompletedUsage;

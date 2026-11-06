@@ -22,6 +22,9 @@ Type
     { Prompt tokens including cached ones, summed over every model call in the turn. }
     InputTokens: Int64;
     OutputTokens: Int64;
+    { cache_read plus cache_creation, when the result event reports either field. }
+    CachedInputTokens: Int64;
+    HasCached: Boolean;
   End;
 
   { One tool call, in the order Claude made it. }
@@ -112,6 +115,8 @@ Begin
   Turn.UsageState := ClaudeUsageUnavailable;
   Turn.InputTokens := 0;
   Turn.OutputTokens := 0;
+  Turn.CachedInputTokens := 0;
+  Turn.HasCached := False;
 End;
 
 Procedure ClearClaudeStream(Out State: TClaudeStreamState);
@@ -349,6 +354,10 @@ Begin
       State.Turn.UsageState := ClaudeUsageReported;
       State.Turn.InputTokens := PromptTokens(Usage);
       State.Turn.OutputTokens := JsonNumber(Usage.Find('output_tokens'));
+      State.Turn.HasCached := Assigned(Usage.Find('cache_read_input_tokens')) Or
+        Assigned(Usage.Find('cache_creation_input_tokens'));
+      State.Turn.CachedInputTokens := JsonNumber(Usage.Find('cache_read_input_tokens')) +
+        JsonNumber(Usage.Find('cache_creation_input_tokens'));
     End;
 End;
 

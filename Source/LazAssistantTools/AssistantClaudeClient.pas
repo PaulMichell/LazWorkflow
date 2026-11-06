@@ -75,7 +75,8 @@ Type
     RateLimitJson: String;
     RateLimitStatus: String;
     UsageState: String;
-    InputTokens, OutputTokens, ContextTokens: Int64;
+    InputTokens, OutputTokens, CachedInputTokens, ContextTokens: Int64;
+    HasCached: Boolean;
     Done: Boolean;
   End;
 
@@ -892,6 +893,8 @@ Begin
     Latest.UsageState := Stream.Turn.UsageState;
     Latest.InputTokens := Stream.Turn.InputTokens;
     Latest.OutputTokens := Stream.Turn.OutputTokens;
+    Latest.CachedInputTokens := Stream.Turn.CachedInputTokens;
+    Latest.HasCached := Stream.Turn.HasCached;
   Finally
     LeaveCriticalSection(Lock);
   End;
@@ -1006,6 +1009,8 @@ Begin
     Latest.UsageState := Stream.Turn.UsageState;
     Latest.InputTokens := Stream.Turn.InputTokens;
     Latest.OutputTokens := Stream.Turn.OutputTokens;
+    Latest.CachedInputTokens := Stream.Turn.CachedInputTokens;
+    Latest.HasCached := Stream.Turn.HasCached;
     Latest.Tools := Copy(Stream.Tools);
     Latest.Thinking := Stream.Thinking;
     Latest.Done := True;
