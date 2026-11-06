@@ -46,6 +46,7 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
 { Shared, bounded read helpers; these never dispatch arbitrary native tools. }
 Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolStagePatch(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;

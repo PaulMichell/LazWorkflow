@@ -58,6 +58,7 @@ Type
     Function CanGit: Boolean; Virtual;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -118,6 +119,14 @@ Const
   MaxBufferBytes = 1048576;
   MaxSnapshotBytes = 8388608;
   MaxSnapshots = 64;
+  FormComponentSchema = '{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},' +
+    '"class_name":{"type":"string"},"properties":{"type":"string"},"event_method":{"type":"string"},' +
+    '"uses_unit":{"type":"string"}},"required":["path","name","class_name"],"additionalProperties":false}';
+  FormComponentDescription =
+    'Add or update a published form component in BOTH the .pas unit and matching .lfm. ' +
+    'Required when adding TTimer, TButton, and other controls so events fire. ' +
+    'Prefer this over replacing either buffer alone. Build mode only. ' +
+    'properties is a JSON object string. TTimer.Interval is milliseconds.';
 
 Function Quoted(Const S: String): String;
 Begin
@@ -324,6 +333,13 @@ Function TAssistantWorkspaceAdapter.StagePatch(Const Patch: String; Out ResultTe
 Begin
   ResultText := '';
   ErrorText := 'Partial staging is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Form component edits are unavailable.';
   Result := False;
 End;
 
@@ -1286,6 +1302,56 @@ Begin
                 End;
           Exit;
         End;
+      If Tool = 'lazarus_ensure_form_component' Then
+        Begin
+          If FWriteScope <> awsProject Then
+            Begin
+              ErrorText := 'Form component edits require Build mode.';
+              Exit;
+            End;
+          Node := Args.Find('path');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              ErrorText := 'ensure_form_component requires path, name, and class_name.';
+              Exit;
+            End;
+          Path := Node.AsString;
+          Node := Args.Find('name');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              ErrorText := 'ensure_form_component requires path, name, and class_name.';
+              Exit;
+            End;
+          Text := Node.AsString;
+          Node := Args.Find('class_name');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              ErrorText := 'ensure_form_component requires path, name, and class_name.';
+              Exit;
+            End;
+          NewText := Node.AsString;
+          Node := Args.Find('properties');
+          If Assigned(Node) And (Node.JSONType <> jtString) Then
+            Begin
+              ErrorText := 'properties must be a JSON object string when provided.';
+              Exit;
+            End;
+          Node := Args.Find('event_method');
+          If Assigned(Node) And (Node.JSONType <> jtString) Then
+            Begin
+              ErrorText := 'event_method must be a string.';
+              Exit;
+            End;
+          Node := Args.Find('uses_unit');
+          If Assigned(Node) And (Node.JSONType <> jtString) Then
+            Begin
+              ErrorText := 'uses_unit must be a string.';
+              Exit;
+            End;
+          If Not Approve(RunId, Tool, Path, '', Text + ': ' + NewText, ErrorText) Then Exit;
+          Result := FAdapter.EnsureFormComponent(Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If Tool = 'lazarus_stage_patch' Then
         Begin
           If FWriteScope <> awsProject Then
@@ -1672,6 +1738,9 @@ Begin
   If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_stage_patch","description":' + Quoted(AssistantStagePatchDescription) +
     ',"inputSchema":' + AssistantStagePatchSchema + '}';
+  If FWriteScope = awsProject Then Result := Result +
+    ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
+    ',"inputSchema":' + FormComponentSchema + '}';
   Result := Result + ']';
 End;
 End.

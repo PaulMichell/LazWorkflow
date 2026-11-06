@@ -12,7 +12,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener,
-  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings;
+  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -28,7 +28,8 @@ Type
     ReplaceCount, SaveCount, EditorStamp: Integer;
     AllowInspect, AllowChanges, AllowBuild: Boolean;
     ProjectRoot, BaseCommand, LastCommand: String;
-    LaunchCount: Integer;
+    LaunchCount, FormCalls: Integer;
+    PasText, LfmText: String;
     ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
@@ -43,6 +44,7 @@ Type
     Function CanTest: Boolean; Override;
     Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
     Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
@@ -185,6 +187,47 @@ Begin
   Result := True;
 End;
 
+Function TMemoryWorkspace.EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Data: TJSONData;
+  CompName, ComponentClass, PropsJson, PropLines, Detected: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Inc(FormCalls);
+  Data := GetJSON(Arguments);
+  Try
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'Expected object arguments.';
+        Exit;
+      End;
+    CompName := Trim(TJSONObject(Data).Get('name', ''));
+    ComponentClass := Trim(TJSONObject(Data).Get('class_name', ''));
+    PropsJson := TJSONObject(Data).Get('properties', '');
+  Finally
+    Data.Free;
+  End;
+  If (CompName = '') Or (ComponentClass = '') Then
+    Begin
+      ErrorText := 'ensure_form_component requires path, name, and class_name.';
+      Exit;
+    End;
+  If ComponentClass[1] <> 'T' Then
+    ComponentClass := 'T' + ComponentClass;
+  If Not BuildLfmPropertyLines(PropsJson, PropLines, Detected) Then
+    Begin
+      ErrorText := 'properties must be a JSON object string when provided.';
+      Exit;
+    End;
+  If Pos(LowerCase(CompName + ':'), LowerCase(PasText)) = 0 Then
+    PasText := PasText + LineEnding + '    ' + CompName + ': ' + ComponentClass + ';';
+  UpsertLfmComponent(LfmText, CompName, ComponentClass, PropLines);
+  ResultText := 'ensured ' + CompName;
+  Result := True;
+End;
+
 Function TMemoryWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
 Begin
   Stamp := '';
@@ -324,6 +367,7 @@ Begin
   Check('a read run lists read_buffer', Pos('"lazarus_read_buffer"', Bridge.ToolsJSON) > 0);
   Check('a read run lists no replace_buffer', Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) = 0);
   Check('a read run lists no replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) = 0);
+  Check('a read run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(ctsMarkdown);
   Check('a Markdown run lists replace_buffer for Markdown only',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) > 0));
@@ -332,6 +376,10 @@ Begin
   Check('a project run lists replace_buffer for any file',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) = 0));
   Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
+  Check('a project run lists the form tool', Pos('"lazarus_ensure_form_component"', Bridge.ToolsJSON) > 0);
+  Bridge.BeginRun(ctsMarkdown);
+  Check('a Markdown run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
+  Bridge.BeginRun(ctsProject);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
 
@@ -886,6 +934,54 @@ Begin
   RemoveDir(ExcludeTrailingPathDelimiter(Root));
 End;
 
+Procedure CheckFormComponent;
+Var
+  ResultText, ErrorText, BeforePas, BeforeLfm: String;
+  Args, Props: TJSONObject;
+  Calls: Integer;
+Begin
+  Workspace.PasText :=
+    'unit Main;' + LineEnding +
+    'type' + LineEnding +
+    '  TMainForm = class(TForm)' + LineEnding +
+    '  private' + LineEnding +
+    '  end;' + LineEnding;
+  Workspace.LfmText :=
+    'object MainForm: TMainForm' + LineEnding +
+    'end' + LineEnding;
+  Workspace.FormCalls := 0;
+  Args := TJSONObject.Create;
+  Props := TJSONObject.Create;
+  Try
+    Props.Add('Interval', 1000);
+    Props.Add('Enabled', True);
+    Props.Add('OnTimer', 'ColorTimerTimer');
+    Args.Add('path', 'Main.pas');
+    Args.Add('name', 'ColorTimer');
+    Args.Add('class_name', 'TTimer');
+    Args.Add('properties', Props.AsJSON);
+    Args.Add('event_method', 'ColorTimerTimer');
+    Args.Add('uses_unit', 'ExtCtrls');
+    Bridge.BeginRun(ctsProject);
+    Check('the broker adds the component to both buffers', Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
+      Args.AsJSON, ResultText, ErrorText) And (Workspace.FormCalls = 1));
+  Finally
+    Props.Free;
+    Args.Free;
+  End;
+  Check('the component is in the pas buffer', Pos('ColorTimer: TTimer', Workspace.PasText) > 0);
+  Check('the component is in the lfm buffer', Pos('object ColorTimer: TTimer', Workspace.LfmText) > 0);
+  Check('the timer interval is in the lfm buffer', Pos('Interval = 1000', Workspace.LfmText) > 0);
+  BeforePas := Workspace.PasText;
+  BeforeLfm := Workspace.LfmText;
+  Calls := Workspace.FormCalls;
+  Bridge.BeginRun(ctsMarkdown);
+  Check('a Markdown scope refuses the form tool', Not Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
+    '{"path":"Main.pas","name":"OtherTimer","class_name":"TTimer"}', ResultText, ErrorText) And
+    (Pos('Build mode', ErrorText) > 0) And (Workspace.FormCalls = Calls));
+  Check('a refused form edit leaves both buffers unchanged', (Workspace.PasText = BeforePas) And (Workspace.LfmText = BeforeLfm));
+End;
+
 Begin
   Workspace := TMemoryWorkspace.Create;
   Broker := TAssistantToolBroker.Create(Workspace);
@@ -899,6 +995,7 @@ Begin
     CheckNoEcho;
     CheckSearch;
     CheckNamedTests;
+    CheckFormComponent;
     CheckCall;
     CheckDirectCall;
     CheckCancel;

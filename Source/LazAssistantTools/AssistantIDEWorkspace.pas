@@ -57,6 +57,7 @@ Type
     Function CanGit: Boolean; Override;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -121,6 +122,12 @@ Begin
   Finally
     Args.Free;
   End;
+End;
+
+{ The broker has already required the IDE thread and Build scope. This is the native form edit. }
+Function TAssistantIDEWorkspace.EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolEnsureFormComponent(Arguments, ResultText, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.CanWriteMarkdown: Boolean;
