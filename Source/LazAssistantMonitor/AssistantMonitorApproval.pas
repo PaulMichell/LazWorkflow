@@ -111,6 +111,8 @@ Begin
       ErrorText := 'stopped';
     ClearAssistantApproval(ToolId, Reason);
   Finally
+    { Disarm first. A later cancel, decision or desktop stop then signals nothing, not this freed event. }
+    DisarmAssistantApprovalWait(Event);
     RTLEventDestroy(Event);
   End;
 End;

@@ -182,11 +182,17 @@ Function AssistantModalDepth: Integer;
 
 /// Stores the event and resets the stored decision to aadNone. A nil event is a no-op.
 Procedure ArmAssistantApprovalWait(Event: PRTLEvent);
+/// Clears the stored event only while it is still Event, so a newer waiter's event stays armed.
+/// The waiter calls this before it destroys its event. A nil event is a no-op.
+Procedure DisarmAssistantApprovalWait(Event: PRTLEvent);
+/// True while a waiter's event is stored. Tests use it to check that a finished wait disarmed.
+Function AssistantApprovalWaitArmed: Boolean;
 /// Writes only while the stored decision is aadNone. A later store leaves the first decision in place.
 Procedure StoreAssistantApprovalDecision(Decision: TAssistantApprovalDecision);
 /// Stored decision. aadNone means no answer is stored.
 Function ReadAssistantApprovalDecision: TAssistantApprovalDecision;
-/// Copies the event and sets it outside the lock. A nil event returns immediately. The signal carries no decision.
+/// Sets the stored event while holding the lock, so the waiter cannot disarm and destroy it in between.
+/// A nil event returns immediately. The signal carries no decision.
 Procedure SignalAssistantApprovalWait;
 
 Implementation
@@ -416,6 +422,29 @@ Begin
   End;
 End;
 
+Procedure DisarmAssistantApprovalWait(Event: PRTLEvent);
+Begin
+  If Not Assigned(Event) Then
+    Exit;
+  EnterCriticalSection(ObserveLock);
+  Try
+    If ApprovalEvent = Event Then
+      ApprovalEvent := Nil;
+  Finally
+    LeaveCriticalSection(ObserveLock);
+  End;
+End;
+
+Function AssistantApprovalWaitArmed: Boolean;
+Begin
+  EnterCriticalSection(ObserveLock);
+  Try
+    Result := Assigned(ApprovalEvent);
+  Finally
+    LeaveCriticalSection(ObserveLock);
+  End;
+End;
+
 Procedure StoreAssistantApprovalDecision(Decision: TAssistantApprovalDecision);
 Begin
   EnterCriticalSection(ObserveLock);
@@ -438,18 +467,16 @@ Begin
 End;
 
 Procedure SignalAssistantApprovalWait;
-Var
-  Event: PRTLEvent;
 Begin
+  { Set under the lock. A copy set after leaving could land on an event the waiter has just disarmed and destroyed.
+    RTLEventSetEvent does not block, so holding the lock here is safe. }
   EnterCriticalSection(ObserveLock);
   Try
-    Event := ApprovalEvent;
+    If Assigned(ApprovalEvent) Then
+      RTLEventSetEvent(ApprovalEvent);
   Finally
     LeaveCriticalSection(ObserveLock);
   End;
-  If Not Assigned(Event) Then
-    Exit;
-  RTLEventSetEvent(Event);
 End;
 
 Initialization
