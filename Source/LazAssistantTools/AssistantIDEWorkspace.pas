@@ -518,7 +518,7 @@ Var
   Status: String;
   Data: TJSONData;
   Settings: TAssistantTestSettings;
-  Fingerprint: String;
+  Fingerprint, BaseCommand: String;
 Begin
   Result := False;
   Command := '';
@@ -556,11 +556,13 @@ Begin
     Try
       TJSONObject(Data).Add('executableFingerprint', Fingerprint);
       TJSONObject(Data).Add('build_job_id', BuildId);
-      Command := Data.AsJSON;
+      BaseCommand := Data.AsJSON;
     Finally
       Data.Free;
     End;
-    If Not ApplyTestOnly(Command, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
+    { Not ApplyTestOnly(Command, ..., Command): the Out parameter is cleared on entry, and the Const one, which holds
+      no reference of its own, would then read an empty or freed string. }
+    If Not ApplyTestOnly(BaseCommand, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
     Result := True;
   Finally
     Settings.Free;
