@@ -20,7 +20,7 @@ Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok ', 
 Procedure WriteFile(Const Path, Text: String);
 Var Stream: TFileStream;
 Begin Stream := TFileStream.Create(Path, fmCreate); Try If Text <> '' Then Stream.WriteBuffer(Text[1], Length(Text)); Finally Stream.Free; End; End;
-Var Root, Note, OldFingerprint: String; Id: TGuid; Settings, Reloaded: TAssistantTestSettings;
+Var Root, Note, OldFingerprint: String; Id: TGuid; Settings, Reloaded, Folder: TAssistantTestSettings;
   Job: IAssistantBuildJob; Value: TBuildJobSnapshot; Inputs: TBuildInputs; Deadline: QWord; Args, Lines: TStringList; Data: TJSONData; Rejected: Boolean;
 Procedure WaitDone;
 Begin
@@ -55,6 +55,17 @@ Begin
       (Settings.Arguments[0] = '  spaces  ') And (Settings.Arguments[1] = '"quoted"') And (Settings.Arguments[2] = '  second  '));
     Check('report configuration roundtrips', (Settings.ReportFormat = 'fpcunit-xml') And (Settings.MinimumTests = 2));
     Check('relative executable resolves from project directory', Settings.ResolvedExecutable = Root + '/test runner');
+    ForceDirectories(Root + '/folder-target');
+    Folder := TAssistantTestSettings.Create(Root + '/folder-target/.assistant/', Root + '/folder-target');
+    Try
+      Folder.Executable := './runner';
+      Check('folder target runs in the folder itself', Folder.WorkingDirectory = Root + '/folder-target/');
+      Check('folder target resolves a relative executable inside the folder',
+        Folder.ResolvedExecutable = Root + '/folder-target/runner');
+    Finally
+      Folder.Free;
+      RemoveDir(Root + '/folder-target');
+    End;
     Reloaded.Load; Check('test commands belong to one target document', Not Reloaded.Enabled And (Settings.StorageFilename <> Reloaded.StorageFilename)
       And (ExtractFileName(Settings.StorageFilename) = 'config.json'));
     Settings.Arguments.Add(''); Check('empty argument rejected explicitly', Not Settings.Validate(Note));

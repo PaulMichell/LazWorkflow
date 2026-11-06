@@ -216,7 +216,12 @@ End;
 
 Function TAssistantTestSettings.WorkingDirectory: String;
 Begin
-  Result := ExtractFilePath(FProject);
+  { A folder target's manifest is the folder itself, with no trailing delimiter. ExtractFilePath would give its
+    parent, so the command would start one level up and a relative executable would resolve there. }
+  If (FProject <> '') And DirectoryExists(FProject) Then
+    Result := IncludeTrailingPathDelimiter(FProject)
+  Else
+    Result := ExtractFilePath(FProject);
 End;
 
 Function TAssistantTestSettings.ResolvedExecutable: String;
