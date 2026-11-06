@@ -58,6 +58,9 @@ Type
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -128,6 +131,23 @@ End;
 Function TAssistantIDEWorkspace.EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   Result := ToolEnsureFormComponent(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolDeletePath(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolRenamePath(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolAddUnitToProject(Arguments, ResultText, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.CanWriteMarkdown: Boolean;

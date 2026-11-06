@@ -47,6 +47,13 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
 Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolStagePatch(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolDeletePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolRenamePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolAddUnitToProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+{ Native path gate: control characters, project resolution, protected paths and target scope. }
+Function AssistantCheckedProjectPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
+{ Native add-unit gate, including the package-target refusal. }
+Function AssistantCheckedAddUnitPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -102,6 +109,8 @@ Uses
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
+
+Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
 
 ThreadVar
   WriteImageTurnFailed: Boolean;
@@ -3269,24 +3278,8 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
-  Path := JsonArgString(ArgumentsJson, 'path');
-  If Path = '' Then
-    Begin
-      ErrorText := 'add_unit_to_project requires path.';
-      Exit;
-    End;
-  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
+  If Not AssistantCheckedAddUnitPath(JsonArgString(ArgumentsJson, 'path'), Resolved, ErrorText) Then
     Exit;
-  If Not FileExistsUTF8(Resolved) Then
-    Begin
-      ErrorText := 'File not found: ' + Resolved;
-      Exit;
-    End;
-  If Not IsPascalUnitPath(Resolved) Then
-    Begin
-      ErrorText := 'Only Pascal units (.pas/.pp/.lpr) can be added to the project.';
-      Exit;
-    End;
   If Not Assigned(LazarusIDE) Or Not Assigned(LazarusIDE.ActiveProject) Then
     Begin
       ErrorText := 'No active Lazarus project.';
@@ -3654,6 +3647,15 @@ Begin
     (CompareFilenames(Copy(Cand, 1, Length(IncludeTrailingPathDelimiter(GitDir))), IncludeTrailingPathDelimiter(GitDir)) = 0);
 End;
 
+Function AssistantAddUnitRefused(Out ErrorText: String): Boolean;
+Begin
+  Result := AssistantTarget.Kind = atkPackage;
+  If Result Then
+    ErrorText := 'Package membership is managed in the Lazarus package editor.'
+  Else
+    ErrorText := '';
+End;
+
 Function RefuseProtectedPath(Const Resolved: String; Out ErrorText: String): Boolean;
 Var
   Root, Manifest: String;
@@ -3683,6 +3685,51 @@ Begin
   Result := False;
 End;
 
+Function AssistantCheckedProjectPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  Resolved := '';
+  ErrorText := '';
+  If PathHasControlCharacter(RelativeOrAbsolute) Then
+    Begin
+      ErrorText := 'Path contains a control character.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(RelativeOrAbsolute, Resolved, ErrorText) Then Exit;
+  If RefuseProtectedPath(Resolved, ErrorText) Then Exit;
+  If AssistantTarget.Available And (Not AssistantTarget.AllowsWrite(Resolved)) Then
+    Begin
+      ErrorText := AssistantTarget.ScopeRefusal('change', RelativeOrAbsolute);
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function AssistantCheckedAddUnitPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  Resolved := '';
+  ErrorText := '';
+  If AssistantAddUnitRefused(ErrorText) Then Exit;
+  If Trim(RelativeOrAbsolute) = '' Then
+    Begin
+      ErrorText := 'add_unit_to_project requires path.';
+      Exit;
+    End;
+  If Not AssistantCheckedProjectPath(RelativeOrAbsolute, Resolved, ErrorText) Then Exit;
+  If Not FileExistsUTF8(Resolved) Then
+    Begin
+      ErrorText := 'File not found: ' + Resolved;
+      Exit;
+    End;
+  If Not IsPascalUnitPath(Resolved) Then
+    Begin
+      ErrorText := 'Only Pascal units (.pas/.pp/.lpr) can be added to the project.';
+      Exit;
+    End;
+  Result := True;
+End;
+
 Function DirectoryIsEmpty(Const Directory: String): Boolean;
 Var
   Info: TDirectoryScan;
@@ -3709,14 +3756,7 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
-  If PathHasControlCharacter(JsonArgString(ArgumentsJson, 'path')) Then
-    Begin
-      ErrorText := 'Path contains a control character.';
-      Exit;
-    End;
-  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'path'), Resolved, ErrorText) Then
-    Exit;
-  If RefuseProtectedPath(Resolved, ErrorText) Then
+  If Not AssistantCheckedProjectPath(JsonArgString(ArgumentsJson, 'path'), Resolved, ErrorText) Then
     Exit;
   If FileIsSymlink(Resolved) Then
     Begin
@@ -3766,17 +3806,9 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
-  If PathHasControlCharacter(JsonArgString(ArgumentsJson, 'path')) Or
-    PathHasControlCharacter(JsonArgString(ArgumentsJson, 'new_path')) Then
-    Begin
-      ErrorText := 'Path contains a control character.';
-      Exit;
-    End;
-  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'path'), SourcePath, ErrorText) Then
+  If Not AssistantCheckedProjectPath(JsonArgString(ArgumentsJson, 'path'), SourcePath, ErrorText) Then
     Exit;
-  If Not ResolveProjectPath(JsonArgString(ArgumentsJson, 'new_path'), DestPath, ErrorText) Then
-    Exit;
-  If RefuseProtectedPath(SourcePath, ErrorText) Or RefuseProtectedPath(DestPath, ErrorText) Then
+  If Not AssistantCheckedProjectPath(JsonArgString(ArgumentsJson, 'new_path'), DestPath, ErrorText) Then
     Exit;
   If CompareFilenames(SourcePath, DestPath) = 0 Then
     Begin
@@ -4433,8 +4465,8 @@ Var
     If AssistantTarget.Kind<>atkPackage Then Exit;
     If Name='add_unit_to_project' Then
       Begin
-        ErrorText := 'Package membership is managed in the Lazarus package editor.';
-        Exit(False);
+        Result := Not AssistantAddUnitRefused(ErrorText);
+        Exit;
       End;
     If (Name='write_file') Or (Name='replace_in_file') Or (Name='ensure_form_component') Or
       (Name='write_markdown') Or (Name='update_markdown') Or (Name='delete_path') Or (Name='rename_path') Then

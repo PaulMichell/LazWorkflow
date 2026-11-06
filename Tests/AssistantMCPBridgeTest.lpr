@@ -11,8 +11,9 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener,
-  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm;
+  Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient,
+  AssistantMCPListener,
+  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -28,8 +29,9 @@ Type
     ReplaceCount, SaveCount, EditorStamp: Integer;
     AllowInspect, AllowChanges, AllowBuild: Boolean;
     ProjectRoot, BaseCommand, LastCommand: String;
-    LaunchCount, FormCalls: Integer;
-    PasText, LfmText: String;
+    LaunchCount, FormCalls, DeleteCalls, RenameCalls, AddUnitCalls: Integer;
+    PasText, LfmText, AddedUnit: String;
+    AddedUses: Boolean;
     ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
@@ -45,6 +47,9 @@ Type
     Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
     Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
@@ -228,6 +233,48 @@ Begin
   Result := True;
 End;
 
+Function TMemoryWorkspace.DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Inc(DeleteCalls);
+  If Not DeleteFile(ResolvedPath) Then
+    Begin
+      ErrorText := 'Could not delete the file: ' + ResolvedPath;
+      Exit;
+    End;
+  ResultText := 'Deleted ' + ResolvedPath;
+  Result := True;
+End;
+
+Function TMemoryWorkspace.RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Inc(RenameCalls);
+  If Not RenameFile(ResolvedFrom, ResolvedTo) Then
+    Begin
+      ErrorText := 'Could not rename the path.';
+      Exit;
+    End;
+  ResultText := 'Renamed ' + ResolvedFrom + ' to ' + ResolvedTo;
+  Result := True;
+End;
+
+Function TMemoryWorkspace.AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  Inc(AddUnitCalls);
+  AddedUnit := ResolvedPath;
+  AddedUses := AddToUses;
+  ResultText := 'Added ' + ResolvedPath;
+  ErrorText := '';
+  Result := True;
+End;
+
 Function TMemoryWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
 Begin
   Stamp := '';
@@ -377,8 +424,14 @@ Begin
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) = 0));
   Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
   Check('a project run lists the form tool', Pos('"lazarus_ensure_form_component"', Bridge.ToolsJSON) > 0);
+  Check('a project run lists delete, rename and add-unit',
+    (Pos('"lazarus_delete_path"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_rename_path"', Bridge.ToolsJSON) > 0) And
+    (Pos('"lazarus_add_unit_to_project"', Bridge.ToolsJSON) > 0));
   Bridge.BeginRun(ctsMarkdown);
   Check('a Markdown run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
+  Check('a Markdown run hides delete, rename and add-unit',
+    (Pos('lazarus_delete_path', Bridge.ToolsJSON) = 0) And (Pos('lazarus_rename_path', Bridge.ToolsJSON) = 0) And
+    (Pos('lazarus_add_unit_to_project', Bridge.ToolsJSON) = 0));
   Bridge.BeginRun(ctsProject);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
@@ -857,6 +910,52 @@ Begin
   End;
 End;
 
+Procedure CheckPathTools;
+Var
+  Root, Outside, ResultText, ErrorText: String;
+  Deletes, Renames, Adds: Integer;
+Begin
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-paths-' + IntToStr(GetProcessID);
+  ForceDirectories(Root);
+  Outside := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-outside-' + IntToStr(GetProcessID) + '.txt';
+  WriteTextFile(Outside, 'outside');
+  Check('select the path-tool target', AssistantTarget.SelectFolder(Root, ErrorText));
+  Root := AssistantTarget.Root;
+  WriteTextFile(Root + 'inside.txt', 'inside');
+  WriteTextFile(Root + 'move-me.txt', 'move');
+  WriteTextFile(Root + 'UnitOne.pas', 'unit UnitOne;');
+  Workspace.DeleteCalls := 0;
+  Workspace.RenameCalls := 0;
+  Workspace.AddUnitCalls := 0;
+  Bridge.BeginRun(ctsProject);
+  Deletes := Workspace.DeleteCalls;
+  Check('delete outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_delete_path',
+    '{"path":"' + Outside + '"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
+    (Workspace.DeleteCalls = Deletes) And FileExists(Outside));
+  Check('delete inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_delete_path',
+    '{"path":"inside.txt"}', ResultText, ErrorText) And (Workspace.DeleteCalls = Deletes + 1) And
+    (Not FileExists(Root + 'inside.txt')));
+  Renames := Workspace.RenameCalls;
+  Check('rename outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_rename_path',
+    '{"path":"' + Outside + '","new_path":"stolen.txt"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
+    (Workspace.RenameCalls = Renames) And FileExists(Outside));
+  Check('rename inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_rename_path',
+    '{"path":"move-me.txt","new_path":"moved.txt"}', ResultText, ErrorText) And (Workspace.RenameCalls = Renames + 1) And
+    (Not FileExists(Root + 'move-me.txt')) And FileExists(Root + 'moved.txt'));
+  Adds := Workspace.AddUnitCalls;
+  Check('add-unit outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_add_unit_to_project',
+    '{"path":"' + Outside + '"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
+    (Workspace.AddUnitCalls = Adds));
+  Check('add-unit inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_add_unit_to_project',
+    '{"path":"UnitOne.pas","add_to_uses":true}', ResultText, ErrorText) And (Workspace.AddUnitCalls = Adds + 1) And
+    (Pos('UnitOne.pas', Workspace.AddedUnit) > 0) And Workspace.AddedUses);
+  DeleteFile(Outside);
+  DeleteFile(Root + 'moved.txt');
+  DeleteFile(Root + 'UnitOne.pas');
+  RemoveDir(ExcludeTrailingPathDelimiter(Root));
+  AssistantTarget.SelectProject;
+End;
+
 Function OnlyRequest(Const Names: Array Of String): String;
 Var
   Obj: TJSONObject;
@@ -996,6 +1095,7 @@ Begin
     CheckSearch;
     CheckNamedTests;
     CheckFormComponent;
+    CheckPathTools;
     CheckCall;
     CheckDirectCall;
     CheckCancel;

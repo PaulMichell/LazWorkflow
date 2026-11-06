@@ -59,6 +59,9 @@ Type
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -113,7 +116,7 @@ Type
 Implementation
 
 Uses
-  jsonparser, AssistantProtocol, AssistantGit;
+  jsonparser, AssistantProtocol, AssistantGit, AssistantTools;
 
 Const
   MaxBufferBytes = 1048576;
@@ -127,6 +130,20 @@ Const
     'Required when adding TTimer, TButton, and other controls so events fire. ' +
     'Prefer this over replacing either buffer alone. Build mode only. ' +
     'properties is a JSON object string. TTimer.Interval is milliseconds.';
+  DeletePathSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
+  RenamePathSchema = '{"type":"object","properties":{"path":{"type":"string"},"new_path":{"type":"string"}},' +
+    '"required":["path","new_path"],"additionalProperties":false}';
+  AddUnitSchema = '{"type":"object","properties":{"path":{"type":"string"},"add_to_uses":{"type":"boolean"}},' +
+    '"required":["path"],"additionalProperties":false}';
+  DeletePathDescription =
+    'Delete one file, symbolic link, or empty directory inside the target. ' +
+    'Refuses the project root, Git metadata, and the project or package file. Build mode only. Does not use a shell.';
+  RenamePathDescription =
+    'Rename or move a file or directory inside the target. Both paths must stay in the target. ' +
+    'Refuses the project root, Git metadata, and the project or package file. Build mode only. Does not use a shell.';
+  AddUnitDescription =
+    'Register an existing Pascal unit file with the active Lazarus project. ' +
+    'Refuses a path outside the target. A package target is refused. Build mode only.';
 
 Function Quoted(Const S: String): String;
 Begin
@@ -340,6 +357,29 @@ Function TAssistantWorkspaceAdapter.EnsureFormComponent(Const Arguments: String;
 Begin
   ResultText := '';
   ErrorText := 'Form component edits are unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Deleting paths is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Renaming paths is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Adding a unit is unavailable.';
   Result := False;
 End;
 
@@ -1091,7 +1131,7 @@ Var
   I, Index, Line, Column, MaxResults: Integer;
   SearchPaths: TStringList;
   ResultField: String;
-  Semantic: Boolean;
+  Semantic, AddUses: Boolean;
 Begin
   Result := False;
   ResultText := '';
@@ -1300,6 +1340,62 @@ Begin
                       End;
                     End;
                 End;
+          Exit;
+        End;
+      If (Tool = 'lazarus_delete_path') Or (Tool = 'lazarus_rename_path') Or (Tool = 'lazarus_add_unit_to_project') Then
+        Begin
+          If FWriteScope <> awsProject Then
+            Begin
+              ErrorText := 'Path changes require Build mode.';
+              Exit;
+            End;
+          Node := Args.Find('path');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
+            Begin
+              ErrorText := 'path must be a string.';
+              Exit;
+            End;
+          Path := Node.AsString;
+          If Tool = 'lazarus_add_unit_to_project' Then
+            Begin
+              AddUses := False;
+              Node := Args.Find('add_to_uses');
+              If Assigned(Node) Then
+                If Node.JSONType <> jtBoolean Then
+                  Begin
+                    ErrorText := 'add_to_uses must be a boolean.';
+                    Exit;
+                  End
+                Else
+                  AddUses := Node.AsBoolean;
+              If Not AssistantCheckedAddUnitPath(Path, ActualPath, ErrorText) Then Exit;
+              If Not Approve(RunId, Tool, ActualPath, '', Path, ErrorText) Then Exit;
+              If Not AssistantCheckedAddUnitPath(Path, ActualPath, ErrorText) Then Exit;
+              Result := FAdapter.AddUnitToProject(Arguments, ActualPath, AddUses, ResultText, ErrorText);
+            End
+          Else If Tool = 'lazarus_rename_path' Then
+            Begin
+              Node := Args.Find('new_path');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
+                Begin
+                  ErrorText := 'new_path must be a string.';
+                  Exit;
+                End;
+              NewText := Node.AsString;
+              If Not AssistantCheckedProjectPath(Path, ActualPath, ErrorText) Then Exit;
+              If Not AssistantCheckedProjectPath(NewText, Text, ErrorText) Then Exit;
+              If Not Approve(RunId, Tool, ActualPath, Path, NewText, ErrorText) Then Exit;
+              If Not AssistantCheckedProjectPath(Path, ActualPath, ErrorText) Then Exit;
+              If Not AssistantCheckedProjectPath(NewText, Text, ErrorText) Then Exit;
+              Result := FAdapter.RenamePath(Arguments, ActualPath, Text, ResultText, ErrorText);
+            End
+          Else
+            Begin
+              If Not AssistantCheckedProjectPath(Path, ActualPath, ErrorText) Then Exit;
+              If Not Approve(RunId, Tool, ActualPath, Path, '', ErrorText) Then Exit;
+              If Not AssistantCheckedProjectPath(Path, ActualPath, ErrorText) Then Exit;
+              Result := FAdapter.DeletePath(Arguments, ActualPath, ResultText, ErrorText);
+            End;
           Exit;
         End;
       If Tool = 'lazarus_ensure_form_component' Then
@@ -1740,7 +1836,13 @@ Begin
     ',"inputSchema":' + AssistantStagePatchSchema + '}';
   If FWriteScope = awsProject Then Result := Result +
     ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
-    ',"inputSchema":' + FormComponentSchema + '}';
+    ',"inputSchema":' + FormComponentSchema + '}' +
+    ',{"type":"function","name":"lazarus_delete_path","description":' + Quoted(DeletePathDescription) +
+    ',"inputSchema":' + DeletePathSchema + '}' +
+    ',{"type":"function","name":"lazarus_rename_path","description":' + Quoted(RenamePathDescription) +
+    ',"inputSchema":' + RenamePathSchema + '}' +
+    ',{"type":"function","name":"lazarus_add_unit_to_project","description":' + Quoted(AddUnitDescription) +
+    ',"inputSchema":' + AddUnitSchema + '}';
   Result := Result + ']';
 End;
 End.
