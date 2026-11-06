@@ -5,7 +5,8 @@ Unit AssistantPlanRun;
   Every Run Plan exit uses one report: the plan-list counts, why the run ended,
   each blocked item's stored user action, and the next step. A finish with
   blocked items left does not say that all packages are complete. The start
-  dialog uses the same rule when nothing unblocked remains. }
+  dialog uses the same rule when nothing unblocked remains.
+  A blocked item that leaves tracked source uncommitted stops the run. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -35,7 +36,8 @@ Type
     preError,
     prePackageCap,
     preContextLimit,
-    preNewChat
+    preNewChat,
+    preUncommitted
   );
 
   TPlanRunBlockedItem = Record
@@ -77,6 +79,14 @@ Function PlanRunStallResumeNote: String;
 Function PlanRunNewChatNote(UsagePercent: Integer): String;
 { Trace line naming the Claude session for one plan item. Resumed is a continue turn of that item. }
 Function ClaudePlanItemSessionNote(Const ItemTitle, SessionId: String; Resumed: Boolean): String;
+{ Tracked source paths in git status --porcelain, comma-separated. Untracked and non-source lines are ignored. }
+Function PlanRunDirtySourceFiles(Const Porcelain: String): String;
+{ A blocked item with those files stops the run. A clean tree, or an item that is not blocked, does not. }
+Function PlanRunStopsForDirtySource(Blocked: Boolean; Const Porcelain: String): Boolean;
+{ Status line naming the dirty tracked source files. Empty when the run should continue. }
+Function PlanRunDirtySourceStatus(Const Porcelain: String): String;
+{ Reads git status --porcelain. False when the tree is clean, there is no repository, or Git fails. }
+Function PlanRunBlockedSourceStop(Const Root: String; Out StatusLine: String): Boolean;
 { Work-item prompt. Claude names only tools present in ToolsJson. Native keeps the existing sentences. }
 Function PlanWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
   ContinueSameItem, Claude: Boolean; Const ToolsJson: String): String;
@@ -85,7 +95,7 @@ Function PlanSectionReadSentence: String;
 Implementation
 
 Uses
-  Classes, AssistantPlan, AssistantAcceptance;
+  Classes, fpjson, jsonparser, AssistantPlan, AssistantAcceptance, AssistantGit;
 
 Function PlanContextContinuePercent(StoredPercent: Integer): Integer;
 Begin
@@ -144,6 +154,119 @@ Begin
   If Title <> '' Then
     Result := Result + ' for "' + Title + '"';
   Result := Result + '.';
+End;
+
+Function UnquoteGitPath(Const Path: String): String;
+Begin
+  Result := Path;
+  If (Length(Result) < 2) Or (Result[1] <> '"') Or (Result[Length(Result)] <> '"') Then
+    Exit;
+  Result := Copy(Result, 2, Length(Result) - 2);
+  Result := StringReplace(Result, '\\', '\', [rfReplaceAll]);
+  Result := StringReplace(Result, '\"', '"', [rfReplaceAll]);
+End;
+
+Function PorcelainSourcePath(Const Line: String): String;
+Var
+  Rest: String;
+  Arrow: Integer;
+Begin
+  Result := '';
+  { XY is two columns. Do not trim: a leading space is an unstaged tracked change. }
+  If (Length(Line) < 4) Or (Line[3] <> ' ') Then
+    Exit;
+  If (Copy(Line, 1, 2) = '??') Or (Copy(Line, 1, 2) = '!!') Or ((Line[1] = ' ') And (Line[2] = ' ')) Then
+    Exit;
+  Rest := Copy(Line, 4, MaxInt);
+  Arrow := Pos(' -> ', Rest);
+  If Arrow > 0 Then
+    Rest := Copy(Rest, Arrow + 4, MaxInt);
+  Result := UnquoteGitPath(Trim(Rest));
+End;
+
+Function IsTrackedSourcePath(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.lpr') Or (Ext = '.inc') Or (Ext = '.lfm');
+End;
+
+Function PlanRunDirtySourceFiles(Const Porcelain: String): String;
+Var
+  Lines, Names: TStringList;
+  Index: Integer;
+  Path: String;
+Begin
+  Result := '';
+  Lines := TStringList.Create;
+  Names := TStringList.Create;
+  Try
+    Lines.Text := Porcelain;
+    For Index := 0 To Lines.Count - 1 Do
+      Begin
+        If (Lines[Index] = '') Or (Copy(Lines[Index], 1, 5) = 'hint:') Then
+          Continue;
+        Path := PorcelainSourcePath(Lines[Index]);
+        If IsTrackedSourcePath(Path) And (Names.IndexOf(Path) < 0) Then
+          Names.Add(Path);
+      End;
+    For Index := 0 To Names.Count - 1 Do
+      Begin
+        If Result <> '' Then
+          Result := Result + ', ';
+        Result := Result + Names[Index];
+      End;
+  Finally
+    Names.Free;
+    Lines.Free;
+  End;
+End;
+
+Function PlanRunStopsForDirtySource(Blocked: Boolean; Const Porcelain: String): Boolean;
+Begin
+  Result := Blocked And (PlanRunDirtySourceFiles(Porcelain) <> '');
+End;
+
+Function PlanRunDirtySourceStatus(Const Porcelain: String): String;
+Begin
+  Result := PlanRunDirtySourceFiles(Porcelain);
+  If Result <> '' Then
+    Result := 'Stopped. Uncommitted source: ' + Result;
+End;
+
+Function PorcelainFromGitReply(Const Reply: String): String;
+Var
+  Data: TJSONData;
+Begin
+  Result := Reply;
+  If (Reply = '') Or (Reply[1] <> '{') Then
+    Exit;
+  Data := Nil;
+  Try
+    Data := GetJSON(Reply);
+    If Data Is TJSONObject Then
+      Result := TJSONObject(Data).Get('output', Reply);
+  Except
+    Result := Reply;
+  End;
+  Data.Free;
+End;
+
+Function PlanRunBlockedSourceStop(Const Root: String; Out StatusLine: String): Boolean;
+Var
+  Reply, ErrorText, Porcelain: String;
+Begin
+  StatusLine := '';
+  Result := False;
+  If Not WorkingRootHasGitRepository(Root) Then
+    Exit;
+  If Not RunAssistantGit(Root, '{"arguments":["status","--porcelain"]}', Reply, ErrorText) Then
+    Exit;
+  Porcelain := PorcelainFromGitReply(Reply);
+  Result := PlanRunStopsForDirtySource(True, Porcelain);
+  If Result Then
+    StatusLine := PlanRunDirtySourceStatus(Porcelain);
 End;
 
 Function DefaultPlanRunReportFacts: TPlanRunReportFacts;
@@ -214,6 +337,13 @@ Begin
       End;
     Ord(preNewChat):
       Result := 'A new chat started.';
+    Ord(preUncommitted):
+      Begin
+        If Trim(Facts.Detail) <> '' Then
+          Result := Trim(Facts.Detail)
+        Else
+          Result := 'Stopped. Uncommitted source remains.';
+      End;
   Else
     Result := 'The plan run ended.';
   End;
@@ -240,6 +370,8 @@ End;
 Function AssistantPlanRunNextStep(Const Facts: TPlanRunReportFacts): String;
 Begin
   Result := '';
+  If Facts.Kind = preUncommitted Then
+    Exit(AssistantPlanRunAgain);
   If PlanRunOpenCount(Facts) > 0 Then
     Begin
       If Facts.TerminalFault Or (Facts.Kind = preContextLimit) Then

@@ -2993,6 +2993,8 @@ Var
     SetBuildStatusFeedback(Report);
     ShowBuildNote(Report);
     RefreshBuildTodos;
+    If FPlanAgentRunning And PlanRunBlockedSourceStop(ProjectAssistantRoot, Report) Then
+      StopRunPlan(preUncommitted, Report);
   End;
 
 Begin
@@ -3039,8 +3041,7 @@ Begin
         End;
     Else
     End;
-  { A missing Validation line, a failed build, or any other acceptance note stays in progress.
-    A blocked item is skipped by FindNextIncompleteBuildSection. None of these stop the run. }
+  { A missing Validation line or a failed build stays in progress. Dirty source on a blocked item stops the run. }
   If Not CheckAssistantAcceptance(TrackedBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
       LeaveInProgress(Note);

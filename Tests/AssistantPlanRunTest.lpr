@@ -208,10 +208,28 @@ Begin
   Check('a resumed session note names the id', Has(Note, 'item-1') And Has(Note, 'resumed'));
 End;
 
+Procedure CheckDirtySourceStop;
+Const
+  DirtyPas = ' M Source/Foo.pas' + LineEnding + ' M Documents/Plan.md';
+  Clean = '';
+  PlanOnly = ' M Documents/Plan.md';
+Var
+  Status: String;
+Begin
+  Check('a blocked item with a dirty pas file stops the run', PlanRunStopsForDirtySource(True, DirtyPas));
+  Status := PlanRunDirtySourceStatus(DirtyPas);
+  Check('the stop line names the pas file', Has(Status, 'Source/Foo.pas') And (Pos('Plan.md', Status) = 0));
+  Check('a blocked item with a clean tree continues', Not PlanRunStopsForDirtySource(True, Clean));
+  Check('a blocked item with only the plan dirty continues', Not PlanRunStopsForDirtySource(True, PlanOnly));
+  Check('an item that is not blocked does not stop', Not PlanRunStopsForDirtySource(False, DirtyPas));
+  Check('an untracked pas file is not tracked source', Not PlanRunStopsForDirtySource(True, '?? Source/New.pas'));
+End;
+
 Begin
   FailCount := 0;
   CheckPrompts;
   CheckPlanItemSession;
+  CheckDirtySourceStop;
   Check('empty plan counts match the list',
     AssistantPlanRunCountsLine(0, 0, 0, 0) = '0 not started · 0 in progress · 0 blocked · 0 complete  ·  no actionable items');
   Check('open counts match the list',
