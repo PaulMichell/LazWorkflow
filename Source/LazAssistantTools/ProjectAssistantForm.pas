@@ -3158,8 +3158,8 @@ Begin
   Result := '';
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
-  FCodexBroker.BeginRun(awsProject, amBuild);
-  Result := FCodexBroker.ToolsJson;
+  { A prompt must not start a run. BeginRun would cancel a build and replace the open run id. }
+  Result := FCodexBroker.ToolsJsonForScope(awsProject);
 End;
 
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,

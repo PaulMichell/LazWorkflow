@@ -114,6 +114,8 @@ Type
     Function Execute(Const RunId, Tool, Arguments: String;
       Out ResultText, ErrorText: String): Boolean;
     Function ToolsJson: String;
+    /// Catalogue for Scope. Does not start a run or change the open run, its build, or a prepared change set.
+    Function ToolsJsonForScope(Scope: TAssistantWriteScope): String;
     Property OnApproval: TAssistantToolApproval Read FOnApproval Write FOnApproval;
     Property RunId: String Read FRunId;
   End;
@@ -1814,6 +1816,11 @@ Begin
 End;
 
 Function TAssistantToolBroker.ToolsJson: String;
+Begin
+  Result := ToolsJsonForScope(FWriteScope);
+End;
+
+Function TAssistantToolBroker.ToolsJsonForScope(Scope: TAssistantWriteScope): String;
 Const
   ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
   BufferSchema = '{"type":"object","properties":{"path":{"type":"string"},"include_text":{"type":"boolean"}},"required":["path"],"additionalProperties":false}';
@@ -1828,13 +1835,13 @@ Const
 Var
   WriteNote: String;
 Begin
-  If FWriteScope = awsNone Then
+  If Scope = awsNone Then
     Begin
       Result := '[]';
       Exit;
     End;
   WriteNote := '';
-  If FWriteScope = awsMarkdown Then WriteNote := ' Only .md, .markdown and .mdown files are writable.';
+  If Scope = awsMarkdown Then WriteNote := ' Only .md, .markdown and .mdown files are writable.';
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project or package and relevant open buffer.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text, including unsaved changes, and get a revision token. ' +
     'Returns the text unless include_text is false, which returns only the path, revision and line_count.","inputSchema":' + BufferSchema + '}';
@@ -1857,7 +1864,7 @@ Begin
     Begin
       Result := Result + ',{"type":"function","name":"lazarus_prepare_changes","description":"Prepare one reviewed change set for 1-16 already open project text buffers. Read each buffer first and supply its revision and complete proposed text. Does not edit or save; returns a one-use change_set_id. Replaces the previous pending set. No project/designer metadata edits or inferred rename coverage.","inputSchema":{"type":"object","properties":{"changes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}},' +
         '{"type":"function","name":"lazarus_change_status","description":"Get an in-memory change-set receipt with per-file apply/recovery outcomes. Without an ID, lists receipts for this project. Receipts survive new chats/runs until the assistant panel closes; they are not durable.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"additionalProperties":false}}';
-      If FWriteScope = awsProject Then Result := Result +
+      If Scope = awsProject Then Result := Result +
         ',{"type":"function","name":"lazarus_apply_changes","description":"Review and apply an exact prepared multi-editor change set in Build. ' +
         'Validates every source and editor stamp before each write. On failure restores only confirmed unchanged assistant edits and returns per-file outcomes. ' +
         'On success returns each file''s new revision and changed line range, not the buffer text. Does not save or build.",' +
@@ -1867,10 +1874,10 @@ Begin
   If FAdapter.CanPreviewRename Then
     Begin
       Result := Result + ',{"type":"function","name":"lazarus_preview_local_rename","description":"Preview a routine-local variable or constant rename using CodeTools. Requires a current buffer revision; coordinates are 1-based UTF-8 bytes. Returns exact changes and a one-use preview_id without editing. Supports one editor only; rejects parameters, globals, fields, includes/macros/assembly, conditionals inside the routine and names in active code. Ignores comments, strings and unrelated inactive branches. Preview is valid only in this run; no partial renames.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"new_name":{"type":"string"}},"required":["path","revision","line","column","new_name"],"additionalProperties":false}}';
-      If FWriteScope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. ' +
+      If Scope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. ' +
         'Consumes preview_id, preserves editor Undo and returns the new revision and changed line range, not the buffer text. Does not save or compile; never supply replacement text.","inputSchema":{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"],"additionalProperties":false}}';
     End;
-  If FWriteScope <> awsReadOnly Then Result := Result +
+  If Scope <> awsReadOnly Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save. ' +
     'Returns the new revision and changed line range, not the buffer text.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_replace_in_buffer","description":"Replace exact old_text in a previously read buffer ' +
@@ -1878,9 +1885,9 @@ Begin
     'than once unless replace_all is true. Returns the new revision and changed line range, not the buffer text.' +
     WriteNote + '","inputSchema":' + ReplaceSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
-  If (FWriteScope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
+  If (Scope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
     ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
-  If (FWriteScope <> awsReadOnly) And FAdapter.CanWriteMarkdown Then Result := Result +
+  If (Scope <> awsReadOnly) And FAdapter.CanWriteMarkdown Then Result := Result +
     ',{"type":"function","name":"lazarus_write_markdown","description":"Create or overwrite a project Markdown plan or document ' +
     '(prefer Documents/) and open its live window. This is the only way to write an existing .md file. Omit path for the ' +
     'active plan in Plan and Build mode, or the current document in Document mode. In a plan a Status: line belongs under a ' +
@@ -1894,25 +1901,25 @@ Begin
     '"inputSchema":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},' +
     '"new_text":{"type":"string"},"replace_all":{"type":"boolean"},"open":{"type":"boolean"}},' +
     '"required":["old_text","new_text"],"additionalProperties":false}}';
-  If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
+  If (Scope = awsProject) And FAdapter.CanBuild Then Result := Result +
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project, package, or folder target using its saved inputs. ' +
     'A folder builds each .lpk under it, in the same order as run_compile. Optional package is one project-relative .lpk inside that folder. ' +
     'Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{"package":{"type":"string"}},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
-  If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
+  If (Scope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. ' +
     'Optional only is a list of test program names, and applies only when the command is Tests/RunAssistantTests.pas. ' +
     'Each name must match an existing Tests/<name>.lpr and is passed as --only. Output goes to a temporary directory chosen here. ' +
     'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
     '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}}},"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
-  If ((FWriteScope = awsProject) Or (FWriteScope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
+  If ((Scope = awsProject) Or (Scope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
     ',"inputSchema":' + AssistantGitSchema + '}';
-  If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
+  If (Scope = awsProject) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_stage_patch","description":' + Quoted(AssistantStagePatchDescription) +
     ',"inputSchema":' + AssistantStagePatchSchema + '}';
-  If (FWriteScope = awsMarkdown) Or (FWriteScope = awsProject) Then Result := Result +
+  If (Scope = awsMarkdown) Or (Scope = awsProject) Then Result := Result +
     ',{"type":"function","name":"lazarus_list_plans","description":' +
     Quoted('List plans registered in the project .assistant settings. Missing files are dropped. The project folders are not scanned.') +
     ',"inputSchema":' + ListPlansSchema + '}' +
@@ -1921,11 +1928,11 @@ Begin
     ',"inputSchema":' + ListPlansSchema + '}' +
     ',{"type":"function","name":"lazarus_read_markdown_section","description":' + Quoted(ReadSectionDescription) +
     ',"inputSchema":' + ReadSectionSchema + '}';
-  If FWriteScope = awsMarkdown Then Result := Result +
+  If Scope = awsMarkdown Then Result := Result +
     ',{"type":"function","name":"lazarus_set_active_plan","description":' +
     Quoted('Set the canonical active plan Markdown path for this project. Plan mode only.') +
     ',"inputSchema":' + SetActivePlanSchema + '}';
-  If FWriteScope = awsProject Then Result := Result +
+  If Scope = awsProject Then Result := Result +
     ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
     ',"inputSchema":' + FormComponentSchema + '}' +
     ',{"type":"function","name":"lazarus_delete_path","description":' + Quoted(DeletePathDescription) +

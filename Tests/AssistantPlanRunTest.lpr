@@ -255,9 +255,152 @@ Begin
   End;
 End;
 
+Type
+  TCatalogueWorkspace = Class(TAssistantWorkspaceAdapter)
+    CancelCount: Integer;
+    Job: String;
+    Function Identity: String; Override;
+    Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
+    Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
+    Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
+    Function Describe: String; Override;
+    Function CanChangeSets: Boolean; Override;
+    Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
+    Function CanBuild: Boolean; Override;
+    Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
+    Procedure CancelBuild; Override;
+  End;
+
+Function TCatalogueWorkspace.Identity: String;
+Begin
+  Result := 'catalogue-test';
+End;
+
+Function TCatalogueWorkspace.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
+Begin
+  CanonicalPath := 'Source/Unit.pas';
+  Text := 'unit Unit;';
+  ErrorText := '';
+  Result := Path <> '';
+End;
+
+Function TCatalogueWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := 'not used';
+  Result := False;
+End;
+
+Function TCatalogueWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := 'not used';
+  Result := False;
+End;
+
+Function TCatalogueWorkspace.Describe: String;
+Begin
+  Result := '{}';
+End;
+
+Function TCatalogueWorkspace.CanChangeSets: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TCatalogueWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
+Begin
+  Result := ReadBuffer(Path, CanonicalPath, Text, ErrorText);
+  Stamp := 'stamp-1';
+End;
+
+Function TCatalogueWorkspace.CanBuild: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TCatalogueWorkspace.StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Job := 'job-1';
+  ResultText := '{"job_id":"job-1","done":false}';
+  ErrorText := '';
+  Result := True;
+End;
+
+Function TCatalogueWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := '';
+  If Job = '' Then
+    Begin
+      ErrorText := 'No build.';
+      Exit(False);
+    End;
+  ResultText := '{"job_id":"' + Job + '","done":false}';
+  Result := True;
+End;
+
+Procedure TCatalogueWorkspace.CancelBuild;
+Begin
+  Inc(CancelCount);
+  Job := '';
+End;
+
+Function JsonStringField(Const Text, Name: String): String;
+Var
+  Key, StartAt, EndAt: Integer;
+Begin
+  Result := '';
+  Key := Pos('"' + Name + '":"', Text);
+  If Key = 0 Then Exit;
+  StartAt := Key + Length(Name) + 4;
+  EndAt := StartAt;
+  While (EndAt <= Length(Text)) And (Text[EndAt] <> '"') Do Inc(EndAt);
+  Result := Copy(Text, StartAt, EndAt - StartAt);
+End;
+
+Procedure CheckCatalogueLeavesRun;
+Var
+  Workspace: TCatalogueWorkspace;
+  Broker: TAssistantToolBroker;
+  RunId, Reply, Err, Revision, SetId, Catalogue, OpenCatalogue: String;
+  Cancels: Integer;
+Begin
+  Workspace := TCatalogueWorkspace.Create;
+  Broker := TAssistantToolBroker.Create(Workspace);
+  Try
+    RunId := Broker.BeginRun(awsProject);
+    Check('catalogue test reads a buffer', Broker.Execute(RunId, 'lazarus_read_buffer',
+      '{"path":"Source/Unit.pas"}', Reply, Err));
+    Revision := JsonStringField(Reply, 'revision');
+    Check('catalogue test prepares a change set', Broker.Execute(RunId, 'lazarus_prepare_changes',
+      '{"changes":[{"path":"Source/Unit.pas","revision":"' + Revision + '","text":"unit Unit; changed"}]}', Reply, Err));
+    SetId := JsonStringField(Reply, 'change_set_id');
+    Check('catalogue test starts a fake build', Broker.Execute(RunId, 'lazarus_start_build', '{}', Reply, Err) And
+      (JsonStringField(Reply, 'job_id') = 'job-1'));
+    Cancels := Workspace.CancelCount;
+    OpenCatalogue := Broker.ToolsJson;
+    Catalogue := Broker.ToolsJsonForScope(awsProject);
+    Check('a scope catalogue does not replace the run id', Broker.RunId = RunId);
+    Check('a scope catalogue does not cancel the build', (Workspace.CancelCount = Cancels) And (Workspace.Job = 'job-1'));
+    Check('the fake build is still current', Broker.Execute(RunId, 'lazarus_build_status', '{"job_id":"job-1"}', Reply, Err) And
+      (JsonStringField(Reply, 'job_id') = 'job-1'));
+    Check('the prepared change set is still current', Broker.Execute(RunId, 'lazarus_change_status',
+      '{"change_set_id":"' + SetId + '"}', Reply, Err) And (JsonStringField(Reply, 'change_set_id') = SetId));
+    Check('the project catalogue still lists the build', Pos('"lazarus_start_build"', Catalogue) > 0);
+    Check('the open run catalogue is unchanged', Broker.ToolsJson = OpenCatalogue);
+    Check('a markdown catalogue does not retarget the open run',
+      (Pos('"lazarus_start_build"', Broker.ToolsJsonForScope(awsMarkdown)) = 0) And (Broker.RunId = RunId) And
+      (Pos('"lazarus_start_build"', Broker.ToolsJson) > 0));
+  Finally
+    Broker.Free;
+    Workspace.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   CheckPrompts;
+  CheckCatalogueLeavesRun;
   CheckPlanItemSession;
   CheckDirtySourceStop;
   CheckBuildStart;
