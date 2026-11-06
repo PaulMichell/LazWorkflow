@@ -39,6 +39,8 @@ Type
     AutoNewChatCheck: TCheckBox;
     NewChatPercentEdit: TSpinEdit;
     NewChatPercentLabel: TLabel;
+    PlanRunEffortLabel: TLabel;
+    PlanRunEffortCombo: TComboBox;
     RecoveryGroup: TGroupBox;
     ReconnectIntervalLabel: TLabel;
     ReconnectIntervalEdit: TSpinEdit;
@@ -238,6 +240,8 @@ Type
     Procedure FillClaudeModels(Const SelectedModel: String);
     Procedure FillClaudeEffort(Const SelectedEffort: String);
     Function ClaudeEffort: String;
+    Procedure FillPlanRunEffort(Const Stored: String);
+    Function PlanRunEffortFromCombo: String;
     Procedure AddKind(Const Backend, DisplayName: String);
     Procedure RefreshGrokReasoningChoices(Const PreferredEffort: String);
     Procedure RefreshCompatibleModels;
@@ -1371,6 +1375,38 @@ Begin
   ClaudeEffortCombo.Enabled := ClaudeEffortCombo.Items.Count > 1;
 End;
 
+Procedure TAssistantSettingsForm.FillPlanRunEffort(Const Stored: String);
+Begin
+  PlanRunEffortCombo.Items.BeginUpdate;
+  Try
+    PlanRunEffortCombo.Items.Clear;
+    PlanRunEffortCombo.Items.Add('Default');
+    PlanRunEffortCombo.Items.Add('Low');
+    PlanRunEffortCombo.Items.Add('Medium');
+    PlanRunEffortCombo.Items.Add('High');
+  Finally
+    PlanRunEffortCombo.Items.EndUpdate;
+  End;
+  Case NormalizePlanRunEffort(Stored) Of
+    'low': PlanRunEffortCombo.ItemIndex := 1;
+    'medium': PlanRunEffortCombo.ItemIndex := 2;
+    'high': PlanRunEffortCombo.ItemIndex := 3;
+  Else
+    PlanRunEffortCombo.ItemIndex := 0;
+  End;
+End;
+
+Function TAssistantSettingsForm.PlanRunEffortFromCombo: String;
+Begin
+  Case PlanRunEffortCombo.ItemIndex Of
+    1: Result := 'low';
+    2: Result := 'medium';
+    3: Result := 'high';
+  Else
+    Result := '';
+  End;
+End;
+
 Function TAssistantSettingsForm.ClaudeEffort: String;
 Begin
   If ClaudeEffortCombo.ItemIndex <= 0 Then
@@ -1727,6 +1763,7 @@ Begin
   AutoCompactCheck.Checked := AssistantChatConfig.AutoCompactContext;
   AutoNewChatCheck.Checked := AssistantChatConfig.AutoNewChatAtContextLimit;
   NewChatPercentEdit.Value := AssistantChatConfig.NewChatContextPercent;
+  FillPlanRunEffort(AssistantChatConfig.PlanRunEffort);
   ReconnectIntervalEdit.Value := AssistantChatConfig.ReconnectIntervalSeconds;
   CreditRetryEdit.Value := AssistantChatConfig.CreditRetryMinutes;
   ContinuationCapEdit.Value := AssistantChatConfig.AutomaticContinuations;
@@ -1779,6 +1816,7 @@ Begin
   AssistantChatConfig.AutoCompactContext := AutoCompactCheck.Checked;
   AssistantChatConfig.AutoNewChatAtContextLimit := AutoNewChatCheck.Checked;
   AssistantChatConfig.NewChatContextPercent := NewChatPercentEdit.Value;
+  AssistantChatConfig.PlanRunEffort := PlanRunEffortFromCombo;
   AssistantChatConfig.ReconnectIntervalSeconds := ReconnectIntervalEdit.Value;
   AssistantChatConfig.CreditRetryMinutes := CreditRetryEdit.Value;
   AssistantChatConfig.AutomaticContinuations := ContinuationCapEdit.Value;

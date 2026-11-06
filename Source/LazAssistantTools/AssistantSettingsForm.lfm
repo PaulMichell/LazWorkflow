@@ -264,7 +264,7 @@ object AssistantSettingsForm: TAssistantSettingsForm
       end
       object ContextGroup: TGroupBox
         Left = 0
-        Height = 136
+        Height = 176
         Top = 176
         Width = 972
         Align = alTop
@@ -322,6 +322,26 @@ object AssistantSettingsForm: TAssistantSettingsForm
           Width = 16
           Caption = '%'
           ParentColor = False
+        end
+        object PlanRunEffortLabel: TLabel
+          Left = 12
+          Height = 17
+          Top = 108
+          Width = 96
+          Caption = 'Plan run effort'
+          ParentColor = False
+        end
+        object PlanRunEffortCombo: TComboBox
+          Left = 160
+          Height = 28
+          Top = 104
+          Width = 200
+          Hint = 'Effort for each plan item. Separate from the per-turn reasoning setting. Default leaves it to the model.'
+          ItemHeight = 0
+          ParentShowHint = False
+          ShowHint = True
+          Style = csDropDownList
+          TabOrder = 4
         end
       end
       object PromptGroup: TGroupBox

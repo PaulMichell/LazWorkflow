@@ -59,6 +59,8 @@ Type
     FActiveSkill: String;
     FIncludeIDEContext: Boolean;
     FThinkingLevel: String;
+    { Empty means Default: a plan item leaves effort to the model. low, medium, or high otherwise. }
+    FPlanRunEffort: String;
     FApprovalMode: String;
     FAutoNewChatAtContextLimit: Boolean;
     FNewChatContextPercent: Integer;
@@ -131,6 +133,8 @@ Type
     Property IncludeIDEContext: Boolean Read FIncludeIDEContext Write FIncludeIDEContext;
     { low | medium | high | xhigh — API reasoning_effort. }
     Property ThinkingLevel: String Read FThinkingLevel Write FThinkingLevel;
+    { Plan item effort. Empty is Default. low, medium, or high otherwise. Key plan_run_effort. }
+    Property PlanRunEffort: String Read FPlanRunEffort Write FPlanRunEffort;
     { ask | auto | always — tool approval policy. }
     Property ApprovalMode: String Read FApprovalMode Write FApprovalMode;
     { A plan run at NewChatContextPercent starts a new chat and continues. Key plan_continue_new_chat. Missing key is on. }
@@ -173,6 +177,10 @@ Type
 
 Function ThinkingLevelToStr(Level: TAssistantThinkingLevel): String;
 Function StrToThinkingLevel(Const Value: String): TAssistantThinkingLevel;
+{ Empty, default, or an unknown value is Default. Otherwise low, medium, or high. }
+Function NormalizePlanRunEffort(Const Value: String): String;
+{ A plan item uses the stored plan-run effort. Any other turn keeps TurnEffort. }
+Function PlanRunTurnEffort(PlanItem: Boolean; Const TurnEffort, Stored: String): String;
 Function ApprovalModeToStr(Mode: TAssistantApprovalMode): String;
 Function StrToApprovalMode(Const Value: String): TAssistantApprovalMode;
 Function ApprovalModeCaption(Mode: TAssistantApprovalMode): String;
@@ -210,6 +218,22 @@ Begin
   Else
     Result := 'high';
   End;
+End;
+
+Function NormalizePlanRunEffort(Const Value: String): String;
+Begin
+  Result := LowerCase(Trim(Value));
+  If (Result = 'low') Or (Result = 'medium') Or (Result = 'high') Then
+    Exit;
+  Result := '';
+End;
+
+Function PlanRunTurnEffort(PlanItem: Boolean; Const TurnEffort, Stored: String): String;
+Begin
+  If Not PlanItem Then
+    Result := TurnEffort
+  Else
+    Result := NormalizePlanRunEffort(Stored);
 End;
 
 Function StrToThinkingLevel(Const Value: String): TAssistantThinkingLevel;
@@ -305,6 +329,7 @@ Begin
   FActiveSkill := '';
   FIncludeIDEContext := False;
   FThinkingLevel := AssistantConfigDefaultThinking;
+  FPlanRunEffort := '';
   FApprovalMode := AssistantConfigDefaultApproval;
   FAutoNewChatAtContextLimit := True;
   FNewChatContextPercent := AssistantNewChatContextDefault;
@@ -371,6 +396,7 @@ Begin
   FActiveSkill := Source.ActiveSkill;
   FIncludeIDEContext := Source.IncludeIDEContext;
   FThinkingLevel := Source.ThinkingLevel;
+  FPlanRunEffort := Source.PlanRunEffort;
   FApprovalMode := Source.ApprovalMode;
   FAutoNewChatAtContextLimit := Source.AutoNewChatAtContextLimit;
   FNewChatContextPercent := Source.NewChatContextPercent;
@@ -477,6 +503,7 @@ Begin
   If Trim(Config.FTokenType) = '' Then
     Config.FTokenType := 'Bearer';
   Config.FThinkingLevel := ThinkingLevelToStr(StrToThinkingLevel(Config.FThinkingLevel));
+  Config.FPlanRunEffort := NormalizePlanRunEffort(Config.FPlanRunEffort);
   Config.FApprovalMode := ApprovalModeToStr(StrToApprovalMode(Config.FApprovalMode));
   Config.FReconnectIntervalSeconds := BoundRecoveryInt(Config.FReconnectIntervalSeconds, 0, AssistantReconnectIntervalMax);
   Config.FCreditRetryMinutes := BoundRecoveryInt(Config.FCreditRetryMinutes, 0, AssistantCreditRetryMax);
@@ -934,6 +961,7 @@ Begin
     FModel := AssistantConfigDefaultModel;
     FActiveSkill := '';
     FThinkingLevel := AssistantConfigDefaultThinking;
+    FPlanRunEffort := '';
     FApprovalMode := AssistantConfigDefaultApproval;
     ClearOAuthTokens;
     FSkillModes.Clear;
@@ -981,6 +1009,7 @@ Begin
       FModel := Section.Get('model', FModel);
     If Section.Find('thinking') <> Nil Then
       FThinkingLevel := Section.Get('thinking', FThinkingLevel);
+    FPlanRunEffort := NormalizePlanRunEffort(Section.Get('plan_run_effort', ''));
     If Section.Find('approval') <> Nil Then
       FApprovalMode := Section.Get('approval', FApprovalMode);
     If Section.Find('api_base') <> Nil Then
@@ -1091,6 +1120,7 @@ Begin
     Section.Add('auto_new_chat_at_limit', FAutoNewChatAtContextLimit);
     Section.Add('plan_continue_new_chat', FAutoNewChatAtContextLimit);
     Section.Add('new_chat_context_percent', FNewChatContextPercent);
+    Section.Add('plan_run_effort', NormalizePlanRunEffort(FPlanRunEffort));
     Section.Add('show_thinking', FShowThinking);
     Section.Add('show_tool_calls', FShowToolCalls);
     Section.Add('conversation_font_size', FConversationFontSize);

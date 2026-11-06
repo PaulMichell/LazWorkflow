@@ -17,14 +17,10 @@ Unit ProjectAssistantForm;
   text after a picture is copied. The Run Plan end report is built in
   AssistantPlanRun. A dropped Codex or Claude transport waits in
   AssistantRecovery, then the same turn is started again.
-  A Claude plan item starts its own session; only a continue passes --resume.
+  A Claude plan item starts a fresh session; a continue resumes it.
   Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
   The list stays in AssistantTasksForm.
-  Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
-  Dialog-free monitor fill and remote helpers stay here because they read private send and plan state.
-  The elapsed timer publishes the live trace so a Codex or Claude poll reaches the phone before the turn finishes.
-  Reviewed 2026-10-22: plan sidebar status is an owner-drawn pill on BuildTodoList.
-  Reviewed 2026-10-27: remote history selection stays with the other dialog-free helpers. }
+  Reviewed 2026-10-27: file drop, monitor fill, the trace timer, and plan pills stay here. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -4941,7 +4937,8 @@ Begin
   End;
   Try
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
-      FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, FCodexLaunchInstructions,
+      FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile,
+      PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), FCodexLaunchInstructions,
       ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
     FCodexRun.Start;
     SetStreamPhase(AssistantPhaseWaiting);
@@ -4970,7 +4967,7 @@ Begin
   TurnSettings.Executable := FClaudeRuntime;
   TurnSettings.Model := FClaudeModel;
   TurnSettings.ToolScope := ClaudeToolScopeForMode(ActiveMode);
-  TurnSettings.Effort := FClaudeEffort;
+  TurnSettings.Effort := PlanRunTurnEffort(FPlanAgentRunning, FClaudeEffort, AssistantChatConfig.PlanRunEffort);
   TurnSettings.WorkingDirectory := FClaudeDirectory;
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
   TurnSettings.SessionId := FClaudeSessionId;
@@ -5172,7 +5169,8 @@ Begin
     FCodexLaunchWire := WireJson;
     FCodexLaunchReady := True;
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile, FCodexEffort, Instructions, ActiveMode,
+      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile,
+      PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), Instructions, ActiveMode,
       ProjectAssistantRoot, WireJson);
     BeginWriteImageTurn;
     FCodexRun.Start;
@@ -5627,6 +5625,9 @@ Begin
   If Assigned(AssistantChatConfig) And Assigned(AssistantClient) Then
     Begin
       AssistantClient.ApplyConfig(AssistantChatConfig);
+      If FPlanAgentRunning Then
+        AssistantClient.ReasoningEffort := PlanRunTurnEffort(True, AssistantClient.ReasoningEffort,
+          AssistantChatConfig.PlanRunEffort);
       FModelName := AssistantChatConfig.Model;
     End
   Else If Assigned(AssistantClient) Then

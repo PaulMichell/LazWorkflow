@@ -1,7 +1,7 @@
 Program AssistantSettingsTest;
 {$mode objfpc}{$H+}
 Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, StdCtrls, Graphics, ComCtrls, Menus,
-  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, WorkflowSettings, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantTestSettings, AssistantTestSettingsFrame;
+  LazIDEIntf, ProjectIntf, BaseIDEIntf, LazConfigStorage, SpellCheckerConfig, WorkflowSettings, AssistantTestIDEHost, AssistantSettingsForm, AssistantConnections, AssistantCodexSettings, AssistantCodexProfile, AssistantConfig, AssistantClaudeClient, AssistantTestSettings, AssistantTestSettingsFrame;
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Var ConfigRoot: String;
 Type
@@ -23,6 +23,54 @@ Class Function TIDE.GetPrimaryConfigPath: String;
 Begin Result := ConfigRoot; End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
+Procedure CheckPlanRunEffort;
+Var
+  Config: TAssistantConfig;
+  Dialog: TAssistantSettingsForm;
+  Combo: TComboBox;
+  Args: TStringList;
+Begin
+  Config := TAssistantConfig.Create;
+  Try
+    Config.PlanRunEffort := 'High';
+    Config.Save;
+    Config.PlanRunEffort := 'low';
+    Config.Load;
+    Check('plan run effort round-trips', Config.PlanRunEffort = 'high');
+    Config.PlanRunEffort := 'default';
+    Config.Save;
+    Config.Load;
+    Check('plan run effort default stores empty', Config.PlanRunEffort = '');
+  Finally
+    Config.Free;
+  End;
+  Dialog := TAssistantSettingsForm.Create(Nil);
+  Try
+    AssistantChatConfig.PlanRunEffort := 'medium';
+    Dialog.LoadFromConfig;
+    Combo := TComboBox(Dialog.FindComponent('PlanRunEffortCombo'));
+    Check('plan run effort offers Default, Low, Medium and High', Assigned(Combo) And (Combo.Items.Count = 4) And
+      (Combo.Items[0] = 'Default') And (Combo.Items[1] = 'Low') And (Combo.Items[2] = 'Medium') And
+      (Combo.Items[3] = 'High') And (Combo.ItemIndex = 2));
+    Combo.ItemIndex := 3;
+    Dialog.SaveToConfig;
+    Check('settings form stores High', AssistantChatConfig.PlanRunEffort = 'high');
+  Finally
+    Dialog.Free;
+  End;
+  Args := TStringList.Create;
+  Try
+    AppendClaudePlanItemArguments('sonnet', PlanRunTurnEffort(True, 'low', 'medium'), 'item-1', False, Args);
+    Check('a plan item turn passes the plan-run effort', (Args.IndexOf('--effort') >= 0) And
+      (Args[Args.IndexOf('--effort') + 1] = 'medium') And (Args.IndexOf('--resume') < 0));
+    Args.Clear;
+    AppendClaudePlanItemArguments('sonnet', PlanRunTurnEffort(False, 'low', 'medium'), 'item-1', True, Args);
+    Check('a non-plan turn keeps its own effort', (Args.IndexOf('--effort') >= 0) And
+      (Args[Args.IndexOf('--effort') + 1] = 'low') And (Args.IndexOf('--resume') >= 0));
+  Finally
+    Args.Free;
+  End;
+End;
 Procedure RejectModels(Frame: TCodexConnectionFrame; Const Value: String);
 Var
   Cached, Models, Efforts, Model, Effort: String;
@@ -60,6 +108,7 @@ Begin
   WorkflowSpellConfig.SetStorageFileName(WorkflowSettingsPath);
   StoreDir := IncludeTrailingPathDelimiter(ConfigRoot) + '.assistant' + PathDelim;
   IDE := TIDE.Create(Nil); LazarusIDE := IDE;
+  CheckPlanRunEffort;
   Frame := TCodexConnectionFrame.Create(Nil);
   Try
     Frame.LoadConnection(ConfigRoot, ParamStr(0), 'model-one', 'high', 'auto');
