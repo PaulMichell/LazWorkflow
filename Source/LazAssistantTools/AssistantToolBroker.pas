@@ -85,6 +85,7 @@ Type
     Function ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
       Out ResultText, ErrorText: String): Boolean;
     Function CommitBuffer(Const Path, Text, NewText: String; Out ResultText, ErrorText: String): Boolean;
+    Function AppliedChangeReply(SetItem: TAssistantChangeSet): String;
     Function ReplaceInBuffer(Const RunId, Path, Text: String; Args: TJSONObject; Out ResultText, ErrorText: String): Boolean;
     Function SnapshotRevision(Const Path: String): String;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
@@ -619,12 +620,17 @@ Begin
       End;
     If Tool = 'lazarus_apply_changes' Then Result := SetItem.Apply(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent)
     Else Result := SetItem.Revert(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent);
-    { Discard model revisions for all affected buffers; callers reread actual
-      editor text after any outcome, including recovery. }
-    If FRunId = FChangeRun Then
-      For I := 0 To High(FSnapshots) Do
-        For J := 0 To High(SetItem.Items) Do If FSnapshots[I].Path = SetItem.Items[J].Path Then FSnapshots[I].Revision := '';
-      ResultText := SetItem.Receipt;
+    If Result And (Tool = 'lazarus_apply_changes') Then
+      ResultText := AppliedChangeReply(SetItem)
+    Else
+      Begin
+        { A failed apply or a revert must not leave a revision of text the editor no longer has. }
+        If FRunId = FChangeRun Then
+          For I := 0 To High(FSnapshots) Do
+            For J := 0 To High(SetItem.Items) Do
+              If FSnapshots[I].Path = SetItem.Items[J].Path Then FSnapshots[I].Revision := '';
+        ResultText := SetItem.Receipt;
+      End;
     If Not Result Then ErrorText := ResultText;
   Finally
     Candidate.Free;
@@ -754,6 +760,28 @@ Begin
   Result := True;
 End;
 
+{ Same line breaks as read_file, so a cheap revision can be paired with a ranged read. A trailing break does not add a line. }
+Function BufferLineCount(Const Text: String): Integer;
+Var
+  I, StartAt: Integer;
+Begin
+  Result := 0;
+  If Text = '' Then Exit;
+  StartAt := 1;
+  I := 1;
+  While I <= Length(Text) Do
+    Begin
+      If (Text[I] = #13) Or (Text[I] = #10) Then
+        Begin
+          Inc(Result);
+          If (Text[I] = #13) And (I < Length(Text)) And (Text[I + 1] = #10) Then Inc(I);
+          StartAt := I + 1;
+        End;
+      Inc(I);
+    End;
+  If StartAt <= Length(Text) Then Inc(Result);
+End;
+
 { 1-based inclusive span of the change, matching MCPApprovalSummary's line split. Empty when the texts are identical. }
 Function ChangedLineSpan(Const OldText, NewText: String): String;
 Var
@@ -844,6 +872,41 @@ Begin
       Exit;
     End;
   Result := True;
+End;
+
+Function TAssistantToolBroker.AppliedChangeReply(SetItem: TAssistantChangeSet): String;
+Var
+  Data: TJSONData;
+  Root, Entry: TJSONObject;
+  Files: TJSONData;
+  I: Integer;
+  Canonical, Text, ErrorText, Revision: String;
+Begin
+  Result := SetItem.Receipt;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(Result);
+    Except
+      Data := Nil;
+    End;
+    If Not (Data Is TJSONObject) Then Exit;
+    Root := TJSONObject(Data);
+    Files := Root.Find('files');
+    If Not (Files Is TJSONArray) Then Exit;
+    For I := 0 To TJSONArray(Files).Count - 1 Do
+      Begin
+        If (I > High(SetItem.Items)) Or Not (TJSONArray(Files).Items[I] Is TJSONObject) Then Continue;
+        Entry := TJSONObject(TJSONArray(Files).Items[I]);
+        If Not FAdapter.ReadBuffer(SetItem.Items[I].Path, Canonical, Text, ErrorText) Then Continue;
+        Revision := Remember(Canonical, Text);
+        If Revision <> '' Then Entry.Add('revision', Revision);
+        Entry.Add('lines', ChangedLineSpan(SetItem.Items[I].BeforeText, Text));
+      End;
+    Result := Root.AsJSON;
+  Finally
+    Data.Free;
+  End;
 End;
 
 Function TAssistantToolBroker.SnapshotRevision(Const Path: String): String;
@@ -971,8 +1034,8 @@ Begin
         ErrorText := 'Buffer was edited but its normalized text exceeds the snapshot budget.';
         Exit;
       End;
-    ResultText := '{"bufferUpdated":true,"saved":false,"revision":' + Quoted(Revision) +
-      ',"text":' + Quoted(ActualText) + '}';
+    ResultText := '{"saved":false,"revision":' + Quoted(Revision) + ',"lines":' +
+      Quoted(ChangedLineSpan(Text, ActualText)) + '}';
     Result := True;
   Except
     On E: Exception Do
@@ -1250,13 +1313,23 @@ Begin
         End;
       If (Tool = 'lazarus_read_buffer') Or (Tool = 'lazarus_open_buffer') Then
         Begin
+          Node := Args.Find('include_text');
+          If Assigned(Node) And (Node.JSONType <> jtBoolean) Then
+            Begin
+              ErrorText := 'include_text must be a boolean.';
+              Exit;
+            End;
           Revision := Remember(Path, Text);
           If Revision = '' Then
             Begin
               ErrorText := 'Snapshot budget exhausted.';
               Exit;
             End;
-          ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}';
+          If Not Assigned(Node) Or Node.AsBoolean Then
+            ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) + ',"text":' + Quoted(Text) + '}'
+          Else
+            ResultText := '{"path":' + Quoted(Path) + ',"revision":' + Quoted(Revision) +
+              ',"line_count":' + IntToStr(BufferLineCount(Text)) + '}';
           Exit(True);
         End;
       If (Not Semantic) And
@@ -1401,6 +1474,7 @@ End;
 Function TAssistantToolBroker.ToolsJson: String;
 Const
   ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
+  BufferSchema = '{"type":"object","properties":{"path":{"type":"string"},"include_text":{"type":"boolean"}},"required":["path"],"additionalProperties":false}';
   FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
   ReplaceSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"old_text":{"type":"string"},' +
@@ -1417,11 +1491,15 @@ Begin
   WriteNote := '';
   If FWriteScope = awsMarkdown Then WriteNote := ' Only .md, .markdown and .mdown files are writable.';
   Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project or package and relevant open buffer.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text including unsaved changes and get a revision token.","inputSchema":' + ReadSchema + '}';
+    '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text, including unsaved changes, and get a revision token. ' +
+    'Returns the text unless include_text is false, which returns only the path, revision and line_count.","inputSchema":' + BufferSchema + '}';
   If FAdapter.CanInspectFiles Then Result := Result +
     ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
-    '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
-    '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. Return current text and an edit revision; does not create or save files.","inputSchema":' + ReadSchema + '}';
+    '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Returns the requested text. ' +
+    'Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
+    '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. ' +
+    'Returns the text and an edit revision unless include_text is false, which returns only the path, revision and line_count. Does not create or save files.","inputSchema":' +
+    BufferSchema + '}';
   If FAdapter.CanFindDeclaration Then Result := Result +
     ',{"type":"function","name":"lazarus_find_declaration","description":"Resolve a Pascal identifier using Lazarus CodeTools and the selected target configuration. First read/open the source buffer and supply its revision. Coordinates are 1-based lines and UTF-8 byte columns, including tabs as one byte. Returns a declaration location without moving the editor, changing files or issuing an edit revision for the target.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}}';
   If FAdapter.CanInspectSymbols Then Result := Result +
@@ -1432,16 +1510,21 @@ Begin
       Result := Result + ',{"type":"function","name":"lazarus_prepare_changes","description":"Prepare one reviewed change set for 1-16 already open project text buffers. Read each buffer first and supply its revision and complete proposed text. Does not edit or save; returns a one-use change_set_id. Replaces the previous pending set. No project/designer metadata edits or inferred rename coverage.","inputSchema":{"type":"object","properties":{"changes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}},' +
         '{"type":"function","name":"lazarus_change_status","description":"Get an in-memory change-set receipt with per-file apply/recovery outcomes. Without an ID, lists receipts for this project. Receipts survive new chats/runs until the assistant panel closes; they are not durable.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"additionalProperties":false}}';
       If FWriteScope = awsProject Then Result := Result +
-        ',{"type":"function","name":"lazarus_apply_changes","description":"Review and apply an exact prepared multi-editor change set in Build. Validates every source and editor stamp before each write. On failure restores only confirmed unchanged assistant edits; returns explicit per-file outcomes. No saves or builds. Read buffers again for fresh edit/save revisions.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}},' +
+        ',{"type":"function","name":"lazarus_apply_changes","description":"Review and apply an exact prepared multi-editor change set in Build. ' +
+        'Validates every source and editor stamp before each write. On failure restores only confirmed unchanged assistant edits and returns per-file outcomes. ' +
+        'On success returns each file''s new revision and changed line range, not the buffer text. Does not save or build.",' +
+        '"inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}},' +
         '{"type":"function","name":"lazarus_revert_changes","description":"Review and restore confirmed edits from a retained change-set receipt in Build. Skips changed, closed or unverified editors; returns partial outcomes instead of overwriting user edits. Does not save. Native Undo remains per editor.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}}';
     End;
   If FAdapter.CanPreviewRename Then
     Begin
       Result := Result + ',{"type":"function","name":"lazarus_preview_local_rename","description":"Preview a routine-local variable or constant rename using CodeTools. Requires a current buffer revision; coordinates are 1-based UTF-8 bytes. Returns exact changes and a one-use preview_id without editing. Supports one editor only; rejects parameters, globals, fields, includes/macros/assembly, conditionals inside the routine and names in active code. Ignores comments, strings and unrelated inactive branches. Preview is valid only in this run; no partial renames.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"new_name":{"type":"string"}},"required":["path","revision","line","column","new_name"],"additionalProperties":false}}';
-      If FWriteScope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. Consumes preview_id, preserves editor Undo and returns a fresh buffer revision. Does not save or compile; never supply replacement text.","inputSchema":{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"],"additionalProperties":false}}';
+      If FWriteScope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. ' +
+        'Consumes preview_id, preserves editor Undo and returns the new revision and changed line range, not the buffer text. Does not save or compile; never supply replacement text.","inputSchema":{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"],"additionalProperties":false}}';
     End;
   If FWriteScope <> awsReadOnly Then Result := Result +
-    ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
+    ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save. ' +
+    'Returns the new revision and changed line range, not the buffer text.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
     '{"type":"function","name":"lazarus_replace_in_buffer","description":"Replace exact old_text in a previously read buffer ' +
     'at its revision, preserving Undo. Does not save. Changes nothing when old_text is missing, or when it matches more ' +
     'than once unless replace_all is true. Returns the new revision and changed line range, not the buffer text.' +

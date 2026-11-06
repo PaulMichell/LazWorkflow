@@ -25,13 +25,18 @@ Type
     Reads: Integer;
     ReadThread: TThreadID;
     StoredText: String;
-    ReplaceCount: Integer;
+    ReplaceCount, SaveCount, EditorStamp: Integer;
+    AllowInspect, AllowChanges: Boolean;
     ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
+    Function CanInspectFiles: Boolean; Override;
+    Function CanChangeSets: Boolean; Override;
+    Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
+    Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
 
@@ -78,8 +83,32 @@ Begin
       Exit;
     End;
   StoredText := NewText;
+  Inc(EditorStamp);
   ErrorText := '';
   Result := True;
+End;
+
+Function TMemoryWorkspace.CanInspectFiles: Boolean;
+Begin
+  Result := AllowInspect;
+End;
+
+Function TMemoryWorkspace.CanChangeSets: Boolean;
+Begin
+  Result := AllowChanges;
+End;
+
+Function TMemoryWorkspace.OpenBuffer(Const Path: String; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Result := AllowInspect;
+End;
+
+Function TMemoryWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
+Begin
+  Stamp := '';
+  Result := ReadBuffer(Path, CanonicalPath, Text, ErrorText);
+  If Result Then Stamp := 'stamp:' + IntToStr(EditorStamp);
 End;
 
 Function TMemoryWorkspace.ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
@@ -93,8 +122,15 @@ End;
 
 Function TMemoryWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
 Begin
-  ErrorText := 'Read-only test workspace.';
-  Result := False;
+  Inc(SaveCount);
+  If ExpectedText <> StoredText Then
+    Begin
+      ErrorText := 'Buffer text did not match.';
+      Result := False;
+      Exit;
+    End;
+  ErrorText := '';
+  Result := True;
 End;
 
 Function TMemoryWorkspace.Describe: String;
@@ -271,6 +307,41 @@ Begin
   End;
 End;
 
+Function JsonPath(Const Json, Path: String): String;
+Var
+  Data, Node: TJSONData;
+Begin
+  Result := '';
+  Try
+    Data := GetJSON(Json);
+  Except
+    Exit;
+  End;
+  Try
+    Node := Data.FindPath(Path);
+    If Assigned(Node) Then Result := Node.AsString;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ObjectArguments(Const Path, Revision, TextName, TextValue: String; IncludeFlag, Flag: Boolean;
+  Const FlagName: String): String;
+Var
+  Obj: TJSONObject;
+Begin
+  Obj := TJSONObject.Create;
+  Try
+    If Path <> '' Then Obj.Add('path', Path);
+    If Revision <> '' Then Obj.Add('revision', Revision);
+    If TextName <> '' Then Obj.Add(TextName, TextValue);
+    If IncludeFlag Then Obj.Add(FlagName, Flag);
+    Result := Obj.AsJSON;
+  Finally
+    Obj.Free;
+  End;
+End;
+
 Function JsonField(Const Json, Name: String): String;
 Var
   Data: TJSONData;
@@ -401,6 +472,94 @@ Begin
   Workspace.StoredText := BufferText;
 End;
 
+Procedure CheckNoEcho;
+Const
+  Secret = 'SecretTokenValue';
+  Edited = 'EditedTokenValue';
+Var
+  Before, After, Revision, ResultText, ErrorText, PrepareArgs, ApplyArgs: String;
+  Saves: Integer;
+  Root, Change, Apply: TJSONObject;
+  Changes: TJSONArray;
+  Data, Node: TJSONData;
+Begin
+  Before := 'keep' + LineEnding + Secret + LineEnding + 'tail';
+  After := 'keep' + LineEnding + Edited + LineEnding + 'tail';
+  Workspace.StoredText := Before;
+  Workspace.EditorStamp := 1;
+  Workspace.AllowInspect := True;
+  Workspace.AllowChanges := True;
+  Workspace.SaveCount := 0;
+  Bridge.BeginRun(ctsProject);
+  Check('read_buffer still returns text by default',
+    Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText) And
+    (Pos(Secret, ResultText) > 0));
+  Revision := JsonField(ResultText, 'revision');
+  Saves := Workspace.SaveCount;
+  Check('replace_buffer applies', Broker.Execute(Bridge.RunId, 'lazarus_replace_buffer',
+    ObjectArguments('Main.pas', Revision, 'text', After, False, False, ''), ResultText, ErrorText));
+  Check('replace_buffer reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
+    (Pos(Before, ResultText) = 0) And (Pos(After, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
+  Check('replace_buffer names the changed lines', JsonField(ResultText, 'lines') = '2-2');
+  Revision := JsonField(ResultText, 'revision');
+  Check('save accepts the replace_buffer revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'lazarus_save_buffer',
+    ObjectArguments('Main.pas', Revision, '', '', False, False, ''), ResultText, ErrorText) And (Workspace.SaveCount = Saves + 1));
+
+  Workspace.StoredText := Before;
+  Workspace.EditorStamp := 1;
+  Bridge.BeginRun(ctsProject);
+  Revision := ReadRevision('Main.pas');
+  Root := TJSONObject.Create;
+  Changes := TJSONArray.Create;
+  Change := TJSONObject.Create;
+  Root.Add('changes', Changes);
+  Changes.Add(Change);
+  Change.Add('path', 'Main.pas');
+  Change.Add('revision', Revision);
+  Change.Add('text', After);
+  PrepareArgs := Root.AsJSON;
+  Root.Free;
+  Check('prepare the change set', Broker.Execute(Bridge.RunId, 'lazarus_prepare_changes', PrepareArgs, ResultText, ErrorText));
+  Apply := TJSONObject.Create;
+  Try
+    Apply.Add('change_set_id', JsonPath(ResultText, 'change_set_id'));
+    ApplyArgs := Apply.AsJSON;
+  Finally
+    Apply.Free;
+  End;
+  Saves := Workspace.SaveCount;
+  Check('apply_changes applies', Broker.Execute(Bridge.RunId, 'lazarus_apply_changes', ApplyArgs, ResultText, ErrorText));
+  Check('apply_changes reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
+    (Pos(Before, ResultText) = 0) And (Pos(After, ResultText) = 0));
+  Check('apply_changes names the changed lines', JsonPath(ResultText, 'files[0].lines') = '2-2');
+  Revision := JsonPath(ResultText, 'files[0].revision');
+  Check('save accepts the apply_changes revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'lazarus_save_buffer',
+    ObjectArguments('Main.pas', Revision, '', '', False, False, ''), ResultText, ErrorText) And (Workspace.SaveCount = Saves + 1));
+
+  Workspace.StoredText := Before;
+  Bridge.BeginRun(ctsProject);
+  Check('open_buffer can omit the text', Broker.Execute(Bridge.RunId, 'lazarus_open_buffer',
+    ObjectArguments('Main.pas', '', '', '', True, False, 'include_text'), ResultText, ErrorText));
+  Check('open_buffer reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
+  Revision := JsonField(ResultText, 'revision');
+  Data := Nil;
+  Try
+    Data := GetJSON(ResultText);
+    Node := Data.FindPath('line_count');
+    Check('open_buffer reports the line count', Assigned(Node) And (Node.AsInteger = 3));
+  Finally
+    Data.Free;
+  End;
+  Check('replace_in_buffer accepts the open_buffer revision', (Revision <> '') And
+    Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, Secret, Edited, False, False), ResultText, ErrorText) And
+    (Workspace.StoredText = After));
+
+  Workspace.AllowInspect := False;
+  Workspace.AllowChanges := False;
+  Workspace.StoredText := BufferText;
+End;
+
 Procedure CheckDirectCall;
 Var
   ResultText, ErrorText: String;
@@ -481,6 +640,7 @@ Begin
     CheckScopes;
     CheckSummaries;
     CheckReplaceInBuffer;
+    CheckNoEcho;
     CheckCall;
     CheckDirectCall;
     CheckCancel;
