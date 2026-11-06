@@ -3,7 +3,11 @@ Unit AssistantToolBroker;
 { Backend-neutral, IDE-thread tool broker. Owns run identity and model-visible
   revisions. The adapter resolves project paths and uses the actual IDE buffers.
   This initial registry exposes bounded buffer operations; execution and build
-  operations must not be smuggled through a generic unvalidated tool fallback. (c) 2026 Michell Computing. }
+  operations must not be smuggled through a generic unvalidated tool fallback.
+
+  Size note: exceeds the 1000 line preference. Run identity, approval and
+  dispatch are one registry; a new tool is an entry, not a new unit.
+  Reviewed 2026-11-06. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -53,6 +57,7 @@ Type
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanGit: Boolean; Virtual;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -312,6 +317,13 @@ Function TAssistantWorkspaceAdapter.RunGit(Const Arguments: String; Out ResultTe
 Begin
   ResultText := '';
   ErrorText := 'Git is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Partial staging is unavailable.';
   Result := False;
 End;
 
@@ -1274,6 +1286,34 @@ Begin
                 End;
           Exit;
         End;
+      If Tool = 'lazarus_stage_patch' Then
+        Begin
+          If FWriteScope <> awsProject Then
+            Begin
+              ErrorText := 'Partial staging requires Build mode.';
+              Exit;
+            End;
+          If Not FAdapter.CanGit Then
+            Begin
+              ErrorText := 'Partial staging is unavailable.';
+              Exit;
+            End;
+          Node := Args.Find('patch');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              ErrorText := 'A unified diff is required.';
+              Exit;
+            End;
+          Text := Node.AsString;
+          If (Length(Text) > MaxBufferBytes) Or (Pos(#0, Text) > 0) Then
+            Begin
+              ErrorText := 'Patch must contain at most 1 MiB of text without NUL bytes.';
+              Exit;
+            End;
+          If Not Approve(RunId, Tool, '', '', Text, ErrorText) Then Exit;
+          Result := FAdapter.StagePatch(Text, ResultText, ErrorText);
+          Exit;
+        End;
       If Tool = 'lazarus_run_git' Then
         Begin
           If Not FAdapter.CanGit Or (FWriteScope = awsNone) Or (FWriteScope = awsMarkdown) Then
@@ -1629,6 +1669,9 @@ Begin
   If ((FWriteScope = awsProject) Or (FWriteScope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
     ',"inputSchema":' + AssistantGitSchema + '}';
+  If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
+    ',{"type":"function","name":"lazarus_stage_patch","description":' + Quoted(AssistantStagePatchDescription) +
+    ',"inputSchema":' + AssistantStagePatchSchema + '}';
   Result := Result + ']';
 End;
 End.

@@ -203,7 +203,10 @@ Begin
         'Do not enable it to run a script. A one-off execution uses run_command: one program and its arguments, no shell, and no new script. ' +
         'Python is not an assistant dependency. A saved repeatable cross-platform test is an InstantFPC program in the repository Tests/ directory, ' +
         'not under Source/. Invoke it with instantfpc through run_command. delete_path and rename_path stay inside the project root.' + LineEnding +
-        'Use run_git for repository inspection, explicit staging and commits. Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
+        'Use run_git for repository inspection, explicit staging and commits. ' +
+        'When a file has other uncommitted edits, stage only this item''s hunks with stage_patch and a unified diff; do not stage the whole file. ' +
+        'Commit that index with commit -m and no paths. Do not pass the partially staged file after --, because that records the working tree. ' +
+        'Save authorized edits first; inspect status and staged diff, and exclude unrelated changes.' + LineEnding +
         'When the user instructs you in a conversation or active plan to commit changes automatically, carry out those commits after completing and validating the requested work. Do not ask again for already-authorized commits; tool approval settings still apply. Report the commit hash only after Git confirms success.' + LineEnding +
         'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
         'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +

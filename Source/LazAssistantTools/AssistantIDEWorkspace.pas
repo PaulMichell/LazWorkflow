@@ -56,6 +56,7 @@ Type
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function CanGit: Boolean; Override;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
@@ -107,6 +108,19 @@ End;
 Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   Result := ToolRunGit(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Args: TJSONObject;
+Begin
+  Args := TJSONObject.Create;
+  Try
+    Args.Add('patch', Patch);
+    Result := ToolStagePatch(Args.AsJSON, ResultText, ErrorText);
+  Finally
+    Args.Free;
+  End;
 End;
 
 Function TAssistantIDEWorkspace.CanWriteMarkdown: Boolean;

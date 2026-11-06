@@ -3,8 +3,8 @@ Unit AssistantTools;
 { Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. Tool schemas, sandbox checks, and
-  dispatch are one IDE tool surface. Reviewed 2026-10-17: symbol queries stay in
-  this catalog and call QueryAssistantSymbol. The CodeTools work is not copied here. }
+  dispatch are one IDE tool surface. Reviewed 2026-11-06: stage_patch stays in
+  this catalog and calls StageAssistantGitPatch. The Git process is not copied here. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -45,6 +45,7 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
   Out ErrorText: String): Boolean;
 { Shared, bounded read helpers; these never dispatch arbitrary native tools. }
 Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolStagePatch(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -407,7 +408,7 @@ Begin
     (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
     (Name = 'write_file') Or (Name = 'replace_in_file') Or
     (Name = 'write_markdown') Or (Name = 'update_markdown') Or
-    (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or
+    (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or (Name = 'stage_patch') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'set_active_plan') Or (Name = 'read_file') Or
@@ -460,7 +461,7 @@ Begin
     End;
   { Build-mode source tools — never Inspect or Plan. }
   If (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'run_compile') Or
+    (Name = 'run_compile') Or (Name = 'stage_patch') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'add_unit_to_project') Or
@@ -869,7 +870,9 @@ Begin
         Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
           BuildSymbolToolsJson + ',' + BuildSourceToolsJson + ',' + BuildRunToolsJson +
           ',{"type":"function","function":{"name":"run_git","description":' +
-          '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
+          '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}},' +
+          '{"type":"function","function":{"name":"stage_patch","description":' +
+          '"' + JsonEscapeText(AssistantStagePatchDescription) + '"' + ',"parameters":' + AssistantStagePatchSchema + '}}';
         { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
         If OfferWriteImage And AssistantTurnOffersImageOutput(amBuild) Then
           Body := Body + ',' + BuildWriteImageToolJson;
@@ -1113,6 +1116,76 @@ Begin
       Result := RunAssistantGit(Root, ArgumentsJson, ResultText, ErrorText);
     Except On E: Exception Do ErrorText := E.Message; End;
   Finally Data.Free; End;
+End;
+
+Function ToolStagePatch(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Data, Node: TJSONData;
+  Patch, Root, FullPath: String;
+  Paths: TStringList;
+  I: Integer;
+  Editor: TSourceEditorInterface;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Root := ProjectRootPath;
+  If Not AssistantTarget.Available Or (Root = '') Then
+    Begin
+      ErrorText := 'No available Assistant work target.';
+      Exit;
+    End;
+  Data := Nil;
+  Paths := Nil;
+  Try
+    Try
+      Data := GetJSON(ArgumentsJson);
+      If Not (Data Is TJSONObject) Then
+        Begin
+          ErrorText := 'stage_patch arguments must be a JSON object.';
+          Exit;
+        End;
+      Node := TJSONObject(Data).Find('patch');
+      If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+        Begin
+          ErrorText := 'A unified diff is required.';
+          Exit;
+        End;
+      Patch := Node.AsString;
+      If Not QuietSaveTargetForGit(ErrorText) Then Exit;
+      If Assigned(SourceEditorManagerIntf) Then
+        For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+          Begin
+            Editor := SourceEditorManagerIntf.SourceEditors[I];
+            If Assigned(Editor) And (Editor.Modified Or Editor.ModifiedDesign) And
+              ((Editor.FileName = '') Or IsPathUnderRoot(Root, Editor.FileName)) And
+              ((AssistantTarget.Kind = atkProject) Or AssistantTarget.ContainsFile(Editor.FileName)) Then
+              Begin
+                ErrorText := 'Save ' + Editor.FileName +
+                  ' before staging or committing. Git reads the saved file, and this editor still has unsaved changes.';
+                Exit;
+              End;
+          End;
+      Paths := TStringList.Create;
+      If Not AssistantGitPatchPaths(Patch, Paths, ErrorText) Then Exit;
+      For I := 0 To Paths.Count - 1 Do
+        Begin
+          FullPath := ExpandFileName(IncludeTrailingPathDelimiter(Root) +
+            StringReplace(Paths[I], '/', PathDelim, [rfReplaceAll]));
+          If Not AssistantTarget.AllowsWrite(FullPath) Then
+            Begin
+              ErrorText := AssistantTarget.ScopeRefusal('stage', Paths[I]);
+              Exit;
+            End;
+        End;
+      Result := StageAssistantGitPatch(Root, Patch, ResultText, ErrorText);
+    Except
+      On E: Exception Do ErrorText := 'stage_patch failed: ' + E.Message;
+    End;
+  Finally
+    Paths.Free;
+    Data.Free;
+  End;
 End;
 
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -4674,6 +4747,8 @@ Begin
     Result := ToolReplaceInFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_git' Then
     Result := ToolRunGit(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'stage_patch' Then
+    Result := ToolStagePatch(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_compile' Then
     Result := ToolRunCompile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_project' Then

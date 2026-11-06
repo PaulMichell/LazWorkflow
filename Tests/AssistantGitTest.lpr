@@ -1,7 +1,8 @@
 Program AssistantGitTest;
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, Process, fpjson, jsonparser,
-  AssistantGit, AssistantPlan, AssistantToolBroker, AssistantWorkTarget, AssistantIDEWorkspace, AssistantConversation;
+  AssistantGit, AssistantPlan, AssistantToolBroker, AssistantWorkTarget, AssistantIDEWorkspace, AssistantConversation,
+  AssistantTools;
 Type
   TWorkspace = Class(TAssistantWorkspaceAdapter)
     Root: String; Calls: Integer;
@@ -12,6 +13,7 @@ Type
     Function Describe: String; Override;
     Function CanGit: Boolean; Override;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
   End;
   TApproval = Class
     Allow: Boolean;
@@ -25,6 +27,8 @@ Function TWorkspace.Describe: String; Begin Result := '{}'; End;
 Function TWorkspace.CanGit: Boolean; Begin Result := True; End;
 Function TWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin Inc(Calls); Result := RunAssistantGit(Root, Arguments, ResultText, ErrorText); End;
+Function TWorkspace.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
+Begin Inc(Calls); Result := StageAssistantGitPatch(Root, Patch, ResultText, ErrorText); End;
 Function TApproval.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
 Begin Result := Allow; End;
 Procedure Check(Const Name: String; OK: Boolean);
@@ -43,7 +47,7 @@ Const
   { How a Claude turn sets a Status line: the Lazarus update_markdown, with no live window in a console test. }
   BrokerCompletion = '{"path":"Documents/Plan.md","old_text":"Status: not started","new_text":"Status: complete","open":false}';
 Var W: TWorkspace; B: TAssistantToolBroker; A: TApproval; G: TGuid;
-  Run, Reply, Err, Note, PlanPath, Resolved, SelectErr, Before: String;
+  Run, Reply, Err, Note, PlanPath, Resolved, SelectErr, Before, Patch, Saved: String;
   Lines: TStringList; Data: TJSONData; ReplaceCount, CallsBefore: Integer; Hook: TProcess;
   IDEWorkspace: TAssistantIDEWorkspace; IDEBroker: TAssistantToolBroker;
 
@@ -52,6 +56,56 @@ Var PlanLines: TStringList;
 Begin
   PlanLines := TStringList.Create;
   Try PlanLines.LoadFromFile(PlanPath); Result := PlanLines.Text; Finally PlanLines.Free; End;
+End;
+
+Function PatchCall(Const PatchText: String): String;
+Var Obj: TJSONObject;
+Begin
+  Obj := TJSONObject.Create;
+  Try Obj.Add('patch', PatchText); Result := Obj.AsJSON; Finally Obj.Free; End;
+End;
+
+Function HunkPatch(Const FileName: String): String;
+Begin
+  Result := 'diff --git "a/' + FileName + '" "b/' + FileName + '"' + LineEnding +
+    '--- "a/' + FileName + '"' + LineEnding +
+    '+++ "b/' + FileName + '"' + LineEnding +
+    '@@ -1,5 +1,5 @@' + LineEnding +
+    ' one' + LineEnding +
+    ' two' + LineEnding +
+    '-three' + LineEnding +
+    '+ALPHA' + LineEnding +
+    ' four' + LineEnding +
+    ' five' + LineEnding;
+End;
+
+Procedure SaveRaw(Const Path, Text: String);
+Var Stream: TFileStream;
+Begin
+  Stream := TFileStream.Create(Path, fmCreate);
+  Try If Text <> '' Then Stream.WriteBuffer(Text[1], Length(Text)); Finally Stream.Free; End;
+End;
+
+Function LoadRaw(Const Path: String): String;
+Var Stream: TFileStream;
+Begin
+  Stream := TFileStream.Create(Path, fmOpenRead);
+  Try
+    SetLength(Result, Stream.Size);
+    If Stream.Size > 0 Then Stream.ReadBuffer(Result[1], Stream.Size);
+  Finally Stream.Free; End;
+End;
+
+Function Joined(Const Parts: Array Of String): String;
+Var I: Integer;
+Begin
+  Result := '';
+  For I := 0 To High(Parts) Do
+    Begin
+      If Result <> '' Then Result := Result + LineEnding;
+      Result := Result + Parts[I];
+    End;
+  Result := Result + LineEnding;
 End;
 
 Begin
@@ -81,21 +135,36 @@ Begin
     Check('description allows inspect reads',
       Pos('Inspect may use status, diff, log, show, rev-parse, and ls-files only.', AssistantGitDescription) > 0);
     Check('description is not build-only', Pos('in Build mode', AssistantGitDescription) = 0);
+    Check('stage_patch is Build only', ToolAllowedInMode('stage_patch', amBuild) And
+      Not ToolAllowedInMode('stage_patch', amInspect) And Not ToolAllowedInMode('stage_patch', amPlan) And
+      Not ToolAllowedInMode('stage_patch', amDocument) And Not ToolAllowedInMode('stage_patch', amChat));
+    Check('Build lists stage_patch', Pos('"name":"stage_patch"', BuildAssistantToolsJsonForMode(amBuild)) > 0);
+    Check('Inspect does not list stage_patch', Pos('"name":"stage_patch"', BuildAssistantToolsJsonForMode(amInspect)) = 0);
+    Check('partial staging needs Ask approval', Pos('approval mode Ask', AssistantStagePatchDescription) > 0);
     Run := B.BeginRun(awsReadOnly);
     Check('Ask advertises read Git', Pos('lazarus_run_git', B.ToolsJson) > 0);
+    Check('Ask hides partial staging', Pos('lazarus_stage_patch', B.ToolsJson) = 0);
+    Check('Ask rejects partial staging', Not B.Execute(Run, 'lazarus_stage_patch', '{"patch":"diff --git a/x b/x"}', Reply, Err) And
+      (Pos('Build mode', Err) > 0));
     Check('Ask status works', B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err));
     Check('Ask rejects commit', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","x"]}', Reply, Err) And
       (Pos('ls-files only', Err) > 0));
     Check('Ask rejects push', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["push"]}', Reply, Err));
     Run := B.BeginRun(awsMarkdown);
     Check('Plan hides Git', Pos('lazarus_run_git', B.ToolsJson) = 0);
+    Check('Plan hides partial staging', Pos('lazarus_stage_patch', B.ToolsJson) = 0);
+    Check('Plan rejects partial staging', Not B.Execute(Run, 'lazarus_stage_patch', '{"patch":"diff --git a/x b/x"}', Reply, Err));
     Check('Plan rejects commit', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","x"]}', Reply, Err));
     Run := B.BeginRun(awsProject);
     Data := GetJSON(B.ToolsJson); Data.Free;
     Check('Build advertises Git', Pos('lazarus_run_git', B.ToolsJson) > 0);
+    Check('Build advertises partial staging', Pos('"lazarus_stage_patch"', B.ToolsJson) > 0);
     B.OnApproval := @A.Approve;
     CallsBefore := W.Calls;
     Check('denied approval never invokes Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err) And
+      (W.Calls = CallsBefore));
+    CallsBefore := W.Calls;
+    Check('denied approval never stages a patch', Not B.Execute(Run, 'lazarus_stage_patch', '{"patch":"diff --git a/x b/x"}', Reply, Err) And
       (W.Calls = CallsBefore));
     B.OnApproval := Nil;
     Check('status works', B.Execute(Run, 'lazarus_run_git', '{"arguments":["status","--short"]}', Reply, Err));
@@ -265,11 +334,13 @@ Begin
       IDEWorkspace.ToolMode := amInspect;
       Run := IDEBroker.BeginRun(awsReadOnly);
       Check('Inspect offers no Lazarus Markdown writes', Pos('lazarus_update_markdown', IDEBroker.ToolsJson) = 0);
+      Check('Inspect hides partial staging', Pos('lazarus_stage_patch', IDEBroker.ToolsJson) = 0);
       Check('Inspect refuses a Lazarus Markdown write', Not IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err));
       IDEWorkspace.ToolMode := amBuild;
       Run := IDEBroker.BeginRun(awsProject);
       Check('Build offers the Lazarus Markdown writes', (Pos('"lazarus_write_markdown"', IDEBroker.ToolsJson) > 0) And
         (Pos('"lazarus_update_markdown"', IDEBroker.ToolsJson) > 0));
+      Check('Build offers partial staging through the IDE', Pos('"lazarus_stage_patch"', IDEBroker.ToolsJson) > 0);
       Data := GetJSON(IDEBroker.ToolsJson); Data.Free;
       Check('a Lazarus Markdown write only writes Markdown', Not IDEBroker.Execute(Run, 'lazarus_update_markdown',
         '{"path":"work.txt","old_text":"finished","new_text":"changed","open":false}', Reply, Err) And (Pos('Markdown', Err) > 0));
@@ -307,10 +378,109 @@ Begin
         '"new_text":"Generated by Lazarus Project Assistant.\n\nA note from Plan mode.","open":false}', Reply, Err) And
         (Pos('A note from Plan mode.', PlanText) > 0));
       Check('Plan cannot commit, so it cannot complete an item either', Pos('lazarus_run_git', IDEBroker.ToolsJson) = 0);
+      Check('Plan hides partial staging through the IDE', Pos('lazarus_stage_patch', IDEBroker.ToolsJson) = 0);
+      IDEWorkspace.ToolMode := amBuild;
+      Run := IDEBroker.BeginRun(awsProject);
+      Saved := Joined(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']);
+      Before := Joined(['one', 'two', 'ALPHA', 'four', 'five', 'six', 'seven', 'eight', 'BETA', 'ten']);
+      SaveRaw(W.Root + '/ide hunk.txt', Saved);
+      Check('IDE commits the partial-stage base',
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","ide hunk.txt"]}', Reply, Err) And
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","Add the IDE hunk base","--","ide hunk.txt"]}', Reply, Err));
+      SaveRaw(W.Root + '/ide hunk.txt', Before);
+      Patch := 'diff --git "a/ide hunk.txt" "b/ide hunk.txt"' + LineEnding +
+        '--- "a/ide hunk.txt"' + LineEnding + '+++ "b/ide hunk.txt"' + LineEnding +
+        '@@ -1,3 +1,3 @@' + LineEnding + ' this line is not in the file' + LineEnding +
+        '-missing' + LineEnding + '+still missing' + LineEnding + ' also missing' + LineEnding;
+      Check('IDE refuses a patch that does not apply', Not IDEBroker.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+        (Pos('index is unchanged', Err) > 0));
+      Check('IDE bad patch leaves the index unchanged', IDEBroker.Execute(Run, 'lazarus_run_git',
+        '{"arguments":["diff","--cached","--name-only"]}', Reply, Err) And (Pos('ide hunk.txt', Reply) = 0));
+      Check('IDE bad patch leaves the work tree unchanged', LoadRaw(W.Root + '/ide hunk.txt') = Before);
+      Check('IDE stages one hunk', IDEBroker.Execute(Run, 'lazarus_stage_patch', PatchCall(HunkPatch('ide hunk.txt')), Reply, Err) And
+        (Pos('ide hunk.txt', Reply) > 0));
+      Check('IDE staging leaves the other hunk in the work tree', LoadRaw(W.Root + '/ide hunk.txt') = Before);
+      Check('IDE staged diff has only the first hunk', IDEBroker.Execute(Run, 'lazarus_run_git',
+        '{"arguments":["diff","--cached","--","ide hunk.txt"]}', Reply, Err) And (Pos('ALPHA', Reply) > 0) And (Pos('BETA', Reply) = 0));
+      Check('IDE leaves the other hunk unstaged', IDEBroker.Execute(Run, 'lazarus_run_git',
+        '{"arguments":["diff","--","ide hunk.txt"]}', Reply, Err) And (Pos('BETA', Reply) > 0) And (Pos('ALPHA', Reply) = 0));
+      Check('IDE commit contains only the staged hunk',
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["commit","-m","Stage the IDE hunk"]}', Reply, Err) And
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["show","-1","--format=","--","ide hunk.txt"]}', Reply, Err) And
+        (Pos('ALPHA', Reply) > 0) And (Pos('BETA', Reply) = 0) And
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["log","-1","--name-only","--format="]}', Reply, Err) And
+        (Pos('ide hunk.txt', Reply) > 0) And (Pos('Documents/Plan.md', Reply) = 0));
+      Patch := 'diff --git a/../outside.txt b/../outside.txt' + LineEnding +
+        '--- a/../outside.txt' + LineEnding + '+++ b/../outside.txt' + LineEnding +
+        '@@ -0,0 +1 @@' + LineEnding + '+no' + LineEnding;
+      Check('IDE refuses a path outside the repository', Not IDEBroker.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+        (Pos('outside the target', Err) > 0));
     Finally
       IDEBroker.Free;
       IDEWorkspace.Free;
     End;
+    Run := B.BeginRun(awsProject);
+    Saved := Joined(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']);
+    Before := Joined(['one', 'two', 'ALPHA', 'four', 'five', 'six', 'seven', 'eight', 'BETA', 'ten']);
+    SaveRaw(W.Root + '/hunk file.txt', Saved);
+    Check('commit the two-hunk base', RunAssistantGit(W.Root, '{"arguments":["add","--","hunk file.txt"]}', Reply, Err) And
+      RunAssistantGit(W.Root, '{"arguments":["commit","-m","Add the two-hunk base","--","hunk file.txt"]}', Reply, Err));
+    SaveRaw(W.Root + '/hunk file.txt', Before);
+    Check('cached diff before a bad patch', RunAssistantGit(W.Root, '{"arguments":["diff","--cached"]}', Saved, Err));
+    Patch := 'diff --git "a/hunk file.txt" "b/hunk file.txt"' + LineEnding +
+      '--- "a/hunk file.txt"' + LineEnding + '+++ "b/hunk file.txt"' + LineEnding +
+      '@@ -1,3 +1,3 @@' + LineEnding + ' this line is not in the file' + LineEnding +
+      '-missing' + LineEnding + '+still missing' + LineEnding + ' also missing' + LineEnding;
+    Check('a patch that does not apply is refused', Not B.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+      (Pos('index is unchanged', Err) > 0));
+    Check('a bad patch leaves the index unchanged', RunAssistantGit(W.Root, '{"arguments":["diff","--cached"]}', Reply, Err) And (Reply = Saved));
+    Check('a bad patch leaves the work tree unchanged', LoadRaw(W.Root + '/hunk file.txt') = Before);
+    Check('stage one hunk', B.Execute(Run, 'lazarus_stage_patch', PatchCall(HunkPatch('hunk file.txt')), Reply, Err) And
+      (Pos('hunk file.txt', Reply) > 0));
+    Check('staging one hunk leaves the other in the work tree', LoadRaw(W.Root + '/hunk file.txt') = Before);
+    Check('staged diff has only the first hunk', RunAssistantGit(W.Root, '{"arguments":["diff","--cached","--","hunk file.txt"]}', Reply, Err) And
+      (Pos('ALPHA', Reply) > 0) And (Pos('BETA', Reply) = 0) And (Pos('three', Reply) > 0));
+    Check('the other hunk stays unstaged', RunAssistantGit(W.Root, '{"arguments":["diff","--","hunk file.txt"]}', Reply, Err) And
+      (Pos('BETA', Reply) > 0) And (Pos('ALPHA', Reply) = 0));
+    Check('commit contains only the staged hunk', RunAssistantGit(W.Root,
+      '{"arguments":["commit","-m","Stage one hunk"]}', Reply, Err) And
+      RunAssistantGit(W.Root, '{"arguments":["show","-1","--format=","--","hunk file.txt"]}', Reply, Err) And
+      (Pos('ALPHA', Reply) > 0) And (Pos('BETA', Reply) = 0) And
+      RunAssistantGit(W.Root, '{"arguments":["log","-1","--name-only","--format="]}', Reply, Err) And
+      (Pos('hunk file.txt', Reply) > 0) And (Pos('Documents/Plan.md', Reply) = 0));
+    Check('the unstaged hunk remains after the commit', RunAssistantGit(W.Root, '{"arguments":["diff","--","hunk file.txt"]}', Reply, Err) And
+      (Pos('BETA', Reply) > 0) And (Pos('ALPHA', Reply) = 0));
+    Check('the work tree still has both edits', LoadRaw(W.Root + '/hunk file.txt') = Before);
+    Patch := 'diff --git a/../outside.txt b/../outside.txt' + LineEnding +
+      '--- a/../outside.txt' + LineEnding + '+++ b/../outside.txt' + LineEnding +
+      '@@ -0,0 +1 @@' + LineEnding + '+no' + LineEnding;
+    Check('a patch outside the repository is refused', Not B.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+      (Pos('outside the target', Err) > 0));
+    Patch := 'diff --git "a/\056\056/outside.txt" "b/\056\056/outside.txt"' + LineEnding +
+      '--- "a/\056\056/outside.txt"' + LineEnding + '+++ "b/\056\056/outside.txt"' + LineEnding +
+      '@@ -0,0 +1 @@' + LineEnding + '+no' + LineEnding;
+    Check('a quoted traversal path is refused', Not B.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+      (Pos('..', Err) > 0));
+    Patch := 'diff --git a/.git/config b/.git/config' + LineEnding +
+      '--- a/.git/config' + LineEnding + '+++ b/.git/config' + LineEnding +
+      '@@ -1 +1 @@' + LineEnding + '-x' + LineEnding + '+y' + LineEnding;
+    Check('a patch under .git is refused', Not B.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+      (Pos('under .git', Err) > 0));
+    Hook := TProcess.Create(Nil);
+    Try
+      Hook.Executable := 'ln'; Hook.Parameters.Add('-s'); Hook.Parameters.Add('/tmp'); Hook.Parameters.Add(W.Root + '/escape-link');
+      Hook.Options := [poWaitOnExit, poNoConsole]; Hook.Execute;
+      Check('the escape symlink exists', Hook.ExitCode = 0);
+    Finally Hook.Free; End;
+    Patch := 'diff --git a/escape-link/pwned-assistant-stage.txt b/escape-link/pwned-assistant-stage.txt' + LineEnding +
+      '--- a/escape-link/pwned-assistant-stage.txt' + LineEnding +
+      '+++ b/escape-link/pwned-assistant-stage.txt' + LineEnding +
+      '@@ -0,0 +1 @@' + LineEnding + '+pwned' + LineEnding;
+    Check('a symlink that leaves the repository is refused', Not B.Execute(Run, 'lazarus_stage_patch', PatchCall(Patch), Reply, Err) And
+      (Pos('outside the target', Err) > 0));
+    Check('refusals did not stage a path', RunAssistantGit(W.Root, '{"arguments":["diff","--cached","--name-only"]}', Reply, Err) And
+      (Pos('outside', Reply) = 0) And (Pos('.git/config', Reply) = 0) And (Pos('escape-link', Reply) = 0) And
+      (Pos('hunk file.txt', Reply) = 0));
     B.Cancel;
     Check('cancelled run rejects Git', Not B.Execute(Run, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err));
     WriteLn('Temporary test repository: ', W.Root);

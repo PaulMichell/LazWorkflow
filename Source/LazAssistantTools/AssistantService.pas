@@ -694,6 +694,8 @@ Begin
         '- `run_project` — start the built executable directly. No shell and no debugger.' + LineEnding +
         '- `run_tests` — run the enabled test command for this target. Arguments are not passed through a shell. ' +
         'Do not enable it to run a script.' + LineEnding +
+        '- `stage_patch` — stage a unified diff into the index only. Use it when the same file has other uncommitted edits. ' +
+        'Commit that index with commit -m and no paths.' + LineEnding +
         '- `run_command` — one-off program and arguments. No shell. Python and shells are refused. ' +
         'A saved repeatable cross-platform test is an InstantFPC program in Tests/, not under Source/. ' +
         'Invoke it as instantfpc plus the script path. Do not write a script for a one-off.' + LineEnding +
