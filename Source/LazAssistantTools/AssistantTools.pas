@@ -47,6 +47,7 @@ Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: Stri
 Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
@@ -640,7 +641,7 @@ Begin
   Result :=
     '{"type":"function","function":{' +
       '"name":"search_in_project",' +
-      '"description":"Search project source/text files (same engine as grep). ' +
+      '"description":"Search project source/text files (same engine as grep). Unsaved editor buffers are preferred over disk. ' +
         'Inspect and Build may call it. Returns path:line:text.",' +
       '"parameters":{"type":"object","properties":{' +
         '"query":{"type":"string","description":"Text to find"},' +
@@ -2688,20 +2689,57 @@ Begin
   End;
 End;
 
+Function SearchLimit(Const ArgumentsJson: String; Out MaxResults: Integer; Out ErrorText: String): Boolean;
+Var
+  Data, Node: TJSONData;
+Begin
+  Result := False;
+  ErrorText := '';
+  MaxResults := JsonArgInt(ArgumentsJson, 'max_matches', AssistantToolMaxSearchMatches);
+  If MaxResults < 1 Then
+    MaxResults := AssistantToolMaxSearchMatches;
+  If MaxResults > 200 Then
+    MaxResults := 200;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(ArgumentsJson);
+    Except
+      ErrorText := 'max_results must be an integer from 1 to 200.';
+      Exit;
+    End;
+    If Data Is TJSONObject Then
+      Begin
+        Node := TJSONObject(Data).Find('max_results');
+        If Assigned(Node) Then
+          Begin
+            If (Node.JSONType <> jtNumber) Or (Node.AsInteger < 1) Or (Node.AsInteger > 200) Then
+              Begin
+                ErrorText := 'max_results must be an integer from 1 to 200.';
+                Exit;
+              End;
+            MaxResults := Node.AsInteger;
+          End;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Query, Path, Resolved, Glob, Rel, LineText, LowerQuery: String;
-  MaxMatches, MatchCount, FileCount, WalkCount, LineNo, I: Integer;
+  Query, Path, Resolved, Glob, Rel: String;
+  MaxMatches, MatchCount, FileCount, WalkCount, I: Integer;
   Files: TStringList;
   SL: TStringList;
-  WalkComplete, UseRegex, Hit, Stopped, SingleFile: Boolean;
-  Re: TRegExpr;
+  WalkComplete, UseRegex, FilesOnly, Stopped, SingleFile, Capped: Boolean;
+  Editor: TSourceEditorInterface;
   Deadline: QWord;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
-  Re := Nil;
   Query := JsonArgString(ArgumentsJson, 'query');
   If Trim(Query) = '' Then
     Query := JsonArgString(ArgumentsJson, 'pattern');
@@ -2710,34 +2748,17 @@ Begin
       ErrorText := 'grep/search_in_project requires pattern or query.';
       Exit;
     End;
+  If Not SearchLimit(ArgumentsJson, MaxMatches, ErrorText) Then
+    Exit;
+  UseRegex := JsonArgBool(ArgumentsJson, 'regex', False);
+  ErrorText := SearchPatternError(Query, UseRegex);
+  If ErrorText <> '' Then
+    Exit;
   Path := JsonArgString(ArgumentsJson, 'path');
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
   Glob := Trim(JsonArgString(ArgumentsJson, 'glob'));
-  MaxMatches := JsonArgInt(ArgumentsJson, 'max_matches', AssistantToolMaxSearchMatches);
-  If MaxMatches < 1 Then
-    MaxMatches := AssistantToolMaxSearchMatches;
-  If MaxMatches > 200 Then
-    MaxMatches := 200;
-  UseRegex := JsonArgBool(ArgumentsJson, 'regex', False);
-  If (Not UseRegex) And PatternLooksLikeRegex(Query) Then
-    UseRegex := True;
-  LowerQuery := LowerCase(Query);
-  If UseRegex Then
-    Begin
-      Re := TRegExpr.Create;
-      Try
-        Re.ModifierI := True;
-        Re.Expression := Query;
-      Except
-        On E: Exception Do
-          Begin
-            ErrorText := 'Invalid regular expression: ' + E.Message;
-            FreeAndNil(Re);
-            Exit;
-          End;
-      End;
-    End;
+  FilesOnly := JsonArgBool(ArgumentsJson, 'files_only', False);
   Files := TStringList.Create;
   SL := TStringList.Create;
   Deadline := GetTickCount64 + AssistantToolMaxSearchMs;
@@ -2763,8 +2784,18 @@ Begin
       End
     Else
       Begin
-        ErrorText := 'Path not found: ' + Resolved;
-        Exit;
+        Editor := FindOpenEditor(Resolved);
+        If Assigned(Editor) Then
+          Begin
+            Files.Add(Resolved);
+            FileCount := 1;
+            ResultText := Format('Search for "%s" in %s', [Query, Resolved]) + LineEnding;
+          End
+        Else
+          Begin
+            ErrorText := 'Path not found: ' + Resolved;
+            Exit;
+          End;
       End;
     MatchCount := 0;
     If Not WalkComplete Then
@@ -2772,6 +2803,18 @@ Begin
     If FileCount >= AssistantToolMaxSearchFiles Then
       ResultText := ResultText + Format('[… stopped after listing %d text files …]',
         [AssistantToolMaxSearchFiles]) + LineEnding;
+    { A buffer that has never been saved is not in the directory walk. Search it too. }
+    If DirectoryExistsUTF8(Resolved) And Assigned(SourceEditorManagerIntf) Then
+      For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+        Begin
+          Editor := SourceEditorManagerIntf.SourceEditors[I];
+          If Not Assigned(Editor) Or (Editor.FileName = '') Or Not FileMatchesSearchGlob(Editor.FileName, Glob) Then
+            Continue;
+          If Not IsPathUnderRoot(Resolved, Editor.FileName) Then
+            Continue;
+          If Files.IndexOf(Editor.FileName) < 0 Then
+            Files.Add(Editor.FileName);
+        End;
     For I := 0 To Files.Count - 1 Do
       Begin
         If ToolsShouldStop Or (GetTickCount64 >= Deadline) Then
@@ -2779,39 +2822,33 @@ Begin
             Stopped := True;
             Break;
           End;
-        If FileSizeUTF8(Files[I]) > AssistantToolMaxSearchFileBytes Then
-          Continue;
-        Try
-          SL.LoadFromFile(Files[I]);
-        Except
-          Continue;
-        End;
+        Editor := FindOpenEditor(Files[I]);
+        If Assigned(Editor) Then
+          Begin
+            If Length(Editor.SourceText) > AssistantToolMaxSearchFileBytes Then
+              Continue;
+            SL.Text := Editor.SourceText;
+          End
+        Else
+          Begin
+            If FileSizeUTF8(Files[I]) > AssistantToolMaxSearchFileBytes Then
+              Continue;
+            Try
+              SL.LoadFromFile(Files[I]);
+            Except
+              Continue;
+            End;
+          End;
         Rel := ProjectRelativePath(Files[I]);
         If Rel = '' Then
           Rel := Files[I];
-        For LineNo := 0 To SL.Count - 1 Do
+        If Not MatchSearchLines(Query, Rel, SL, UseRegex, FilesOnly, MaxMatches, AssistantToolMaxSearchLineChars,
+          MatchCount, ResultText, Capped, ErrorText) Then
+            Exit;
+        If Capped Then
           Begin
-            LineText := SL[LineNo];
-            If Assigned(Re) Then
-              Begin
-                If Length(LineText) > AssistantToolMaxSearchLineChars Then
-                  Continue;
-                Hit := Re.Exec(LineText);
-              End
-            Else
-              Hit := Pos(LowerQuery, LowerCase(LineText)) > 0;
-            If Hit Then
-              Begin
-                Inc(MatchCount);
-                ResultText := ResultText + Format('%s:%d: %s',
-                  [Rel, LineNo + 1, Trim(LineText)]) + LineEnding;
-                If MatchCount >= MaxMatches Then
-                  Begin
-                    ResultText := ResultText + Format('[… capped at %d matches …]', [MaxMatches]);
-                    Result := True;
-                    Exit;
-                  End;
-              End;
+            Result := True;
+            Exit;
           End;
       End;
     If Stopped Then
@@ -2822,7 +2859,6 @@ Begin
   Finally
     SL.Free;
     Files.Free;
-    FreeAndNil(Re);
   End;
 End;
 

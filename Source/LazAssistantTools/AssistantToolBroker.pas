@@ -29,6 +29,7 @@ Type
     Function CanChangeSets: Boolean; Virtual;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Virtual;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Virtual;
     Function CanCreateFiles: Boolean; Virtual;
@@ -177,6 +178,13 @@ Function TAssistantWorkspaceAdapter.ReadFile(Const Arguments: String; Out Result
 Begin
   ResultText := '';
   ErrorText := 'File inspection unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Project search is unavailable.';
   Result := False;
 End;
 
@@ -1265,6 +1273,38 @@ Begin
           ResultText := FAdapter.Describe;
           Exit(True);
         End;
+      If Tool = 'lazarus_search_in_project' Then
+        Begin
+          If Not FAdapter.CanInspectFiles Then
+            Begin
+              ErrorText := 'Project file inspection unavailable.';
+              Exit;
+            End;
+          Node := Args.Find('query');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              Node := Args.Find('pattern');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+                Begin
+                  ErrorText := 'search_in_project requires query or pattern.';
+                  Exit;
+                End;
+            End;
+          Node := Args.Find('max_results');
+          If Not Assigned(Node) Or (Node.JSONType <> jtNumber) Or (Node.AsInteger < 1) Or (Node.AsInteger > 200) Then
+            Begin
+              ErrorText := 'max_results must be an integer from 1 to 200.';
+              Exit;
+            End;
+          Node := Args.Find('files_only');
+          If Assigned(Node) And (Node.JSONType <> jtBoolean) Then
+            Begin
+              ErrorText := 'files_only must be a boolean.';
+              Exit;
+            End;
+          Result := FAdapter.SearchInProject(Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
         (Tool = 'lazarus_open_buffer') Then
           Begin
@@ -1475,6 +1515,9 @@ Function TAssistantToolBroker.ToolsJson: String;
 Const
   ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
   BufferSchema = '{"type":"object","properties":{"path":{"type":"string"},"include_text":{"type":"boolean"}},"required":["path"],"additionalProperties":false}';
+  SearchSchema = '{"type":"object","properties":{"query":{"type":"string"},"pattern":{"type":"string"},"path":{"type":"string"},' +
+    '"glob":{"type":"string"},"regex":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":200},' +
+    '"files_only":{"type":"boolean"}},"required":["query","max_results"],"additionalProperties":false}';
   FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
   ReplaceSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"old_text":{"type":"string"},' +
@@ -1497,6 +1540,9 @@ Begin
     ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
     '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Returns the requested text. ' +
     'Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
+    '{"type":"function","name":"lazarus_search_in_project","description":"Search project text with the same rules as search_in_project. ' +
+    'Unsaved editor buffers are preferred over disk. Returns path:line:text unless files_only is true, which returns paths only. ' +
+    'Does not return file text beyond the matching line. max_results is required, from 1 to 200.","inputSchema":' + SearchSchema + '},' +
     '{"type":"function","name":"lazarus_open_buffer","description":"Open an existing project text file in a background editor tab, or reuse its unsaved buffer. ' +
     'Returns the text and an edit revision unless include_text is false, which returns only the path, revision and line_count. Does not create or save files.","inputSchema":' +
     BufferSchema + '}';

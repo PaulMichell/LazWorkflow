@@ -34,6 +34,7 @@ Type
     Function CanChangeSets: Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ReadFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ListDirectory(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
     Function CanCreateFiles: Boolean; Override;
@@ -295,6 +296,11 @@ Begin
   Finally
     Data.Free;
   End;
+End;
+
+Function TAssistantIDEWorkspace.SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolSearchInProject(Arguments, ResultText, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.ListDirectory(Const Arguments: String;

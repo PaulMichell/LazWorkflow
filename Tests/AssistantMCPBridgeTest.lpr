@@ -12,7 +12,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener,
-  AssistantMCPBridge;
+  AssistantMCPBridge, AssistantSearchUtil;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -24,7 +24,7 @@ Type
   Public
     Reads: Integer;
     ReadThread: TThreadID;
-    StoredText: String;
+    StoredText, DiskText, OpenPath: String;
     ReplaceCount, SaveCount, EditorStamp: Integer;
     AllowInspect, AllowChanges: Boolean;
     ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
@@ -36,6 +36,7 @@ Type
     Function CanInspectFiles: Boolean; Override;
     Function CanChangeSets: Boolean; Override;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
+    Function SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
@@ -102,6 +103,47 @@ Function TMemoryWorkspace.OpenBuffer(Const Path: String; Out ErrorText: String):
 Begin
   ErrorText := '';
   Result := AllowInspect;
+End;
+
+Function TMemoryWorkspace.SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Data: TJSONData;
+  Query, Path, Body, Rel: String;
+  MaxResults: Integer;
+  FilesOnly: Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Data := GetJSON(Arguments);
+  Try
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'Expected object arguments.';
+        Exit;
+      End;
+    Query := TJSONObject(Data).Get('query', '');
+    If Query = '' Then
+      Query := TJSONObject(Data).Get('pattern', '');
+    Path := TJSONObject(Data).Get('path', '');
+    MaxResults := TJSONObject(Data).Get('max_results', 0);
+    FilesOnly := False;
+    If Assigned(TJSONObject(Data).Find('files_only')) And (TJSONObject(Data).Find('files_only').JSONType = jtBoolean) Then
+      FilesOnly := TJSONObject(Data).Find('files_only').AsBoolean;
+  Finally
+    Data.Free;
+  End;
+  If (Path = '') Or (Path = OpenPath) Then
+    Begin
+      Body := StoredText;
+      Rel := OpenPath;
+    End
+  Else
+    Begin
+      Body := DiskText;
+      Rel := Path;
+    End;
+  Result := SearchTextMatches(Query, Rel, Body, FilesOnly, MaxResults, ResultText, ErrorText);
 End;
 
 Function TMemoryWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
@@ -560,6 +602,61 @@ Begin
   Workspace.StoredText := BufferText;
 End;
 
+Procedure CheckSearch;
+Const
+  Unsaved = 'OnlyUnsavedToken';
+  Disk = 'OnlyDiskToken';
+Var
+  ResultText, ErrorText: String;
+  Obj: TJSONObject;
+Begin
+  Workspace.AllowInspect := True;
+  Workspace.OpenPath := 'Main.pas';
+  Workspace.DiskText := 'alpha' + LineEnding + Disk + LineEnding + 'omega';
+  Workspace.StoredText := Unsaved + '-one' + LineEnding + Unsaved + '-two' + LineEnding + Unsaved + '-three';
+  Bridge.BeginRun(ctsRead);
+  Check('a read run lists search_in_project', Pos('"lazarus_search_in_project"', Bridge.ToolsJSON) > 0);
+  Obj := TJSONObject.Create;
+  Try
+    Obj.Add('query', Unsaved);
+    Obj.Add('path', 'Main.pas');
+    Obj.Add('max_results', 1);
+    Check('an unsaved buffer match is found', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project', Obj.AsJSON,
+      ResultText, ErrorText) And (Pos(Unsaved + '-one', ResultText) > 0) And (Pos(Disk, ResultText) = 0));
+    Check('max_results caps the output', (Pos(Unsaved + '-two', ResultText) = 0) And (Pos('capped at 1', ResultText) > 0));
+    Obj.Free;
+    Obj := Nil;
+    Obj := TJSONObject.Create;
+    Obj.Add('query', Unsaved);
+    Obj.Add('path', 'Main.pas');
+    Obj.Add('max_results', 5);
+    Obj.Add('files_only', True);
+    Check('files_only returns the path without the line', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project',
+      Obj.AsJSON, ResultText, ErrorText) And (Pos('Main.pas', ResultText) > 0) And (Pos(Unsaved, ResultText) = 0));
+    Obj.Free;
+    Obj := Nil;
+    Obj := TJSONObject.Create;
+    Obj.Add('query', Disk);
+    Obj.Add('path', 'Other.pas');
+    Obj.Add('max_results', 5);
+    Check('a different path searches the disk stand-in', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project',
+      Obj.AsJSON, ResultText, ErrorText) And (Pos(Disk, ResultText) > 0) And (Pos(Unsaved, ResultText) = 0));
+    Obj.Free;
+    Obj := Nil;
+    Obj := TJSONObject.Create;
+    Obj.Add('query', Unsaved);
+    Obj.Add('path', 'Main.pas');
+    Check('max_results is required', Not Broker.Execute(Bridge.RunId, 'lazarus_search_in_project', Obj.AsJSON,
+      ResultText, ErrorText) And (Pos('max_results', ErrorText) > 0));
+  Finally
+    Obj.Free;
+  End;
+  Workspace.AllowInspect := False;
+  Workspace.StoredText := BufferText;
+  Workspace.DiskText := '';
+  Workspace.OpenPath := '';
+End;
+
 Procedure CheckDirectCall;
 Var
   ResultText, ErrorText: String;
@@ -641,6 +738,7 @@ Begin
     CheckSummaries;
     CheckReplaceInBuffer;
     CheckNoEcho;
+    CheckSearch;
     CheckCall;
     CheckDirectCall;
     CheckCancel;
