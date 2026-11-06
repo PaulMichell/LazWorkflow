@@ -442,6 +442,9 @@ Begin
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
+  { Turn pages, plan slices and images are queued here with no later Notify, so they would wait for the link's next poll. }
+  If Result Then
+    Wake;
 End;
 
 Procedure TMonitorOutbox.Notify;
