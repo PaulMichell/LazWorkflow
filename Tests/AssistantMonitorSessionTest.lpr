@@ -640,6 +640,15 @@ Begin
   Session.RememberHandedPatch(Cursor, Json);
 End;
 
+{ A real patch payload with one answer block of BodyBytes copies of Fill. The log replays only what decodes as a patch. }
+Function LargePatchJson(Const Epoch: String; Cursor: Int64; Fill: Char; BodyBytes: Integer): String;
+Begin
+  Result := '{"epoch":"' + Epoch + '","cursor":' + IntToStr(Cursor) + ',"turn_index":1,"turn_id":"turn-1","part":1,' +
+    '"part_count":1,"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
+    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
+    '"tool_id":"","body":"' + StringOfChar(Fill, BodyBytes) + '","running":false,"ok":true,"duration_ms":0}]}';
+End;
+
 Procedure TestResumeRing;
 Var
   Catchup: TMonitorCatchup;
@@ -649,8 +658,9 @@ Var
   Big: String;
 Begin
   Session.BeginMirrorEpoch('Ab12Cd34', 'current', '/work/LazWorkflow', 'Current');
+  { Since 6d0b0f2 'current' is not an identity. The unsaved chat has no conversation id. }
   Check('closed copy before patches', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'ab12cd34') And
-    (Closed.Cursor = 0) And (Closed.ConversationId = 'current') And (Closed.Title = 'Current'));
+    (Closed.Cursor = 0) And (Closed.ConversationId = '') And (Closed.Title = 'Current'));
   HandPatch('ab12cd34', 'one', Cursor);
   HandPatch('ab12cd34', 'two', Cursor);
   HandPatch('ab12cd34', 'three', Cursor);
@@ -675,7 +685,7 @@ Begin
   Check('closed identity is the new epoch', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'eeff0011') And
     (Closed.ConversationId = 'conversation-20261019T120000000') And (Closed.Title = 'Archived') And (Closed.Cursor = 0));
   HandPatch('eeff0011', 'kept', Cursor);
-  Big := StringOfChar('z', MonitorRingJsonCap + 1);
+  Big := LargePatchJson('eeff0011', 2, 'z', MonitorRingJsonCap + 1);
   Check('oversized commit', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
   Session.NoteMirrorHanded(2);
   Session.RememberHandedPatch(2, Big);
@@ -689,18 +699,12 @@ Begin
     (Catchup.Patches[0].Cursor = 1) And (Catchup.Patches[High(Catchup.Patches)].Cursor = MonitorRingCapacity + 1));
   Session.BeginMirrorEpoch('55667788', 'current', '/work/LazWorkflow', 'Bytes');
   HandPatch('55667788', 'small', Cursor);
-  Big := '{"epoch":"55667788","cursor":2,"turn_index":1,"turn_id":"turn-1","part":1,"part_count":1,' +
-    '"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
-    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
-    '"tool_id":"","body":"' + StringOfChar('q', 1200000) + '","running":false,"ok":true,"duration_ms":0}]}';
+  Big := LargePatchJson('55667788', 2, 'q', 1200000);
   Check('large patch is under the ring cap', (Length(Big) > 1000000) And (Length(Big) < MonitorRingJsonCap));
   Check('large commit', Session.CommitMirrorCursor('large-a', Cursor) And (Cursor = 2));
   Session.NoteMirrorHanded(2);
   Session.RememberHandedPatch(2, Big);
-  Big := '{"epoch":"55667788","cursor":3,"turn_index":1,"turn_id":"turn-1","part":1,"part_count":1,' +
-    '"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
-    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
-    '"tool_id":"","body":"' + StringOfChar('r', 1200000) + '","running":false,"ok":true,"duration_ms":0}]}';
+  Big := LargePatchJson('55667788', 3, 'r', 1200000);
   Check('second large commit', Session.CommitMirrorCursor('large-b', Cursor) And (Cursor = 3));
   Session.NoteMirrorHanded(3);
   Session.RememberHandedPatch(3, Big);
@@ -731,7 +735,7 @@ Begin
     Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
   Check('oversized handed patch', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
   Session.NoteMirrorHanded(2);
-  Session.RememberHandedPatch(2, StringOfChar('z', MonitorRingJsonCap + 1));
+  Session.RememberHandedPatch(2, LargePatchJson('ab12cd34', 2, 'z', MonitorRingJsonCap + 1));
   Check('a patch under the log budget does not need a form snapshot',
     Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
   Check('a hole still needs one form snapshot', Session.CommitMirrorCursor('hole', Cursor) And (Cursor = 3));
@@ -1176,7 +1180,8 @@ Begin
     Check('resume setup is busy', Session.State = mssBusy);
     Carrier.ClearSent;
     Carrier.DeliverJson(EncodeMonitorResume('resume-busy', '', 0));
-    Check('busy resume is queued', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkResume)));
+    { Since eefac54 the session answers every resume from the mirror. The form never receives one. }
+    Check('busy resume is answered by the session, not the form', Sink.Calls = 0);
     Check('busy resume is not host_busy', (Carrier.SentCount = 0) Or
       (Not (DecodeLast(Message) And (Message.Kind = mmkError) And DecodeMonitorError(Message.PayloadJson, ErrorBody) And
       (ErrorBody.Reason = MonitorHostBusyReason))));
