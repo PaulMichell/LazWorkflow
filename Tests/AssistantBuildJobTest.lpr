@@ -9,8 +9,9 @@ Begin
   Stream := TFileStream.Create(Path, fmCreate);
   Try If Text <> '' Then Stream.WriteBuffer(Text[1], Length(Text)); Finally Stream.Free; End;
 End;
-Var Job: IAssistantBuildJob; Value: TBuildJobSnapshot; Inputs: TBuildInputs;
-  Path, Note, ID: String; Deadline, Started: QWord; Data: TJSONData; Diagnostics: TJSONArray; Truncated: Boolean; I: Integer;
+Var Job: IAssistantBuildJob; Value: TBuildJobSnapshot; Inputs, FolderInputs: TBuildInputs;
+  Path, Note, ID, Folder, Outside, EmptyDir: String; Deadline, Started: QWord; Data: TJSONData; Diagnostics: TJSONArray;
+  Truncated: Boolean; I: Integer; Packages: TStringList;
 Procedure WaitDone;
 Begin
   Deadline := GetTickCount64 + 3000;
@@ -88,6 +89,51 @@ Begin
     Check('input deduplication retains one snapshot', AddBuildInput(Inputs, Path, Note) And (Length(Inputs) = 1));
     Job := StartAssistantBuild('/no/such/compiler', Path, 'good', Inputs); WaitDone;
     Check('missing compiler fails without killing host', Value.ErrorText <> '');
+    Folder := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-folder-' + IntToStr(GetProcessID);
+    Outside := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-outside-' + IntToStr(GetProcessID);
+    EmptyDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-empty-' + IntToStr(GetProcessID);
+    ForceDirectories(Folder); ForceDirectories(Outside); ForceDirectories(EmptyDir);
+    Packages := TStringList.Create;
+    Try
+      WriteFile(IncludeTrailingPathDelimiter(Folder) + 'A.lpk', 'package a');
+      WriteFile(IncludeTrailingPathDelimiter(Folder) + 'B.lpk', 'package b');
+      WriteFile(IncludeTrailingPathDelimiter(Outside) + 'Z.lpk', 'package z');
+      WriteFile(IncludeTrailingPathDelimiter(EmptyDir) + 'Only.lpi', 'project');
+      Check('folder resolves both packages', ResolveFolderPackages(Folder, '', Packages, Note) And (Packages.Count = 2)
+        And (Pos('A.lpk', Packages[0]) > 0) And (Pos('B.lpk', Packages[1]) > 0));
+      FolderInputs := Nil;
+      Job := StartAssistantFolderBuild(ParamStr(0), Folder, Packages, FolderInputs); WaitDone;
+      Data := GetJSON(AssistantBuildStatusJSON(Value, False));
+      Try
+        Check('folder build reports both packages', (Data.FindPath('items').Count = 2)
+          And (Pos('A.lpk', Data.FindPath('items[0].path').AsString) > 0)
+          And (Pos('B.lpk', Data.FindPath('items[1].path').AsString) > 0)
+          And (Data.FindPath('items[0].outcome').AsString = 'compile_passed')
+          And (Data.FindPath('items[1].outcome').AsString = 'compile_passed'));
+        Check('both packages were passed to the compiler', (Pos('A.lpk', Value.Command) > 0) And (Pos('B.lpk', Value.Command) > 0));
+      Finally Data.Free; End;
+      Check('package selects one', ResolveFolderPackages(Folder, 'A.lpk', Packages, Note) And (Packages.Count = 1)
+        And (Pos('A.lpk', Packages[0]) > 0));
+      Job := StartAssistantFolderBuild(ParamStr(0), Folder, Packages, FolderInputs); WaitDone;
+      Data := GetJSON(AssistantBuildStatusJSON(Value, False));
+      Try
+        Check('package builds one', (Data.FindPath('items').Count = 1)
+          And (Pos('A.lpk', Data.FindPath('items[0].path').AsString) > 0) And (Pos('B.lpk', Value.Command) = 0));
+      Finally Data.Free; End;
+      Check('a path outside the target is refused', Not ResolveFolderPackages(Folder, IncludeTrailingPathDelimiter(Outside) + 'Z.lpk', Packages, Note)
+        And (Pos('outside', Note) > 0) And (Pos('not a regular file', Note) = 0));
+      Check('a folder with no package is a clear error', Not ResolveFolderPackages(EmptyDir, '', Packages, Note)
+        And (Pos('No Lazarus package', Note) > 0) And (Pos('not a regular file', Note) = 0));
+    Finally
+      Packages.Free;
+      DeleteFile(IncludeTrailingPathDelimiter(Folder) + 'A.lpk');
+      DeleteFile(IncludeTrailingPathDelimiter(Folder) + 'B.lpk');
+      RemoveDir(ExcludeTrailingPathDelimiter(Folder));
+      DeleteFile(IncludeTrailingPathDelimiter(Outside) + 'Z.lpk');
+      RemoveDir(ExcludeTrailingPathDelimiter(Outside));
+      DeleteFile(IncludeTrailingPathDelimiter(EmptyDir) + 'Only.lpi');
+      RemoveDir(ExcludeTrailingPathDelimiter(EmptyDir));
+    End;
     DeleteFile(Path); fpMkFifo(PChar(Path), &600);
     Check('special input is rejected without blocking', Not ReadBuildInput(Path, Note, ID));
   Finally Job := Nil; DeleteFile(Path); End;

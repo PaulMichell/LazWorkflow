@@ -22,7 +22,8 @@ Type
   TBuildJobSnapshot = Record
     Done, Cancelled, InputsUnchanged, OutputTruncated, ProcessStarted: Boolean;
     ExitCode: Integer;
-    OutputText, ErrorText, Manifest, JobId, Command, Kind, ParentJobId, ExecutableFingerprint, ReportFormat, ReportJSON: String;
+    OutputText, ErrorText, Manifest, JobId, Command, Kind, ParentJobId, ExecutableFingerprint, ReportFormat, ReportJSON,
+    PackageResults: String;
     MinimumTests: Integer;
   End;
   IAssistantBuildJob = Interface
@@ -40,12 +41,19 @@ Function StartAssistantTest(Const Executable, Directory, BuildId: String; Argume
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''; Const ReportFormat: String = 'exit-code'; MinimumTests: Integer = 1): IAssistantBuildJob;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000; Const IDEProfile: String = ''; Const WidgetSet: String = ''): IAssistantBuildJob;
+{ Packages under Folder, using the same collection as run_compile. PackagePath, when set, must be one of those
+  packages. A folder with no package is an error, not a missing-file error. }
+Function ResolveFolderPackages(Const Folder, PackagePath: String; Packages: TStrings; Out ErrorText: String): Boolean;
+Function StartAssistantFolderBuild(Const Executable, Folder: String; Packages: TStrings; Const Inputs: TBuildInputs;
+  TimeoutMs: Cardinal = 600000; Const IDEProfile: String = ''; Const WidgetSet: String = ''): IAssistantBuildJob;
 
 Implementation
 
 Uses
   Process, Pipes, sha1, AssistantProtocol, AssistantBuildDiagnostics, AssistantTestReport, fpjson, jsonparser,
-  ProcessSession, LazFileUtils, SafeFileAccess;
+  ProcessSession, LazFileUtils, SafeFileAccess, AssistantProjectPaths;
+
+Function FinishPackageResults(Const Results: String; Const Value: TBuildJobSnapshot): String; Forward;
 
 Type
   TBuildState = Class(TInterfacedObject, IAssistantBuildJob)
@@ -274,6 +282,16 @@ Begin
     If (Value.Command <> '') And (Length(Value.Command) <= 65536) Then Root.Add('command', GetJSON(Value.Command));
     Root.Add('commandTruncated', Length(Value.Command) > 65536);
     Diagnostics := ParseBuildDiagnostics(Value.OutputText, Value.JobId, Truncated);
+    If Value.PackageResults <> '' Then
+      Begin
+        Data := GetJSON(Value.PackageResults);
+        Try
+          For I := 0 To Data.Count - 1 Do
+            Diagnostics.Insert(I, Data.Items[I].Clone);
+        Finally
+          Data.Free;
+        End;
+      End;
     Root.Add('items', Diagnostics);
     Root.Add('diagnosticsTruncated', Truncated);
     Root.Add('outputTruncated', Value.OutputTruncated);
@@ -397,6 +415,8 @@ Begin
     Value.Cancelled := InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0;
     If (Value.Kind = 'test') And (Value.ReportFormat = 'fpcunit-xml') Then
       Value.ReportJSON := ParseFPCUnitReport(Value.OutputText, Value.OutputTruncated, Value.MinimumTests);
+    If Value.PackageResults <> '' Then
+      Value.PackageResults := FinishPackageResults(Value.PackageResults, Value);
     Value.Done := True;
     EnterCriticalSection(FState.Lock);
     Try
@@ -408,8 +428,119 @@ Begin
   End;
 End;
 
+Function FinishPackageResults(Const Results: String; Const Value: TBuildJobSnapshot): String;
+Var
+  Data: TJSONData;
+  I: Integer;
+  Outcome: String;
+Begin
+  Result := Results;
+  If Value.Cancelled Then
+    Outcome := 'cancelled'
+  Else If (Value.ExitCode = 0) And (Value.ErrorText = '') Then
+    Outcome := 'compile_passed'
+  Else
+    Outcome := 'compile_failed';
+  Data := GetJSON(Results);
+  Try
+    For I := 0 To Data.Count - 1 Do
+      TJSONObject(Data.Items[I]).Add('outcome', Outcome);
+    Result := Data.AsJSON;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function PackageListJSON(Packages: TStrings): String;
+Var
+  List: TJSONArray;
+  Item: TJSONObject;
+  I: Integer;
+Begin
+  List := TJSONArray.Create;
+  Try
+    For I := 0 To Packages.Count - 1 Do
+      Begin
+        Item := TJSONObject.Create;
+        Item.Add('kind', 'package');
+        Item.Add('path', Packages[I]);
+        List.Add(Item);
+      End;
+    Result := List.AsJSON;
+  Finally
+    List.Free;
+  End;
+End;
+
+Function PathIsInsideFolder(Const Folder, Candidate: String): Boolean;
+Var
+  Root, Full: String;
+Begin
+  Root := IncludeTrailingPathDelimiter(ExpandFileName(Folder));
+  Full := ExpandFileName(Candidate);
+  Result := (Full <> '') And (CompareFilenames(Copy(Full, 1, Length(Root)), Root) = 0) And
+    (CompareFilenames(ExcludeTrailingPathDelimiter(Full), ExcludeTrailingPathDelimiter(Root)) <> 0);
+End;
+
+Function ResolveFolderPackages(Const Folder, PackagePath: String; Packages: TStrings; Out ErrorText: String): Boolean;
+Var
+  All: TStringList;
+  I: Integer;
+  Root, Requested: String;
+Begin
+  Result := False;
+  ErrorText := '';
+  Packages.Clear;
+  Root := ExcludeTrailingPathDelimiter(ExpandFileName(Trim(Folder)));
+  If (Root = '') Or Not DirectoryExistsUTF8(Root) Then
+    Begin
+      ErrorText := 'Folder target was not found: ' + Folder;
+      Exit;
+    End;
+  All := TStringList.Create;
+  Try
+    CollectFolderCompileFiles(Root, All);
+    For I := All.Count - 1 DownTo 0 Do
+      If CompareText(ExtractFileExt(All[I]), '.lpk') <> 0 Then
+        All.Delete(I);
+    If All.Count = 0 Then
+      Begin
+        ErrorText := 'No Lazarus package (.lpk) found under the target folder.';
+        Exit;
+      End;
+    If Trim(PackagePath) = '' Then
+      Begin
+        Packages.AddStrings(All);
+        Exit(True);
+      End;
+    If FilenameIsAbsolute(PackagePath) Then
+      Requested := ExpandFileName(PackagePath)
+    Else
+      Requested := ExpandFileName(IncludeTrailingPathDelimiter(Root) + PackagePath);
+    If CompareText(ExtractFileExt(Requested), '.lpk') <> 0 Then
+      Begin
+        ErrorText := 'package must be a Lazarus package (.lpk) inside the target folder.';
+        Exit;
+      End;
+    If Not PathIsInsideFolder(Root, Requested) Then
+      Begin
+        ErrorText := 'package is outside the target folder: ' + PackagePath;
+        Exit;
+      End;
+    For I := 0 To All.Count - 1 Do
+      If CompareFilenames(All[I], Requested) = 0 Then
+        Begin
+          Packages.Add(All[I]);
+          Exit(True);
+        End;
+    ErrorText := 'package is not a package of this folder target: ' + PackagePath;
+  Finally
+    All.Free;
+  End;
+End;
+
 Function StartCommand(Const Executable, Directory, Kind, ParentJobId, ExpectedFingerprint, ReportFormat: String; MinimumTests: Integer; Arguments: TStrings;
-    Const Inputs: TBuildInputs; TimeoutMs: Cardinal): IAssistantBuildJob;
+    Const Inputs: TBuildInputs; TimeoutMs: Cardinal; PackagePaths: TStrings = Nil): IAssistantBuildJob;
 Var
   State: TBuildState;
   Worker: TBuildWorker;
@@ -449,13 +580,15 @@ Begin
   Worker.FreeOnTerminate := True;
   Worker.FState := State;
   Worker.FKeepAlive := Result;
-  Worker.FInitial := State.Value;
   Worker.FExecutable := Executable;
   Worker.FDirectory := Directory;
   Worker.FArguments := TStringList.Create;
   Worker.FArguments.Assign(Arguments);
   Worker.FInputs := Copy(Inputs);
   Worker.FTimeout := TimeoutMs;
+  If Assigned(PackagePaths) And (PackagePaths.Count > 0) Then
+    State.Value.PackageResults := PackageListJSON(PackagePaths);
+  Worker.FInitial := State.Value;
   Worker.Start;
 End;
 
@@ -477,6 +610,27 @@ Begin
     If BuildMode <> '' Then Arguments.Add('--build-mode=' + BuildMode);
     Arguments.Add(ProjectFile);
     Result := StartCommand(Executable, ExtractFilePath(ProjectFile), 'build', '', '', 'exit-code', 1, Arguments, Inputs, TimeoutMs);
+  Finally
+    Arguments.Free;
+  End;
+End;
+
+Function StartAssistantFolderBuild(Const Executable, Folder: String; Packages: TStrings; Const Inputs: TBuildInputs;
+  TimeoutMs: Cardinal; Const IDEProfile: String; Const WidgetSet: String): IAssistantBuildJob;
+Var
+  Arguments: TStringList;
+  I: Integer;
+Begin
+  If Not Assigned(Packages) Or (Packages.Count = 0) Then
+    Raise Exception.Create('No Lazarus package (.lpk) found under the target folder.');
+  Arguments := TStringList.Create;
+  Try
+    If IDEProfile <> '' Then Arguments.Add('--pcp=' + IDEProfile);
+    If WidgetSet <> '' Then Arguments.Add('--widgetset=' + WidgetSet);
+    For I := 0 To Packages.Count - 1 Do
+      Arguments.Add(Packages[I]);
+    Result := StartCommand(Executable, ExcludeTrailingPathDelimiter(ExpandFileName(Folder)), 'build', '', '', 'exit-code', 1,
+      Arguments, Inputs, TimeoutMs, Packages);
   Finally
     Arguments.Free;
   End;

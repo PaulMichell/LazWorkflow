@@ -54,7 +54,7 @@ Type
     Function CanGit: Boolean; Virtual;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
-    Function StartBuild(Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Procedure CancelBuild; Virtual;
   End;
@@ -320,7 +320,7 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.StartBuild(Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Build adapter unavailable.';
@@ -1222,8 +1222,19 @@ Begin
             End;
           If Tool = 'lazarus_start_build' Then
             Begin
-              If Not Approve(RunId, Tool, '', '', '', ErrorText) Then Exit;
-              Result := FAdapter.StartBuild(ResultText, ErrorText);
+              ActualPath := '';
+              Node := Args.Find('package');
+              If Assigned(Node) Then
+                Begin
+                  If (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+                    Begin
+                      ErrorText := 'package must be a project-relative .lpk path.';
+                      Exit;
+                    End;
+                  ActualPath := Node.AsString;
+                End;
+              If Not Approve(RunId, Tool, ActualPath, '', '', ErrorText) Then Exit;
+              Result := FAdapter.StartBuild(ActualPath, ResultText, ErrorText);
             End
               Else
                 Begin
@@ -1593,7 +1604,9 @@ Begin
     '"new_text":{"type":"string"},"replace_all":{"type":"boolean"},"open":{"type":"boolean"}},' +
     '"required":["old_text","new_text"],"additionalProperties":false}}';
   If (FWriteScope = awsProject) And FAdapter.CanBuild Then Result := Result +
-    ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project or package using its saved inputs. Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
+    ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project, package, or folder target using its saved inputs. ' +
+    'A folder builds each .lpk under it, in the same order as run_compile. Optional package is one project-relative .lpk inside that folder. ' +
+    'Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{"package":{"type":"string"}},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
   If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. Configure it in Settings > Target tests. Cannot supply commands or arguments. Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.","inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"}},"required":["build_job_id"],"additionalProperties":false}},' +

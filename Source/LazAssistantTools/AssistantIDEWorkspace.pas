@@ -57,7 +57,7 @@ Type
     Function CanGit: Boolean; Override;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
-    Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
+    Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Procedure CancelBuild; Override;
     Function Identity: String; Override;
@@ -624,7 +624,7 @@ Begin
   Result := FindLazbuildExecutable;
 End;
 
-Function TAssistantIDEWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Editor: TSourceEditorInterface;
   I: Integer;
@@ -664,6 +664,11 @@ Begin
       ErrorText := 'Save target and dependency settings explicitly before building.';
       Exit;
     End;
+  If (Trim(PackagePath) <> '') And (AssistantTarget.Kind <> atkFolder) Then
+    Begin
+      ErrorText := 'package applies only to a folder target.';
+      Exit;
+    End;
   ProjectFile := AssistantTarget.Manifest;
   Exe := BuildExecutable;
   If Not FileExistsUTF8(Exe) Then
@@ -672,7 +677,19 @@ Begin
       Exit;
     End;
   Inputs := Nil;
-  If Not AddBuildInput(Inputs, ProjectFile, ErrorText) Then Exit;
+  Files := TStringList.Create;
+  Try
+    If AssistantTarget.Kind = atkFolder Then
+      Begin
+        If Not ResolveFolderPackages(AssistantTarget.Root, PackagePath, Files, ErrorText) Then Exit;
+        For I := 0 To Files.Count - 1 Do
+          If Not AddBuildInput(Inputs, Files[I], ErrorText) Then Exit;
+      End
+    Else If Not AddBuildInput(Inputs, ProjectFile, ErrorText) Then
+      Exit;
+  Finally
+    Files.Free;
+  End;
   { Target members seed the CodeTools closure; dependency manifests also form
     saved evidence, without granting write access to dependency source trees. }
   Files := TStringList.Create;
@@ -737,7 +754,18 @@ Begin
           Exit;
         End;
     End;
-  If AssistantTarget.Kind = atkPackage Then
+  If AssistantTarget.Kind = atkFolder Then
+    Begin
+      Files := TStringList.Create;
+      Try
+        If Not ResolveFolderPackages(AssistantTarget.Root, PackagePath, Files, ErrorText) Then Exit;
+        Job := StartAssistantFolderBuild(Exe, AssistantTarget.Root, Files, Inputs, 600000, LazarusIDE.GetPrimaryConfigPath,
+          GetLCLWidgetTypeName);
+      Finally
+        Files.Free;
+      End;
+    End
+  Else If AssistantTarget.Kind = atkPackage Then
     Job := StartAssistantBuild(Exe, ProjectFile, '', Inputs, 600000, LazarusIDE.GetPrimaryConfigPath, GetLCLWidgetTypeName)
   Else Job := StartAssistantBuild(Exe, ProjectFile, AssistantTarget.BuildMode, Inputs);
   FBuildIdentity := Identity;
