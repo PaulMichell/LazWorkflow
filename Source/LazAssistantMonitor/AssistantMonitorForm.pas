@@ -5,7 +5,11 @@ Unit AssistantMonitorForm;
   Static layout. The listener outlives the dialog. The phone connects to the
   shown endpoint. There is no fingerprint and no pairing code on this form.
   LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
-  the layouts below are read through explicit libc and iphlpapi externals. }
+  the layouts below are read through explicit libc and iphlpapi externals.
+
+  LoadFields sets Loading while it fills the controls. Setting
+  RemoteApprovalCheck.Checked fires its OnClick, and that handler must not
+  save half-loaded fields (plan item 3.4 of Documents/Plan-20261105-130659.md). }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -53,6 +57,8 @@ Type
     Procedure ClientListClick(Sender: TObject);
   Private
     ClientIds: TStringList;
+    { True while LoadFields fills the controls. Control events do not save then. }
+    Loading: Boolean;
     Procedure LoadFields;
     Procedure FillAddressChoices;
     Function EndpointCaption: String;
@@ -382,21 +388,26 @@ Var
   Settings: TMonitorSettings;
   ErrorText, Proposed: String;
 Begin
-  If Not LoadMonitorSettings(Settings, ErrorText) Then
-    Settings := DefaultMonitorSettings;
-  PortEdit.Value := Settings.Port;
-  BindAllCheck.Checked := Settings.BindAll;
-  RemoteApprovalCheck.Checked := Settings.RemoteApproval;
-  If Settings.BindAddress <> '' Then
-    AddressEdit.Text := Settings.BindAddress
-  Else
-    Begin
-      Proposed := ProposeBindAddress;
-      AddressEdit.Text := Proposed;
-    End;
-  If ErrorText <> '' Then
-    StatusMemo.Text := ErrorText;
-  FillAddressChoices;
+  Loading := True;
+  Try
+    If Not LoadMonitorSettings(Settings, ErrorText) Then
+      Settings := DefaultMonitorSettings;
+    PortEdit.Value := Settings.Port;
+    BindAllCheck.Checked := Settings.BindAll;
+    RemoteApprovalCheck.Checked := Settings.RemoteApproval;
+    If Settings.BindAddress <> '' Then
+      AddressEdit.Text := Settings.BindAddress
+    Else
+      Begin
+        Proposed := ProposeBindAddress;
+        AddressEdit.Text := Proposed;
+      End;
+    If ErrorText <> '' Then
+      StatusMemo.Text := ErrorText;
+    FillAddressChoices;
+  Finally
+    Loading := False;
+  End;
 End;
 
 Procedure TAssistantMonitorForm.SaveFields(Listening: Boolean);
@@ -598,6 +609,9 @@ End;
 
 Procedure TAssistantMonitorForm.RemoteApprovalCheckClick(Sender: TObject);
 Begin
+  { LoadFields setting Checked fires this. The loaded value is not a user change. }
+  If Loading Then
+    Exit;
   SaveFields(ListenerRunning);
   RefreshState;
 End;
