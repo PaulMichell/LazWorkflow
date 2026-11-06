@@ -225,11 +225,42 @@ Begin
   Check('an untracked pas file is not tracked source', Not PlanRunStopsForDirtySource(True, '?? Source/New.pas'));
 End;
 
+Procedure CheckBuildStart;
+Var
+  Root, PackageFile, EmptyDir, Note: String;
+  Lines: TStringList;
+Begin
+  Check('a target with no build input refuses to start', PlanRunBuildRefusal(True, '') = PlanRunNoBuildInput);
+  Check('the refusal suggests selecting a package or project', Has(PlanRunNoBuildInput, 'Select a package or project.'));
+  Check('a missing path is no build input', PlanRunBuildRefusal(True, '/no/such/build-input') = PlanRunNoBuildInput);
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-plan-build-' + IntToStr(GetProcessID);
+  EmptyDir := Root + '-empty';
+  ForceDirectories(Root);
+  ForceDirectories(EmptyDir);
+  PackageFile := IncludeTrailingPathDelimiter(Root) + 'Target.lpk';
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := 'package';
+    Lines.SaveToFile(PackageFile);
+    Note := PlanRunBuildRefusal(True, PackageFile);
+    Check('a package target starts', Note = '');
+    Check('the build tool must be able to build', PlanRunBuildRefusal(False, PackageFile) = PlanRunCannotBuildTarget);
+    Check('a folder that holds a package starts', PlanRunBuildRefusal(True, Root) = '');
+    Check('a folder with no package refuses', PlanRunBuildRefusal(True, EmptyDir) = PlanRunFolderHasNoPackage);
+  Finally
+    Lines.Free;
+    DeleteFile(PackageFile);
+    RemoveDir(Root);
+    RemoveDir(EmptyDir);
+  End;
+End;
+
 Begin
   FailCount := 0;
   CheckPrompts;
   CheckPlanItemSession;
   CheckDirtySourceStop;
+  CheckBuildStart;
   Check('empty plan counts match the list',
     AssistantPlanRunCountsLine(0, 0, 0, 0) = '0 not started · 0 in progress · 0 blocked · 0 complete  ·  no actionable items');
   Check('open counts match the list',

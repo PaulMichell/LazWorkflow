@@ -17,8 +17,7 @@ Unit ProjectAssistantForm;
   text after a picture is copied. The Run Plan end report is built in
   AssistantPlanRun. A dropped Codex or Claude transport waits in
   AssistantRecovery, then the same turn is started again.
-  A Claude plan item starts its own session. Only a continue of that same item passes --resume.
-  Reviewed 2026-11-06: that session is not the conversation session, and a fresh item is a new turn, not a replay.
+  A Claude plan item starts its own session; only a continue passes --resume.
   Tasks is one action plus the call that applies a prepared request. Menu items follow that action's Visible.
   The list stays in AssistantTasksForm.
   Reviewed 2026-10-19: native file-drop arming moved to AssistantFileDrop.
@@ -3041,7 +3040,7 @@ Begin
         End;
     Else
     End;
-  { A missing Validation line or a failed build stays in progress. Dirty source on a blocked item stops the run. }
+  { A failed build stays in progress. Dirty source on a blocked item stops the run. }
   If Not CheckAssistantAcceptance(TrackedBody, FCompletionBuildJSON, FCompletionTestJSON, Note) Then
     Begin
       LeaveInProgress(Note);
@@ -3422,6 +3421,7 @@ End;
 Procedure TProjectAssistantForm.RunPlan;
 Var
   Idx: Integer;
+  Note: String;
 Begin
   If FSending Or FPlanAgentRunning Then
     Begin
@@ -3435,6 +3435,9 @@ Begin
       RunAssistantModal('Set an active plan first.', mtInformation, [mbOK], 0);
       Exit;
     End;
+  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
+  Note := PlanRunBuildRefusal(FCodexWorkspace.CanBuild, AssistantTarget.Manifest);
+  If Note <> '' Then Begin SetBuildStatusFeedback(Note); Exit; End;
   { Available from Chat, Inspect, Document, Plan, or Build. Switch before any package work. }
   SelectMode(amBuild);
   RefreshBuildTodos;

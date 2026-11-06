@@ -24,6 +24,10 @@ Const
   AssistantPlanRunBlockedLeft = 'Blocked items need the listed actions. No unblocked item is left.';
   AssistantPlanRunAlreadyComplete = 'All plan packages are already complete.';
   AssistantPlanRunNoneFound = 'No plan packages were found.';
+  { Status footer when Run Plan must not start. Each line suggests selecting a package or project. }
+  PlanRunNoBuildInput = 'The target has no build input. Select a package or project.';
+  PlanRunCannotBuildTarget = 'The build tool cannot build this target. Select a package or project.';
+  PlanRunFolderHasNoPackage = 'The target folder has no Lazarus package. Select a package or project.';
   { Context continuation. 0 in storage means the default. The form does not hard-code 95. }
   AssistantPlanContextPercentDefault = 95;
   AssistantPlanContextPercentMin = 50;
@@ -87,6 +91,8 @@ Function PlanRunStopsForDirtySource(Blocked: Boolean; Const Porcelain: String): 
 Function PlanRunDirtySourceStatus(Const Porcelain: String): String;
 { Reads git status --porcelain. False when the tree is clean, there is no repository, or Git fails. }
 Function PlanRunBlockedSourceStop(Const Root: String; Out StatusLine: String): Boolean;
+{ Empty when Run Plan may start. Otherwise the status line: CanBuild, and a file or a folder that holds a package. }
+Function PlanRunBuildRefusal(CanBuild: Boolean; Const InputPath: String): String;
 { Work-item prompt. Claude names only tools present in ToolsJson. Native keeps the existing sentences. }
 Function PlanWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
   ContinueSameItem, Claude: Boolean; Const ToolsJson: String): String;
@@ -95,7 +101,7 @@ Function PlanSectionReadSentence: String;
 Implementation
 
 Uses
-  Classes, fpjson, jsonparser, AssistantPlan, AssistantAcceptance, AssistantGit;
+  Classes, fpjson, jsonparser, AssistantPlan, AssistantAcceptance, AssistantGit, AssistantBuildJob;
 
 Function PlanContextContinuePercent(StoredPercent: Integer): Integer;
 Begin
@@ -267,6 +273,35 @@ Begin
   Result := PlanRunStopsForDirtySource(True, Porcelain);
   If Result Then
     StatusLine := PlanRunDirtySourceStatus(Porcelain);
+End;
+
+Function PlanRunBuildRefusal(CanBuild: Boolean; Const InputPath: String): String;
+Var
+  Path, ErrorText: String;
+  Packages: TStringList;
+Begin
+  Result := '';
+  If Not CanBuild Then
+    Exit(PlanRunCannotBuildTarget);
+  Path := Trim(InputPath);
+  If Path = '' Then
+    Exit(PlanRunNoBuildInput);
+  { A directory is also a file on Unix. Decide the folder case first. }
+  If DirectoryExists(Path) Then
+    Begin
+      Packages := TStringList.Create;
+      Try
+        If ResolveFolderPackages(Path, '', Packages, ErrorText) Then
+          Exit;
+      Finally
+        Packages.Free;
+      End;
+      Result := PlanRunFolderHasNoPackage;
+      Exit;
+    End;
+  If FileExists(Path) Then
+    Exit;
+  Result := PlanRunNoBuildInput;
 End;
 
 Function DefaultPlanRunReportFacts: TPlanRunReportFacts;
