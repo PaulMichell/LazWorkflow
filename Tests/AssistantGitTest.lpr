@@ -12,7 +12,7 @@ Type
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
     Function CanGit: Boolean; Override;
-    Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
   End;
   TApproval = Class
@@ -25,7 +25,7 @@ Function TWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out
 Function TWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Begin Result := False; End;
 Function TWorkspace.Describe: String; Begin Result := '{}'; End;
 Function TWorkspace.CanGit: Boolean; Begin Result := True; End;
-Function TWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TWorkspace.RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin Inc(Calls); Result := RunAssistantGit(Root, Arguments, ResultText, ErrorText); End;
 Function TWorkspace.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
 Begin Inc(Calls); Result := StageAssistantGitPatch(Root, Patch, ResultText, ErrorText); End;
@@ -108,7 +108,107 @@ Begin
   Result := Result + LineEnding;
 End;
 
+Type
+  TModeRecord = Class(TAssistantWorkspaceAdapter)
+    MarkdownMode, GitMode: TAssistantMode;
+    GitCalls: Integer;
+    Function Identity: String; Override;
+    Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
+    Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
+    Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
+    Function Describe: String; Override;
+    Function CanWriteMarkdown: Boolean; Override;
+    Function WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanGit: Boolean; Override;
+    Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+  End;
+
+Function TModeRecord.Identity: String;
 Begin
+  Result := 'mode-record';
+End;
+
+Function TModeRecord.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
+Begin
+  Result := False;
+End;
+
+Function TModeRecord.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+End;
+
+Function TModeRecord.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+End;
+
+Function TModeRecord.Describe: String;
+Begin
+  Result := '{}';
+End;
+
+Function TModeRecord.CanWriteMarkdown: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TModeRecord.WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  MarkdownMode := Mode;
+  ResultText := 'recorded';
+  ErrorText := '';
+  Result := True;
+End;
+
+Function TModeRecord.CanGit: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TModeRecord.RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  GitMode := Mode;
+  Inc(GitCalls);
+  ResultText := 'recorded';
+  ErrorText := '';
+  Result := True;
+End;
+
+{ Plan cannot run git: the broker refuses that scope before the adapter. The following Build run must still hand
+  Build to both tools, not the Plan mode left by the previous run. }
+Procedure CheckBrokerPassesRunMode;
+Var
+  Recorded: TModeRecord;
+  Broker: TAssistantToolBroker;
+  RunId, Reply, Err: String;
+Begin
+  Recorded := TModeRecord.Create;
+  Broker := TAssistantToolBroker.Create(Recorded);
+  Try
+    Recorded.GitMode := amChat;
+    RunId := Broker.BeginRun(awsMarkdown, amPlan);
+    Check('Plan markdown receives Plan', Broker.Execute(RunId, 'lazarus_write_markdown',
+      '{"path":"Documents/Plan.md","content":"plan"}', Reply, Err) And (Recorded.MarkdownMode = amPlan));
+    Check('Plan git is refused before the adapter', Not Broker.Execute(RunId, 'lazarus_run_git',
+      '{"arguments":["status"]}', Reply, Err) And (Recorded.GitCalls = 0) And (Recorded.GitMode = amChat));
+    RunId := Broker.BeginRun(awsProject, amBuild);
+    Check('Build markdown receives Build, not the previous Plan mode', Broker.Execute(RunId, 'lazarus_write_markdown',
+      '{"path":"Documents/Plan.md","content":"build"}', Reply, Err) And (Recorded.MarkdownMode = amBuild));
+    Check('Build git receives Build', Broker.Execute(RunId, 'lazarus_run_git', '{"arguments":["status"]}', Reply, Err) And
+      (Recorded.GitMode = amBuild) And (Recorded.GitCalls = 1));
+    RunId := Broker.BeginRun(awsMarkdown, amDocument);
+    Check('Document markdown receives Document, not the previous Build mode', Broker.Execute(RunId, 'lazarus_write_markdown',
+      '{"path":"Documents/Note.md","content":"note"}', Reply, Err) And (Recorded.MarkdownMode = amDocument));
+  Finally
+    Broker.Free;
+    Recorded.Free;
+  End;
+End;
+
+Begin
+  CheckBrokerPassesRunMode;
   CreateGUID(G); W := TWorkspace.Create;
   W.Root := IncludeTrailingPathDelimiter(GetTempDir) + 'assistant-git-' + GUIDToString(G);
   ForceDirectories(W.Root);
@@ -346,16 +446,14 @@ Begin
     IDEWorkspace := TAssistantIDEWorkspace.Create;
     IDEBroker := TAssistantToolBroker.Create(IDEWorkspace);
     Try
-      IDEWorkspace.ToolMode := amInspect;
-      Run := IDEBroker.BeginRun(awsReadOnly);
+      Run := IDEBroker.BeginRun(awsReadOnly, amInspect);
       Check('Inspect refuses add before any other tool call',
         Not IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","work.txt"]}', Reply, Err) And
         (Pos('ls-files only', Err) > 0));
       Check('Inspect offers no Lazarus Markdown writes', Pos('lazarus_update_markdown', IDEBroker.ToolsJson) = 0);
       Check('Inspect hides partial staging', Pos('lazarus_stage_patch', IDEBroker.ToolsJson) = 0);
       Check('Inspect refuses a Lazarus Markdown write', Not IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err));
-      IDEWorkspace.ToolMode := amBuild;
-      Run := IDEBroker.BeginRun(awsProject);
+      Run := IDEBroker.BeginRun(awsProject, amBuild);
       Check('Build git add does not depend on a previous tool setting the mode',
         IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","work.txt"]}', Reply, Err));
       Check('Build offers the Lazarus Markdown writes', (Pos('"lazarus_write_markdown"', IDEBroker.ToolsJson) > 0) And
@@ -387,8 +485,7 @@ Begin
         RevertUncommittedPlanCompletion(Note) And (Pos('Committed', Note) > 0) And (Pos('Documents/Plan.md', Note) > 0));
       Check('the plan file is clean after the turn', RunAssistantGit(W.Root, '{"arguments":["status","--short"]}', Reply, Err) And
         (Pos('Documents/Plan.md', Reply) = 0));
-      IDEWorkspace.ToolMode := amPlan;
-      Run := IDEBroker.BeginRun(awsMarkdown);
+      Run := IDEBroker.BeginRun(awsMarkdown, amPlan);
       Check('Plan offers the Lazarus Markdown writes', Pos('"lazarus_update_markdown"', IDEBroker.ToolsJson) > 0);
       ResetAssistantGitTurn;
       ResetAssistantPlanTurn;
@@ -399,8 +496,7 @@ Begin
         (Pos('A note from Plan mode.', PlanText) > 0));
       Check('Plan cannot commit, so it cannot complete an item either', Pos('lazarus_run_git', IDEBroker.ToolsJson) = 0);
       Check('Plan hides partial staging through the IDE', Pos('lazarus_stage_patch', IDEBroker.ToolsJson) = 0);
-      IDEWorkspace.ToolMode := amBuild;
-      Run := IDEBroker.BeginRun(awsProject);
+      Run := IDEBroker.BeginRun(awsProject, amBuild);
       Saved := Joined(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']);
       Before := Joined(['one', 'two', 'ALPHA', 'four', 'five', 'six', 'seven', 'eight', 'BETA', 'ten']);
       SaveRaw(W.Root + '/ide hunk.txt', Saved);

@@ -3158,8 +3158,7 @@ Begin
   Result := '';
   If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
-  FCodexWorkspace.ToolMode := amBuild;
-  FCodexBroker.BeginRun(awsProject);
+  FCodexBroker.BeginRun(awsProject, amBuild);
   Result := FCodexBroker.ToolsJson;
 End;
 
@@ -4777,10 +4776,9 @@ Begin
   If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
   { A Codex launch sets this back to Nil; only one backend runs a turn at a time. }
   FCodexBroker.OnApproval := @ApproveClaudeTool;
-  { write_markdown and update_markdown follow this mode's rules, as for an assistant turn. }
-  FCodexWorkspace.ToolMode := ActiveMode;
   ClaudeBridge := TMCPBrokerBridge.Create(FCodexBroker);
-  ClaudeBridge.BeginRun(Scope);
+  { The run carries ActiveMode. Plan and Document share a Markdown scope, so the scope alone is not enough. }
+  ClaudeBridge.BeginRun(Scope, ActiveMode);
   ClaudeListener := TMCPListener.Create(ClaudeBridge.ToolsJSON, @ClaudeBridge.Execute);
   If Not ClaudeListener.Start(ErrorText) Then
     Begin
@@ -4915,12 +4913,12 @@ Begin
   If FCodexWorkspace.Identity <> FCodexIdentity Then
     Exit;
   Case ActiveMode Of
-    amChat: FCodexBroker.BeginRun(awsNone);
-    amBuild: FCodexBroker.BeginRun(awsProject);
-    amDocument: FCodexBroker.BeginRun(awsMarkdown);
-    amPlan: FCodexBroker.BeginRun(awsMarkdown);
+    amChat: FCodexBroker.BeginRun(awsNone, amChat);
+    amBuild: FCodexBroker.BeginRun(awsProject, amBuild);
+    amDocument: FCodexBroker.BeginRun(awsMarkdown, amDocument);
+    amPlan: FCodexBroker.BeginRun(awsMarkdown, amPlan);
   Else
-    FCodexBroker.BeginRun(awsReadOnly);
+    FCodexBroker.BeginRun(awsReadOnly, amInspect);
   End;
   Try
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
@@ -5083,11 +5081,11 @@ Begin
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
   Case ActiveMode Of
-    amChat: FCodexBroker.BeginRun(awsNone);
-    amBuild: FCodexBroker.BeginRun(awsProject);
-    amDocument: FCodexBroker.BeginRun(awsMarkdown);
-    amPlan: FCodexBroker.BeginRun(awsMarkdown);
-  Else FCodexBroker.BeginRun(awsReadOnly); End;
+    amChat: FCodexBroker.BeginRun(awsNone, amChat);
+    amBuild: FCodexBroker.BeginRun(awsProject, amBuild);
+    amDocument: FCodexBroker.BeginRun(awsMarkdown, amDocument);
+    amPlan: FCodexBroker.BeginRun(awsMarkdown, amPlan);
+  Else FCodexBroker.BeginRun(awsReadOnly, amInspect); End;
   ShowChatSurfaceKeepMode;
   { Same user text as SubmitUserTextEx. The harness prompt owns the mode essay, including chat's no-tools sentence.
     Pictures are the same stored refs. The Codex wire maps them to localImage; it does not invent a note. }

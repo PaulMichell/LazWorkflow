@@ -17,7 +17,7 @@ Unit AssistantMCPBridge;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantToolBroker, AssistantClaudeClient;
+  Classes, SysUtils, AssistantToolBroker, AssistantClaudeClient, AssistantConversation;
 
 Const
   MCPRunCancelledText = 'The Claude run was stopped before this tool ran.';
@@ -36,7 +36,9 @@ Type
     Constructor Create(ToolBroker: TAssistantToolBroker);
     Destructor Destroy; Override;
     /// Starts a broker run with the write scope for this Claude tool scope, cancelling any run still open.
-    Function BeginRun(Scope: TClaudeToolScope): String;
+    Function BeginRun(Scope: TClaudeToolScope): String; Overload;
+    /// Same run, with the turn's mode so Plan and Document are not collapsed.
+    Function BeginRun(Scope: TClaudeToolScope; Mode: TAssistantMode): String; Overload;
     /// Ends the run: every waiting call returns MCPRunCancelledText and later calls are refused until BeginRun.
     Procedure Cancel;
     /// The broker's catalogue for this run's scope, to hand to TMCPListener.
@@ -299,7 +301,24 @@ Var
   NewRunId: String;
 Begin
   Cancel;
+  { One-argument broker start. Markdown becomes Plan; a live turn passes ActiveMode instead. }
   NewRunId := FBroker.BeginRun(ClaudeBrokerWriteScope(Scope));
+  EnterCriticalSection(Lock);
+  Try
+    FRunId := NewRunId;
+    Cancelled := False;
+  Finally
+    LeaveCriticalSection(Lock);
+  End;
+  Result := NewRunId;
+End;
+
+Function TMCPBrokerBridge.BeginRun(Scope: TClaudeToolScope; Mode: TAssistantMode): String;
+Var
+  NewRunId: String;
+Begin
+  Cancel;
+  NewRunId := FBroker.BeginRun(ClaudeBrokerWriteScope(Scope), Mode);
   EnterCriticalSection(Lock);
   Try
     FRunId := NewRunId;

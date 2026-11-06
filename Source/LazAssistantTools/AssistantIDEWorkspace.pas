@@ -23,7 +23,6 @@ Type
     FDefineStep: Integer;
     FBuildGeneration: QWord;
     FBuildIdentity, FBuildMode: String;
-    FToolMode: TAssistantMode;
     Function EditorAffectsBuild(Editor: TObject): Boolean;
   Protected
     Function BuildExecutable: String; Virtual;
@@ -41,7 +40,7 @@ Type
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Override;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanWriteMarkdown: Boolean; Override;
-    Function WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanFindDeclaration: Boolean; Override;
     Function CanInspectSymbols: Boolean; Override;
     Function CanPreviewRename: Boolean; Override;
@@ -55,7 +54,7 @@ Type
     Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function CanGit: Boolean; Override;
-    Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -70,8 +69,6 @@ Type
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
-    /// The conversation mode WriteMarkdown applies the assistant's rules for. Inspect, the default, writes nothing.
-    Property ToolMode: TAssistantMode Read FToolMode Write FToolMode;
   End;
 
 Implementation
@@ -109,10 +106,9 @@ Begin
   Result := AssistantTarget.Available And (ProjectRootPath <> '');
 End;
 
-Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
-  { The turn's mode. A broker call does not set GAssistantToolMode. }
-  Result := ToolRunGit(FToolMode, Arguments, ResultText, ErrorText);
+  Result := ToolRunGit(Mode, Arguments, ResultText, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
@@ -156,9 +152,10 @@ Begin
   Result := AssistantTarget.Available And (ProjectRootPath <> '');
 End;
 
-{ The assistant's own write_markdown and update_markdown, in ToolMode: the same path defaults, mode refusals,
+{ The assistant's own write_markdown and update_markdown, in the run's mode: the same path defaults, mode refusals,
   structure check and completion rule. The broker has already asked for approval. }
-Function TAssistantIDEWorkspace.WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String;
+  Out ResultText, ErrorText: String): Boolean;
 Var
   ImageRefs: TAssistantImageRefArray;
 Begin
@@ -169,7 +166,7 @@ Begin
       ErrorText := 'Not a Markdown tool: ' + Tool;
       Exit(False);
     End;
-  Result := ExecuteAssistantToolForMode(Tool, Arguments, '', FToolMode, ResultText, ErrorText, ImageRefs, True);
+  Result := ExecuteAssistantToolForMode(Tool, Arguments, '', Mode, ResultText, ErrorText, ImageRefs, True);
 End;
 
 Destructor TAssistantIDEWorkspace.Destroy;

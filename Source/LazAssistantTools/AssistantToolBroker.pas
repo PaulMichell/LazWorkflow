@@ -17,7 +17,7 @@ Unit AssistantToolBroker;
 Interface
 
 Uses
-  Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets;
+  Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets, AssistantConversation;
 
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
@@ -40,9 +40,10 @@ Type
     Function CheckNewFile(Const Path: String; Out CanonicalPath, ErrorText: String): Boolean; Virtual;
     Function CreateFile(Const Path, Text: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     { Plans and documents. Tool is write_markdown or update_markdown with the assistant's own arguments; the
-      adapter applies the plan rules, including the completion rule, as the assistant's tool does. }
+      adapter applies the plan rules, including the completion rule, as the assistant's tool does.
+      Mode is the run's mode from BeginRun, not a value left by an earlier run. }
     Function CanWriteMarkdown: Boolean; Virtual;
-    Function WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanFindDeclaration: Boolean; Virtual;
     Function CanInspectSymbols: Boolean; Virtual;
     Function CanPreviewRename: Boolean; Virtual;
@@ -56,7 +57,7 @@ Type
     Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanGit: Boolean; Virtual;
-    Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -82,6 +83,7 @@ Type
     FRunId, FIdentity: String;
     FCancelled: Boolean;
     FWriteScope: TAssistantWriteScope;
+    FMode: TAssistantMode;
     FRevision: Integer;
     FSnapshots: Array Of TBrokerSnapshot;
     FOnApproval: TAssistantToolApproval;
@@ -104,7 +106,10 @@ Type
   Public
     Constructor Create(Adapter: TAssistantWorkspaceAdapter);
     Destructor Destroy; Override;
-    Function BeginRun(WriteScope: TAssistantWriteScope): String;
+    { Scope-only start. Markdown becomes Plan, so a Document turn must pass its mode. }
+    Function BeginRun(WriteScope: TAssistantWriteScope): String; Overload;
+    /// Stores this run's write scope and conversation mode together. WriteMarkdown and RunGit receive that mode.
+    Function BeginRun(WriteScope: TAssistantWriteScope; Mode: TAssistantMode): String; Overload;
     Procedure Cancel;
     Function Execute(Const RunId, Tool, Arguments: String;
       Out ResultText, ErrorText: String): Boolean;
@@ -264,7 +269,8 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.WriteMarkdown(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.WriteMarkdown(Mode: TAssistantMode; Const Tool, Arguments: String;
+  Out ResultText, ErrorText: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Markdown writing unavailable.';
@@ -347,7 +353,7 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Git is unavailable.';
@@ -421,6 +427,7 @@ Begin
   FReceipts := TObjectList.Create(True);
   FOwner := GetCurrentThreadID;
   FCancelled := True;
+  FMode := amInspect;
 End;
 
 Destructor TAssistantToolBroker.Destroy;
@@ -430,7 +437,23 @@ Begin
   Inherited Destroy;
 End;
 
+Function AssistantModeForWriteScope(Scope: TAssistantWriteScope): TAssistantMode;
+Begin
+  Case Scope Of
+    awsNone: Result := amChat;
+    awsMarkdown: Result := amPlan;
+    awsProject: Result := amBuild;
+  Else
+    Result := amInspect;
+  End;
+End;
+
 Function TAssistantToolBroker.BeginRun(WriteScope: TAssistantWriteScope): String;
+Begin
+  Result := BeginRun(WriteScope, AssistantModeForWriteScope(WriteScope));
+End;
+
+Function TAssistantToolBroker.BeginRun(WriteScope: TAssistantWriteScope; Mode: TAssistantMode): String;
 Var
   Id: TGuid;
 Begin
@@ -442,6 +465,7 @@ Begin
   FIdentity := FAdapter.Identity;
   FCancelled := False;
   FWriteScope := WriteScope;
+  FMode := Mode;
   FRevision := 0;
   SetLength(FSnapshots, 0);
   FRenamePreview := Default(TLocalRenamePreview);
@@ -1266,7 +1290,7 @@ Begin
               NewText := Args.Get('new_text', '');
             End;
           If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
-          Result := FAdapter.WriteMarkdown(Copy(Tool, Length('lazarus_') + 1, MaxInt), Arguments, ResultText, ErrorText);
+          Result := FAdapter.WriteMarkdown(FMode, Copy(Tool, Length('lazarus_') + 1, MaxInt), Arguments, ResultText, ErrorText);
           Exit;
         End;
       If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Or (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
@@ -1543,7 +1567,7 @@ Begin
               Exit;
             End;
           If Not Approve(RunId, Tool, '', '', Arguments, ErrorText) Then Exit;
-          Result := FAdapter.RunGit(Arguments, ResultText, ErrorText);
+          Result := FAdapter.RunGit(FMode, Arguments, ResultText, ErrorText);
           Exit;
         End;
       If Tool = 'lazarus_project_info' Then
