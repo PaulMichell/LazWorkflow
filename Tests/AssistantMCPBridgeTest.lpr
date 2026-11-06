@@ -24,11 +24,15 @@ Type
   Public
     Reads: Integer;
     ReadThread: TThreadID;
+    StoredText: String;
+    ReplaceCount: Integer;
+    ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
+    Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
 
   TClientThread = Class(TThread)
@@ -59,15 +63,32 @@ Begin
   Inc(Reads);
   ReadThread := GetCurrentThreadId;
   CanonicalPath := Path;
-  Text := BufferText;
+  Text := StoredText;
   ErrorText := '';
   Result := True;
 End;
 
 Function TMemoryWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
 Begin
-  ErrorText := 'Read-only test workspace.';
-  Result := False;
+  Inc(ReplaceCount);
+  If ExpectedText <> StoredText Then
+    Begin
+      ErrorText := 'Buffer text did not match.';
+      Result := False;
+      Exit;
+    End;
+  StoredText := NewText;
+  ErrorText := '';
+  Result := True;
+End;
+
+Function TMemoryWorkspace.ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
+Begin
+  ApprovedTool := Tool;
+  ApprovedPath := Path;
+  ApprovedOld := OldText;
+  ApprovedNew := NewText;
+  Result := True;
 End;
 
 Function TMemoryWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
@@ -185,12 +206,15 @@ Begin
   Bridge.BeginRun(ctsRead);
   Check('a read run lists read_buffer', Pos('"lazarus_read_buffer"', Bridge.ToolsJSON) > 0);
   Check('a read run lists no replace_buffer', Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) = 0);
+  Check('a read run lists no replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(ctsMarkdown);
   Check('a Markdown run lists replace_buffer for Markdown only',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) > 0));
+  Check('a Markdown run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(ctsProject);
   Check('a project run lists replace_buffer for any file',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) = 0));
+  Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
 
@@ -245,6 +269,136 @@ Begin
   Finally
     Client.Free;
   End;
+End;
+
+Function JsonField(Const Json, Name: String): String;
+Var
+  Data: TJSONData;
+Begin
+  Result := '';
+  Try
+    Data := GetJSON(Json);
+  Except
+    Exit;
+  End;
+  Try
+    If Data Is TJSONObject Then
+      Result := TJSONObject(Data).Get(Name, '');
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ReplaceArguments(Const Path, Revision, OldText, NewText: String; IncludeReplaceAll, ReplaceAll: Boolean): String;
+Var
+  Obj: TJSONObject;
+Begin
+  Obj := TJSONObject.Create;
+  Try
+    Obj.Add('path', Path);
+    Obj.Add('revision', Revision);
+    Obj.Add('old_text', OldText);
+    Obj.Add('new_text', NewText);
+    If IncludeReplaceAll Then
+      Obj.Add('replace_all', ReplaceAll);
+    Result := Obj.AsJSON;
+  Finally
+    Obj.Free;
+  End;
+End;
+
+Function ReadRevision(Const Path: String): String;
+Var
+  ResultText, ErrorText: String;
+Begin
+  Check('read ' + Path,
+    Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"' + Path + '"}', ResultText, ErrorText));
+  Result := JsonField(ResultText, 'revision');
+  Check('read ' + Path + ' returned a revision', Result <> '');
+End;
+
+Procedure CheckReplaceInBuffer;
+Const
+  Secret = 'SecretTokenValue';
+  Edited = 'EditedTokenValue';
+Var
+  Before, After, Revision, NextRevision, ResultText, ErrorText, Summary: String;
+  Calls: Integer;
+Begin
+  Broker.OnApproval := @Workspace.ApproveReplace;
+  Before := 'keep' + LineEnding + Secret + LineEnding + 'tail';
+  After := 'keep' + LineEnding + Edited + LineEnding + 'tail';
+  Workspace.StoredText := Before;
+  Workspace.ReplaceCount := 0;
+  Bridge.BeginRun(ctsProject);
+  Revision := ReadRevision('Main.pas');
+  Workspace.ApprovedOld := '';
+  Workspace.ApprovedNew := '';
+  Check('a unique match is replaced', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, Secret, Edited, False, False), ResultText, ErrorText));
+  NextRevision := JsonField(ResultText, 'revision');
+  Check('the new revision is returned', (NextRevision <> '') And (NextRevision <> Revision));
+  Check('the reply names the changed lines', JsonField(ResultText, 'lines') = '2-2');
+  Check('the reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
+    (Pos(Before, ResultText) = 0) And (Pos(After, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
+  Check('the buffer holds the replacement', Workspace.StoredText = After);
+  Check('the unique match was one editor edit', Workspace.ReplaceCount = 1);
+  Summary := MCPApprovalSummary(Workspace.ApprovedPath, Workspace.ApprovedOld, Workspace.ApprovedNew);
+  Check('approval receives the old and new buffer text', (Workspace.ApprovedTool = 'lazarus_replace_in_buffer') And
+    (Workspace.ApprovedOld = Before) And (Workspace.ApprovedNew = After));
+  Check('the approval summary names the changed lines', Pos('lines 2-2 of 3 replaced by 1', Summary) > 0);
+  Check('the returned revision accepts the next edit', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', NextRevision, Edited, 'EditedAgain', False, False), ResultText, ErrorText) And
+    (Workspace.StoredText = 'keep' + LineEnding + 'EditedAgain' + LineEnding + 'tail'));
+
+  Before := Workspace.StoredText;
+  Calls := Workspace.ReplaceCount;
+  Revision := ReadRevision('Main.pas');
+  Check('a missing match fails', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, 'missing-token', Edited, False, False), ResultText, ErrorText));
+  Check('a missing match leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
+
+  Workspace.StoredText := 'one' + LineEnding + 'two' + LineEnding + 'one';
+  Bridge.BeginRun(ctsProject);
+  Revision := ReadRevision('Main.pas');
+  Calls := Workspace.ReplaceCount;
+  Before := Workspace.StoredText;
+  Check('two matches without replace_all fail', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, 'one', 'ONE', False, False), ResultText, ErrorText));
+  Check('two matches leave the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
+  Check('replace_all replaces both', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, 'one', 'ONE', True, True), ResultText, ErrorText));
+  Check('both matches were replaced', Workspace.StoredText = 'ONE' + LineEnding + 'two' + LineEnding + 'ONE');
+  Check('replace_all was one editor edit', Workspace.ReplaceCount = Calls + 1);
+  Check('the replace_all reply contains no buffer text', (Pos('ONE', ResultText) = 0) And (Pos('one', ResultText) = 0));
+
+  Workspace.StoredText := 'keep' + LineEnding + 'only-once' + LineEnding + 'tail';
+  Bridge.BeginRun(ctsProject);
+  Revision := ReadRevision('Main.pas');
+  Workspace.StoredText := 'keep' + LineEnding + 'moved-once' + LineEnding + 'tail';
+  Calls := Workspace.ReplaceCount;
+  Before := Workspace.StoredText;
+  Check('a stale revision fails', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, 'moved-once', 'changed', False, False), ResultText, ErrorText));
+  Check('a stale revision leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
+
+  Workspace.StoredText := 'keep' + LineEnding + 'edit me' + LineEnding;
+  Bridge.BeginRun(ctsMarkdown);
+  Revision := ReadRevision('Main.pas');
+  Calls := Workspace.ReplaceCount;
+  Before := Workspace.StoredText;
+  Check('the Markdown scope refuses a pas path', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Main.pas', Revision, 'edit me', 'edited', False, False), ResultText, ErrorText) And
+    (Pos('Markdown', ErrorText) > 0));
+  Check('a refused pas path leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
+  Revision := ReadRevision('Notes.md');
+  Check('the Markdown scope accepts a markdown path', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+    ReplaceArguments('Notes.md', Revision, 'edit me', 'edited', False, False), ResultText, ErrorText));
+  Check('the markdown buffer was edited', Workspace.StoredText = 'keep' + LineEnding + 'edited' + LineEnding);
+  Check('the markdown reply contains no buffer text', (Pos('edited', ResultText) = 0) And (Pos('edit me', ResultText) = 0));
+
+  Broker.OnApproval := Nil;
+  Workspace.StoredText := BufferText;
 End;
 
 Procedure CheckDirectCall;
@@ -323,8 +477,10 @@ Begin
   Bridge := TMCPBrokerBridge.Create(Broker);
   Listener := Nil;
   Try
+    Workspace.StoredText := BufferText;
     CheckScopes;
     CheckSummaries;
+    CheckReplaceInBuffer;
     CheckCall;
     CheckDirectCall;
     CheckCancel;

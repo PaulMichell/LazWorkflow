@@ -85,6 +85,8 @@ Type
     Function ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
       Out ResultText, ErrorText: String): Boolean;
     Function CommitBuffer(Const Path, Text, NewText: String; Out ResultText, ErrorText: String): Boolean;
+    Function ReplaceInBuffer(Const RunId, Path, Text: String; Args: TJSONObject; Out ResultText, ErrorText: String): Boolean;
+    Function SnapshotRevision(Const Path: String): String;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
     Function CanWritePath(Const Path: String): Boolean;
     Function Remember(Const Path, Text: String): String;
@@ -752,6 +754,165 @@ Begin
   Result := True;
 End;
 
+{ 1-based inclusive span of the change, matching MCPApprovalSummary's line split. Empty when the texts are identical. }
+Function ChangedLineSpan(Const OldText, NewText: String): String;
+Var
+  OldLines, NewLines: TStringList;
+  First, OldLast, NewLast, StartLine, EndLine: Integer;
+Begin
+  Result := '';
+  If OldText = NewText Then
+    Exit;
+  OldLines := TStringList.Create;
+  NewLines := TStringList.Create;
+  Try
+    OldLines.Text := OldText;
+    NewLines.Text := NewText;
+    First := 0;
+    While (First < OldLines.Count) And (First < NewLines.Count) And (OldLines[First] = NewLines[First]) Do
+      Inc(First);
+    OldLast := OldLines.Count - 1;
+    NewLast := NewLines.Count - 1;
+    While (OldLast >= First) And (NewLast >= First) And (OldLines[OldLast] = NewLines[NewLast]) Do
+      Begin
+        Dec(OldLast);
+        Dec(NewLast);
+      End;
+    If (OldLast < First) And (NewLast < First) Then
+      Begin
+        Result := '1-1';
+        Exit;
+      End;
+    StartLine := First + 1;
+    EndLine := StartLine;
+    If OldLast >= First Then
+      EndLine := OldLast + 1;
+    If (NewLast >= First) And (NewLast + 1 > EndLine) Then
+      EndLine := NewLast + 1;
+    Result := IntToStr(StartLine) + '-' + IntToStr(EndLine);
+  Finally
+    NewLines.Free;
+    OldLines.Free;
+  End;
+End;
+
+{ Exact match. Fails with Updated unused when old_text is missing or is not unique and ReplaceAll is false. }
+Function ApplyExactReplace(Const Source, OldText, NewText: String; ReplaceAll: Boolean;
+  Out Updated, ErrorText: String): Boolean;
+Var
+  Count, P: Integer;
+Begin
+  Result := False;
+  Updated := '';
+  ErrorText := '';
+  If OldText = '' Then
+    Begin
+      ErrorText := 'old_text must not be empty.';
+      Exit;
+    End;
+  Count := 0;
+  P := 1;
+  While P <= Length(Source) - Length(OldText) + 1 Do
+    If Copy(Source, P, Length(OldText)) = OldText Then
+      Begin
+        Inc(Count);
+        Inc(P, Length(OldText));
+        If (Count > 1) And Not ReplaceAll Then
+          Begin
+            ErrorText := 'old_text occurs more than once; set replace_all to replace every match.';
+            Exit;
+          End;
+      End
+    Else
+      Inc(P);
+  If Count = 0 Then
+    Begin
+      ErrorText := 'old_text not found in the open editor buffer.';
+      Exit;
+    End;
+  If ReplaceAll Then
+    Updated := StringReplace(Source, OldText, NewText, [rfReplaceAll])
+  Else
+    Begin
+      P := Pos(OldText, Source);
+      Updated := Copy(Source, 1, P - 1) + NewText + Copy(Source, P + Length(OldText), MaxInt);
+    End;
+  If Length(Updated) > MaxBufferBytes Then
+    Begin
+      Updated := '';
+      ErrorText := 'Replacement exceeds the buffer limit.';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TAssistantToolBroker.SnapshotRevision(Const Path: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := 0 To High(FSnapshots) Do
+    If FSnapshots[I].Path = Path Then
+      Exit(FSnapshots[I].Revision);
+End;
+
+Function TAssistantToolBroker.ReplaceInBuffer(Const RunId, Path, Text: String; Args: TJSONObject;
+  Out ResultText, ErrorText: String): Boolean;
+Var
+  Node: TJSONData;
+  OldText, NewText, Updated, Revision, Span: String;
+  ReplaceAll: Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  ReplaceAll := False;
+  Node := Args.Find('old_text');
+  If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
+    Begin
+      ErrorText := 'old_text must be a non-empty string.';
+      Exit;
+    End;
+  OldText := Node.AsString;
+  Node := Args.Find('new_text');
+  If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
+    Begin
+      ErrorText := 'new_text must be a string.';
+      Exit;
+    End;
+  NewText := Node.AsString;
+  Node := Args.Find('replace_all');
+  If Assigned(Node) Then
+    Begin
+      If Node.JSONType <> jtBoolean Then
+        Begin
+          ErrorText := 'replace_all must be a boolean.';
+          Exit;
+        End;
+      ReplaceAll := Node.AsBoolean;
+    End;
+  { Match before approval or mutation. A failed match leaves the editor alone. }
+  If Not ApplyExactReplace(Text, OldText, NewText, ReplaceAll, Updated, ErrorText) Then
+    Exit;
+  If Not Approve(RunId, 'lazarus_replace_in_buffer', Path, Text, Updated, ErrorText) Then
+    Exit;
+  Span := ChangedLineSpan(Text, Updated);
+  If Not CommitBuffer(Path, Text, Updated, ResultText, ErrorText) Then
+    Begin
+      ResultText := '';
+      Exit;
+    End;
+  Revision := SnapshotRevision(Path);
+  If Revision = '' Then
+    Begin
+      ResultText := '';
+      ErrorText := 'Buffer was edited but its revision could not be recorded; inspect and reread it.';
+      Exit;
+    End;
+  ResultText := '{"saved":false,"revision":' + Quoted(Revision) + ',"lines":' + Quoted(Span) + '}';
+  Result := True;
+End;
+
 Function TAssistantToolBroker.CommitBuffer(Const Path, Text, NewText: String;
     Out ResultText, ErrorText: String): Boolean;
 Var
@@ -1069,8 +1230,8 @@ Begin
             If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
           End;
       If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
-        (Tool <> 'lazarus_save_buffer') And (Tool <> 'lazarus_open_buffer') And
-        (Not Semantic) Then
+        (Tool <> 'lazarus_replace_in_buffer') And (Tool <> 'lazarus_save_buffer') And
+        (Tool <> 'lazarus_open_buffer') And (Not Semantic) Then
           Begin
             ErrorText := 'Tool is not registered with the IDE broker.';
             Exit;
@@ -1111,6 +1272,11 @@ Begin
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
         Begin
           ErrorText := 'Stale buffer revision; read the buffer again before using this request.';
+          Exit;
+        End;
+      If Tool = 'lazarus_replace_in_buffer' Then
+        Begin
+          Result := ReplaceInBuffer(RunId, Path, Text, Args, ResultText, ErrorText);
           Exit;
         End;
       If Semantic Then
@@ -1237,6 +1403,8 @@ Const
   ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
   FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
   ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
+  ReplaceSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"old_text":{"type":"string"},' +
+    '"new_text":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","revision","old_text","new_text"],"additionalProperties":false}';
   SaveSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"}},"required":["path","revision"],"additionalProperties":false}';
 Var
   WriteNote: String;
@@ -1274,6 +1442,10 @@ Begin
     End;
   If FWriteScope <> awsReadOnly Then Result := Result +
     ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. Does not save.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
+    '{"type":"function","name":"lazarus_replace_in_buffer","description":"Replace exact old_text in a previously read buffer ' +
+    'at its revision, preserving Undo. Does not save. Changes nothing when old_text is missing, or when it matches more ' +
+    'than once unless replace_all is true. Returns the new revision and changed line range, not the buffer text.' +
+    WriteNote + '","inputSchema":' + ReplaceSchema + '},' +
     '{"type":"function","name":"lazarus_save_buffer","description":"Explicitly save the exact previously read or edited revision.' + WriteNote + '","inputSchema":' + SaveSchema + '}';
   If (FWriteScope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
     ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
