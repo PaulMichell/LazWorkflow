@@ -481,6 +481,7 @@ Type
     Function QueryContinuation(Truncated, ToolRoundCap, HadToolRound: Boolean; Const AssistantText: String): Boolean;
     Function ContinuationToolRecap: String;
     Function FindNextIncompleteBuildSection: Integer;
+    Function ClaudeBuildToolsJson: String;
     Function BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
       ContinueSameItem: Boolean): String;
     Procedure MaybeWarnHighContextUsage;
@@ -3167,43 +3168,26 @@ Begin
   StatusFooter.SetRightText('Review: Fix Error ready');
 End;
 
+Function TProjectAssistantForm.ClaudeBuildToolsJson: String;
+Begin
+  Result := '';
+  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
+  FCodexWorkspace.ToolMode := amBuild;
+  FCodexBroker.BeginRun(awsProject);
+  Result := FCodexBroker.ToolsJson;
+End;
+
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
   SectionBody, ParentTitle: String; ContinueSameItem: Boolean): String;
-Const MaxBodyChars = 6000;
-Var Body, ToolInstructions, Heading: String;
+Var
+  Tools: String;
 Begin
-  Body := Trim(SectionBody);
-  If Length(Body) > MaxBodyChars Then
-    Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
-      '… *(section truncated for the prompt; open the plan file for the full text.)*';
-  ToolInstructions :=
-    '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
-    'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.' + LineEnding +
-    '3. Run run_compile after edits, repair introduced errors and compile again. ' +
-    'A clean compile does not mark this item complete.';
-  Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
-  If Trim(ParentTitle) <> '' Then
-    Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
-  Heading := Heading + '**Item:** ' + SectionTitle + LineEnding + '**Status:** ' + StatusText + LineEnding + LineEnding;
-  If ContinueSameItem Then
-    Result := 'Continue this same plan item in **Build mode**. The previous turn left it in progress.' +
-      LineEnding + LineEnding +
-      'Edits already applied are in the project. Do not re-read a file you already have unless a later replace_in_file failed.' +
-      LineEnding +
-      'Run run_compile. A folder target compiles the Lazarus packages under that folder, not the project open in the IDE.' +
-      LineEnding +
-      'When the written acceptance criteria are met, commit the finished files, set Status to complete, then commit the plan file. ' +
-      'A missing Validation line does not block that status change. A clean compile alone does not complete the item.' +
-      LineEnding + LineEnding + Heading
-  Else
-    Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading;
-  Result := Result +
-    'Instructions:' + LineEnding + '1. Focus only on this actionable item unless blocked.' + LineEnding +
-    ToolInstructions + LineEnding +
-    '4. ' + AssistantPlanCompletionRules + LineEnding +
-    '5. Follow the acceptance criteria in the section. Do not change validation requirements to make work pass. ' +
-    'Unchecked acceptance items require manual review. A clean compile alone does not prove correct behavior.' +
-    LineEnding + LineEnding + '----- begin plan section -----' + LineEnding + Body + LineEnding + '----- end plan section -----';
+  Tools := '';
+  If FActiveBackend = 'claude' Then
+    Tools := ClaudeBuildToolsJson;
+  Result := PlanWorkPrompt(PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle, ContinueSameItem,
+    FActiveBackend = 'claude', Tools);
 End;
 
 Procedure TProjectAssistantForm.BuildWorkOnSelectedPackage;

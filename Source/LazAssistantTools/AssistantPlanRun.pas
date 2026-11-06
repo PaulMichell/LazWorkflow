@@ -75,11 +75,15 @@ Function PlanRunUnexplainedStall(AgentRunning, Sending, UserStopped: Boolean; Op
 Function PlanRunStallWaitNote(WaitSeconds: Integer): String;
 Function PlanRunStallResumeNote: String;
 Function PlanRunNewChatNote(UsagePercent: Integer): String;
+{ Work-item prompt. Claude names only tools present in ToolsJson. Native keeps the existing sentences. }
+Function PlanWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
+  ContinueSameItem, Claude: Boolean; Const ToolsJson: String): String;
+Function PlanSectionReadSentence: String;
 
 Implementation
 
 Uses
-  AssistantAcceptance;
+  Classes, AssistantPlan, AssistantAcceptance;
 
 Function PlanContextContinuePercent(StoredPercent: Integer): Integer;
 Begin
@@ -274,6 +278,172 @@ Begin
       AssistantPlanRunCountsLine(Facts.NotStarted, Facts.InProgress, Facts.Blocked, Facts.Complete)
   Else
     Result := AssistantPlanRunNoneFound;
+End;
+
+Function PlanSectionReadSentence: String;
+Begin
+  Result := 'Read only this item''s section; use line ranges, not whole files, for large units.';
+End;
+
+Function BrokerToolListed(Const ToolsJson, Name: String): Boolean;
+Begin
+  Result := Pos('"' + Name + '"', ToolsJson) > 0;
+End;
+
+Function ListedTools(Const ToolsJson: String; Const Names: Array Of String): String;
+Var
+  I, Count: Integer;
+  Chosen: Array Of String;
+Begin
+  Result := '';
+  SetLength(Chosen, 0);
+  For I := 0 To High(Names) Do
+    If BrokerToolListed(ToolsJson, Names[I]) Then
+      Begin
+        SetLength(Chosen, Length(Chosen) + 1);
+        Chosen[High(Chosen)] := Names[I];
+      End;
+  Count := Length(Chosen);
+  For I := 0 To Count - 1 Do
+    Begin
+      If I = 0 Then
+        Result := Chosen[I]
+      Else If I = Count - 1 Then
+        Result := Result + ' and ' + Chosen[I]
+      Else
+        Result := Result + ', ' + Chosen[I];
+    End;
+End;
+
+Function ClaudeCompileSentence(Const ToolsJson: String): String;
+Begin
+  Result := '';
+  If BrokerToolListed(ToolsJson, 'lazarus_start_build') Then
+    Begin
+      Result := 'Run lazarus_start_build after edits';
+      If BrokerToolListed(ToolsJson, 'lazarus_build_status') Then
+        Result := Result + ' and poll lazarus_build_status';
+      Result := Result + '. ';
+    End
+  Else
+    Result := 'Compile after edits when a build tool is offered. ';
+  If BrokerToolListed(ToolsJson, 'lazarus_start_tests') Then
+    Result := Result + 'Run lazarus_start_tests with only for named regression tests. ';
+  Result := Result + 'A clean compile does not mark this item complete.';
+End;
+
+Function ClaudeCompletionRules(Const ToolsJson: String): String;
+Var
+  UpdateTool, GitTool: String;
+Begin
+  If BrokerToolListed(ToolsJson, 'lazarus_update_markdown') Then
+    UpdateTool := 'lazarus_update_markdown'
+  Else
+    UpdateTool := 'the offered Markdown tool';
+  If BrokerToolListed(ToolsJson, 'lazarus_run_git') Then
+    GitTool := 'lazarus_run_git'
+  Else
+    GitTool := 'the offered Git tool';
+  Result :=
+    'When an actionable item is finished, set its Status to complete with ' + UpdateTool + '. ' +
+    'Do not put Status on a ## heading. A clean compile does not complete the item. ' +
+    'If the working root is a Git repository, ' + GitTool + ' commit must succeed in this turn before Status becomes complete. ' +
+    'Commit the finished files first, then set the status, then commit the plan file. ' +
+    'Use one -m string for the subject and body, or several -m arguments; Git joins them with a blank line. ' +
+    'A commit may end with -- and the files to record, so other staged files stay staged. ' +
+    'If the turn ends with Status complete and that plan file is still uncommitted, the assistant commits the plan file and keeps the status. ' +
+    'If the working root has no Git repository, set Status to complete with no commit. ' +
+    'Report a commit hash only from a successful ' + GitTool + ' result. If a tool fails, say so. ' +
+    'During a plan run, do not open the plan viewer. Status changes update the summary list. ' +
+    'If that Markdown window is already open, it is refreshed.';
+End;
+
+Function ClaudeDiscoverSentence(Const ToolsJson: String): String;
+Var
+  Found: String;
+Begin
+  Found := ListedTools(ToolsJson, ['lazarus_search_in_project', 'lazarus_read_file']);
+  If Found = '' Then
+    Result := '2. Discover with the offered project tools. '
+  Else
+    Result := '2. Discover with ' + Found + '. ';
+  Result := Result + PlanSectionReadSentence + ' ';
+  If BrokerToolListed(ToolsJson, 'lazarus_read_markdown_section') Then
+    Result := Result + 'Use lazarus_read_markdown_section for this item''s section. ';
+  Result := Result + 'Apply authorized edits using the available project tools. ';
+  If BrokerToolListed(ToolsJson, 'lazarus_ensure_form_component') Then
+    Result := Result + 'Use lazarus_ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units. ';
+  If BrokerToolListed(ToolsJson, 'lazarus_replace_in_buffer') Then
+    Result := Result + 'Use lazarus_replace_in_buffer for surgical edits. ';
+  If BrokerToolListed(ToolsJson, 'lazarus_stage_patch') Then
+    Result := Result + 'Use lazarus_stage_patch to stage part of a file. ';
+  Result := TrimRight(Result);
+End;
+
+Function ClaudeContinueLead(Const ToolsJson: String): String;
+Begin
+  Result := 'Edits already applied are in the project. Do not re-read a file you already have';
+  If BrokerToolListed(ToolsJson, 'lazarus_replace_in_buffer') Then
+    Result := Result + ' unless a later lazarus_replace_in_buffer failed.'
+  Else
+    Result := Result + '.';
+  Result := Result + LineEnding + PlanSectionReadSentence + LineEnding + ClaudeCompileSentence(ToolsJson) +
+    ' A folder target compiles the Lazarus packages under that folder, not the project open in the IDE.';
+End;
+
+Function PlanWorkPrompt(Const PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle: String;
+  ContinueSameItem, Claude: Boolean; Const ToolsJson: String): String;
+Const
+  MaxBodyChars = 6000;
+Var
+  Body, ToolInstructions, Heading, ContinueLead: String;
+Begin
+  Body := Trim(SectionBody);
+  If Length(Body) > MaxBodyChars Then
+    Body := Copy(Body, 1, MaxBodyChars) + LineEnding + LineEnding +
+      '… *(section truncated for the prompt; open the plan file for the full text.)*';
+  If Claude Then
+    Begin
+      ToolInstructions := ClaudeDiscoverSentence(ToolsJson) + LineEnding + '3. ' + ClaudeCompileSentence(ToolsJson);
+      ContinueLead := ClaudeContinueLead(ToolsJson);
+    End
+  Else
+    Begin
+      ToolInstructions :=
+        '2. Discover with search_in_project, get_project_info, list_directory and read_file. Apply authorized edits using the available project tools. ' +
+        'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units. ' +
+        PlanSectionReadSentence + LineEnding +
+        '3. Run run_compile after edits, repair introduced errors and compile again. ' +
+        'A clean compile does not mark this item complete.';
+      ContinueLead :=
+        'Edits already applied are in the project. Do not re-read a file you already have unless a later replace_in_file failed. ' +
+        PlanSectionReadSentence + LineEnding +
+        'Run run_compile. A folder target compiles the Lazarus packages under that folder, not the project open in the IDE.';
+    End;
+  Heading := '**Active plan:** `' + PlanRel + '`' + LineEnding;
+  If Trim(ParentTitle) <> '' Then
+    Heading := Heading + '**Section:** ' + ParentTitle + LineEnding;
+  Heading := Heading + '**Item:** ' + SectionTitle + LineEnding + '**Status:** ' + StatusText + LineEnding + LineEnding;
+  If ContinueSameItem Then
+    Result := 'Continue this same plan item in **Build mode**. The previous turn left it in progress.' +
+      LineEnding + LineEnding + ContinueLead + LineEnding +
+      'When the written acceptance criteria are met, commit the finished files, set Status to complete, then commit the plan file. ' +
+      'A missing Validation line does not block that status change. A clean compile alone does not complete the item.' +
+      LineEnding + LineEnding + Heading
+  Else
+    Result := 'Work on this plan item in **Build mode**.' + LineEnding + LineEnding + Heading;
+  Result := Result +
+    'Instructions:' + LineEnding + '1. Focus only on this actionable item unless blocked.' + LineEnding +
+    ToolInstructions + LineEnding +
+    '4. ';
+  If Claude Then
+    Result := Result + ClaudeCompletionRules(ToolsJson)
+  Else
+    Result := Result + AssistantPlanCompletionRules;
+  Result := Result + LineEnding +
+    '5. Follow the acceptance criteria in the section. Do not change validation requirements to make work pass. ' +
+    'Unchecked acceptance items require manual review. A clean compile alone does not prove correct behavior.' +
+    LineEnding + LineEnding + '----- begin plan section -----' + LineEnding + Body + LineEnding + '----- end plan section -----';
 End;
 
 End.

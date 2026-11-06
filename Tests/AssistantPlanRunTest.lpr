@@ -8,10 +8,35 @@ Program AssistantPlanRunTest;
 {$ENDIF}
 
 Uses
-  SysUtils, AssistantPlanRun, AssistantTurnFinish, AssistantAcceptance;
+  {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, AssistantPlanRun, AssistantTurnFinish, AssistantAcceptance,
+  AssistantToolBroker;
+
+Type
+  TPromptWorkspace = Class(TAssistantWorkspaceAdapter)
+    Function Identity: String; Override;
+    Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
+    Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
+    Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
+    Function Describe: String; Override;
+    Function CanBuild: Boolean; Override;
+    Function CanTest: Boolean; Override;
+    Function CanGit: Boolean; Override;
+  End;
 
 Var
   FailCount: Integer;
+
+Function TPromptWorkspace.Identity: String; Begin Result := 'prompt-test'; End;
+Function TPromptWorkspace.ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean;
+Begin Result := False; End;
+Function TPromptWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+Begin Result := False; End;
+Function TPromptWorkspace.SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean;
+Begin Result := False; End;
+Function TPromptWorkspace.Describe: String; Begin Result := '{}'; End;
+Function TPromptWorkspace.CanBuild: Boolean; Begin Result := True; End;
+Function TPromptWorkspace.CanTest: Boolean; Begin Result := True; End;
+Function TPromptWorkspace.CanGit: Boolean; Begin Result := True; End;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -63,9 +88,102 @@ End;
 Var
   Report, StartMessage, ActionText: String;
   Sample: TPlanRunReportFacts;
+Procedure CheckPrompts;
+  Const
+    NativeNames: Array[0..9] Of String = (
+      'search_in_project', 'get_project_info', 'list_directory', 'read_file', 'ensure_form_component',
+      'run_compile', 'replace_in_file', 'run_git', 'update_markdown', 'write_file');
+    ExpectedClaude: Array[0..8] Of String = (
+      'lazarus_search_in_project', 'lazarus_read_file', 'lazarus_replace_in_buffer', 'lazarus_ensure_form_component',
+      'lazarus_start_build', 'lazarus_build_status', 'lazarus_start_tests', 'lazarus_stage_patch',
+      'lazarus_read_markdown_section');
+  Var
+    Workspace: TPromptWorkspace;
+    Broker: TAssistantToolBroker;
+    Tools, Native, Claude, Sparse, Name: String;
+    Names: TStringList;
+    I, Start: Integer;
+    Function IdentChar(C: Char): Boolean;
+    Begin
+      Result := C In ['A'..'Z', 'a'..'z', '0'..'9', '_'];
+    End;
+    Function WholeWord(Const Text, Word: String): Boolean;
+    Var
+      P, Next: Integer;
+    Begin
+      Result := False;
+      P := 1;
+      While P <= Length(Text) - Length(Word) + 1 Do
+        Begin
+          If Copy(Text, P, Length(Word)) = Word Then
+            Begin
+              Next := P + Length(Word);
+              If ((P = 1) Or Not IdentChar(Text[P - 1])) And ((Next > Length(Text)) Or Not IdentChar(Text[Next])) Then
+                Exit(True);
+            End;
+          Inc(P);
+        End;
+    End;
+  Begin
+    Workspace := TPromptWorkspace.Create;
+    Broker := TAssistantToolBroker.Create(Workspace);
+    Names := TStringList.Create;
+    Try
+      Broker.BeginRun(awsProject);
+      Tools := Broker.ToolsJson;
+      Native := PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '5. Driver', False, False, '');
+      Check('native discover sentence is unchanged',
+        Pos('2. Discover with search_in_project, get_project_info, list_directory and read_file. ' +
+          'Apply authorized edits using the available project tools. ' +
+          'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units.', Native) > 0);
+      Check('native compile sentence is unchanged',
+        Pos('3. Run run_compile after edits, repair introduced errors and compile again.', Native) > 0);
+      Check('native continue still names replace_in_file',
+        Pos('unless a later replace_in_file failed.', PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress',
+          'body', '', True, False, '')) > 0);
+      Check('native prompt includes the section sentence', Pos(PlanSectionReadSentence, Native) > 0);
+      Check('native prompt does not name broker tools', Pos('lazarus_', Native) = 0);
+      Claude := PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '5. Driver', False, True, Tools);
+      Claude := Claude + LineEnding + PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '',
+        True, True, Tools);
+      I := 1;
+      While I <= Length(Claude) Do
+        Begin
+          If Copy(Claude, I, 8) = 'lazarus_' Then
+            Begin
+              Start := I;
+              Inc(I, 8);
+              While (I <= Length(Claude)) And IdentChar(Claude[I]) Do Inc(I);
+              Name := Copy(Claude, Start, I - Start);
+              If Names.IndexOf(Name) < 0 Then Names.Add(Name);
+            End
+          Else
+            Inc(I);
+        End;
+      For I := 0 To Names.Count - 1 Do
+        Check('Claude prompt names only a listed tool: ' + Names[I], Pos('"' + Names[I] + '"', Tools) > 0);
+      For I := 0 To High(ExpectedClaude) Do
+        If Pos('"' + ExpectedClaude[I] + '"', Tools) > 0 Then
+          Check('Claude prompt names ' + ExpectedClaude[I], Pos(ExpectedClaude[I], Claude) > 0);
+      For I := 0 To High(NativeNames) Do
+        Check('Claude prompt does not name ' + NativeNames[I], Not WholeWord(Claude, NativeNames[I]));
+      Sparse := '["lazarus_read_file"]';
+      Claude := PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '', False, True, Sparse) +
+        PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '', True, True, Sparse);
+      Check('a missing broker tool is not named', (Pos('lazarus_stage_patch', Claude) = 0) And
+        (Pos('lazarus_start_build', Claude) = 0) And (Pos('lazarus_ensure_form_component', Claude) = 0) And
+        (Pos('lazarus_run_git', Claude) = 0));
+      Check('the sparse prompt still names the tool it has', Pos('lazarus_read_file', Claude) > 0);
+    Finally
+      Names.Free;
+      Broker.Free;
+      Workspace.Free;
+    End;
+  End;
+
 Begin
   FailCount := 0;
-
+  CheckPrompts;
   Check('empty plan counts match the list',
     AssistantPlanRunCountsLine(0, 0, 0, 0) = '0 not started · 0 in progress · 0 blocked · 0 complete  ·  no actionable items');
   Check('open counts match the list',
