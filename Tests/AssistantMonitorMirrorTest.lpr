@@ -148,30 +148,51 @@ Begin
   End;
 End;
 
-Procedure TestBodyEscape;
+{ A body of Size bytes with a quote, a backslash, a newline and a #1 in every thousand. }
+Function MarkedBody(Size: Integer): String;
 Var
-  Turn: TAssistantMonitorTurn;
-  Page, Body: String;
-  Started: QWord;
   Index: Integer;
 Begin
-  Body := StringOfChar('a', 200000);
-  For Index := 1 To Length(Body) Do
+  Result := StringOfChar('a', Size);
+  For Index := 1 To Length(Result) Do
     Case Index Mod 1000 Of
-      0: Body[Index] := '"';
-      1: Body[Index] := '\';
-      2: Body[Index] := #10;
-      3: Body[Index] := #1;
+      0: Result[Index] := '"';
+      1: Result[Index] := '\';
+      2: Result[Index] := #10;
+      3: Result[Index] := #1;
     Else
       ;
     End;
-  Turn := SampleTurn('turn-esc', Body, 2);
+End;
+
+Function IsJson(Const Text: String): Boolean;
+Var
+  Data: TJSONData;
+Begin
+  Try
+    Data := GetJSON(Text);
+    Result := Data <> Nil;
+    Data.Free;
+  Except
+    Result := False;
+  End;
+End;
+
+Procedure TestBodyEscape;
+Var
+  Page: String;
+  Started: QWord;
+Begin
   Started := GetTickCount64;
-  Page := MonitorTurnPageJson('conversation-a', 'ab12cd34', 1, Turn);
+  Page := MonitorTurnPageJson('conversation-a', 'ab12cd34', 1, SampleTurn('turn-big', MarkedBody(200000), 2));
   Check('a quoted body escapes in one pass', (GetTickCount64 - Started < 2000) And (Page <> ''));
+  { A body over MonitorInlineBodyBytes is deferred and left out of the page, so the escapes are checked on one that fits. }
+  Page := MonitorTurnPageJson('conversation-a', 'ab12cd34', 1, SampleTurn('turn-esc', MarkedBody(MonitorInlineBodyBytes - 1024), 2));
+  Check('the escape body is sent inline', Pos('"deferred":false', Page) > 0);
   Check('quotes, slashes, and newlines are escaped', (Pos('\"', Page) > 0) And (Pos('\\', Page) > 0) And (Pos('\n', Page) > 0));
   { Plan item 2.1: every control below #32 is escaped, so the page is valid JSON. }
   Check('other controls are escaped', (Pos(#1, Page) = 0) And (Pos('\u0001', Page) > 0));
+  Check('the escaped page is valid JSON', IsJson(Page));
 End;
 
 Procedure TestLiveBlocks;
