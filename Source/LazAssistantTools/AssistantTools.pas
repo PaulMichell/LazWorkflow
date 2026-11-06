@@ -44,7 +44,7 @@ Function ProjectRootPath: String;
 Function ResolveProjectPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 { Shared, bounded read helpers; these never dispatch arbitrary native tools. }
-Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolRunGit(Mode: TAssistantMode; Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolStagePatch(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolDeletePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
@@ -1048,7 +1048,7 @@ Begin
   End;
 End;
 
-Function ToolRunGit(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolRunGit(Mode: TAssistantMode; Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var Data, Args: TJSONData; I: Integer; Editor: TSourceEditorInterface; Root, Command, CheckReply, Staged, StagedPath: String; CheckData:TJSONData; StartPos,EndPos:Integer;
   Function CanStage(Const RelativePath:String):Boolean;
   Var FullPath:String;
@@ -1073,9 +1073,12 @@ Begin
           Args := TJSONObject(Data).Find('arguments');
           If (Args Is TJSONArray) And (Args.Count > 0) Then Command := Args.Items[0].AsString;
         End;
-      If (GAssistantToolMode = amInspect) And (Not AssistantGitInspectReadCommand(Command)) Then
+      If Not AssistantGitAllowedInMode(Mode, Command) Then
         Begin
-          ErrorText := 'Inspect git allows status, diff, log, show, rev-parse, and ls-files only.';
+          If Mode = amInspect Then
+            ErrorText := 'Inspect git allows status, diff, log, show, rev-parse, and ls-files only.'
+          Else
+            ErrorText := 'Git execution requires Build mode.';
           Exit;
         End;
       If (AssistantTarget.Kind=atkPackage) And (Command='add') And (Args Is TJSONArray) Then
@@ -4567,7 +4570,7 @@ Begin
   End;
 End;
 
-Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
+Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
@@ -4643,7 +4646,7 @@ Begin
       Exit;
     End;
   If Not CheckTarget Then Exit;
-  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, ResultText, ErrorText, ImageRefs);
+  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
 End;
 
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
@@ -4855,7 +4858,7 @@ Begin
   End;
 End;
 
-Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Out ResultText: String;
+Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
   Name: String;
@@ -4897,7 +4900,7 @@ Begin
   Else If Name = 'replace_in_file' Then
     Result := ToolReplaceInFile(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_git' Then
-    Result := ToolRunGit(ArgumentsJson, ResultText, ErrorText)
+    Result := ToolRunGit(Mode, ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'stage_patch' Then
     Result := ToolStagePatch(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'run_compile' Then

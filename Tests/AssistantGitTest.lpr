@@ -132,6 +132,21 @@ Begin
     Check('inspect refuses add', Not AssistantGitInspectReadCommand('add'));
     Check('inspect refuses commit', Not AssistantGitInspectReadCommand('commit'));
     Check('inspect refuses push', Not AssistantGitInspectReadCommand('push'));
+    Check('Build allows add', AssistantGitAllowedInMode(amBuild, 'add'));
+    Check('Build allows commit', AssistantGitAllowedInMode(amBuild, 'commit'));
+    Check('Inspect allows only status', AssistantGitAllowedInMode(amInspect, 'status'));
+    Check('Inspect allows only diff', AssistantGitAllowedInMode(amInspect, 'diff'));
+    Check('Inspect allows only log', AssistantGitAllowedInMode(amInspect, 'log'));
+    Check('Inspect allows only show', AssistantGitAllowedInMode(amInspect, 'show'));
+    Check('Inspect allows only rev-parse', AssistantGitAllowedInMode(amInspect, 'rev-parse'));
+    Check('Inspect allows only ls-files', AssistantGitAllowedInMode(amInspect, 'ls-files'));
+    Check('Inspect mode refuses add', Not AssistantGitAllowedInMode(amInspect, 'add'));
+    Check('Inspect mode refuses commit', Not AssistantGitAllowedInMode(amInspect, 'commit'));
+    Check('Inspect mode refuses push', Not AssistantGitAllowedInMode(amInspect, 'push'));
+    Check('Plan refuses commit', Not AssistantGitAllowedInMode(amPlan, 'commit'));
+    Check('Document refuses commit', Not AssistantGitAllowedInMode(amDocument, 'commit'));
+    Check('Plan refuses status like the broker', Not AssistantGitAllowedInMode(amPlan, 'status'));
+    Check('Document refuses status like the broker', Not AssistantGitAllowedInMode(amDocument, 'status'));
     Check('description allows inspect reads',
       Pos('Inspect may use status, diff, log, show, rev-parse, and ls-files only.', AssistantGitDescription) > 0);
     Check('description is not build-only', Pos('in Build mode', AssistantGitDescription) = 0);
@@ -333,11 +348,16 @@ Begin
     Try
       IDEWorkspace.ToolMode := amInspect;
       Run := IDEBroker.BeginRun(awsReadOnly);
+      Check('Inspect refuses add before any other tool call',
+        Not IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","work.txt"]}', Reply, Err) And
+        (Pos('ls-files only', Err) > 0));
       Check('Inspect offers no Lazarus Markdown writes', Pos('lazarus_update_markdown', IDEBroker.ToolsJson) = 0);
       Check('Inspect hides partial staging', Pos('lazarus_stage_patch', IDEBroker.ToolsJson) = 0);
       Check('Inspect refuses a Lazarus Markdown write', Not IDEBroker.Execute(Run, 'lazarus_update_markdown', BrokerCompletion, Reply, Err));
       IDEWorkspace.ToolMode := amBuild;
       Run := IDEBroker.BeginRun(awsProject);
+      Check('Build git add does not depend on a previous tool setting the mode',
+        IDEBroker.Execute(Run, 'lazarus_run_git', '{"arguments":["add","--","work.txt"]}', Reply, Err));
       Check('Build offers the Lazarus Markdown writes', (Pos('"lazarus_write_markdown"', IDEBroker.ToolsJson) > 0) And
         (Pos('"lazarus_update_markdown"', IDEBroker.ToolsJson) > 0));
       Check('Build offers partial staging through the IDE', Pos('"lazarus_stage_patch"', IDEBroker.ToolsJson) > 0);

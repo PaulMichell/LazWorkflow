@@ -567,7 +567,7 @@ Begin
     Check('read resolver uses target root',ResolveProjectPath('Source/One/One.pas',Path,Note) And (Path=Packages.First.Member.Path));
     Check('legacy tools describe selected package',ExecuteAssistantToolForMode('get_project_info','{}',amInspect,Reply,Note) And (Pos('One.lpk',Reply)>0));
     Check('legacy package writes cannot alter unrelated source',Not ExecuteAssistantToolForMode('write_file','{"path":"App/App.pas","content":"bad"}',amBuild,Reply,Note));
-    Check('Git cannot stage unrelated project source',Not ToolRunGit('{"arguments":["add","--","App/App.pas"]}',Reply,Note));
+    Check('Git cannot stage unrelated project source',Not ToolRunGit(amBuild,'{"arguments":["add","--","App/App.pas"]}',Reply,Note));
     Check('legacy membership tool cannot modify active project',Not ExecuteAssistantToolForMode('add_unit_to_project','{"path":"Source/One/One.pas"}',amBuild,Reply,Note));
     Store.SetProjectRoot(AssistantTarget.Root,AssistantTarget.StoreKey);
     Check('save package plan setting',Store.SaveShellConfig(True,amPlan,'Documents/One.md'));

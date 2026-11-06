@@ -11,7 +11,7 @@ Unit AssistantGit;
 Interface
 
 Uses
-  Classes, SysUtils;
+  Classes, SysUtils, AssistantConversation;
 
 Const
   AssistantGitSchema = '{"type":"object","properties":{"arguments":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":256}},"required":["arguments"],"additionalProperties":false}';
@@ -39,6 +39,10 @@ Const
 Function WorkingRootHasGitRepository(Const Root: String): Boolean;
 { True only for the six read commands Inspect may run. Add, commit, and every other command are false. }
 Function AssistantGitInspectReadCommand(Const Command: String): Boolean;
+{ True when this mode may run Command. Build does not restrict the subcommand.
+  Inspect allows only the six read commands. Plan, Document and Chat refuse Git,
+  the same as the broker's Markdown and none scopes. }
+Function AssistantGitAllowedInMode(Mode: TAssistantMode; Const Command: String): Boolean;
 Procedure ResetAssistantGitTurn;
 Function AssistantGitTurnCommitted: Boolean;
 Function RunAssistantGit(Const ProjectRoot, ArgumentsJSON: String; Out ResultText, ErrorText: String): Boolean;
@@ -61,6 +65,16 @@ Function AssistantGitInspectReadCommand(Const Command: String): Boolean;
 Begin
   Result := (Command = 'status') Or (Command = 'diff') Or (Command = 'log') Or
     (Command = 'show') Or (Command = 'rev-parse') Or (Command = 'ls-files');
+End;
+
+Function AssistantGitAllowedInMode(Mode: TAssistantMode; Const Command: String): Boolean;
+Begin
+  Case Mode Of
+    amBuild: Result := True;
+    amInspect: Result := AssistantGitInspectReadCommand(Command);
+  Else
+    Result := False;
+  End;
 End;
 
 Function WorkingRootHasGitRepository(Const Root: String): Boolean;

@@ -111,7 +111,8 @@ End;
 
 Function TAssistantIDEWorkspace.RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
 Begin
-  Result := ToolRunGit(Arguments, ResultText, ErrorText);
+  { The turn's mode. A broker call does not set GAssistantToolMode. }
+  Result := ToolRunGit(FToolMode, Arguments, ResultText, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.StagePatch(Const Patch: String; Out ResultText, ErrorText: String): Boolean;
