@@ -7,7 +7,7 @@ Unit AssistantMonitorForm;
   LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
   the layouts below are read through explicit libc and iphlpapi externals.
 
-  LoadFields sets Loading while it fills the controls. Setting
+  LoadFields sets FieldsLoading while it fills the controls. Setting
   RemoteApprovalCheck.Checked fires its OnClick, and that handler must not
   save half-loaded fields (plan item 3.4 of Documents/Plan-20261105-130659.md). }
 
@@ -58,7 +58,7 @@ Type
   Private
     ClientIds: TStringList;
     { True while LoadFields fills the controls. Control events do not save then. }
-    Loading: Boolean;
+    FieldsLoading: Boolean;
     Procedure LoadFields;
     Procedure FillAddressChoices;
     Function EndpointCaption: String;
@@ -388,7 +388,7 @@ Var
   Settings: TMonitorSettings;
   ErrorText, Proposed: String;
 Begin
-  Loading := True;
+  FieldsLoading := True;
   Try
     If Not LoadMonitorSettings(Settings, ErrorText) Then
       Settings := DefaultMonitorSettings;
@@ -406,7 +406,7 @@ Begin
       StatusMemo.Text := ErrorText;
     FillAddressChoices;
   Finally
-    Loading := False;
+    FieldsLoading := False;
   End;
 End;
 
@@ -610,7 +610,7 @@ End;
 Procedure TAssistantMonitorForm.RemoteApprovalCheckClick(Sender: TObject);
 Begin
   { LoadFields setting Checked fires this. The loaded value is not a user change. }
-  If Loading Then
+  If FieldsLoading Then
     Exit;
   SaveFields(ListenerRunning);
   RefreshState;
