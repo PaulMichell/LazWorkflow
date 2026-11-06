@@ -48,8 +48,8 @@ Type
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanTest: Boolean; Virtual;
-    Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Virtual;
-    Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Virtual;
+    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanGit: Boolean; Virtual;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -282,14 +282,14 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
 Begin
   Command := '';
   ErrorText := 'Configured tests are unavailable.';
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Configured tests are unavailable.';
@@ -1215,9 +1215,20 @@ Begin
                   Exit;
                 End;
               ActualPath := Node.AsString;
-              If Not FAdapter.TestCommand(ActualPath, Text, ErrorText) Then Exit;
+              NewText := '';
+              Node := Args.Find('only');
+              If Assigned(Node) Then
+                Begin
+                  If Not (Node Is TJSONArray) Then
+                    Begin
+                      ErrorText := 'only must be a list of test program names.';
+                      Exit;
+                    End;
+                  NewText := Node.AsJSON;
+                End;
+              If Not FAdapter.TestCommand(ActualPath, NewText, Text, ErrorText) Then Exit;
               If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;
-              Result := FAdapter.StartTests(ActualPath, Text, ResultText, ErrorText);
+              Result := FAdapter.StartTests(ActualPath, Text, NewText, ResultText, ErrorText);
               Exit;
             End;
           If Tool = 'lazarus_start_build' Then
@@ -1609,7 +1620,11 @@ Begin
     'Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{"package":{"type":"string"}},"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
   If (FWriteScope = awsProject) And FAdapter.CanTest Then Result := Result +
-    ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. Configure it in Settings > Target tests. Cannot supply commands or arguments. Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.","inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"}},"required":["build_job_id"],"additionalProperties":false}},' +
+    ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. ' +
+    'Optional only is a list of test program names, and applies only when the command is Tests/RunAssistantTests.pas. ' +
+    'Each name must match an existing Tests/<name>.lpr and is passed as --only. Output goes to a temporary directory chosen here. ' +
+    'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
+    '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}}},"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
   If ((FWriteScope = awsProject) Or (FWriteScope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +

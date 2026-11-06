@@ -33,10 +33,160 @@ Type
     Function StorageFilename: String;
   End;
 
+{ Append --only pairs and a private --output-dir when OnlyJSON names tests. An empty list leaves CommandJSON unchanged.
+  Only the repository runner Tests/RunAssistantTests.pas accepts names, and each name must be an existing Tests/<name>.lpr. }
+Function ApplyTestOnly(Const CommandJSON, ProjectRoot, OnlyJSON: String; Out NewCommand, ErrorText: String): Boolean;
+
 Implementation
 
 Uses
-  fpjson, AssistantProjectPaths;
+  fpjson, jsonparser, LazFileUtils, AssistantProjectPaths;
+
+Function ValidTestProgramName(Const Name: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := (Name <> '') And (Name[1] In ['A'..'Z', 'a'..'z']);
+  If Not Result Then Exit;
+  For I := 2 To Length(Name) Do
+    If Not (Name[I] In ['A'..'Z', 'a'..'z', '0'..'9']) Then Exit(False);
+End;
+
+Function SafeDirToken(Const Value: String): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := 1 To Length(Value) Do
+    If Value[I] In ['A'..'Z', 'a'..'z', '0'..'9'] Then
+      Result := Result + Value[I];
+  If Result = '' Then
+    Result := 'run';
+End;
+
+Function IsRepositoryRunner(Const Executable, ProjectRoot: String; Arguments: TJSONArray): Boolean;
+Var
+  I: Integer;
+  Runner, Value: String;
+Begin
+  Runner := ExpandFileName(IncludeTrailingPathDelimiter(ProjectRoot) + 'Tests' + PathDelim + 'RunAssistantTests.pas');
+  Result := CompareFilenames(ExpandFileName(Executable), Runner) = 0;
+  If Result Or Not Assigned(Arguments) Then Exit;
+  For I := 0 To Arguments.Count - 1 Do
+    Begin
+      If Arguments.Items[I].JSONType <> jtString Then Continue;
+      Value := StringReplace(Arguments.Items[I].AsString, '\', '/', [rfReplaceAll]);
+      If (Value = 'Tests/RunAssistantTests.pas') Or
+        (CompareFilenames(ExpandFileName(Arguments.Items[I].AsString), Runner) = 0) Then
+          Exit(True);
+    End;
+End;
+
+Function ApplyTestOnly(Const CommandJSON, ProjectRoot, OnlyJSON: String; Out NewCommand, ErrorText: String): Boolean;
+Var
+  Data, OnlyData, Args: TJSONData;
+  Only: TJSONArray;
+  I: Integer;
+  Name, TestFile, OutputDir, Token: String;
+Begin
+  Result := False;
+  NewCommand := '';
+  ErrorText := '';
+  If (Trim(OnlyJSON) = '') Or (Trim(OnlyJSON) = '[]') Then
+    Begin
+      NewCommand := CommandJSON;
+      Exit(True);
+    End;
+  OnlyData := Nil;
+  Data := Nil;
+  Try
+    Try
+      OnlyData := GetJSON(OnlyJSON);
+    Except
+      ErrorText := 'only must be a list of test program names.';
+      Exit;
+    End;
+    If Not (OnlyData Is TJSONArray) Then
+      Begin
+        ErrorText := 'only must be a list of test program names.';
+        Exit;
+      End;
+    Only := TJSONArray(OnlyData);
+    If Only.Count = 0 Then
+      Begin
+        NewCommand := CommandJSON;
+        Exit(True);
+      End;
+    If Only.Count > 32 Then
+      Begin
+        ErrorText := 'only accepts at most 32 test program names.';
+        Exit;
+      End;
+    If Trim(ProjectRoot) = '' Then
+      Begin
+        ErrorText := 'The project root is required to select named tests.';
+        Exit;
+      End;
+    For I := 0 To Only.Count - 1 Do
+      Begin
+        If Only.Items[I].JSONType <> jtString Then
+          Begin
+            ErrorText := 'Each only name must be a string.';
+            Exit;
+          End;
+        Name := Only.Items[I].AsString;
+        If Not ValidTestProgramName(Name) Then
+          Begin
+            ErrorText := 'Test name must match ^[A-Za-z][A-Za-z0-9]*$: ' + Name;
+            Exit;
+          End;
+        TestFile := IncludeTrailingPathDelimiter(ProjectRoot) + 'Tests' + PathDelim + Name + '.lpr';
+        If Not FileExistsUTF8(TestFile) Then
+          Begin
+            ErrorText := 'Test program was not found: Tests/' + Name + '.lpr';
+            Exit;
+          End;
+      End;
+    Try
+      Data := GetJSON(CommandJSON);
+    Except
+      ErrorText := 'Test command is not valid JSON.';
+      Exit;
+    End;
+    If Not (Data Is TJSONObject) Or Not (TJSONObject(Data).Find('arguments') Is TJSONArray) Then
+      Begin
+        ErrorText := 'Test command has no argument list.';
+        Exit;
+      End;
+    Args := TJSONObject(Data).Find('arguments');
+    If Not IsRepositoryRunner(TJSONObject(Data).Get('executable', ''), ProjectRoot, TJSONArray(Args)) Then
+      Begin
+        ErrorText := 'only applies only when the configured command is Tests/RunAssistantTests.pas.';
+        Exit;
+      End;
+    Token := SafeDirToken(TJSONObject(Data).Get('build_job_id', ''));
+    For I := 0 To Only.Count - 1 Do
+      Token := Token + '-' + Only.Items[I].AsString;
+    OutputDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + Token;
+    If Not ForceDirectories(OutputDir) Then
+      Begin
+        ErrorText := 'Could not create a temporary test output directory.';
+        Exit;
+      End;
+    For I := 0 To Only.Count - 1 Do
+      Begin
+        TJSONArray(Args).Add('--only');
+        TJSONArray(Args).Add(Only.Items[I].AsString);
+      End;
+    TJSONArray(Args).Add('--output-dir');
+    TJSONArray(Args).Add(ExcludeTrailingPathDelimiter(OutputDir));
+    NewCommand := Data.AsJSON;
+    Result := True;
+  Finally
+    OnlyData.Free;
+    Data.Free;
+  End;
+End;
 
 Constructor TAssistantTestSettings.Create(Const ConfigRoot, ProjectFile: String);
 Begin

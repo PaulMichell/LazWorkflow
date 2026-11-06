@@ -51,8 +51,8 @@ Type
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanTest: Boolean; Override;
-    Function TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean; Override;
-    Function StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
+    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function CanGit: Boolean; Override;
     Function RunGit(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -474,7 +474,7 @@ Begin
   Result := True;
 End;
 
-Function TAssistantIDEWorkspace.TestCommand(Const BuildId: String; Out Command, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
 Var
   Status: String;
   Data: TJSONData;
@@ -521,13 +521,14 @@ Begin
     Finally
       Data.Free;
     End;
+    If Not ApplyTestOnly(Command, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
     Result := True;
   Finally
     Settings.Free;
   End;
 End;
 
-Function TAssistantIDEWorkspace.StartTests(Const BuildId, ExpectedCommand: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Command: String;
   Data: TJSONData;
@@ -538,7 +539,7 @@ Var
 Begin
   Result := False;
   ResultText := '';
-  If Not TestCommand(BuildId, Command, ErrorText) Then Exit;
+  If Not TestCommand(BuildId, OnlyJSON, Command, ErrorText) Then Exit;
   If Command <> ExpectedCommand Then
     Begin
       ErrorText := 'Test configuration, executable or build changed during approval.';

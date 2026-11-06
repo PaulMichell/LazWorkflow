@@ -12,7 +12,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener,
-  AssistantMCPBridge, AssistantSearchUtil;
+  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -26,7 +26,9 @@ Type
     ReadThread: TThreadID;
     StoredText, DiskText, OpenPath: String;
     ReplaceCount, SaveCount, EditorStamp: Integer;
-    AllowInspect, AllowChanges: Boolean;
+    AllowInspect, AllowChanges, AllowBuild: Boolean;
+    ProjectRoot, BaseCommand, LastCommand: String;
+    LaunchCount: Integer;
     ApprovedTool, ApprovedPath, ApprovedOld, ApprovedNew: String;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
@@ -37,6 +39,10 @@ Type
     Function CanChangeSets: Boolean; Override;
     Function OpenBuffer(Const Path: String; Out ErrorText: String): Boolean; Override;
     Function SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanBuild: Boolean; Override;
+    Function CanTest: Boolean; Override;
+    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
+    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
@@ -144,6 +150,39 @@ Begin
       Rel := Path;
     End;
   Result := SearchTextMatches(Query, Rel, Body, FilesOnly, MaxResults, ResultText, ErrorText);
+End;
+
+Function TMemoryWorkspace.CanBuild: Boolean;
+Begin
+  Result := AllowBuild;
+End;
+
+Function TMemoryWorkspace.CanTest: Boolean;
+Begin
+  Result := AllowBuild;
+End;
+
+Function TMemoryWorkspace.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
+Begin
+  Result := ApplyTestOnly(BaseCommand, ProjectRoot, OnlyJSON, Command, ErrorText);
+End;
+
+Function TMemoryWorkspace.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Command: String;
+Begin
+  Result := False;
+  ResultText := '';
+  If Not TestCommand(BuildId, OnlyJSON, Command, ErrorText) Then Exit;
+  If Command <> ExpectedCommand Then
+    Begin
+      ErrorText := 'Test configuration, executable or build changed during approval.';
+      Exit;
+    End;
+  LastCommand := Command;
+  Inc(LaunchCount);
+  ResultText := '{"started":true,"job_id":"test-job"}';
+  Result := True;
 End;
 
 Function TMemoryWorkspace.ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean;
@@ -727,6 +766,126 @@ Begin
   Check('the listener stops after Cancel', Not Listener.Running);
 End;
 
+Function ArgumentAt(Const Command: String; Index: Integer): String;
+Var
+  Data, Args: TJSONData;
+Begin
+  Result := '';
+  Data := GetJSON(Command);
+  Try
+    Args := Data.FindPath('arguments');
+    If (Args Is TJSONArray) And (Index >= 0) And (Index < Args.Count) Then
+      Result := Args.Items[Index].AsString;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ArgumentCount(Const Command: String): Integer;
+Var
+  Data, Args: TJSONData;
+Begin
+  Result := -1;
+  Data := GetJSON(Command);
+  Try
+    Args := Data.FindPath('arguments');
+    If Args Is TJSONArray Then
+      Result := Args.Count;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Procedure WriteTextFile(Const Path, Text: String);
+Var
+  Stream: TFileStream;
+Begin
+  Stream := TFileStream.Create(Path, fmCreate);
+  Try
+    If Text <> '' Then
+      Stream.WriteBuffer(Text[1], Length(Text));
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Function OnlyRequest(Const Names: Array Of String): String;
+Var
+  Obj: TJSONObject;
+  Only: TJSONArray;
+  I: Integer;
+Begin
+  Obj := TJSONObject.Create;
+  Only := TJSONArray.Create;
+  Try
+    Obj.Add('build_job_id', 'job-1');
+    Obj.Add('only', Only);
+    For I := 0 To High(Names) Do
+      Only.Add(Names[I]);
+    Result := Obj.AsJSON;
+  Finally
+    Obj.Free;
+  End;
+End;
+
+Procedure CheckNamedTests;
+Var
+  Root, ResultText, ErrorText, Command: String;
+  Obj: TJSONObject;
+  Args: TJSONArray;
+Begin
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-only-' + IntToStr(GetProcessID);
+  ForceDirectories(IncludeTrailingPathDelimiter(Root) + 'Tests');
+  WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Tests' + PathDelim + 'GoodTest.lpr', 'program GoodTest;');
+  WriteTextFile(IncludeTrailingPathDelimiter(Root) + 'Tests' + PathDelim + 'OtherTest.lpr', 'program OtherTest;');
+  Obj := TJSONObject.Create;
+  Args := TJSONArray.Create;
+  Try
+    Obj.Add('executable', '/usr/bin/instantfpc');
+    Obj.Add('workingDirectory', Root);
+    Obj.Add('build_job_id', 'job-1');
+    Obj.Add('executableFingerprint', 'fingerprint');
+    Obj.Add('arguments', Args);
+    Args.Add('Tests/RunAssistantTests.pas');
+    Args.Add('--lazarus-root');
+    Args.Add('/lazarus');
+    Workspace.BaseCommand := Obj.AsJSON;
+  Finally
+    Obj.Free;
+  End;
+  Workspace.ProjectRoot := Root;
+  Workspace.AllowBuild := True;
+  Workspace.LaunchCount := 0;
+  Workspace.LastCommand := '';
+  Bridge.BeginRun(ctsProject);
+  Check('valid names are passed as only pairs', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['GoodTest', 'OtherTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
+  Command := Workspace.LastCommand;
+  Check('only pairs follow the configured arguments', (ArgumentCount(Command) = 9) And
+    (ArgumentAt(Command, 0) = 'Tests/RunAssistantTests.pas') And (ArgumentAt(Command, 1) = '--lazarus-root') And
+    (ArgumentAt(Command, 2) = '/lazarus') And (ArgumentAt(Command, 3) = '--only') And (ArgumentAt(Command, 4) = 'GoodTest') And
+    (ArgumentAt(Command, 5) = '--only') And (ArgumentAt(Command, 6) = 'OtherTest') And (ArgumentAt(Command, 7) = '--output-dir'));
+  Check('output-dir is a temporary directory', (Pos(IncludeTrailingPathDelimiter(GetTempDir), ArgumentAt(Command, 8)) = 1) And
+    DirectoryExists(ArgumentAt(Command, 8)));
+  Check('a name with a space is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['Good Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
+  Check('a name with a slash is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['Good/Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
+  Check('a name with a quote is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['Good"Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
+  Check('a name with no lpr file is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['MissingTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
+  Check('without only the command is unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  Workspace.AllowBuild := False;
+  Workspace.BaseCommand := '';
+  Workspace.ProjectRoot := '';
+  DeleteFile(IncludeTrailingPathDelimiter(Root) + 'Tests' + PathDelim + 'GoodTest.lpr');
+  DeleteFile(IncludeTrailingPathDelimiter(Root) + 'Tests' + PathDelim + 'OtherTest.lpr');
+  RemoveDir(IncludeTrailingPathDelimiter(Root) + 'Tests');
+  RemoveDir(ExcludeTrailingPathDelimiter(Root));
+End;
+
 Begin
   Workspace := TMemoryWorkspace.Create;
   Broker := TAssistantToolBroker.Create(Workspace);
@@ -739,6 +898,7 @@ Begin
     CheckReplaceInBuffer;
     CheckNoEcho;
     CheckSearch;
+    CheckNamedTests;
     CheckCall;
     CheckDirectCall;
     CheckCancel;
