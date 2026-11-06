@@ -35,7 +35,8 @@ Type
 Function ReadBuildInput(Const Path: String; Out Text, ErrorText: String): Boolean;
 Function BuildInputsMatch(Const Inputs: TBuildInputs; Out ErrorText: String): Boolean;
 Function AddBuildInput(Var Inputs: TBuildInputs; Const Path: String; Out ErrorText: String): Boolean;
-Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean): String;
+Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean; Const StaleReason: String = '';
+  Const Detail: String = ''): String;
 Function ExecutableFingerprint(Const Path: String; Out Fingerprint, ErrorText: String): Boolean;
 Function StartAssistantTest(Const Executable, Directory, BuildId: String; Arguments: TStrings;
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''; Const ReportFormat: String = 'exit-code'; MinimumTests: Integer = 1): IAssistantBuildJob;
@@ -214,14 +215,17 @@ Begin
   Result := True;
 End;
 
-Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean): String;
+Function AssistantBuildStatusJSON(Const Value: TBuildJobSnapshot; Stale: Boolean; Const StaleReason: String;
+  Const Detail: String): String;
 Var
   Root: TJSONObject;
-  Diagnostics, Manifest: TJSONArray;
+  Diagnostics, Manifest, SummaryItems: TJSONArray;
   Data: TJSONData;
-  Truncated: Boolean;
-  Outcome, Excerpt: String;
-  I, Bytes: Integer;
+  Entry: TJSONObject;
+  Truncated, ManifestTruncated: Boolean;
+  Outcome, Excerpt, Severity, Reason: String;
+  I, OtherCount: Integer;
+  IncludeManifest: Boolean;
 Begin
   Root := TJSONObject.Create;
   Try
@@ -230,6 +234,9 @@ Begin
     Root.Add('exitCode', Value.ExitCode);
     Root.Add('cancelled', Value.Cancelled);
     Root.Add('stale', Stale);
+    Reason := StaleReason;
+    If Stale And (Reason = '') Then Reason := 'The build evidence is stale.';
+    Root.Add('staleReason', Reason);
     Root.Add('verified', False);
     Root.Add('testsRun', (Value.Kind = 'test') And Value.ProcessStarted);
     Root.Add('kind', Value.Kind);
@@ -256,29 +263,27 @@ Begin
     If Value.Kind = 'test' Then
       Root.Add('validationScope', 'Configured process and observed saved inputs/executable. Check testReport when XML reporting is configured; test relevance and compiler/runtime environment are not verified.')
     Else Root.Add('validationScope', 'Observed saved input manifest; check dependencies for CodeTools source coverage. Compiler/linker environment is not frozen. Compilation is not test validation.');
-    Manifest := TJSONArray.Create;
-    Root.Add('manifest', Manifest);
-    Truncated := False;
-    Bytes := 0;
+    IncludeManifest := SameText(Detail, 'manifest');
+    ManifestTruncated := False;
+    I := 0;
     If Value.Manifest <> '' Then
       Begin
         Data := GetJSON(Value.Manifest);
         Try
-          For I := 0 To Data.Count - 1 Do
+          I := Data.Count;
+          If IncludeManifest Then
             Begin
-              Inc(Bytes, Length(Data.Items[I].AsJSON));
-              If Bytes > 65536 Then
-                Begin
-                  Truncated := True;
-                  Break;
-                End;
-              Manifest.Add(Data.Items[I].Clone);
+              Manifest := TJSONArray.Create;
+              Root.Add('manifest', Manifest);
+              For OtherCount := 0 To Data.Count - 1 Do Manifest.Add(Data.Items[OtherCount].Clone);
             End;
         Finally
           Data.Free;
         End;
       End;
-    Root.Add('manifestTruncated', Truncated);
+    Root.Add('manifestCount', I);
+    Root.Add('manifestTruncated', ManifestTruncated);
+    Root.Add('dependencyCount', 0);
     If (Value.Command <> '') And (Length(Value.Command) <= 65536) Then Root.Add('command', GetJSON(Value.Command));
     Root.Add('commandTruncated', Length(Value.Command) > 65536);
     Diagnostics := ParseBuildDiagnostics(Value.OutputText, Value.JobId, Truncated);
@@ -292,13 +297,29 @@ Begin
           Data.Free;
         End;
       End;
-    Root.Add('items', Diagnostics);
+    SummaryItems := TJSONArray.Create;
+    OtherCount := 0;
+    For I := 0 To Diagnostics.Count - 1 Do
+      Begin
+        If Not (Diagnostics.Items[I] Is TJSONObject) Then Continue;
+        Entry := TJSONObject(Diagnostics.Items[I]);
+        Severity := LowerCase(Entry.Get('severity', ''));
+        If (Severity = '') Or (Severity = 'error') Or (Severity = 'fatal') Or (OtherCount < 20) Then
+          Begin
+            If (Severity <> '') And (Severity <> 'error') And (Severity <> 'fatal') Then Inc(OtherCount);
+            SummaryItems.Add(Entry.Clone);
+          End
+        Else
+          Truncated := True;
+      End;
+    Diagnostics.Free;
+    Root.Add('items', SummaryItems);
     Root.Add('diagnosticsTruncated', Truncated);
     Root.Add('outputTruncated', Value.OutputTruncated);
     Excerpt := Value.OutputText;
-    If Length(Excerpt) > 48000 Then
+    If Length(Excerpt) > 400 Then
       Begin
-        Excerpt := Copy(Excerpt, Length(Excerpt) - 47999, 48000);
+        Excerpt := Copy(Excerpt, Length(Excerpt) - 399, 400);
         While (Excerpt <> '') And ((Byte(Excerpt[1]) And $C0) = $80) Do Delete(Excerpt, 1, 1);
       End;
     Root.Add('logExcerptTruncated', Length(Value.OutputText) > 48000);

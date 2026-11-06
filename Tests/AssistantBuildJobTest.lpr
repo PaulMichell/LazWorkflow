@@ -1,6 +1,7 @@
 Program AssistantBuildJobTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Classes, SysUtils, fpjson, jsonparser, AssistantBuildDiagnostics, AssistantBuildJob, AssistantProtocol, BaseUnix;
+Uses cthreads, Classes, SysUtils, fpjson, jsonparser, AssistantBuildDiagnostics, AssistantBuildJob, AssistantProtocol,
+  AssistantAcceptance, BaseUnix;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok ', Name); End;
 Procedure WriteFile(Const Path, Text: String);
@@ -136,6 +137,47 @@ Begin
     End;
     DeleteFile(Path); fpMkFifo(PChar(Path), &600);
     Check('special input is rejected without blocking', Not ReadBuildInput(Path, Note, ID));
+    Value := Default(TBuildJobSnapshot);
+    Value.JobId := 'job-summary';
+    Value.Done := True;
+    Value.ExitCode := 1;
+    Value.Kind := 'build';
+    Value.OutputText := 'unit.pas(2,1) Error: alpha missing' + LineEnding +
+      'unit.pas(3,1) Error: beta missing' + LineEnding + 'unit.pas(4,1) Error: gamma missing' + LineEnding;
+    Note := '[';
+    For I := 1 To 2000 Do
+      Begin
+        If I > 1 Then Note := Note + ',';
+        Note := Note + '{"path":"/usr/lib/lazarus/lcl/include/input-' + IntToStr(I) +
+          '.inc","sha1":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';
+      End;
+    Value.Manifest := Note + ']';
+    Note := AssistantBuildStatusJSON(Value, True, 'Editor text differs from the saved build input.');
+    Check('default status stays within the tool-result limit', Length(Note) < 16384);
+    Check('default status omits the manifest paths', Pos('input-2000.inc', Note) = 0);
+    Data := GetJSON(Note);
+    Try
+      Check('summary names the stale reason',
+        Data.FindPath('staleReason').AsString = 'Editor text differs from the saved build input.');
+      Check('summary counts the manifest', Data.FindPath('manifestCount').AsInteger = 2000);
+      Check('summary keeps every error diagnostic', (Data.FindPath('items').Count = 3) And
+        (Pos('alpha missing', Note) > 0) And (Pos('beta missing', Note) > 0) And (Pos('gamma missing', Note) > 0));
+    Finally
+      Data.Free;
+    End;
+    Note := AssistantBuildStatusJSON(Value, True, 'Editor text differs from the saved build input.', 'manifest');
+    Check('detail manifest includes the observed inputs', (Pos('input-1.inc', Note) > 0) And (Pos('input-2000.inc', Note) > 0));
+    Value.ExitCode := 0;
+    Value.OutputText := '';
+    Note := AssistantBuildStatusJSON(Value, False);
+    Data := GetJSON(Note);
+    Try
+      TJSONObject(Data).Add('dependencies', GetJSON('{"sourceClosureComplete":true,"addedInputs":3}'));
+      Check('completion check accepts the summary', CheckAssistantAcceptance('Validation: build', Data.AsJSON, '', ID) And
+        (Data.FindPath('outcome').AsString = 'compile_passed') And (Data.FindPath('job_id').AsString = 'job-summary'));
+    Finally
+      Data.Free;
+    End;
   Finally Job := Nil; DeleteFile(Path); End;
   WriteLn('All build job tests passed.');
 End.

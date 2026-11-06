@@ -62,7 +62,7 @@ Type
     Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
-    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
+    Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Override;
     Procedure CancelBuild; Override;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
@@ -606,7 +606,7 @@ End;
 Function TAssistantIDEWorkspace.TestStatus(Out ResultText, ErrorText: String): Boolean;
 Var
   Value: TBuildJobSnapshot;
-  Status, Note, Fingerprint: String;
+  Status, Note, Fingerprint, StaleReason: String;
   Data: TJSONData;
   Stale: Boolean;
   Settings: TAssistantTestSettings;
@@ -620,21 +620,43 @@ Begin
       Exit;
     End;
   Value := FTests.Snapshot;
-  Stale := Value.Done And Not Value.InputsUnchanged;
-  If Not BuildStatus(Status, Note) Then Stale := True
+  Stale := False;
+  StaleReason := '';
+  If Value.Done And Not Value.InputsUnchanged Then
+    Begin
+      Stale := True;
+      StaleReason := 'Observed test inputs changed.';
+    End;
+  If Not BuildStatus(Status, Note) Then
+    Begin
+      Stale := True;
+      If StaleReason = '' Then StaleReason := 'The parent build is unavailable.';
+    End
   Else
     Begin
       Data := GetJSON(Status);
       Try
-        Stale := Stale Or (Data.FindPath('job_id').AsString <> FTestBuildId) Or
-          (Data.FindPath('outcome').AsString <> 'compile_passed');
+        If Data.FindPath('job_id').AsString <> FTestBuildId Then
+          Begin
+            Stale := True;
+            If StaleReason = '' Then StaleReason := 'The parent build is not the build these tests ran against.';
+          End;
+        If Data.FindPath('outcome').AsString <> 'compile_passed' Then
+          Begin
+            Stale := True;
+            If StaleReason = '' Then StaleReason := 'The parent build did not pass.';
+          End;
       Finally
         Data.Free;
       End;
     End;
   If Not Stale Then
     Begin
-      If Not ExecutableFingerprint(FTestExecutable, Fingerprint, Note) Or (Fingerprint <> Value.ExecutableFingerprint) Then Stale := True;
+      If Not ExecutableFingerprint(FTestExecutable, Fingerprint, Note) Or (Fingerprint <> Value.ExecutableFingerprint) Then
+        Begin
+          Stale := True;
+          If StaleReason = '' Then StaleReason := 'The test executable changed.';
+        End;
       Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, AssistantTarget.Manifest);
       Try
         Settings.Load;
@@ -642,7 +664,11 @@ Begin
         Try
           TJSONObject(Data).Add('executableFingerprint', Fingerprint);
           TJSONObject(Data).Add('build_job_id', FTestBuildId);
-          If Data.AsJSON <> FTestCommand Then Stale := True;
+          If Data.AsJSON <> FTestCommand Then
+            Begin
+              Stale := True;
+              If StaleReason = '' Then StaleReason := 'The configured test command changed.';
+            End;
         Finally
           Data.Free;
         End;
@@ -650,7 +676,7 @@ Begin
         Settings.Free;
       End;
     End;
-  ResultText := AssistantBuildStatusJSON(Value, Stale);
+  ResultText := AssistantBuildStatusJSON(Value, Stale, StaleReason);
   Result := True;
 End;
 
@@ -821,16 +847,21 @@ Begin
   Result := True;
 End;
 
-Function TAssistantIDEWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.BuildStatus(Out ResultText, ErrorText: String; Const Detail: String): Boolean;
 Var
   Value: TBuildJobSnapshot;
   I, J, DefineStep: Integer;
   Editor: TSourceEditorInterface;
   Stale, Found: Boolean;
-  Note, Evidence: String;
+  Note, Evidence, StaleReason: String;
   CurrentInputs: TBuildInputs;
   Root, Dependency: TJSONObject;
   Generation: QWord;
+  Procedure NoteStale(Const Reason: String);
+  Begin
+    Stale := True;
+    If StaleReason = '' Then StaleReason := Reason;
+  End;
 Begin
   Result := False;
   ResultText := '';
@@ -841,25 +872,32 @@ Begin
       Exit;
     End;
   Value := FBuild.Snapshot;
-  Stale := (Identity <> FBuildIdentity) Or (Value.Done And Not Value.InputsUnchanged);
+  Stale := False;
+  StaleReason := '';
+  If Identity <> FBuildIdentity Then NoteStale('The work target changed.');
+  If Value.Done And Not Value.InputsUnchanged Then NoteStale('Observed build inputs changed before the build finished.');
   If Not Stale Then
     Begin
-      Stale := Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Or Not Assigned(SourceEditorManagerIntf);
+      If Not Assigned(LazarusIDE) Or Not AssistantTarget.Available Then NoteStale('The IDE target is unavailable.')
+      Else If Not Assigned(SourceEditorManagerIntf) Then NoteStale('The source editor is unavailable.');
       If Not Stale Then
         Begin
-          Stale := AssistantTarget.Modified Or (AssistantTarget.ConfigurationStamp <> FBuildMode);
+          If AssistantTarget.Modified Then NoteStale('The project or package was modified.');
+          If AssistantTarget.ConfigurationStamp <> FBuildMode Then NoteStale('The build configuration changed.');
           { Recheck disk at observation time as well as worker completion: an
             earlier successful build must not validate subsequent saved edits. }
-          If Value.Done And Not BuildInputsMatch(FBuildInputs, Note) Then Stale := True;
+          If Value.Done And Not BuildInputsMatch(FBuildInputs, Note) Then NoteStale(Note);
           For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditors[I];
-              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then
+                NoteStale('An editor that affects the build has unsaved changes.');
             End;
           For I := 0 To High(FBuildInputs) Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FBuildInputs[I].Path);
-              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then Stale := True;
+              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then
+                NoteStale('Editor text differs from the saved build input.');
             End;
         End;
     End;
@@ -876,7 +914,8 @@ Begin
           ErrorText := 'Build changed during dependency discovery.';
           Exit;
         End;
-      Stale := (DefineStep <> FDefineStep) Or (Length(CurrentInputs) <> Length(FBuildInputs));
+      If DefineStep <> FDefineStep Then NoteStale('CodeTools defines changed.');
+      If Length(CurrentInputs) <> Length(FBuildInputs) Then NoteStale('The saved input set changed.');
       For I := 0 To High(CurrentInputs) Do
         Begin
           Found := False;
@@ -886,21 +925,25 @@ Begin
                 Found := True;
                 Break;
               End;
-          If Not Found Then Stale := True;
+          If Not Found Then NoteStale('A saved build input no longer matches.');
         End;
-      Stale := Stale Or (Identity <> FBuildIdentity) Or Not Assigned(SourceEditorManagerIntf);
+      If Identity <> FBuildIdentity Then NoteStale('The work target changed.');
+      If Not Assigned(SourceEditorManagerIntf) Then NoteStale('The source editor is unavailable.');
       If Not Stale Then
         Begin
-          Stale := AssistantTarget.Modified Or (AssistantTarget.ConfigurationStamp <> FBuildMode);
+          If AssistantTarget.Modified Then NoteStale('The project or package was modified.');
+          If AssistantTarget.ConfigurationStamp <> FBuildMode Then NoteStale('The build configuration changed.');
           For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditors[I];
-              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then Stale := True;
+              If Assigned(Editor) And EditorAffectsBuild(Editor) And (Editor.Modified Or Editor.ModifiedDesign) Then
+                NoteStale('An editor that affects the build has unsaved changes.');
             End;
           For I := 0 To High(FBuildInputs) Do
             Begin
               Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FBuildInputs[I].Path);
-              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then Stale := True;
+              If Assigned(Editor) And (Editor.SourceText <> FBuildInputs[I].Text) Then
+                NoteStale('Editor text differs from the saved build input.');
             End;
         End;
       { A previously complete scan becoming incomplete cannot retain validity. }
@@ -913,15 +956,20 @@ Begin
             Dependency.Add('initialScanIncomplete', True);
             Evidence := Dependency.AsJSON;
           End
-        Else If Not Dependency.Get('sourceClosureComplete', False) Then Stale := True;
+        Else If Not Dependency.Get('sourceClosureComplete', False) Then
+          NoteStale('Source coverage is no longer complete.');
       Finally
         Root.Free;
         Dependency.Free;
       End;
     End;
-  Root := TJSONObject(GetJSON(AssistantBuildStatusJSON(Value, Stale)));
+  Root := TJSONObject(GetJSON(AssistantBuildStatusJSON(Value, Stale, StaleReason, Detail)));
   Try
-    Root.Add('dependencies', GetJSON(Evidence));
+    Dependency := TJSONObject(GetJSON(Evidence));
+    Root.Add('dependencies', Dependency);
+    I := Root.IndexOfName('dependencyCount');
+    If I >= 0 Then Root.Delete(I);
+    Root.Add('dependencyCount', Dependency.Get('addedInputs', 0));
     ResultText := Root.AsJSON;
   Finally
     Root.Free;

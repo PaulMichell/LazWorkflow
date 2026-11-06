@@ -268,7 +268,7 @@ Type
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
-    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
+    Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Override;
     Procedure CancelBuild; Override;
   End;
 
@@ -326,7 +326,7 @@ Begin
   Result := True;
 End;
 
-Function TCatalogueWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Function TCatalogueWorkspace.BuildStatus(Out ResultText, ErrorText: String; Const Detail: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := '';

@@ -65,7 +65,7 @@ Type
     Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanBuild: Boolean; Virtual;
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
-    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Virtual;
     Procedure CancelBuild; Virtual;
   End;
   TBrokerSnapshot = Record
@@ -411,7 +411,7 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.BuildStatus(Out ResultText, ErrorText: String; Const Detail: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Build adapter unavailable.';
@@ -1161,7 +1161,7 @@ Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
 Var
   Data, Node, BuildReply: TJSONData;
   Args: TJSONObject;
-  Path, Text, Revision, NewText, ActualPath, ActualText: String;
+  Path, Text, Revision, NewText, ActualPath, ActualText, Detail: String;
   I, Index, Line, Column, MaxResults: Integer;
   SearchPaths: TStringList;
   ResultField: String;
@@ -1358,7 +1358,22 @@ Begin
                       Exit;
                     End;
                   If Tool = 'lazarus_test_status' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
-                  Else Result := FAdapter.BuildStatus(ResultText, ErrorText);
+                  Else
+                    Begin
+                      Detail := '';
+                      Node := Args.Find('detail');
+                      If Assigned(Node) Then
+                        Begin
+                          If (Node.JSONType <> jtString) Or
+                            ((Node.AsString <> '') And (Not SameText(Node.AsString, 'manifest'))) Then
+                            Begin
+                              ErrorText := 'detail must be manifest when provided.';
+                              Exit;
+                            End;
+                          Detail := Node.AsString;
+                        End;
+                      Result := FAdapter.BuildStatus(ResultText, ErrorText, Detail);
+                    End;
                   If Result And Assigned(Node) Then
                     Begin
                       BuildReply := GetJSON(ResultText);
@@ -1905,7 +1920,7 @@ Begin
     ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project, package, or folder target using its saved inputs. ' +
     'A folder builds each .lpk under it, in the same order as run_compile. Optional package is one project-relative .lpk inside that folder. ' +
     'Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{"package":{"type":"string"}},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build for live output, structured diagnostic items and observed-input evidence. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"additionalProperties":false}}';
+    '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build. The default result is a summary: job id, done, exit code, outcome, stale and staleReason, capped diagnostic items, and manifest and dependency counts. Pass detail manifest for the observed-input list. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"},"detail":{"type":"string"}},"additionalProperties":false}}';
   If (Scope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. ' +
     'Optional only is a list of test program names, and applies only when the command is Tests/RunAssistantTests.pas. ' +

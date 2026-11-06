@@ -37,7 +37,7 @@ Type
     Function Describe: String; Override;
     Function CanBuild: Boolean; Override;
     Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
-    Function BuildStatus(Out ResultText, ErrorText: String): Boolean; Override;
+    Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Override;
   End;
 Function TBrokerWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
 Begin
@@ -71,7 +71,7 @@ Function TBrokerWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
 Function TBrokerWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
 Begin Inc(Builds); ResultText := '{"started":true}'; ErrorText := ''; Result := True; End;
-Function TBrokerWorkspace.BuildStatus(Out ResultText, ErrorText: String): Boolean;
+Function TBrokerWorkspace.BuildStatus(Out ResultText, ErrorText: String; Const Detail: String): Boolean;
 Begin ResultText := '{"done":true}'; ErrorText := ''; Result := True; End;
 Function TBrokerWorkspace.Describe: String;
 Begin Result := 'Test project'; End;
