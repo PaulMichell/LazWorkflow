@@ -236,9 +236,14 @@ Type
     Function GetLastError: String;
     Function GetBoundAddress: String;
     Function GetConnectedClientName: String;
+    { Locked reads for the link and IDE threads. The session lock is recursive, so a holder may call them. }
+    Function GetState: TMonitorSessionState;
+    Function GetCloseRequested: Boolean;
+    Function LinkPulls: Boolean;
     Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
     Procedure FillLogLane;
-    Procedure PullPlanSlice;
+    { Pulls is the caller's one read of LinkPulls. }
+    Procedure PullPlanSlice(Pulls: Boolean);
     Procedure PlanFetchReady;
     Procedure QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
     Procedure RememberState(Const Key, ValueJson: String);
@@ -349,10 +354,10 @@ Type
     Procedure SendPackedFrames(Const Frames: TStringArray);
     { One snapshot page for a turn the phone asked for. Does not send turn_data. }
     Procedure SendTurnPage(Const Id: String; Const Turn: TAssistantMonitorTurn);
-    Property State: TMonitorSessionState Read FState;
+    Property State: TMonitorSessionState Read GetState;
     Property Carrier: IMonitorCarrier Read FCarrier;
     Property OnCommand: TMonitorCommandHandler Read FOnCommand Write FOnCommand;
-    Property CloseRequested: Boolean Read FCloseRequested;
+    Property CloseRequested: Boolean Read GetCloseRequested;
     Property FramesSent: Integer Read FFramesSent;
     Property FramesDropped: Integer Read FFramesDropped;
     Property LastError: String Read GetLastError;
@@ -1072,6 +1077,36 @@ Begin
   LockSession;
   Try
     Result := FLastError;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.GetState: TMonitorSessionState;
+Begin
+  LockSession;
+  Try
+    Result := FState;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.GetCloseRequested: Boolean;
+Begin
+  LockSession;
+  Try
+    Result := FCloseRequested;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.LinkPulls: Boolean;
+Begin
+  LockSession;
+  Try
+    Result := FLinkPulls;
   Finally
     UnlockSession;
   End;
@@ -2466,7 +2501,7 @@ Begin
   { The set is already in the state lane. Handed means the outbox accepted it. }
   If Had Then
     NoteMirrorHanded(Cursor);
-  If Not FLinkPulls Then
+  If Not LinkPulls Then
     DrainOutbound;
 End;
 
@@ -3142,8 +3177,8 @@ End;
 
 Function TMonitorSession.TakeOutboundFrameWithLane(Out Bytes: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
 Begin
-  If FLinkPulls Then
-    PullPlanSlice;
+  If LinkPulls Then
+    PullPlanSlice(True);
   FillLogLane;
   Bytes := '';
   Lane := molControl;
@@ -3179,14 +3214,14 @@ Begin
     FPlanFetch.NoteCachedRevision(Path, Revision);
 End;
 
-Procedure TMonitorSession.PullPlanSlice;
+Procedure TMonitorSession.PullPlanSlice(Pulls: Boolean);
 Var
   Json: String;
 Begin
   If Not Assigned(FPlanFetch) Or Not FPlanFetch.Ready Then
     Exit;
   { One slice in the bulk lane. A larger plan must not fill the 4 MiB budget. }
-  If FLinkPulls And ((Not Assigned(FOutbox)) Or (FOutbox.LaneCount(molBulk) > 0)) Then
+  If Pulls And ((Not Assigned(FOutbox)) Or (FOutbox.LaneCount(molBulk) > 0)) Then
     Exit;
   LockSession;
   Try
@@ -3207,12 +3242,15 @@ Var
   Lane: TMonitorOutboxLane;
   Frame: TMonitorFrame;
   Status: TMonitorFrameStatus;
+  Pulls: Boolean;
 Begin
-  If Not FLinkPulls Then
-    PullPlanSlice;
+  { One read, so the pull and the wake below agree if the link changes mode meanwhile. }
+  Pulls := LinkPulls;
+  If Not Pulls Then
+    PullPlanSlice(False);
   FillLogLane;
   { The link takes the outbox. Wake it; do not also send. }
-  If FLinkPulls Then
+  If Pulls Then
     Begin
       If Assigned(FOutbox) Then
         FOutbox.Notify;
