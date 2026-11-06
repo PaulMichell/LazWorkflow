@@ -19,11 +19,22 @@ Unit AssistantMonitorLink;
   Heartbeat and partial-frame deadlines are the poll timeout. A later handshake
   does not share this thread, so it cannot delay frames already in flight.
   A new controller asks this thread to queue bye with reason replaced, flush for
-  at most 500 ms, and close. The session then resets as on a socket close. }
+  at most 500 ms, and close. The session then resets as on a socket close.
+
+  Cross-thread fields (plan item 3.3 of Documents/Plan-20261105-130659.md):
+  another link's thread calls StartReplace, Retain, Release, Held and
+  WaitRetired. ReplaceFlag, ByeState, RetiredFlag and Refs are read and written
+  only through Interlocked calls, which are full barriers. ReplaceUntil is
+  written once, by the caller that claims ReplaceFlag, before the flag is
+  published; this thread reads it only after it sees the flag. So it needs no
+  64-bit atomic, and a 32-bit target cannot read half of it. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
   {$LONGSTRINGS ON}
+{$ENDIF}
+{$IFDEF DEBUG}
+  {$ASSERTIONS ON}
 {$ENDIF}
 
 Interface
@@ -79,20 +90,24 @@ Type
     ControllerLink: Boolean;
     Adopted: Boolean;
     DropLink: Boolean;
-    Replacing: Boolean;
+    { 0 not replacing, 1 claimed while ReplaceUntil is written, 2 replacing. Interlocked only. }
+    ReplaceFlag: LongInt;
+    { 0 until the replace bye is queued, then 1. Interlocked only. }
     ByeState: LongInt;
     ByeArmed: Boolean;
     ByeSent: Boolean;
+    { Written once before ReplaceFlag becomes 2. Read only after Replacing is True. }
     ReplaceUntil: QWord;
     HandshakeStart: QWord;
     PartialSince: QWord;
     CloseSince: QWord;
     DropReason: String;
     FinishedFlag: LongInt;
+    { Interlocked only. Never below zero. }
     Refs: LongInt;
-    RefLock: TRTLCriticalSection;
     Retired: PRTLEvent;
-    RetiredSet: Boolean;
+    { 1 once the link has retired. Interlocked only. }
+    RetiredFlag: LongInt;
     Shut: Boolean;
     Ssl: TObject;
     SslContext: TObject;
@@ -105,6 +120,8 @@ Type
     Procedure ShutdownLink;
     Procedure SignalRetired;
     Procedure QueueReplaceBye;
+    Function Replacing: Boolean;
+    Function ByeQueued: Boolean;
     Function BuildSsl: Boolean;
     Function Handshake: Boolean;
     Procedure BecomeController;
@@ -132,6 +149,7 @@ Type
     Function Held: Boolean;
     Function Finished: Boolean;
     Function WakeOpen: Boolean;
+    { Called from the new controller's thread, never from this link's own thread. }
     Procedure StartReplace;
     Function WaitRetired(TimeoutMs: Integer): Boolean;
   Protected
@@ -155,6 +173,9 @@ Const
   MonitorLinkReadCap = 64;
   MonitorTls12Version = $0303;
   SslVerifyNone = 0;
+  ReplaceIdle = 0;
+  ReplaceClaimed = 1;
+  ReplacePublished = 2;
 
 Procedure LogLink(Level: Integer; Const Text: String);
 Begin
@@ -253,7 +274,7 @@ Begin
   ControllerLink := False;
   Adopted := False;
   DropLink := False;
-  Replacing := False;
+  ReplaceFlag := ReplaceIdle;
   ByeState := 0;
   ByeArmed := False;
   ByeSent := False;
@@ -265,12 +286,11 @@ Begin
   FinishedFlag := 0;
   Refs := 1;
   Retired := Nil;
-  RetiredSet := False;
+  RetiredFlag := 0;
   Shut := False;
   Ssl := Nil;
   SslContext := Nil;
   AcceptedStream := Nil;
-  InitCriticalSection(RefLock);
   Retired := RTLEventCreate;
   Outbox := TMonitorOutbox.Create;
   Outbox.OnWake := @OutboxWake;
@@ -290,7 +310,6 @@ Begin
   If Assigned(Retired) Then
     RTLEventDestroy(Retired);
   Retired := Nil;
-  DoneCriticalSection(RefLock);
   Inherited Destroy;
 End;
 
@@ -307,33 +326,24 @@ End;
 
 Procedure TMonitorLinkThread.Retain;
 Begin
-  EnterCriticalSection(RefLock);
-  Try
-    Inc(Refs);
-  Finally
-    LeaveCriticalSection(RefLock);
-  End;
+  InterlockedIncrement(Refs);
 End;
 
 Procedure TMonitorLinkThread.Release;
+Var
+  Seen: LongInt;
 Begin
-  EnterCriticalSection(RefLock);
-  Try
-    If Refs > 0 Then
-      Dec(Refs);
-  Finally
-    LeaveCriticalSection(RefLock);
-  End;
+  { Compare-and-swap keeps the old rule: an extra release does not take the count below zero. }
+  Repeat
+    Seen := InterlockedExchangeAdd(Refs, 0);
+    If Seen <= 0 Then
+      Exit;
+  Until InterlockedCompareExchange(Refs, Seen - 1, Seen) = Seen;
 End;
 
 Function TMonitorLinkThread.Held: Boolean;
 Begin
-  EnterCriticalSection(RefLock);
-  Try
-    Result := Refs > 1;
-  Finally
-    LeaveCriticalSection(RefLock);
-  End;
+  Result := InterlockedExchangeAdd(Refs, 0) > 1;
 End;
 
 Function TMonitorLinkThread.Finished: Boolean;
@@ -520,16 +530,33 @@ End;
 
 Procedure TMonitorLinkThread.SignalRetired;
 Begin
-  RetiredSet := True;
+  InterlockedExchange(RetiredFlag, 1);
   If Assigned(Retired) Then
     RTLEventSetEvent(Retired);
 End;
 
+Function TMonitorLinkThread.Replacing: Boolean;
+Begin
+  Result := InterlockedExchangeAdd(ReplaceFlag, 0) = ReplacePublished;
+End;
+
+Function TMonitorLinkThread.ByeQueued: Boolean;
+Begin
+  Result := InterlockedExchangeAdd(ByeState, 0) <> 0;
+End;
+
 Procedure TMonitorLinkThread.StartReplace;
 Begin
-  Replacing := True;
-  If ReplaceUntil = 0 Then
-    ReplaceUntil := GetTickCount64 + MonitorReplaceFlushMs;
+  {$IFDEF DEBUG}
+  Assert(GetCurrentThreadId <> ThreadID, 'StartReplace was called on the link''s own thread');
+  {$ENDIF}
+  { Only the caller that claims the flag writes the deadline. The exchange that publishes the flag is a full
+    barrier, so a thread that sees Replacing also sees ReplaceUntil. }
+  If InterlockedCompareExchange(ReplaceFlag, ReplaceClaimed, ReplaceIdle) = ReplaceIdle Then
+    Begin
+      ReplaceUntil := GetTickCount64 + MonitorReplaceFlushMs;
+      InterlockedExchange(ReplaceFlag, ReplacePublished);
+    End;
   QueueReplaceBye;
   Wake;
 End;
@@ -540,7 +567,7 @@ Begin
     TimeoutMs := 1;
   If Assigned(Retired) Then
     RTLEventWaitFor(Retired, TimeoutMs);
-  Result := RetiredSet;
+  Result := InterlockedExchangeAdd(RetiredFlag, 0) <> 0;
 End;
 
 Procedure TMonitorLinkThread.QueueReplaceBye;
@@ -845,7 +872,7 @@ Begin
   Result := Outbox.Take(Bytes, Lane);
   If Result Then
     Begin
-      If Replacing And (ByeState <> 0) Then
+      If Replacing And ByeQueued Then
         ByeArmed := True;
       Exit;
     End;
@@ -1102,7 +1129,7 @@ Begin
           DropReason := 'replaced';
           Break;
         End;
-      If Replacing And (ByeState = 0) Then
+      If Replacing And Not ByeQueued Then
         QueueReplaceBye;
       PollWait(NextTimeout, WantsWrite);
       DrainWake;
