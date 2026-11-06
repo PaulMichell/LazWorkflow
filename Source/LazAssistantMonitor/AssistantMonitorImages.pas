@@ -266,7 +266,9 @@ Begin
 End;
 
 { One pass into a sized buffer. A resume publishes these pages on the IDE thread.
-  Result := Result + once per byte copies the whole page on every character and Lazarus never opens. }
+  Result := Result + once per byte copies the whole page on every character and Lazarus never opens.
+  This stays separate from AssistantProtocol.JsonEscapeText because ChunkSourceLen budgets each
+  source byte with EscapedByteLen, and the two must agree exactly. Every control is escaped. }
 Function EscapedByteLen(C: Char): Integer;
 Begin
   Case C Of
@@ -360,9 +362,9 @@ End;
 
 Function ChunkFrame(Const Id, ItemId, ItemType, Data: String; Part, PartCount: Integer): String;
 Begin
-  Result := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + Id + '","type":"chunk","payload":{"item_id":"' +
-    ItemId + '","part":' + IntToStr(Part) + ',"part_count":' + IntToStr(PartCount) + ',"item_type":"' + ItemType +
-    '","data":"' + EscapeChunkData(Data) + '"}}';
+  Result := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + EscapeChunkData(Id) +
+    '","type":"chunk","payload":{"item_id":"' + EscapeChunkData(ItemId) + '","part":' + IntToStr(Part) + ',"part_count":' +
+    IntToStr(PartCount) + ',"item_type":"' + EscapeChunkData(ItemType) + '","data":"' + EscapeChunkData(Data) + '"}}';
 End;
 
 { Bytes of one UTF-8 code point starting at Index, or 1 for a stray byte. Never zero when Index is in range. }
@@ -427,8 +429,8 @@ Begin
   SetLength(Frames, 0);
   If (ItemId = '') Or (ItemType = '') Or (PayloadJson = '') Or (Not MonitorMessageIdIsSafe(ItemId)) Then
     Exit;
-  Item := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + ItemId + '","type":"' + ItemType + '","payload":' +
-    PayloadJson + '}';
+  Item := '{"v":' + IntToStr(MonitorCatalogueVersion) + ',"id":"' + EscapeChunkData(ItemId) + '","type":"' +
+    EscapeChunkData(ItemType) + '","payload":' + PayloadJson + '}';
   If Length(Item) > MonitorMaxItemBytes Then
     Exit;
   If Length(Item) <= MonitorOutboxChunkBytes Then

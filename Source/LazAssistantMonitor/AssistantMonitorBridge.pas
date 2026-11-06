@@ -11,7 +11,12 @@ Unit AssistantMonitorBridge;
   Reviewed 2026-11-03: the 1 s timer is a backstop. A counter wake queues one pump,
   coalesced to 20 ms. The change pump publishes plan rows and does not read the plan file.
   The live pump uses FillMonitorLiveChanges and does not copy an unchanged block body.
-  No provider or socket code in this unit.
+  No provider or socket code in this unit. State values are written by AssistantMonitorSync.
+
+  The bridge and its two timers exist only between RegisterAssistantMonitor and
+  UnregisterAssistantMonitor. AssistantMonitorMain unregisters in its own
+  finalisation, before the listener stops, so the timers are not freed after the
+  widgetset (plan item 3.6 of Documents/Plan-20261105-130659.md).
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -32,9 +37,9 @@ Procedure AttachAssistantMonitorBridge(Session: TMonitorSession);
 Procedure DetachAssistantMonitorBridge;
 /// Stores aadAllow or aadDeny and signals. Does not run the tool. A second answer returns false.
 Function DecideAssistantMonitorApproval(Const ToolId: String; Allow: Boolean): Boolean;
-/// Main thread. Registers the session listener and the remote approval waiter.
+/// Main thread. Creates the bridge on first use, then registers the session listener and the remote approval waiter.
 Procedure RegisterAssistantMonitor;
-/// Clears the listener and the waiter. Does not stop a listen thread.
+/// Main thread. Clears the listener and the waiter, then frees the bridge and its timers. Does not stop a listen thread.
 Procedure UnregisterAssistantMonitor;
 { Main thread. Copies settings for a listener start. The listen thread keeps that copy. }
 Function CaptureMonitorListenSnapshot(Out Settings: TMonitorSettings; Out ErrorText: String): Boolean;
@@ -43,7 +48,7 @@ Implementation
 
 Uses
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
-  AssistantMonitorMirror, AssistantMonitorApproval, AssistantTools, AssistantConversation,
+  AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorApproval, AssistantTools, AssistantConversation,
   ProjectAssistantForm;
 
 Type
@@ -609,33 +614,8 @@ Begin
   FSentFlagsValid := False;
 End;
 
-Function JsonBool(Condition: Boolean): String;
-Begin
-  If Condition Then
-    Result := 'true'
-  Else
-    Result := 'false';
-End;
-
-Function ChoiceArray(Paths, Captions: TStrings): String;
-Var
-  Index: Integer;
-  One: String;
-Begin
-  Result := '';
-  If (Not Assigned(Paths)) Or (Not Assigned(Captions)) Then
-    Exit;
-  For Index := 0 To Paths.Count - 1 Do
-    Begin
-      If Index >= Captions.Count Then
-        Break;
-      One := '{"path":"' + Paths[Index] + '","caption":"' + Captions[Index] + '"}';
-      If Result <> '' Then
-        Result := Result + ',';
-      Result := Result + One;
-    End;
-End;
-
+{ Every string in these values is escaped by the AssistantMonitorSync writers. Status text, paths,
+  titles and notes reach the phone as they are, including quotes, backslashes and controls. }
 Procedure TAssistantMonitorBridge.PublishStateKeys(Form: TProjectAssistantForm);
 Var
   Session: TMonitorSession;
@@ -643,8 +623,7 @@ Var
   Rows: TAssistantMonitorPlanRows;
   Tasks: TAssistantMonitorTaskRows;
   Paths, Captions, Ids, Titles: TStringList;
-  Current, Backend, Note, PlanRows, TaskRows, ConversationId, ProjectRoot, Title: String;
-  Index: Integer;
+  Current, Backend, Note, ConversationId, ProjectRoot, Title: String;
   Truncated: Boolean;
 Begin
   If Not Assigned(Form) Then
@@ -660,76 +639,47 @@ Begin
   { History current is empty for the open chat. The mirror id is what New and Send write. }
   Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If (ConversationId <> '') And (ConversationId <> 'current') Then
-    Session.PublishState('conversation', '{"id":"' + ConversationId + '"}');
+    Session.PublishState('conversation', MonitorConversationValueJson(ConversationId));
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('status', '{"busy":' + JsonBool(View.Sending Or View.PlanRunning) + ',"sending":' +
-    JsonBool(View.Sending) + ',"plan_running":' + JsonBool(View.PlanRunning) + ',"phase":"' + View.Phase +
-    '","status_text":"' + View.StatusText + '","started_at":"' + View.StartedAt + '","can_send":' +
-    JsonBool(View.CanSend) + ',"can_steer":' + JsonBool(View.CanSteer) + ',"can_stop":' + JsonBool(View.CanStop) +
-    ',"can_change_mode":' + JsonBool(View.CanChangeMode) + ',"error_text":"' + View.ErrorText + '"}');
-  Session.PublishState('session', '{"model":"' + View.Model + '","backend":"' + View.Backend + '","signed_in":' +
-    JsonBool(View.SignedIn) + ',"effort":"' + View.Effort + '","skill":"' + View.Skill + '","context_text":"' +
-    View.ContextText + '","remote_approval":' + JsonBool(View.RemoteApproval) + ',"approval_caption":"' +
-    View.ApprovalCaption + '"}');
-  Session.PublishState('mode', '{"mode":"' + View.Mode + '","locked":' + JsonBool(View.ModeLocked) + '}');
-  Session.PublishState('target', '{"kind":"' + View.TargetKind + '","display":"' + View.TargetDisplay + '","root":"' +
-    View.TargetRoot + '"}');
+  Session.PublishState('status', MonitorStatusValueJson(View));
+  Session.PublishState('session', MonitorSessionValueJson(View));
+  Session.PublishState('mode', MonitorModeValueJson(View));
+  Session.PublishState('target', MonitorTargetValueJson(View));
   Paths := TStringList.Create;
   Captions := TStringList.Create;
   Ids := TStringList.Create;
   Titles := TStringList.Create;
   Try
     Form.FillMonitorTargetChoices(Paths, Captions, Current);
-    Session.PublishState('targets', '{"current":"' + Current + '","choices":[' + ChoiceArray(Paths, Captions) + ']}');
+    Session.PublishState('targets', MonitorTargetsValueJson(Current, Paths, Captions));
     Paths.Clear;
     Captions.Clear;
     Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
-    Session.PublishState('conversations', '{"current":"' + Current + '","truncated":' + JsonBool(Truncated) +
-      ',"choices":[' + ChoiceArray(Ids, Titles) + ']}');
+    Session.PublishState('conversations', MonitorConversationsValueJson(Current, Truncated, Ids, Titles));
     Ids.Clear;
     Titles.Clear;
     Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('models', '{"current":"' + Current + '","backend":"' + Backend + '","note":"' + Note +
-      '","choices":[' + ChoiceArray(Ids, Captions) + ']}');
+    Session.PublishState('models', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
     Ids.Clear;
     Captions.Clear;
     Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
-    Session.PublishState('reasoning', '{"current":"' + Current + '","note":"' + Note + '","choices":[' +
-      ChoiceArray(Ids, Captions) + ']}');
+    Session.PublishState('reasoning', MonitorNamedChoicesValueJson(Current, '', Note, False, Ids, Captions));
     Ids.Clear;
     Captions.Clear;
     Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('permissions', '{"current":"' + Current + '","backend":"' + Backend + '","note":"' + Note +
-      '","choices":[' + ChoiceArray(Ids, Captions) + ']}');
+    Session.PublishState('permissions', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
     Paths.Clear;
     Captions.Clear;
     Form.FillMonitorPlanChoices(Paths, Captions);
-    Session.PublishState('plan_choices', '{"choices":[' + ChoiceArray(Paths, Captions) + ']}');
+    Session.PublishState('plan_choices', MonitorPlanChoicesValueJson(Paths, Captions));
     Form.FillMonitorPlan(Rows);
-    PlanRows := '';
-    For Index := 0 To High(Rows) Do
-      Begin
-        If PlanRows <> '' Then
-          PlanRows := PlanRows + ',';
-        PlanRows := PlanRows + '{"index":' + IntToStr(Rows[Index].Index) + ',"level":' + IntToStr(Rows[Index].Level) +
-          ',"title":"' + Rows[Index].Title + '","parent_title":"' + Rows[Index].ParentTitle + '","status":"' +
-          Rows[Index].Status + '","actionable":' + JsonBool(Rows[Index].Actionable) + '}';
-      End;
-    Session.PublishState('plan', '{"path":"' + View.PlanPath + '","title":"' + View.PlanTitle + '","running":' +
-      JsonBool(View.PlanRunning) + ',"revision":"' + Form.PlanDocumentRevision + '","rows":[' + PlanRows + ']}');
+    Session.PublishState('plan', MonitorPlanValueJson(View.PlanPath, View.PlanTitle, View.PlanRunning,
+      Form.PlanDocumentRevision, Rows));
     Session.NotePlanCachedRevision(View.PlanPath, Form.PlanDocumentRevision);
     Form.FillMonitorTasks(Tasks);
-    TaskRows := '';
-    For Index := 0 To High(Tasks) Do
-      Begin
-        If TaskRows <> '' Then
-          TaskRows := TaskRows + ',';
-        TaskRows := TaskRows + '{"id":"' + Tasks[Index].Id + '","title":"' + Tasks[Index].Title + '","summary":"' +
-          Tasks[Index].Summary + '","mode":"' + Tasks[Index].Mode + '"}';
-      End;
-    Session.PublishState('tasks', '{"rows":[' + TaskRows + ']}');
+    Session.PublishState('tasks', MonitorTasksValueJson(Tasks));
   Finally
     Titles.Free;
     Ids.Free;
@@ -1686,6 +1636,7 @@ End;
 
 Procedure RegisterAssistantMonitor;
 Begin
+  { The only place the bridge, and so its two timers, is created. A second call keeps the first bridge. }
   If Not Assigned(Bridge) Then
     Bridge := TAssistantMonitorBridge.Create;
   SetAssistantSessionListener(@Bridge.Hear);
@@ -1696,6 +1647,14 @@ Procedure UnregisterAssistantMonitor;
 Begin
   SetAssistantSessionListener(Nil);
   SetAssistantRemoteApproval(Nil);
+  If Not Assigned(Bridge) Then
+    Exit;
+  { SchedulePump and QueuedPump are queued against the bridge. Drop them before it is freed. Destroy detaches the
+    session and stops both timers. FreeAndNil clears Bridge before the free, so a TThread.Queue job that runs
+    later finds no bridge and does nothing. }
+  If Assigned(Application) Then
+    Application.RemoveAsyncCalls(Bridge);
+  FreeAndNil(Bridge);
 End;
 
 Function CaptureMonitorListenSnapshot(Out Settings: TMonitorSettings; Out ErrorText: String): Boolean;
@@ -1705,13 +1664,9 @@ Begin
     ApplyMonitorRemoteApproval(Settings.RemoteApproval);
 End;
 
-Initialization
-
-Bridge := TAssistantMonitorBridge.Create;
-
 Finalization
 
+{ Backstop only. AssistantMonitorMain has already unregistered, so this is normally a no-op. }
 UnregisterAssistantMonitor;
-FreeAndNil(Bridge);
 
 End.

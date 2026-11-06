@@ -214,6 +214,9 @@ Type
     Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
     Procedure ServeBlockGet(Const Id, PayloadJson: String);
     Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
+    { One LAM1 frame for Json. False counts the frame in FFramesDropped and logs its type and status.
+      Raw JSON is never returned in Bytes. The caller decides whether the failure closes the link. }
+    Function EncodeHostFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
     Procedure EnqueueAccepted(Const Json: String);
     { Caller holds the session lock. The previous unsent plan is counted as dropped. }
     Procedure StorePlanSend(Const Json: String);
@@ -312,6 +315,9 @@ Type
     { Wakes the controller when a frame is queued. Nil on the memory carrier. }
     Procedure SetOutboundWake(Handler: TMonitorOutboxWake);
     Function TakeOutboundFrame(Out Bytes: RawByteString): Boolean;
+    { TakeOutboundFrame that also names the outbox lane the frame left from. The link does not need the lane;
+      tests use it to check which lane a producer's frames reach. }
+    Function TakeOutboundFrameWithLane(Out Bytes: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
     Function OutboxPending: Boolean;
     Function OutboundCount: Integer;
     /// Next host frame id. Safe to call off the session lock.
@@ -384,10 +390,11 @@ Type
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 { False when the ring can answer. The caller must not fill a form snapshot on that path. }
 Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
+
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantMonitorSettings;
+  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantProtocol, AssistantMonitorSettings;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -660,7 +667,7 @@ Var
   Message: TMonitorMessage;
   ErrorText: String;
 Begin
-  { An unreadable frame stays on control so it is not dropped. }
+  { An envelope the codec cannot decode stays on control. EncodeHostFrame has already refused text that is not JSON. }
   Result := hlControl;
   If Not TryDecodeMonitorEnvelope(Json, Message, ErrorText) Then
     Exit;
@@ -675,9 +682,33 @@ Begin
   End;
 End;
 
-Function EncodeHostFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
+{ The "type" value of a frame, for a log line. The frame may not be JSON, so this is a text search. Only
+  lowercase letters, digits and underscores are kept, at most 32 of them, so no frame content is logged. }
+Function FrameTypeHint(Const Json: String): String;
+Var
+  At, Stop: Integer;
+Begin
+  Result := '?';
+  At := Pos('"type"', Json);
+  If At = 0 Then
+    Exit;
+  At := At + Length('"type"');
+  While (At <= Length(Json)) And (Json[At] In [' ', ':']) Do
+    Inc(At);
+  If (At > Length(Json)) Or (Json[At] <> '"') Then
+    Exit;
+  Inc(At);
+  Stop := At;
+  While (Stop <= Length(Json)) And (Stop - At < 32) And (Json[Stop] In ['a'..'z', '0'..'9', '_']) Do
+    Inc(Stop);
+  If Stop > At Then
+    Result := Copy(Json, At, Stop - At);
+End;
+
+Function TMonitorSession.EncodeHostFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
 Var
   Status: TMonitorFrameStatus;
+  StatusName: String;
 Begin
   Bytes := '';
   Result := False;
@@ -685,12 +716,13 @@ Begin
     Exit;
   If TryEncodeMonitorFrame(Json, Bytes, Status) Then
     Exit(True);
-  { Placeholder strings in the session tests are not envelopes. Keep them so a
-    replaced live part still round-trips. A real frame that is too large does not. }
-  If Status <> mfsBadJson Then
-    Exit;
-  Bytes := Json;
-  Result := Length(Bytes) <= MonitorOutboxChunkBytes;
+  { Raw JSON has no LAM1 header. The phone would read a bad magic and drop the link, and a resume would
+    publish the same state again. So the frame is dropped here and is never queued. }
+  Bytes := '';
+  Inc(FFramesDropped);
+  WriteStr(StatusName, Status);
+  LogLine(2, 'frame not encoded type=' + FrameTypeHint(Json) + ' status=' + StatusName + ' bytes=' +
+    IntToStr(Length(Json)));
 End;
 
 Function JsonMessageId(Const Json: String): String;
@@ -1698,17 +1730,11 @@ Begin
   Status.ApprovalActive := FRemoteApproval And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
   Status.ApprovalToolId := FPendingApprovalId;
   PublishRememberedState;
-  PublishState('status', '{"busy":' + LowerCase(BoolToStr(Status.Busy, True)) + ',"sending":' +
-    LowerCase(BoolToStr(Status.Sending, True)) + ',"plan_running":' + LowerCase(BoolToStr(Status.PlanRunning, True)) +
-    ',"phase":"","status_text":"","can_send":' + LowerCase(BoolToStr(Status.CanSend, True)) + ',"can_steer":' +
-    LowerCase(BoolToStr(Status.CanSteer, True)) + ',"can_stop":' + LowerCase(BoolToStr(Status.CanStop, True)) +
-    ',"can_change_mode":' + LowerCase(BoolToStr(Status.CanChangeMode, True)) + ',"started_at":"","error_text":""}');
-  If Status.ApprovalActive Then
-    PublishState('approval', '{"active":true,"tool_id":"' + Status.ApprovalToolId + '"}')
-  Else
-    PublishState('approval', '{"active":false}');
+  { The tool id and the conversation id are escaped by the AssistantMonitorSync writers. }
+  PublishState('status', MonitorResumeStatusValueJson(Status));
+  PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
   If (FConversationId <> '') And (FConversationId <> 'current') Then
-    PublishState('conversation', '{"id":"' + FConversationId + '"}');
+    PublishState('conversation', MonitorConversationValueJson(FConversationId));
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
   FPhoneAcked := ResumeMsg.Cursor;
@@ -2784,6 +2810,8 @@ Begin
   Finally
     Data.Free;
   End;
+  { The envelope decode already refused an unsafe Id. A block id is echoed only after FetchBlock
+    finds it in the mirror, so it is one the host wrote. Both are still escaped below. }
   If (BlockId = '') Or (Offset < 0) Or (Not Assigned(FMirror)) Or (Not FMirror.FetchBlock(BlockId, Body)) Then
     Begin
       QueueSend(EncodeMonitorError(NewHostId, 'not_found', 'Block was not found.', Id));
@@ -2792,8 +2820,8 @@ Begin
   HeldRevision := FMirror.BlockRevision(BlockId);
   If HasRevision And (AskedRevision <> HeldRevision) Then
     Begin
-      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"revision_changed","payload":{"ref":"' + Id +
-        '","block_id":"' + BlockId + '","revision":' + IntToStr(HeldRevision) + '}}');
+      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"revision_changed","payload":{"ref":"' + JsonEscapeText(Id) +
+        '","block_id":"' + JsonEscapeText(BlockId) + '","revision":' + IntToStr(HeldRevision) + '}}');
       Exit;
     End;
   Bytes := UTF8String(Body);
@@ -3109,10 +3137,16 @@ Function TMonitorSession.TakeOutboundFrame(Out Bytes: RawByteString): Boolean;
 Var
   Lane: TMonitorOutboxLane;
 Begin
+  Result := TakeOutboundFrameWithLane(Bytes, Lane);
+End;
+
+Function TMonitorSession.TakeOutboundFrameWithLane(Out Bytes: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
+Begin
   If FLinkPulls Then
     PullPlanSlice;
   FillLogLane;
   Bytes := '';
+  Lane := molControl;
   Result := Assigned(FOutbox) And FOutbox.Take(Bytes, Lane);
 End;
 

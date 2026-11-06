@@ -1,6 +1,8 @@
 Program AssistantMonitorMirrorTest;
 
 { The monitor log keeps each conversation, folds old events into the model, and pages a snapshot.
+  State chunks and prompt previews are cut between UTF-8 characters (plan item 2.3).
+  Observing a turn leaves the caller's record untouched (plan item 3.2).
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -9,7 +11,12 @@ Program AssistantMonitorMirrorTest;
 {$ENDIF}
 
 Uses
-  SysUtils, AssistantSessionObserve, AssistantMonitorMirror;
+  SysUtils, fpjson, jsonparser, AssistantSessionObserve, AssistantMonitorMirror, AssistantMonitorFrames,
+  AssistantMonitorOutbox, AssistantMonitorSync;
+
+Const
+  { The euro sign, three bytes in UTF-8. }
+  Euro = #$E2#$82#$AC;
 
 Var
   FailCount: Integer;
@@ -23,6 +30,24 @@ Begin
       WriteLn('FAIL ', Title);
       Inc(FailCount);
     End;
+End;
+
+{ Byte comparison. No code page conversion on either side. }
+Function SameBytes(Const Left, Right: RawByteString): Boolean;
+Begin
+  Result := (Length(Left) = Length(Right)) And ((Length(Left) = 0) Or (CompareByte(Left[1], Right[1], Length(Left)) = 0));
+End;
+
+{ Appends bytes with Move, so the join is not converted between code pages. }
+Procedure AppendBytes(Var Target: RawByteString; Const Piece: RawByteString);
+Var
+  Start: Integer;
+Begin
+  If Piece = '' Then
+    Exit;
+  Start := Length(Target);
+  SetLength(Target, Start + Length(Piece));
+  Move(Piece[1], Target[Start + 1], Length(Piece));
 End;
 
 Function SampleTurn(Const TurnId, Body: String; TurnIndex: Integer): TAssistantMonitorTurn;
@@ -145,7 +170,8 @@ Begin
   Page := MonitorTurnPageJson('conversation-a', 'ab12cd34', 1, Turn);
   Check('a quoted body escapes in one pass', (GetTickCount64 - Started < 2000) And (Page <> ''));
   Check('quotes, slashes, and newlines are escaped', (Pos('\"', Page) > 0) And (Pos('\\', Page) > 0) And (Pos('\n', Page) > 0));
-  Check('other controls stay raw', (Pos(#1, Page) > 0) And (Pos('\u0001', Page) = 0));
+  { Plan item 2.1: every control below #32 is escaped, so the page is valid JSON. }
+  Check('other controls are escaped', (Pos(#1, Page) = 0) And (Pos('\u0001', Page) > 0));
 End;
 
 Procedure TestLiveBlocks;
@@ -173,11 +199,185 @@ Begin
   End;
 End;
 
+{ Plan item 3.2. The same turn is observed twice with a changed body. The mirror bumps the block revision in its
+  own copy. The caller's record, and a second record that shares its arrays as the session's observed snapshot
+  does, still hold the original revision. }
+Procedure TestObserveLeavesCallerAlone;
+Var
+  Log: TMonitorMirror;
+  Turn, Shared: TAssistantMonitorTurn;
+  Live: Boolean;
+  Name, BlockId, Body: String;
+Begin
+  For Live := False To True Do
+    Begin
+      If Live Then
+        Name := 'live turn'
+      Else
+        Name := 'stored turn';
+      Log := TMonitorMirror.Create;
+      Try
+        Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+        Turn := SampleTurn('turn-r', 'first', 0);
+        Turn.Live := Live;
+        Turn.Blocks[0].Revision := 7;
+        BlockId := Turn.Blocks[0].BlockId;
+        Log.ObserveTurn(Turn);
+        Check('a new ' + Name + ' keeps the caller revision in the mirror', Log.BlockRevision(BlockId) = 7);
+        Turn.Blocks[0].Body := 'first, then more';
+        Shared := Turn;
+        Log.ObserveTurn(Turn);
+        Check('a changed ' + Name + ' bumps the mirror revision', Log.BlockRevision(BlockId) = 8);
+        Check('the caller''s ' + Name + ' keeps its original revision', Turn.Blocks[0].Revision = 7);
+        Check('a record sharing the ' + Name + ' arrays keeps its original revision', Shared.Blocks[0].Revision = 7);
+        Body := '';
+        Check('the mirror holds the changed ' + Name + ' body', Log.FetchBlock(BlockId, Body) And
+          (Body = 'first, then more'));
+      Finally
+        Log.Free;
+      End;
+    End;
+End;
+
+{ The payload object of an encoded frame, or Nil. The caller frees Root. }
+Function FramePayload(Const Json: String; Out Root: TJSONData): TJSONObject;
+Begin
+  Result := Nil;
+  Root := Nil;
+  Try
+    Root := GetJSON(Json);
+  Except
+    Root := Nil;
+  End;
+  If (Root Is TJSONObject) And (TJSONObject(Root).Find('payload') Is TJSONObject) Then
+    Result := TJSONObject(TJSONObject(Root).Find('payload'));
+End;
+
+Procedure TestUtf8CutHelper;
+Begin
+  Check('a cut inside a character steps back to its start', MonitorUtf8CutLength('a' + Euro + 'b', 2) = 1);
+  Check('a cut one byte short of the end of a character steps back', MonitorUtf8CutLength('a' + Euro + 'b', 3) = 1);
+  Check('a cut on a boundary is kept', MonitorUtf8CutLength('a' + Euro + 'b', 4) = 4);
+  Check('a short text is kept whole', MonitorUtf8CutLength('a' + Euro, 80) = 4);
+  Check('a limit inside the first character keeps that character', MonitorUtf8CutLength(Euro + 'b', 1) = 3);
+  Check('a zero limit keeps nothing', MonitorUtf8CutLength('abc', 0) = 0);
+End;
+
+{ Plan item 2.3. A state value over 32 KiB of 3-byte characters is cut into chunks that each encode, and the
+  chunk data joins back to the exact value. The value starts with six ASCII bytes, so a cut every 20000 bytes
+  would fall inside a character. }
+Procedure TestStateChunksKeepCharacters;
+Var
+  Value: String;
+  Joined, Piece: RawByteString;
+  Frames: TStringArray;
+  Index, Encoded, Fitted, Counted: Integer;
+  Bytes: RawByteString;
+  Status: TMonitorFrameStatus;
+  Root: TJSONData;
+  Payload: TJSONObject;
+Begin
+  Value := '{"t":"';
+  For Index := 1 To 12000 Do
+    Value := Value + Euro;
+  Value := Value + '"}';
+  Check('the state value is over 32 KiB', Length(Value) > 32 * 1024);
+  Frames := MonitorSyncStateFrames('h1', 'conversations', Value);
+  Check('the value is sent as more than one chunk', Length(Frames) > 1);
+  Joined := '';
+  Encoded := 0;
+  Fitted := 0;
+  Counted := 0;
+  For Index := 0 To High(Frames) Do
+    Begin
+      If TryEncodeMonitorFrame(Frames[Index], Bytes, Status) Then
+        Inc(Encoded);
+      If Length(Frames[Index]) <= MonitorOutboxChunkBytes Then
+        Inc(Fitted);
+      Payload := FramePayload(Frames[Index], Root);
+      Try
+        If Assigned(Payload) Then
+          Begin
+            If Payload.Get('part_count', 0) = Length(Frames) Then
+              Inc(Counted);
+            Piece := RawByteString(Payload.Get('data', ''));
+            AppendBytes(Joined, Piece);
+          End;
+      Finally
+        Root.Free;
+      End;
+    End;
+  Check('every chunk encodes as a LAM1 frame', Encoded = Length(Frames));
+  Check('every chunk fits the outbox chunk size', Fitted = Length(Frames));
+  Check('every chunk names the real part count', Counted = Length(Frames));
+  Check('the joined chunk data is the value', SameBytes(Joined, RawByteString(Value)));
+End;
+
+{ Plan item 2.3. A prompt whose 80th byte is inside a character still gives a snapshot page that encodes,
+  and its preview is the prompt cut at the last whole character. }
+Procedure TestPreviewKeepsCharacters;
+Var
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
+  Expected: String;
+  Index, PageIndex: Integer;
+  Bytes: RawByteString;
+  FrameStatus: TMonitorFrameStatus;
+  Root: TJSONData;
+  Payload: TJSONObject;
+  Turns: TJSONArray;
+  Preview: RawByteString;
+Begin
+  Source := Default(TMonitorResumeSource);
+  Source.Found := True;
+  Source.Observed := True;
+  Source.ConversationId := 'conversation-a';
+  Source.StreamId := 'ab12cd34';
+  Source.HasLive := True;
+  Source.Live := SampleTurn('live', 'hello', -2);
+  { One ASCII byte, then euro signs. Bytes 80 to 82 are the 27th euro sign. }
+  Source.Live.Prompt := 'a';
+  For Index := 1 To 30 Do
+    Source.Live.Prompt := Source.Live.Prompt + Euro;
+  Expected := 'a';
+  For Index := 1 To 26 Do
+    Expected := Expected + Euro;
+  Status := Default(TMonitorSyncStatus);
+  Answer := MonitorSyncResumeAnswer(Source, 'conversation-a', '', 'resume-1', 0, Status);
+  PageIndex := -1;
+  For Index := 0 To High(Answer.Frames) Do
+    If Answer.Frames[Index].Kind = mskBulk Then
+      PageIndex := Index;
+  Check('the resume answer has a snapshot page', PageIndex >= 0);
+  If PageIndex < 0 Then
+    Exit;
+  Check('the snapshot page encodes as a LAM1 frame', TryEncodeMonitorFrame(Answer.Frames[PageIndex].Json, Bytes, FrameStatus));
+  Preview := '';
+  Payload := FramePayload(Answer.Frames[PageIndex].Json, Root);
+  Try
+    If Assigned(Payload) And (Payload.Find('turns') Is TJSONArray) Then
+      Begin
+        Turns := TJSONArray(Payload.Find('turns'));
+        If (Turns.Count > 0) And (Turns.Items[0] Is TJSONObject) Then
+          Preview := RawByteString(TJSONObject(Turns.Items[0]).Get('prompt_preview', ''));
+      End;
+  Finally
+    Root.Free;
+  End;
+  Check('the preview stops at the last whole character', SameBytes(Preview, RawByteString(Expected)));
+  Check('the preview is at most 80 bytes', Length(Preview) <= 80);
+End;
+
 Begin
   FailCount := 0;
   TestFoldAndReplay;
   TestBodyEscape;
   TestLiveBlocks;
+  TestObserveLeavesCallerAlone;
+  TestUtf8CutHelper;
+  TestStateChunksKeepCharacters;
+  TestPreviewKeepsCharacters;
   If FailCount = 0 Then
     WriteLn('AssistantMonitorMirrorTest passed')
   Else

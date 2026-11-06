@@ -16,7 +16,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..56] Of String = (
+  CoreTestNames: Array[0..57] Of String = (
     'AssistantUtf8StreamTest', 'AssistantClaudeClientTest', 'AssistantMCPProtocolTest', 'AssistantMCPListenerTest',
     'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
@@ -29,16 +29,17 @@ Const
     'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
     'AssistantTasksTest', 'AssistantMonitorAbsent', 'AssistantMonitorCodecTest', 'AssistantMonitorSessionTest',
-    'AssistantMonitorLockupTest', 'AssistantMonitorOutboxTest', 'AssistantMonitorCommandIntakeTest',
-    'AssistantMonitorProtocolV3Test', 'AssistantMonitorSocketTest', 'AssistantMonitorLinkTest',
-    'AssistantMonitorGrainTest', 'AssistantMonitorPlanFetchTest',
+    'AssistantMonitorEscapeTest', 'AssistantMonitorLockupTest', 'AssistantMonitorOutboxTest',
+    'AssistantMonitorCommandIntakeTest', 'AssistantMonitorProtocolV3Test', 'AssistantMonitorSocketTest',
+    'AssistantMonitorLinkTest', 'AssistantMonitorGrainTest', 'AssistantMonitorPlanFetchTest',
     'AssistantMonitorChaosTest', 'AssistantMonitorAcceptance');
-  GuiTestNames: Array[0..17] Of String = (
+  GuiTestNames: Array[0..18] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',
     'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest',
     'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest',
-    'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest');
+    'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest',
+    'AssistantMonitorFormLoadTest');
 
 Var
   Repo, LazarusRoot, OutputDir: String;

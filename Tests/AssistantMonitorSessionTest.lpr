@@ -467,6 +467,12 @@ Begin
   Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot","payload":{}}';
 End;
 
+{ A live part is a real envelope. The id carries the name, so a check can find the part in the sent frames. }
+Function LivePart(Const Name: String): String;
+Begin
+  Result := '{"v":2,"id":"' + Name + '","type":"patch","payload":{}}';
+End;
+
 Procedure TestOutboundLanes;
 Var
   Index, Before: Integer;
@@ -478,10 +484,10 @@ Begin
   For Index := 1 To 3 Do
     Check('bulk lane accepts ' + IntToStr(Index), Session.TryQueueHostJson(BulkFrame(Index)));
   SetLength(First, 2);
-  First[0] := 'patch-part-1';
-  First[1] := 'patch-part-2';
+  First[0] := LivePart('patch-part-1');
+  First[1] := LivePart('patch-part-2');
   SetLength(Second, 1);
-  Second[0] := 'patch-replaced';
+  Second[0] := LivePart('patch-replaced');
   Before := Session.FramesDropped;
   Session.ReplaceLivePatch(8, First);
   Session.ReplaceLivePatch(9, Second);
@@ -490,7 +496,7 @@ Begin
   Session.DrainOutbound;
   Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 5);
   Check('control ping is sent before the other lanes', Carrier.SentJson(0) = Ping);
-  Check('live replacement is sent and not appended', Carrier.SentJson(1) = 'patch-replaced');
+  Check('live replacement is sent and not appended', Carrier.SentJson(1) = LivePart('patch-replaced'));
   Seen := '';
   For Index := 0 To Carrier.SentCount - 1 Do
     Seen := Seen + Carrier.SentJson(Index) + #10;
@@ -546,22 +552,52 @@ Var
   Before: Integer;
 Begin
   SetLength(First, 2);
-  First[0] := 'patch-part-1';
-  First[1] := 'patch-part-2';
+  First[0] := LivePart('patch-part-1');
+  First[1] := LivePart('patch-part-2');
   SetLength(Second, 1);
-  Second[0] := 'patch-replaced';
+  Second[0] := LivePart('patch-replaced');
   Before := Session.FramesDropped;
   Carrier.ClearSent;
   Session.ReplaceLivePatch(4, First);
   Session.ReplaceLivePatch(5, Second);
   Check('replaced unsent parts are dropped', Session.FramesDropped = Before + 2);
   Session.FlushLivePatch;
-  Check('live lane sends the replacement only', (Carrier.SentCount = 1) And (Carrier.SentJson(0) = 'patch-replaced'));
+  Check('live lane sends the replacement only', (Carrier.SentCount = 1) And
+    (Carrier.SentJson(0) = LivePart('patch-replaced')));
   Session.ReplaceLivePatch(6, First);
   SetLength(First, 0);
   Session.ReplaceLivePatch(6, First);
   Session.FlushLivePatch;
   Check('empty replace does not append', Carrier.SentCount = 1);
+End;
+
+{ Plan item 2.2. Text that is not JSON never reaches the outbox as raw bytes; it is counted as dropped.
+  A fresh session, so a link the failure closes does not change the shared session the later tests use. }
+Procedure TestEncodeFailureNotQueued;
+Var
+  Fresh: TMonitorSession;
+  Parts: TStringArray;
+  Bytes: RawByteString;
+  Before: Integer;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    Before := Fresh.FramesDropped;
+    Check('invalid JSON is refused', Not Fresh.TryQueueHostJson('{"v":2,"id":"bad-1","type":"ping",'));
+    Check('invalid JSON puts nothing in the outbox', Fresh.OutboundCount = 0);
+    Check('invalid JSON is not taken by the link', Not Fresh.TakeOutboundFrame(Bytes));
+    Check('invalid JSON is counted as dropped', Fresh.FramesDropped = Before + 1);
+    Fresh.PublishState('status', '{"busy":');
+    Check('a state value that is not JSON puts nothing in the outbox', Fresh.OutboundCount = 0);
+    Check('a state value that is not JSON is counted as dropped', Fresh.FramesDropped = Before + 2);
+    SetLength(Parts, 1);
+    Parts[0] := 'patch-part-1';
+    Fresh.ReplaceLivePatch(1, Parts);
+    Check('a placeholder live part puts nothing in the outbox', Fresh.OutboundCount = 0);
+    Check('a placeholder live part is counted as dropped', Fresh.FramesDropped = Before + 3);
+  Finally
+    Fresh.Free;
+  End;
 End;
 
 Function PatchPayload(Const Epoch: String; Cursor: Int64; Const Body: String): String;
@@ -1373,6 +1409,7 @@ Begin
       TestOutboundLanes;
       TestPlanFrameBeforeBulk;
       TestLivePatchReplaces;
+      TestEncodeFailureNotQueued;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except

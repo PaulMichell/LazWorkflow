@@ -2,7 +2,8 @@ Program AssistantMonitorPlanFetchTest;
 
 { plan_get streams the file on disk, including past 4 MiB (c) 2026 Michell Computing.
 
-  Item 5.4. The worker is polled from the session. The model cap is not this path. }
+  Item 5.4. The worker is polled from the session. The model cap is not this path.
+  Plan item 2.4 of Documents/Plan-20261105-130659.md: plan_data frames, which fpjson writes, leave on the bulk lane. }
 
 {$IFDEF FPC}
   {$MODE OBJFPC}
@@ -15,7 +16,7 @@ Uses
   {$ENDIF}
   Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
   AssistantMonitorCarrier, AssistantMonitorSession, AssistantPlanDocument, AssistantSessionObserve, AssistantMonitorSettings,
-  WorkflowSettings;
+  AssistantMonitorOutbox, AssistantMonitorSync, WorkflowSettings;
 
 Const
   SliceBound = 24 * 1024;
@@ -288,6 +289,93 @@ Begin
   Check('5.4 a replacement keeps no mixed bytes', Not SentHas('NEWPLAN-SHOULD-NOT-MIX'));
 End;
 
+{ Plan item 2.4. fpjson AsJSON writes "type" : "plan_data", with spaces around the colon. The classifier must
+  still see the type, and a state key in the payload, as it does for a hand-written frame. }
+Procedure TestFpjsonFramesClassify;
+Var
+  Root, Body: TJSONObject;
+  Json, StateKey: String;
+  Lane: TMonitorSyncLane;
+Begin
+  Root := TJSONObject.Create;
+  Try
+    Root.Add('v', 3);
+    Root.Add('id', 'pf-1');
+    Root.Add('type', 'plan_data');
+    Body := TJSONObject.Create;
+    Body.Add('ref', 'pg-1');
+    Body.Add('text', 'plan');
+    Root.Add('payload', Body);
+    Json := Root.AsJSON;
+  Finally
+    Root.Free;
+  End;
+  Check('2.4 fpjson writes a space before the colon', Pos('"type" : "plan_data"', Json) > 0);
+  Check('2.4 an fpjson plan_data frame is bulk', MonitorSyncClassify(Json, Lane, StateKey) And (Lane = mslBulk));
+  Check('2.4 a spaced state frame names its key', MonitorSyncClassify(
+    '{"v" : 3, "id" : "s1", "type" : "state", "payload" : {"key" : "plan", "value" : {}}}', Lane, StateKey) And
+    (Lane = mslState) And (StateKey = 'plan'));
+  Check('2.4 a payload field called type is not the frame type', MonitorSyncClassify(
+    '{"v":3,"id":"e1","type":"error","payload":{"type":"plan_data"}}', Lane, StateKey) = False);
+  Check('2.4 text that is not JSON is not classified', Not MonitorSyncClassify('{"type" : "plan_data"', Lane, StateKey));
+End;
+
+{ Plan item 2.4. With the link pulling the outbox, every plan_data frame of a fetch leaves from the bulk lane. }
+Procedure TestPlanDataOnBulkLane;
+Var
+  FileName: String;
+  Bytes: RawByteString;
+  Lane: TMonitorOutboxLane;
+  Frame: TMonitorFrame;
+  Status: TMonitorFrameStatus;
+  Item: TJSONObject;
+  Start: QWord;
+  DataCount, OffLane: Integer;
+  SawLast: Boolean;
+Begin
+  FileName := IncludeTrailingPathDelimiter(ProjectRoot) + 'lanes.md';
+  WriteBytes(FileName, StringOfChar('L', SliceBound * 3));
+  DataCount := 0;
+  OffLane := 0;
+  SawLast := False;
+  Session.NoteLinkPulls(True);
+  Try
+    Carrier.ClearSent;
+    Carrier.DeliverJson('{"v":3,"id":"pg-lane","type":"plan_get","payload":{"path":"lanes.md","offset":0,"revision":""}}');
+    Start := GetTickCount64;
+    While (Not SawLast) And (GetTickCount64 - Start < 10000) Do
+      Begin
+        If Not Session.TakeOutboundFrameWithLane(Bytes, Lane) Then
+          Begin
+            Sleep(1);
+            Continue;
+          End;
+        If Not TryDecodeMonitorFrame(Bytes, Frame, Status) Then
+          Continue;
+        If JsonTypeName(Frame.Json) <> 'plan_data' Then
+          Continue;
+        Item := Payload(Frame.Json);
+        If Not Assigned(Item) Then
+          Continue;
+        Try
+          If Item.Get('ref', '') <> 'pg-lane' Then
+            Continue;
+          Inc(DataCount);
+          If Lane <> molBulk Then
+            Inc(OffLane);
+          SawLast := Item.Get('last', False);
+        Finally
+          Item.Free;
+        End;
+      End;
+  Finally
+    Session.NoteLinkPulls(False);
+  End;
+  Check('2.4 the fetch reaches its last slice through the outbox', SawLast);
+  Check('2.4 a 72 KiB plan is more than one slice', DataCount > 1);
+  Check('2.4 every plan_data frame leaves from the bulk lane', (DataCount > 0) And (OffLane = 0));
+End;
+
 Procedure Prepare;
 Var
   Guid: TGuid;
@@ -311,6 +399,7 @@ Begin
   Try
     Try
       Prepare;
+      TestFpjsonFramesClassify;
       Carrier := TMonitorMemoryCarrier.Create;
       CarrierRef := Carrier;
       Session := TMonitorSession.Create;
@@ -321,6 +410,7 @@ Begin
       TestMissingAndResume;
       TestReplacement;
       TestWholeFile;
+      TestPlanDataOnBulkLane;
     Except
       On E: Exception Do
         Begin
@@ -337,6 +427,7 @@ Begin
         DeleteFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'small.md');
         DeleteFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'large.md');
         DeleteFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'swap.md');
+        DeleteFile(IncludeTrailingPathDelimiter(ProjectRoot) + 'lanes.md');
         RemoveDir(ProjectRoot);
       End;
     If SettingsRoot <> '' Then

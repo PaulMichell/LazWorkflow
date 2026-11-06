@@ -13,11 +13,16 @@ Unit AssistantMonitorMirror;
   those frames. A patch larger than the budget is not stored.
   Resume behind a dropped record needs a snapshot.
 
+  ObserveTurn never writes into the turn it is given. Its arrays are shared
+  with the caller's snapshot, which another thread may read (plan item 3.2 of
+  Documents/Plan-20261105-130659.md). It bumps revisions on its own copy.
+
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
   gone. The log-credit class stays because the mirror test still constructs it.
-  Reviewed 2026-11-03: JSON escaping is one pass because those pages are built
-  on the IDE thread. }
+  Reviewed 2026-11-05: strings are escaped by AssistantProtocol.JsonEscapeText,
+  which escapes every control and writes one pass into a sized buffer, because
+  those pages are built on the IDE thread. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -138,6 +143,7 @@ Type
     Function TryReplayPatches(Const StreamId: String; Seq, ThroughSeq: Int64; Out Events: TMonitorMirrorEventArray; Out Head: Int64): Boolean;
     { Copy of the log. Tests read the grain without sending it. }
     Function CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
+    { Turn is read only. The stored copy carries the bumped block revisions. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
     Function HasModel: Boolean;
@@ -185,7 +191,7 @@ Type
 Implementation
 
 Uses
-  SyncObjs, fpjson;
+  SyncObjs, fpjson, AssistantProtocol;
 
 Function Utf8Bytes(Const Text: RawByteString): Integer;
 Begin
@@ -238,80 +244,6 @@ Begin
     Result := 'failed';
 End;
 
-{ One pass into a sized buffer. Snapshot pages are built on the IDE thread.
-  Result := Result + once per byte copies the whole body on every character.
-  Controls other than the seven named escapes stay raw; this is not the chunk codec. }
-Function JsonEscape(Const Text: String): String;
-Var
-  Index, OutLen, At: Integer;
-  C: Char;
-Begin
-  OutLen := 0;
-  For Index := 1 To Length(Text) Do
-    Begin
-      Case Text[Index] Of
-        '"', '\', #8, #9, #10, #12, #13: Inc(OutLen, 2);
-      Else
-        Inc(OutLen);
-      End;
-    End;
-  SetLength(Result, OutLen);
-  At := 1;
-  For Index := 1 To Length(Text) Do
-    Begin
-      C := Text[Index];
-      Case C Of
-        '"':
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := '"';
-            Inc(At, 2);
-          End;
-        '\':
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := '\';
-            Inc(At, 2);
-          End;
-        #8:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'b';
-            Inc(At, 2);
-          End;
-        #9:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 't';
-            Inc(At, 2);
-          End;
-        #10:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'n';
-            Inc(At, 2);
-          End;
-        #12:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'f';
-            Inc(At, 2);
-          End;
-        #13:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'r';
-            Inc(At, 2);
-          End;
-      Else
-        Begin
-          Result[At] := C;
-          Inc(At);
-        End;
-      End;
-    End;
-End;
-
 Function OutlineHash(Const Text: RawByteString): String;
 Var
   Hash: UInt64;
@@ -338,14 +270,14 @@ Begin
     Begin
       If Blocks <> '' Then
         Blocks := Blocks + ',';
-      Blocks := Blocks + '{"block_id":"' + JsonEscape(Turn.Blocks[Index].BlockId) + '","kind":"' +
-        JsonEscape(Turn.Blocks[Index].Kind) + '","revision":' + IntToStr(Turn.Blocks[Index].Revision) +
+      Blocks := Blocks + '{"block_id":"' + JsonEscapeText(Turn.Blocks[Index].BlockId) + '","kind":"' +
+        JsonEscapeText(Turn.Blocks[Index].Kind) + '","revision":' + IntToStr(Turn.Blocks[Index].Revision) +
         ',"body_bytes":' + IntToStr(Length(UTF8String(Turn.Blocks[Index].Body))) + ',"hash":"' +
         OutlineHash(UTF8String(Turn.Blocks[Index].Body)) + '"}';
     End;
-  Result := '{"turn_index":' + IntToStr(Turn.TurnIndex) + ',"turn_id":"' + JsonEscape(Turn.Id) + '","mode":"' +
-    JsonEscape(Turn.Mode) + '","prompt_preview":"' + JsonEscape(Turn.PromptPreview) + '","created_at":"' +
-    JsonEscape(Turn.CreatedAt) + '","duration_ms":' + IntToStr(Turn.DurationMs) + ',"blocks":[' + Blocks + ']}';
+  Result := '{"turn_index":' + IntToStr(Turn.TurnIndex) + ',"turn_id":"' + JsonEscapeText(Turn.Id) + '","mode":"' +
+    JsonEscapeText(Turn.Mode) + '","prompt_preview":"' + JsonEscapeText(Turn.PromptPreview) + '","created_at":"' +
+    JsonEscapeText(Turn.CreatedAt) + '","duration_ms":' + IntToStr(Turn.DurationMs) + ',"blocks":[' + Blocks + ']}';
 End;
 
 Function BlockFitsInline(Const Block: TAssistantMonitorBlock): Boolean;
@@ -358,12 +290,12 @@ Var
   Body: String;
 Begin
   If BlockFitsInline(Block) Then
-    Body := JsonEscape(Block.Body)
+    Body := JsonEscapeText(Block.Body)
   Else
     Body := '';
-  Result := '{"block_id":"' + JsonEscape(Block.BlockId) + '","turn_id":"' + JsonEscape(TurnId) + '","kind":"' +
-    JsonEscape(Block.Kind) + '","title":"' + JsonEscape(Block.Title) + '","state":"' +
-    JsonEscape(BlockStateName(Block)) + '","body":"' + Body + '","deferred":' + YesNo(Not BlockFitsInline(Block)) +
+  Result := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","turn_id":"' + JsonEscapeText(TurnId) + '","kind":"' +
+    JsonEscapeText(Block.Kind) + '","title":"' + JsonEscapeText(Block.Title) + '","state":"' +
+    JsonEscapeText(BlockStateName(Block)) + '","body":"' + Body + '","deferred":' + YesNo(Not BlockFitsInline(Block)) +
     ',"bytes":' + IntToStr(Utf8Bytes(Block.Body)) + '}';
 End;
 
@@ -371,7 +303,7 @@ Function TurnPageBody(Const Turn: TAssistantMonitorTurn): String;
 Var
   BlockIndex: Integer;
 Begin
-  Result := '"turn":{"turn_id":"' + JsonEscape(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[';
+  Result := '"turn":{"turn_id":"' + JsonEscapeText(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[';
   For BlockIndex := 0 To High(Turn.Blocks) Do
     Begin
       If BlockIndex > 0 Then
@@ -383,7 +315,7 @@ End;
 
 Function MonitorTurnPageJson(Const ConversationId, StreamId: String; Seq: Int64; Const Turn: TAssistantMonitorTurn): String;
 Begin
-  Result := '{"conversation_id":"' + JsonEscape(ConversationId) + '","stream_id":"' + JsonEscape(StreamId) +
+  Result := '{"conversation_id":"' + JsonEscapeText(ConversationId) + '","stream_id":"' + JsonEscapeText(StreamId) +
     '","seq":' + IntToStr(Seq) + ',' + TurnPageBody(Turn) + '}';
 End;
 
@@ -617,7 +549,7 @@ Begin
     If Title = FTitle Then
       Exit;
     FTitle := Title;
-    AppendLocked(FHead + 1, 'title_changed', '{"title":"' + JsonEscape(Title) + '"}');
+    AppendLocked(FHead + 1, 'title_changed', '{"title":"' + JsonEscapeText(Title) + '"}');
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -720,7 +652,7 @@ End;
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
   Index, BlockIndex: Integer;
-  Stored: TAssistantMonitorTurn;
+  Stored, Local: TAssistantMonitorTurn;
   Found: Boolean;
   EventJson: String;
 
@@ -728,8 +660,8 @@ Var
   Var
     Data: String;
   Begin
-    Data := '{"block_id":"' + JsonEscape(BlockId) + '","offset":' + IntToStr(Offset) + ',"text":"' +
-      JsonEscape(String(Slice)) + '"}';
+    Data := '{"block_id":"' + JsonEscapeText(BlockId) + '","offset":' + IntToStr(Offset) + ',"text":"' +
+      JsonEscapeText(String(Slice)) + '"}';
     { The framed event adds a short envelope around this object. }
     Result := Length(Data) + 256 <= MonitorSnapshotPageBytes;
   End;
@@ -757,8 +689,8 @@ Var
         If Taken = 0 Then
           Taken := Utf8Step(Text, At);
         Slice := Copy(Text, At, Taken);
-        Data := '{"block_id":"' + JsonEscape(BlockId) + '","offset":' + IntToStr(StartOffset + At - 1) + ',"text":"' +
-          JsonEscape(String(Slice)) + '"}';
+        Data := '{"block_id":"' + JsonEscapeText(BlockId) + '","offset":' + IntToStr(StartOffset + At - 1) + ',"text":"' +
+          JsonEscapeText(String(Slice)) + '"}';
         AppendLocked(FHead + 1, 'block_append', Data);
         Inc(At, Taken);
       End;
@@ -771,27 +703,31 @@ Var
   Begin
     Body := UTF8String(Block.Body);
     If (Length(Body) > MonitorAppendSliceBytes) Or (Not SliceFits(Block.BlockId, 0, Body)) Then
-      Data := '{"block_id":"' + JsonEscape(Block.BlockId) + '","deferred":true,"revision":' + IntToStr(Block.Revision) +
+      Data := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","deferred":true,"revision":' + IntToStr(Block.Revision) +
         ',"body_bytes":' + IntToStr(Length(Body)) + '}'
     Else
-      Data := '{"block_id":"' + JsonEscape(Block.BlockId) + '","body":"' + JsonEscape(Block.Body) + '"}';
+      Data := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","body":"' + JsonEscapeText(Block.Body) + '"}';
     AppendLocked(FHead + 1, 'block_replace', Data);
   End;
 
 Begin
+  { Turn shares its arrays with the caller, and through ObserveSnapshot with the session's observed snapshot.
+    Every write below goes to Local, which CopyTurn has made unique. }
+  Local := Default(TAssistantMonitorTurn);
+  CopyTurn(Turn, Local);
   EnterCriticalSection(FLock);
   Try
     Found := False;
     Stored := Default(TAssistantMonitorTurn);
-    If Turn.Live Then
+    If Local.Live Then
       Begin
-        Found := FHasLive And (FLive.Id = Turn.Id);
+        Found := FHasLive And (FLive.Id = Local.Id);
         If Found Then
           CopyTurn(FLive, Stored);
       End
     Else
       For Index := 0 To High(FTurns) Do
-        If FTurns[Index].Id = Turn.Id Then
+        If FTurns[Index].Id = Local.Id Then
           Begin
             Found := True;
             CopyTurn(FTurns[Index], Stored);
@@ -799,77 +735,78 @@ Begin
           End;
     If Not Found Then
       Begin
-        EventJson := '{"turn_id":"' + JsonEscape(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) +
-          ',"mode":"' + JsonEscape(Turn.Mode) + '","created_at":"' + JsonEscape(Turn.CreatedAt) + '"}';
+        EventJson := '{"turn_id":"' + JsonEscapeText(Local.Id) + '","turn_index":' + IntToStr(Local.TurnIndex) +
+          ',"mode":"' + JsonEscapeText(Local.Mode) + '","created_at":"' + JsonEscapeText(Local.CreatedAt) + '"}';
         AppendLocked(FHead + 1, 'turn_open', EventJson);
       End;
-    For BlockIndex := 0 To High(Turn.Blocks) Do
+    For BlockIndex := 0 To High(Local.Blocks) Do
       Begin
         Found := False;
         If BlockIndex <= High(Stored.Blocks) Then
-          Found := Stored.Blocks[BlockIndex].BlockId = Turn.Blocks[BlockIndex].BlockId;
+          Found := Stored.Blocks[BlockIndex].BlockId = Local.Blocks[BlockIndex].BlockId;
         If Not Found Then
           Begin
-            AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-              '","turn_id":"' + JsonEscape(Turn.Id) + '","kind":"' + JsonEscape(Turn.Blocks[BlockIndex].Kind) +
-              '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscape(Turn.Blocks[BlockIndex].Title) + '"}');
-            EventJson := Turn.Blocks[BlockIndex].Body;
+            AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
+              '","turn_id":"' + JsonEscapeText(Local.Id) + '","kind":"' + JsonEscapeText(Local.Blocks[BlockIndex].Kind) +
+              '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscapeText(Local.Blocks[BlockIndex].Title) + '"}');
+            EventJson := Local.Blocks[BlockIndex].Body;
             If EventJson <> '' Then
               Begin
                 If Length(UTF8String(EventJson)) > MonitorAppendSliceBytes Then
-                  EmitReplace(Turn.Blocks[BlockIndex])
+                  EmitReplace(Local.Blocks[BlockIndex])
                 Else
-                  EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0);
+                  EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0);
               End;
           End
-        Else If Stored.Blocks[BlockIndex].Body <> Turn.Blocks[BlockIndex].Body Then
+        Else If Stored.Blocks[BlockIndex].Body <> Local.Blocks[BlockIndex].Body Then
           Begin
-            Turn.Blocks[BlockIndex].Revision := Stored.Blocks[BlockIndex].Revision + 1;
+            Local.Blocks[BlockIndex].Revision := Stored.Blocks[BlockIndex].Revision + 1;
             If Stored.Blocks[BlockIndex].Body = '' Then
-              EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(Turn.Blocks[BlockIndex].Body), 0)
-            Else If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Turn.Blocks[BlockIndex].Body, EventJson, Index) Then
-              EmitAppends(Turn.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index)
+              EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(Local.Blocks[BlockIndex].Body), 0)
+            Else If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Local.Blocks[BlockIndex].Body, EventJson, Index) Then
+              EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index)
             Else
-              EmitReplace(Turn.Blocks[BlockIndex]);
+              EmitReplace(Local.Blocks[BlockIndex]);
           End;
-        If Not Turn.Blocks[BlockIndex].Running Then
+        If Not Local.Blocks[BlockIndex].Running Then
           Begin
             If (Not Found) Or Stored.Blocks[BlockIndex].Running Then
-              AppendLocked(FHead + 1, 'block_close', '{"block_id":"' + JsonEscape(Turn.Blocks[BlockIndex].BlockId) +
-                '","state":"' + BlockStateName(Turn.Blocks[BlockIndex]) + '"}');
+              AppendLocked(FHead + 1, 'block_close', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
+                '","state":"' + BlockStateName(Local.Blocks[BlockIndex]) + '"}');
           End;
       End;
-    For Index := 0 To High(Turn.Images) Do
+    For Index := 0 To High(Local.Images) Do
       Begin
         Found := False;
         For BlockIndex := 0 To High(Stored.Images) Do
-          If Stored.Images[BlockIndex].Id = Turn.Images[Index].Id Then
+          If Stored.Images[BlockIndex].Id = Local.Images[Index].Id Then
             Found := True;
         If Not Found Then
-          AppendLocked(FHead + 1, 'image_added', '{"image_id":"' + JsonEscape(Turn.Images[Index].Id) + '","turn_id":"' +
-            JsonEscape(Turn.Id) + '","name":"' + JsonEscape(Turn.Images[Index].Name) + '","mime":"' +
-            JsonEscape(Turn.Images[Index].Mime) + '","bytes":0,"missing":' + YesNo(Turn.Images[Index].Missing) + '}');
+          AppendLocked(FHead + 1, 'image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
+            JsonEscapeText(Local.Id) + '","name":"' + JsonEscapeText(Local.Images[Index].Name) + '","mime":"' +
+            JsonEscapeText(Local.Images[Index].Mime) + '","bytes":0,"missing":' + YesNo(Local.Images[Index].Missing) + '}');
       End;
-    If Turn.Live Then
+    { Local is already unique, so it is stored without a second copy. }
+    If Local.Live Then
       Begin
-        CopyTurn(Turn, FLive);
+        FLive := Local;
         FHasLive := True;
       End
     Else
       Begin
         Found := False;
         For Index := 0 To High(FTurns) Do
-          If FTurns[Index].Id = Turn.Id Then
+          If FTurns[Index].Id = Local.Id Then
             Begin
-              CopyTurn(Turn, FTurns[Index]);
+              FTurns[Index] := Local;
               Found := True;
               Break;
             End;
         If Not Found Then
           Begin
             SetLength(FTurns, Length(FTurns) + 1);
-            CopyTurn(Turn, FTurns[High(FTurns)]);
-            AppendLocked(FHead + 1, 'turn_close', '{"turn_id":"' + JsonEscape(Turn.Id) + '","outcome":"done"}');
+            FTurns[High(FTurns)] := Local;
+            AppendLocked(FHead + 1, 'turn_close', '{"turn_id":"' + JsonEscapeText(Local.Id) + '","outcome":"done"}');
           End;
       End;
   Finally
@@ -1159,8 +1096,8 @@ Begin
       PointId := FTurns[High(FTurns)].Id;
     SetLength(Pages, 1);
     Pages[0].Page := 0;
-    Pages[0].Json := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
-      '","seq":' + IntToStr(HeadSeq) + ',"point_id":"' + JsonEscape(PointId) + '",' + Outline + '}';
+    Pages[0].Json := '{"conversation_id":"' + JsonEscapeText(FConversationId) + '","stream_id":"' + JsonEscapeText(FStreamId) +
+      '","seq":' + IntToStr(HeadSeq) + ',"point_id":"' + JsonEscapeText(PointId) + '",' + Outline + '}';
     { Current turn first, then older turns newest-first. The phone draws the desktop point at once. }
     PageNo := 1;
     For Index := High(FTurns) + Ord(FHasLive) DownTo 0 Do
@@ -1179,10 +1116,10 @@ Begin
             { The chunk packer cannot take the whole turn. One block per page, still untruncated. }
             For BlockIndex := 0 To High(Turn.Blocks) Do
               Begin
-                PageBody := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' +
-                  JsonEscape(FStreamId) + '","seq":' + IntToStr(HeadSeq) + ',"turn":{"turn_id":"' + JsonEscape(Turn.Id) +
-                  '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[' + BlockJson(Turn.Blocks[BlockIndex], Turn.Id) +
-                  ']}}';
+                PageBody := '{"conversation_id":"' + JsonEscapeText(FConversationId) + '","stream_id":"' +
+                  JsonEscapeText(FStreamId) + '","seq":' + IntToStr(HeadSeq) + ',"turn":{"turn_id":"' +
+                  JsonEscapeText(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"blocks":[' +
+                  BlockJson(Turn.Blocks[BlockIndex], Turn.Id) + ']}}';
                 If FHasLive And (Turn.Id = FLive.Id) Then
                   PageBody := StringReplace(PageBody, '"turn":{', '"turn":{"live":true,', [rfReplaceAll]);
                 PageBody := MarkPoint(PageBody, IsPoint, IsPoint And (BlockIndex = High(Turn.Blocks)));
@@ -1204,7 +1141,7 @@ Begin
     { No turn means the outline is the whole conversation. A point page lets the phone leave Syncing. }
     If (Not FHasLive) And (Length(FTurns) = 0) Then
       Begin
-        PageBody := '{"conversation_id":"' + JsonEscape(FConversationId) + '","stream_id":"' + JsonEscape(FStreamId) +
+        PageBody := '{"conversation_id":"' + JsonEscapeText(FConversationId) + '","stream_id":"' + JsonEscapeText(FStreamId) +
           '","seq":' + IntToStr(HeadSeq) + ',"turn":{"live":true,"turn_id":"live","turn_index":-2,"blocks":[]}}';
         PageBody := MarkPoint(PageBody, True, True);
         SetLength(Pages, Length(Pages) + 1);

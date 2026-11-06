@@ -48,6 +48,10 @@ Function TryInspectMonitorFrameHeader(Const Bytes: RawByteString; Out PayloadLen
 Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
 Function EncodeMonitorImageBytes(Const Bytes: RawByteString): String;
 Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
+{ Byte count of the longest prefix of Text, at most Limit, that does not end inside a UTF-8 character.
+  Copy(Text, 1, Result) keeps valid UTF-8 valid. When the first character alone is longer than Limit, that
+  whole character is kept, so a caller that cuts in a loop always moves forward. Zero when Limit <= 0. }
+Function MonitorUtf8CutLength(Const Text: RawByteString; Limit: Integer): Integer;
 
 Implementation
 
@@ -100,6 +104,38 @@ Begin
       Inc(Index, Need);
     End;
   Result := True;
+End;
+
+Function IsUtf8Continuation(Value: Char): Boolean;
+Begin
+  Result := (Ord(Value) And $C0) = $80;
+End;
+
+Function MonitorUtf8CutLength(Const Text: RawByteString; Limit: Integer): Integer;
+Var
+  Back: Integer;
+Begin
+  If Limit <= 0 Then
+    Exit(0);
+  If Length(Text) <= Limit Then
+    Exit(Length(Text));
+  { Text[Result + 1] is the first byte left out. A continuation byte there means the cut is inside a character.
+    A UTF-8 character has at most three continuation bytes; more than that is not UTF-8, so cut at Limit. }
+  Result := Limit;
+  Back := 0;
+  While (Result > 0) And (Back < 3) And IsUtf8Continuation(Text[Result + 1]) Do
+    Begin
+      Dec(Result);
+      Inc(Back);
+    End;
+  If (Result > 0) And IsUtf8Continuation(Text[Result + 1]) Then
+    Exit(Limit);
+  If Result = 0 Then
+    Begin
+      Result := 1;
+      While (Result < Length(Text)) And (Result < 4) And IsUtf8Continuation(Text[Result + 1]) Do
+        Inc(Result);
+    End;
 End;
 
 Function ReadNetworkLength(Const Bytes: RawByteString): Cardinal;
