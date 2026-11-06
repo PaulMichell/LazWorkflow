@@ -17,7 +17,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
+  Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames,
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorSession, AssistantSessionObserve, WorkflowSettings;
 
 Const
