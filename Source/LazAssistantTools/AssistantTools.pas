@@ -50,6 +50,10 @@ Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, Er
 Function ToolDeletePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolRenamePath(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolAddUnitToProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolListPlans(Out ResultText, ErrorText: String): Boolean;
+Function ToolGetActivePlan(Out ResultText, ErrorText: String): Boolean;
+Function ToolSetActivePlan(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolReadMarkdownSection(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 { Native path gate: control characters, project resolution, protected paths and target scope. }
 Function AssistantCheckedProjectPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
 { Native add-unit gate, including the package-target refusal. }
@@ -111,6 +115,8 @@ Uses
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
 
 Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
+Function LoadProjectFileText(Const Resolved: String; Out Body: String; Out FromEditor: Boolean;
+  Out ErrorText: String): Boolean; Forward;
 
 ThreadVar
   WriteImageTurnFailed: Boolean;
@@ -260,7 +266,7 @@ Begin
   Name := LowerCase(Trim(ToolName));
   Result := (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
     (Name = 'open_markdown') Or (Name = 'get_project_info') Or
-    (Name = 'list_plans') Or (Name = 'get_active_plan') Or
+    (Name = 'list_plans') Or (Name = 'get_active_plan') Or (Name = 'read_markdown_section') Or
     (Name = 'search_in_project') Or (Name = 'open_file') Or
     (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Or
     (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
@@ -421,7 +427,7 @@ Begin
     (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or (Name = 'stage_patch') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
-    (Name = 'set_active_plan') Or (Name = 'read_file') Or
+    (Name = 'set_active_plan') Or (Name = 'read_markdown_section') Or (Name = 'read_file') Or
     (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
 End;
 
@@ -446,7 +452,7 @@ Begin
     End;
   { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
   If (Name = 'list_plans') Or (Name = 'set_active_plan') Or
-    (Name = 'get_active_plan') Or (Name = 'todo_write') Then
+    (Name = 'get_active_plan') Or (Name = 'todo_write') Or (Name = 'read_markdown_section') Then
     Begin
       Result := Mode In [amPlan, amBuild];
       Exit;
@@ -644,6 +650,16 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative .md path"}' +
       '},"required":["path"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"read_markdown_section",' +
+      '"description":"Read one Markdown section. path is optional and defaults to the active plan. ' +
+        'heading is an ATX heading such as ### 3.2. Returns that section up to the next heading of the same or a higher level. ' +
+        'A ### item is one block. A ## heading includes its items.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative Markdown path. Omit for the active plan."},' +
+        '"heading":{"type":"string","description":"ATX heading, for example ### 3.2"}' +
+      '},"required":["heading"]}' +
     '}}';
 End;
 
@@ -1881,6 +1897,106 @@ Begin
       ErrorText := '';
     End;
   Result := True;
+End;
+
+Function MarkdownHeadingMatches(Const Line, Requested: String): Boolean;
+Var
+  RequestLevel, LineLevel: Integer;
+  RequestTitle, LineTitle: String;
+Begin
+  Result := False;
+  RequestLevel := PlanHeadingLevel(Requested, RequestTitle);
+  If RequestLevel = 0 Then Exit;
+  LineLevel := PlanHeadingLevel(Line, LineTitle);
+  If LineLevel <> RequestLevel Then Exit;
+  If LineTitle = RequestTitle Then Exit(True);
+  If Length(LineTitle) <= Length(RequestTitle) Then Exit;
+  If Copy(LineTitle, 1, Length(RequestTitle)) <> RequestTitle Then Exit;
+  Result := LineTitle[Length(RequestTitle) + 1] = ' ';
+End;
+
+Function ReadMarkdownSectionText(Const Body, Heading: String; Out SectionText, ErrorText: String): Boolean;
+Var
+  Lines: TStringList;
+  I, Match, MatchLevel, Level, EndLine: Integer;
+  Title: String;
+Begin
+  Result := False;
+  SectionText := '';
+  ErrorText := '';
+  If PlanHeadingLevel(Heading, Title) = 0 Then
+    Begin
+      ErrorText := 'heading must be a Markdown heading such as ### 3.2.';
+      Exit;
+    End;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Body;
+    Match := -1;
+    MatchLevel := 0;
+    For I := 0 To Lines.Count - 1 Do
+      If MarkdownHeadingMatches(Lines[I], Heading) Then
+        Begin
+          If Match >= 0 Then
+            Begin
+              ErrorText := 'Heading matches more than one section: ' + Trim(Heading);
+              Exit;
+            End;
+          Match := I;
+          MatchLevel := PlanHeadingLevel(Lines[I], Title);
+        End;
+    If Match < 0 Then
+      Begin
+        ErrorText := 'Heading not found: ' + Trim(Heading);
+        Exit;
+      End;
+    EndLine := Lines.Count - 1;
+    For I := Match + 1 To Lines.Count - 1 Do
+      Begin
+        Level := PlanHeadingLevel(Lines[I], Title);
+        If (Level >= 1) And (Level <= MatchLevel) Then
+          Begin
+            EndLine := I - 1;
+            Break;
+          End;
+      End;
+    For I := Match To EndLine Do
+      Begin
+        If SectionText <> '' Then
+          SectionText := SectionText + LineEnding;
+        SectionText := SectionText + Lines[I];
+      End;
+    Result := True;
+  Finally
+    Lines.Free;
+  End;
+End;
+
+Function ToolReadMarkdownSection(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Path, Heading, Resolved, Body: String;
+  FromEditor: Boolean;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Heading := Trim(JsonArgString(ArgumentsJson, 'heading'));
+  If Heading = '' Then
+    Begin
+      ErrorText := 'read_markdown_section requires heading.';
+      Exit;
+    End;
+  Path := Trim(JsonArgString(ArgumentsJson, 'path'));
+  If Path = '' Then
+    Path := GetActivePlanRelativePath;
+  If Path = '' Then
+    Begin
+      ErrorText := 'No active plan. Pass a path, or set the active plan.';
+      Exit;
+    End;
+  If Not ResolvePlanPath(Path, Resolved, ErrorText) Then Exit;
+  If Not LoadProjectFileText(Resolved, Body, FromEditor, ErrorText) Then Exit;
+  Result := ReadMarkdownSectionText(Body, Heading, ResultText, ErrorText);
 End;
 
 Function IsBlockedBinaryExtension(Const Path: String): Boolean;
@@ -4770,6 +4886,8 @@ Begin
     Result := ToolGetActivePlan(ResultText, ErrorText)
   Else If Name = 'set_active_plan' Then
     Result := ToolSetActivePlan(ArgumentsJson, ResultText, ErrorText)
+  Else If Name = 'read_markdown_section' Then
+    Result := ToolReadMarkdownSection(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'search_in_project' Then
     Result := ToolSearchInProject(ArgumentsJson, ResultText, ErrorText)
   Else If Name = 'write_image' Then

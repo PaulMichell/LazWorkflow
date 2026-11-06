@@ -134,6 +134,8 @@ Function SetPlanSectionBlocked(Const RelativeOrAbsolute: String; SectionIndex: I
   and stops at the next # or ##. }
 Function GetPlanSectionBody(Const RelativeOrAbsolute: String; SectionIndex: Integer;
   Out BodyText: String; Out ErrorText: String; IncludeSubsections: Boolean = False): Boolean;
+{ ATX heading with a required space after the hashes. 0 when the line is not a heading. }
+Function PlanHeadingLevel(Const Line: String; Out Title: String): Integer;
 
 Implementation
 

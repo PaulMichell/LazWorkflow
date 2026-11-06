@@ -144,6 +144,14 @@ Const
   AddUnitDescription =
     'Register an existing Pascal unit file with the active Lazarus project. ' +
     'Refuses a path outside the target. A package target is refused. Build mode only.';
+  ReadSectionSchema = '{"type":"object","properties":{"path":{"type":"string"},"heading":{"type":"string"}},' +
+    '"required":["heading"],"additionalProperties":false}';
+  ReadSectionDescription =
+    'Read one Markdown section. path is optional and defaults to the active plan. ' +
+    'heading is an ATX heading such as ### 3.2. Returns that section up to the next heading of the same or a higher level. ' +
+    'A ### item is one block. A ## heading includes its items.';
+  ListPlansSchema = '{"type":"object","properties":{},"required":[],"additionalProperties":false}';
+  SetActivePlanSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
 
 Function Quoted(Const S: String): String;
 Begin
@@ -1342,6 +1350,52 @@ Begin
                 End;
           Exit;
         End;
+      If (Tool = 'lazarus_list_plans') Or (Tool = 'lazarus_get_active_plan') Or
+        (Tool = 'lazarus_set_active_plan') Or (Tool = 'lazarus_read_markdown_section') Then
+        Begin
+          If (FWriteScope <> awsMarkdown) And (FWriteScope <> awsProject) Then
+            Begin
+              ErrorText := 'Plan registry tools require Plan or Build mode.';
+              Exit;
+            End;
+          If Tool = 'lazarus_set_active_plan' Then
+            Begin
+              If FWriteScope <> awsMarkdown Then
+                Begin
+                  ErrorText := 'Setting the active plan requires Plan mode.';
+                  Exit;
+                End;
+              Node := Args.Find('path');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+                Begin
+                  ErrorText := 'set_active_plan requires path.';
+                  Exit;
+                End;
+              If Not Approve(RunId, Tool, Node.AsString, '', Node.AsString, ErrorText) Then Exit;
+              Result := ToolSetActivePlan(Arguments, ResultText, ErrorText);
+            End
+          Else If Tool = 'lazarus_read_markdown_section' Then
+            Begin
+              Node := Args.Find('heading');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+                Begin
+                  ErrorText := 'read_markdown_section requires heading.';
+                  Exit;
+                End;
+              Node := Args.Find('path');
+              If Assigned(Node) And (Node.JSONType <> jtString) Then
+                Begin
+                  ErrorText := 'path must be a string.';
+                  Exit;
+                End;
+              Result := ToolReadMarkdownSection(Arguments, ResultText, ErrorText);
+            End
+          Else If Tool = 'lazarus_list_plans' Then
+            Result := ToolListPlans(ResultText, ErrorText)
+          Else
+            Result := ToolGetActivePlan(ResultText, ErrorText);
+          Exit;
+        End;
       If (Tool = 'lazarus_delete_path') Or (Tool = 'lazarus_rename_path') Or (Tool = 'lazarus_add_unit_to_project') Then
         Begin
           If FWriteScope <> awsProject Then
@@ -1834,6 +1888,19 @@ Begin
   If (FWriteScope = awsProject) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_stage_patch","description":' + Quoted(AssistantStagePatchDescription) +
     ',"inputSchema":' + AssistantStagePatchSchema + '}';
+  If (FWriteScope = awsMarkdown) Or (FWriteScope = awsProject) Then Result := Result +
+    ',{"type":"function","name":"lazarus_list_plans","description":' +
+    Quoted('List plans registered in the project .assistant settings. Missing files are dropped. The project folders are not scanned.') +
+    ',"inputSchema":' + ListPlansSchema + '}' +
+    ',{"type":"function","name":"lazarus_get_active_plan","description":' +
+    Quoted('Return the canonical active plan path for this project.') +
+    ',"inputSchema":' + ListPlansSchema + '}' +
+    ',{"type":"function","name":"lazarus_read_markdown_section","description":' + Quoted(ReadSectionDescription) +
+    ',"inputSchema":' + ReadSectionSchema + '}';
+  If FWriteScope = awsMarkdown Then Result := Result +
+    ',{"type":"function","name":"lazarus_set_active_plan","description":' +
+    Quoted('Set the canonical active plan Markdown path for this project. Plan mode only.') +
+    ',"inputSchema":' + SetActivePlanSchema + '}';
   If FWriteScope = awsProject Then Result := Result +
     ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
     ',"inputSchema":' + FormComponentSchema + '}' +

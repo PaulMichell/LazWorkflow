@@ -427,11 +427,19 @@ Begin
   Check('a project run lists delete, rename and add-unit',
     (Pos('"lazarus_delete_path"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_rename_path"', Bridge.ToolsJSON) > 0) And
     (Pos('"lazarus_add_unit_to_project"', Bridge.ToolsJSON) > 0));
+  Check('a project run lists plans and section read',
+    (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
+    (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0));
+  Check('a project run hides set_active_plan', Pos('lazarus_set_active_plan', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(ctsMarkdown);
   Check('a Markdown run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
   Check('a Markdown run hides delete, rename and add-unit',
     (Pos('lazarus_delete_path', Bridge.ToolsJSON) = 0) And (Pos('lazarus_rename_path', Bridge.ToolsJSON) = 0) And
     (Pos('lazarus_add_unit_to_project', Bridge.ToolsJSON) = 0));
+  Check('a Markdown run lists plans, section read and set_active_plan',
+    (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
+    (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0) And
+    (Pos('"lazarus_set_active_plan"', Bridge.ToolsJSON) > 0));
   Bridge.BeginRun(ctsProject);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
@@ -956,6 +964,76 @@ Begin
   AssistantTarget.SelectProject;
 End;
 
+Procedure CheckMarkdownSection;
+Var
+  Root, PlanPath, ResultText, ErrorText, Section: String;
+  Args: TJSONObject;
+Begin
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-section-' + IntToStr(GetProcessID) + PathDelim;
+  ForceDirectories(Root + 'Documents');
+  PlanPath := Root + 'Documents' + PathDelim + 'Plan.md';
+  WriteTextFile(PlanPath,
+    '# Title' + LineEnding +
+    LineEnding +
+    '## 1. First package' + LineEnding +
+    'package intro' + LineEnding +
+    LineEnding +
+    '### 1.1 Alpha' + LineEnding +
+    'Status: not started' + LineEnding +
+    'alpha only' + LineEnding +
+    LineEnding +
+    '### 1.2 Beta' + LineEnding +
+    'Status: not started' + LineEnding +
+    'beta only' + LineEnding +
+    LineEnding +
+    '## 2. Second package' + LineEnding +
+    'second only' + LineEnding);
+  Check('select the section-read target', AssistantTarget.SelectFolder(Root, ErrorText));
+  Bridge.BeginRun(ctsProject);
+  Args := TJSONObject.Create;
+  Try
+    Args.Add('path', 'Documents/Plan.md');
+    Args.Add('heading', '### 1.1');
+    Check('a ### heading returns one item', Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section', Args.AsJSON,
+      ResultText, ErrorText));
+    Section := ResultText;
+  Finally
+    Args.Free;
+  End;
+  Check('the item block contains its own heading and body', (Pos('### 1.1 Alpha', Section) > 0) And (Pos('alpha only', Section) > 0));
+  Check('the item block is exactly one ### section', (Pos('### 1.2', Section) = 0) And (Pos('beta only', Section) = 0) And
+    (Pos('### ', Copy(Section, Pos('### ', Section) + 4, MaxInt)) = 0));
+  Args := TJSONObject.Create;
+  Try
+    Args.Add('path', 'Documents/Plan.md');
+    Args.Add('heading', '### 9.9');
+    Check('a missing heading is an error', Not Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section', Args.AsJSON,
+      ResultText, ErrorText) And (Pos('not found', ErrorText) > 0));
+  Finally
+    Args.Free;
+  End;
+  Args := TJSONObject.Create;
+  Try
+    Args.Add('path', 'Documents/Plan.md');
+    Args.Add('heading', '## 1. First package');
+    Check('a ## heading returns the whole package', Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section',
+      Args.AsJSON, ResultText, ErrorText));
+    Section := ResultText;
+  Finally
+    Args.Free;
+  End;
+  Check('the package contains both items', (Pos('### 1.1 Alpha', Section) > 0) And (Pos('### 1.2 Beta', Section) > 0) And
+    (Pos('alpha only', Section) > 0) And (Pos('beta only', Section) > 0) And (Pos('package intro', Section) > 0));
+  Check('the package stops before the next ## heading', (Pos('## 2. Second package', Section) = 0) And
+    (Pos('second only', Section) = 0));
+  Check('Build refuses set_active_plan', Not Broker.Execute(Bridge.RunId, 'lazarus_set_active_plan',
+    '{"path":"Documents/Plan.md"}', ResultText, ErrorText) And (Pos('Plan mode', ErrorText) > 0));
+  DeleteFile(PlanPath);
+  RemoveDir(Root + 'Documents');
+  RemoveDir(ExcludeTrailingPathDelimiter(Root));
+  AssistantTarget.SelectProject;
+End;
+
 Function OnlyRequest(Const Names: Array Of String): String;
 Var
   Obj: TJSONObject;
@@ -1096,6 +1174,7 @@ Begin
     CheckNamedTests;
     CheckFormComponent;
     CheckPathTools;
+    CheckMarkdownSection;
     CheckCall;
     CheckDirectCall;
     CheckCancel;
