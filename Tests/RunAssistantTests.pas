@@ -7,6 +7,11 @@ Program RunAssistantTests;
     instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout>
   Compiled test programs are written to a temporary directory, not beside these sources.
 
+  --define NAME passes -dNAME to every fpc build and to the monitor package build. --heaptrc and --valgrind
+  build and run only the named test programs, so each needs at least one --only. They cannot be combined, and
+  neither may be used with --independent, --package-check or --gui. Valgrind multiplies the run timeout by 20,
+  capped at 3600 seconds, and runs far slower than heaptrc.
+
   Size note (2026-11-07): over 1000 lines once the memory-check probes of plan item 2.4 (Documents/Plan-20261107-025146.md)
   were added. Plan item 2.3 names Tests/RunAssistantTestsOptions.inc as the place to move the option handling when the
   memory-check settings have settled. }

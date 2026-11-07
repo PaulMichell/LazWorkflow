@@ -27,6 +27,11 @@ instantfpc Tests/RunAssistantTests.pas --lazarus-root /home/paul/Projects/FreePa
 `--only` may repeat. `--gui` adds the GUI tests (a display is required). Every run also builds the packages, so a
 passing run means the package compiles. Write output to a temporary directory, never under `Source/`.
 
+`--define NAME` passes `-dNAME` to every fpc build and to the monitor package build. `--heaptrc` and `--valgrind`
+build and run only the named test programs, so each needs at least one `--only`. They cannot be combined, and
+neither may be used with `--independent`, `--package-check` or `--gui`. Valgrind multiplies the run timeout by 20,
+capped at 3600 seconds, and runs far slower than heaptrc.
+
 Known failures that predate the Claude connector work: `AssistantSettingsTest` stops at the Codex check "missing
 saved executable recovered without changing connection identity", and also fails "a new profile does not inherit
 image output" once that first check is passed. `AssistantUsageTest` is not registered in the runner. Among the
