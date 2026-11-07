@@ -3,7 +3,7 @@ Unit AssistantMonitorForm;
 { Remote Monitor options dialog (c) 2026 Michell Computing.
 
   Static layout. The listener outlives the dialog. The phone connects to the
-  shown endpoint. There is no fingerprint and no pairing code on this form.
+  shown endpoint. Pairing codes are single-use and expire after two minutes.
   LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
   the layouts below are read through explicit libc and iphlpapi externals.
 
@@ -45,6 +45,9 @@ Type
     StatusMemo: TMemo;
     ClientList: TListBox;
     StatusTimer: TTimer;
+    PairCodeEdit: TEdit;
+    PairButton: TButton;
+    PairAction: TAction;
     Procedure FormCreate(Sender: TObject);
     Procedure FormShow(Sender: TObject);
     Procedure FormClose(Sender: TObject; Var CloseAction: TCloseAction);
@@ -56,6 +59,8 @@ Type
     Procedure StatusTimerTimer(Sender: TObject);
     Procedure ClientListClick(Sender: TObject);
     Procedure BindAllCheckClick(Sender: TObject);
+
+    Procedure PairActionExecute(Sender: TObject);
   Private
     ClientIds: TStringList;
     ClientsRevision: LongInt;
@@ -487,6 +492,13 @@ Begin
   Running := ListenerRunning;
   EnableAction.Enabled := Not Running;
   DisableAction.Enabled := Running;
+  PairAction.Enabled := Running;
+  If Running And Assigned(MonitorLiveSession) Then
+    PairCodeEdit.Text := MonitorLiveSession.PairCode
+  Else
+    PairCodeEdit.Text := '';
+  If PairCodeEdit.Text = '' Then
+    PairCodeEdit.Text := 'Generate a pairing code, then enter it on the phone. Codes expire after two minutes.';
   RevokeAction.Enabled := SelectedClientId <> '';
   RevokeAllAction.Enabled := ClientIds.Count > 0;
   AddressEdit.Enabled := Not Running;
@@ -630,6 +642,14 @@ Begin
   If FieldsLoading Then
     Exit;
   FillAddressChoices;
+  RefreshState;
+End;
+
+Procedure TAssistantMonitorForm.PairActionExecute(Sender: TObject);
+Begin
+  If Not ListenerRunning Or Not Assigned(MonitorLiveSession) Then
+    Exit;
+  MonitorLiveSession.RequestPairCode;
   RefreshState;
 End;
 End.

@@ -6,6 +6,16 @@ The phone client for the Lazarus monitor. The IDE host is `LazAssistantMonitor`.
 
 Catalogue 3 is `Documents/MonitorProtocolV3.md`. The golden messages are `Tests/Fixtures/Monitor/`. The phone still accepts the catalogue 2 frames the current host sends. A saved TLS pin is 64 hex characters. An empty pin means endpoint-only trust. A nonempty pin that is not 64 hex characters is refused. Connect does not clear a saved pin.
 
+## Pair a phone
+
+After rebuilding and restarting Lazarus and installing the updated phone app:
+
+1. Open Assistant > Remote Monitor, choose the LAN endpoint and select Enable.
+2. Select Generate pairing code. The read-only field shows the ten-character code.
+3. On the phone, open Settings, enter that host address and port, enter the code in Pairing code, and tap Connect within two minutes.
+
+A code is single-use. Generate another if it expires or is rejected. Saved-token connections do not need a new code. Only loopback connections may pair without an armed code.
+
 ## Build and test
 
 Java is the Android Studio JBR. From this directory:

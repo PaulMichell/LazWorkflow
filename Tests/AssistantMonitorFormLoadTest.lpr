@@ -149,6 +149,9 @@ Begin
   StoreSettings;
   Form := TAssistantMonitorForm.Create(Nil);
   Try
+    Check('pair button uses the streamed action', Form.PairButton.Action = Form.PairAction);
+    Check('pair action is disabled while stopped', Not Form.PairAction.Enabled);
+    Check('pair code display is read only', Form.PairCodeEdit.ReadOnly);
     Check('the stored settings still load after the dialog is created', Stored(Settings));
     Check('creating the dialog keeps the stored bind address', Settings.BindAddress = StoredAddress);
     Check('creating the dialog keeps the stored enabled flag', Settings.Enabled);

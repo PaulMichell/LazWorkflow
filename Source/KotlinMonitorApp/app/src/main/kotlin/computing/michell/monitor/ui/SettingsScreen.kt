@@ -46,6 +46,7 @@ private const val EndpointHint = "Use the address and port shown in Assistant > 
 fun SettingsScreen(
   address: String,
   port: String,
+  pairCode: String,
   errorText: String,
   phase: LinkPhase,
   disconnected: Boolean,
@@ -56,6 +57,7 @@ fun SettingsScreen(
   canLeave: Boolean,
   onAddress: (String) -> Unit,
   onPort: (String) -> Unit,
+  onPairCode: (String) -> Unit,
   onConnect: () -> Unit,
   onThinking: (Boolean) -> Unit,
   onTools: (Boolean) -> Unit,
@@ -96,6 +98,14 @@ fun SettingsScreen(
         )
       }
       Text(EndpointHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      OutlinedTextField(
+        pairCode,
+        onPairCode,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Pairing code") },
+        supportingText = { Text("In Assistant > Remote Monitor, enable the listener and select Generate pairing code. Enter that code here within two minutes. Saved connections do not need a new code.") },
+        singleLine = true
+      )
       Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) { Text("Connect") }
       if (shownError.isNotEmpty()) {
         Text(shownError, color = MaterialTheme.colorScheme.error)

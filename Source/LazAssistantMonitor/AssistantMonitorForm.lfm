@@ -86,7 +86,7 @@ object AssistantMonitorForm: TAssistantMonitorForm
     ChildSizing.TopBottomSpacing = 8
     ChildSizing.HorizontalSpacing = 4
     ChildSizing.Layout = cclLeftToRightThenTopToBottom
-    ChildSizing.ControlsPerLine = 5
+    ChildSizing.ControlsPerLine = 6
     ClientHeight = 44
     ClientWidth = 720
     TabOrder = 1
@@ -107,6 +107,15 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Action = DisableAction
       AutoSize = True
       TabOrder = 1
+    end
+    object PairButton: TButton
+      Action = PairAction
+      AutoSize = True
+      TabOrder = 2
+      Left = 130
+      Top = 8
+      Width = 150
+      Height = 28
     end
     object RevokeButton: TButton
       Left = 172
@@ -183,9 +192,13 @@ object AssistantMonitorForm: TAssistantMonitorForm
   object ActionList: TActionList
     Left = 525
     Top = 75
+    object PairAction: TAction
+      Caption = 'Generate pairing code'
+      OnExecute = PairActionExecute
+    end
     object EnableAction: TAction
       Caption = 'Enable'
-      Hint = 'Start the listener. The phone connects to the endpoint. No pairing code.'
+      Hint = 'Start the listener, then generate a code to pair a phone.'
       OnExecute = EnableActionExecute
     end
     object DisableAction: TAction
@@ -203,5 +216,13 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Hint = 'Revoke every paired client.'
       OnExecute = RevokeAllActionExecute
     end
+  end
+  object PairCodeEdit: TEdit
+    Align = alTop
+    ReadOnly = True
+    Text = 'Enable the listener, then generate a pairing code.'
+    TabOrder = 4
+    Top = 149
+    Left = 40
   end
 end

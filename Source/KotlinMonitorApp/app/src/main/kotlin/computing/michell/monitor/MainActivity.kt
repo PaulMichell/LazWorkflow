@@ -163,6 +163,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
   val port by model.pairPort.collectAsState()
+  val pairCode by model.pairCode.collectAsState()
   val conversationCap by model.conversationCapText.collectAsState()
   val imageBudget by model.imageBudgetText.collectAsState()
   val showSettings = ui.settingsOpen
@@ -241,10 +242,11 @@ private fun MonitorShell(model: MonitorViewModel) {
     if (showSettings) {
       Box(modifier) {
         SettingsScreen(
-          address, port, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools,
+          address, port, pairCode, ui.banner, link.phase, ui.disconnected, ui.showThinking, ui.showTools,
           conversationCap, imageBudget, true,
           { model.pairAddress.value = it },
           { model.pairPort.value = it },
+          { model.pairCode.value = it },
           model::connectFromPair,
           model::setShowThinking,
           model::setShowTools,

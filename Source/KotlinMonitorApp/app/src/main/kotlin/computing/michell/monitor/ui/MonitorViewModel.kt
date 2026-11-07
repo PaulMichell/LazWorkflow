@@ -1287,6 +1287,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   val cacheBackToList: StateFlow<Boolean> = cacheBackToListState.asStateFlow()
   private val screenState = MutableStateFlow(AppTab.Conversation)
   val tab: StateFlow<AppTab> = screenState.asStateFlow()
+  val pairCode = MutableStateFlow("")
   val pairAddress = MutableStateFlow("")
   val pairPort = MutableStateFlow(MonitorLimits.ListenPort.toString())
   private val dictationState = MutableStateFlow(DictationState())
@@ -1618,7 +1619,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val effects = coordinator.onEvent(MonitorEvent.HostChanged(uiState.value, address, port, clientId))
     if (effects != null) applyUiEffects(effects)
     uiState.update { it.copy(pairHold = false, disconnected = true, banner = ConnectingBanner) }
-    session.connect(address, port)
+    session.connect(address, port, pairCode.value.trim())
+    pairCode.value = ""
   }
 
   fun showCachedList() {
