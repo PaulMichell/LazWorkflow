@@ -44,8 +44,8 @@ Type
     Function SearchInProject(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanBuild: Boolean; Override;
     Function CanTest: Boolean; Override;
-    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
-    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean; Override;
+    Function StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -169,18 +169,18 @@ Begin
   Result := AllowBuild;
 End;
 
-Function TMemoryWorkspace.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
+Function TMemoryWorkspace.TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean;
 Begin
-  Result := ApplyTestOptions(BaseCommand, ProjectRoot, OnlyJSON, Command, ErrorText);
+  Result := ApplyTestOptions(BaseCommand, ProjectRoot, OptionsJSON, Command, ErrorText);
 End;
 
-Function TMemoryWorkspace.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
+Function TMemoryWorkspace.StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Command: String;
 Begin
   Result := False;
   ResultText := '';
-  If Not TestCommand(BuildId, OnlyJSON, Command, ErrorText) Then Exit;
+  If Not TestCommand(BuildId, OptionsJSON, Command, ErrorText) Then Exit;
   If Command <> ExpectedCommand Then
     Begin
       ErrorText := 'Test configuration, executable or build changed during approval.';

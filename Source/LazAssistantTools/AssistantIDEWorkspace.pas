@@ -50,8 +50,8 @@ Type
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function CanTest: Boolean; Override;
-    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Override;
-    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean; Override;
+    Function StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function CanGit: Boolean; Override;
     Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -513,7 +513,7 @@ Begin
   Result := True;
 End;
 
-Function TAssistantIDEWorkspace.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean;
 Var
   Status: String;
   Data: TJSONData;
@@ -562,14 +562,14 @@ Begin
     End;
     { Not ApplyTestOptions(Command, ..., Command): the Out parameter is cleared on entry, and the Const one, which holds
       no reference of its own, would then read an empty or freed string. }
-    If Not ApplyTestOptions(BaseCommand, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
+    If Not ApplyTestOptions(BaseCommand, ProjectRootPath, OptionsJSON, Command, ErrorText) Then Exit;
     Result := True;
   Finally
     Settings.Free;
   End;
 End;
 
-Function TAssistantIDEWorkspace.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantIDEWorkspace.StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Command: String;
   Data: TJSONData;
@@ -580,7 +580,7 @@ Var
 Begin
   Result := False;
   ResultText := '';
-  If Not TestCommand(BuildId, OnlyJSON, Command, ErrorText) Then Exit;
+  If Not TestCommand(BuildId, OptionsJSON, Command, ErrorText) Then Exit;
   If Command <> ExpectedCommand Then
     Begin
       ErrorText := 'Test configuration, executable or build changed during approval.';
@@ -595,7 +595,7 @@ Begin
     FTests := Job;
     FTestBuildId := BuildId;
     FTestCommand := Command;
-    FTestOptions := OnlyJSON;
+    FTestOptions := OptionsJSON;
     FTestExecutable := Data.FindPath('executable').AsString;
     Value := FTests.Snapshot;
     ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","build_job_id":"' + JsonEscapeText(BuildId) + '"}';

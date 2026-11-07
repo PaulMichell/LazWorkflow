@@ -53,8 +53,8 @@ Type
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanTest: Boolean; Virtual;
-    Function TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean; Virtual;
-    Function StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean; Virtual;
+    Function StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function TestStatus(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanGit: Boolean; Virtual;
     Function RunGit(Mode: TAssistantMode; Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
@@ -329,14 +329,14 @@ Begin
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean;
 Begin
   Command := '';
   ErrorText := 'Configured tests are unavailable.';
   Result := False;
 End;
 
-Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
+Function TAssistantWorkspaceAdapter.StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean;
 Begin
   ResultText := '';
   ErrorText := 'Configured tests are unavailable.';
@@ -1317,6 +1317,7 @@ Begin
                   Exit;
                 End;
               ActualPath := Node.AsString;
+              { The options object goes to ApplyTestOptions, which checks the names, the memory_check value and the limits. }
               NewText := '';
               Node := Args.Find('only');
               If Assigned(Node) Then
@@ -1326,8 +1327,31 @@ Begin
                       ErrorText := 'only must be a list of test program names.';
                       Exit;
                     End;
-                  NewText := '{"only":' + Node.AsJSON + '}';
+                  NewText := '"only":' + Node.AsJSON;
                 End;
+              Node := Args.Find('memory_check');
+              If Assigned(Node) Then
+                Begin
+                  If Node.JSONType <> jtString Then
+                    Begin
+                      ErrorText := 'memory_check must be none, heaptrc or valgrind.';
+                      Exit;
+                    End;
+                  If NewText <> '' Then NewText := NewText + ',';
+                  NewText := NewText + '"memory_check":' + Node.AsJSON;
+                End;
+              Node := Args.Find('defines');
+              If Assigned(Node) Then
+                Begin
+                  If Not (Node Is TJSONArray) Then
+                    Begin
+                      ErrorText := 'defines must be a list of define names.';
+                      Exit;
+                    End;
+                  If NewText <> '' Then NewText := NewText + ',';
+                  NewText := NewText + '"defines":' + Node.AsJSON;
+                End;
+              If NewText <> '' Then NewText := '{' + NewText + '}';
               If Not FAdapter.TestCommand(ActualPath, NewText, Text, ErrorText) Then Exit;
               If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;
               Result := FAdapter.StartTests(ActualPath, Text, NewText, ResultText, ErrorText);
@@ -1924,9 +1948,14 @@ Begin
   If (Scope = awsProject) And FAdapter.CanTest Then Result := Result +
     ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. ' +
     'Optional only is a list of test program names, and applies only when the command is Tests/RunAssistantTests.pas. ' +
-    'Each name must match an existing Tests/<name>.lpr and is passed as --only. Output goes to a temporary directory chosen here. ' +
+    'Each name must match an existing Tests/<name>.lpr and is passed as --only. ' +
+    'Optional memory_check (none, heaptrc or valgrind) and defines (a list of conditional names passed as --define) also apply only to ' +
+    'Tests/RunAssistantTests.pas. A memory check other than none needs only; valgrind runs far slower than heaptrc. ' +
+    'Output goes to a temporary directory chosen here. ' +
     'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
-    '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}}},"required":["build_job_id"],"additionalProperties":false}},' +
+    '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}},' +
+    '"memory_check":{"type":"string","enum":["none","heaptrc","valgrind"]},"defines":{"type":"array","items":{"type":"string"}}},' +
+    '"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
   If ((Scope = awsProject) Or (Scope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
     ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
