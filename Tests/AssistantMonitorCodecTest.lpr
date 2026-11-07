@@ -1467,6 +1467,43 @@ Begin
   End;
 End;
 
+Procedure TestBufferedFrames;
+Var
+  Bytes, Pending, Original, Tail: RawByteString;
+  Frame: TMonitorFrame;
+  Status: TMonitorFrameStatus;
+  I, ReadOffset, BeforeOffset: Integer;
+Begin
+  Check('batch frame encoded', TryEncodeMonitorFrame('{"v":3,"id":"batch","type":"ping","payload":{}}', Bytes, Status));
+  SetLength(Pending, Length(Bytes) * 1000);
+  For I := 0 To 999 Do
+    Move(Bytes[1], Pending[I * Length(Bytes) + 1], Length(Bytes));
+  Tail := Copy(Bytes, 1, Length(Bytes) - 1);
+  Pending := Pending + Tail;
+  Original := Pending;
+  ReadOffset := 0;
+  For I := 1 To 1000 Do
+    Begin
+      Check('buffered frame ' + IntToStr(I), TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status) And
+        (Frame.Json = '{"v":3,"id":"batch","type":"ping","payload":{}}'));
+      Check('buffered offset ' + IntToStr(I), ReadOffset = I * Length(Bytes));
+    End;
+  Check('batch buffer unchanged', Pending = Original);
+  BeforeOffset := ReadOffset;
+  Check('batch partial tail waits', (Not TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status)) And
+    (Status = mfsNeedMore) And (ReadOffset = BeforeOffset));
+  Delete(Pending, 1, ReadOffset);
+  Check('batch compact retains partial tail', Pending = Tail);
+  Pending := Pending + Copy(Bytes, Length(Bytes), 1);
+  ReadOffset := 0;
+  Check('batch completed tail consumed', TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status) And
+    (ReadOffset = Length(Bytes)));
+  Pending := Bytes + 'BAD!' + Copy(Bytes, 5, MaxInt);
+  ReadOffset := Length(Bytes);
+  Check('batch invalid header at offset', (Not TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status)) And
+    (Status = mfsBadMagic) And (ReadOffset = Length(Bytes)));
+End;
+
 Procedure TestShortFrame;
 Var
   Bytes, Pending: RawByteString;
@@ -1656,6 +1693,7 @@ Begin
   TestUnknownType;
   TestBadVersion;
   TestShortFrame;
+  TestBufferedFrames;
   TestLengthCap;
   TestBadUtf8;
   TestBadJsonEnvelope;

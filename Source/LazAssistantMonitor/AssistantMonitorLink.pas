@@ -913,16 +913,17 @@ Procedure TMonitorLinkThread.ConsumePending;
 Var
   Frame: TMonitorFrame;
   Status: TMonitorFrameStatus;
-  Had, Consumed: Integer;
+  Had, Consumed, ReadOffset: Integer;
   Ok: Boolean;
 Begin
   Had := Length(Pending);
   Consumed := 0;
+  ReadOffset := 0;
   Status := mfsNeedMore;
   Ok := True;
-  While Ok And (Length(Pending) > 0) And Not DropLink Do
+  While Ok And (ReadOffset < Length(Pending)) And Not DropLink Do
     Begin
-      Ok := TryConsumeMonitorFrame(Pending, Frame, Status);
+      Ok := TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status);
       If Ok Then
         Begin
           Inc(Consumed);
@@ -935,6 +936,8 @@ Begin
             End;
         End;
     End;
+  If ReadOffset > 0 Then
+    Delete(Pending, 1, ReadOffset);
   If (Not Ok) And (Status <> mfsNeedMore) And (Length(Pending) > 0) Then
     Begin
       DropLink := True;

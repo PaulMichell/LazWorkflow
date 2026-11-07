@@ -3060,18 +3060,16 @@ Begin
   Total := Length(Bytes);
   If Offset > Total Then
     Offset := Total;
-  Bytes := Copy(Bytes, Offset + 1, MaxInt);
   Repeat
-    Taken := Length(Bytes);
+    Taken := Total - Offset;
     If Taken > MonitorBlockDataBytes Then
       Taken := MonitorBlockDataBytes;
-    While (Taken > 0) And (Taken < Length(Bytes)) And ((Ord(Bytes[Taken]) And $C0) = $80) Do
+    While (Taken > 0) And (Offset + Taken < Total) And ((Ord(Bytes[Offset + Taken]) And $C0) = $80) Do
       Dec(Taken);
-    If (Taken < 1) And (Length(Bytes) > 0) Then
+    If (Taken < 1) And (Offset < Total) Then
       Taken := 1;
-    Piece := String(Copy(Bytes, 1, Taken));
-    Delete(Bytes, 1, Taken);
-    Last := Length(Bytes) = 0;
+    Piece := String(Copy(Bytes, Offset + 1, Taken));
+    Last := Offset + Taken = Total;
     Payload := TJSONObject.Create;
     Try
       Payload.Add('conversation_id', FConversationId);

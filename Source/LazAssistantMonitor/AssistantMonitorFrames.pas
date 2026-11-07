@@ -49,7 +49,10 @@ Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFr
   The payload buffer is not allocated. }
 Function TryInspectMonitorFrameHeader(Const Bytes: RawByteString; Out PayloadLen: Cardinal; Out Status: TMonitorFrameStatus): Boolean;
 { Streaming read. A length above the cap returns mfsTooLarge before the body is kept. }
-Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean; Overload;
+{ Zero-based read offset; advances only on success and leaves Pending unchanged. Compact once after draining. }
+Function TryConsumeMonitorFrame(Const Pending: RawByteString; Var ReadOffset: Integer; Out Frame: TMonitorFrame;
+  Out Status: TMonitorFrameStatus): Boolean; Overload;
 Function EncodeMonitorImageBytes(Const Bytes: RawByteString): String;
 Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
 { Byte count of the longest prefix of Text, at most Limit, that does not end inside a UTF-8 character.
@@ -226,19 +229,19 @@ Begin
 End;
 
 Function FinishPayload(Const Bytes: RawByteString; PayloadLen: Cardinal; Out Frame: TMonitorFrame;
-  Out Status: TMonitorFrameStatus): Boolean;
+  Out Status: TMonitorFrameStatus; ReadOffset: Integer = 0): Boolean;
 Var
   Raw: RawByteString;
 Begin
   Result := False;
   Frame.Version := MonitorFrameVersion;
-  Frame.Flags := Ord(Bytes[6]);
+  Frame.Flags := Ord(Bytes[ReadOffset + 6]);
   Frame.Json := '';
   Status := mfsBadJson;
   Raw := '';
   SetLength(Raw, PayloadLen);
   If PayloadLen > 0 Then
-    Move(Bytes[MonitorFrameHeaderSize + 1], Raw[1], PayloadLen);
+    Move(Bytes[ReadOffset + MonitorFrameHeaderSize + 1], Raw[1], PayloadLen);
   If Not IsStrictUtf8(Raw) Then
     Begin
       Status := mfsBadUtf8;
@@ -324,7 +327,18 @@ Begin
   Result := FinishPayload(Bytes, PayloadLen, Frame, Status);
 End;
 
-Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
+Function TryConsumeMonitorFrame(Var Pending: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean; Overload;
+Var
+  ReadOffset: Integer;
+Begin
+  ReadOffset := 0;
+  Result := TryConsumeMonitorFrame(Pending, ReadOffset, Frame, Status);
+  If Result Then
+    Delete(Pending, 1, ReadOffset);
+End;
+
+Function TryConsumeMonitorFrame(Const Pending: RawByteString; Var ReadOffset: Integer; Out Frame: TMonitorFrame;
+  Out Status: TMonitorFrameStatus): Boolean;
 Var
   PayloadLen: Cardinal;
   Have: Integer;
@@ -333,22 +347,23 @@ Begin
   Frame.Version := 0;
   Frame.Flags := 0;
   Frame.Json := '';
-  If Length(Pending) < MonitorFrameHeaderSize Then
+  If (ReadOffset < 0) Or (ReadOffset > Length(Pending)) Or
+    (Length(Pending) - ReadOffset < MonitorFrameHeaderSize) Then
     Begin
       Status := mfsNeedMore;
       Exit;
     End;
-  If Not TryInspectMonitorFrameHeader(Pending, PayloadLen, Status) Then
+  If Not TryInspectMonitorFrameHeader(Copy(Pending, ReadOffset + 1, MonitorFrameHeaderSize), PayloadLen, Status) Then
     Exit;
   Have := MonitorFrameHeaderSize + Integer(PayloadLen);
-  If Length(Pending) < Have Then
+  If Length(Pending) - ReadOffset < Have Then
     Begin
       Status := mfsNeedMore;
       Exit;
     End;
-  Result := FinishPayload(Pending, PayloadLen, Frame, Status);
+  Result := FinishPayload(Pending, PayloadLen, Frame, Status, ReadOffset);
   If Result Then
-    Delete(Pending, 1, Have);
+    Inc(ReadOffset, Have);
 End;
 
 Function EncodeMonitorImageBytes(Const Bytes: RawByteString): String;
