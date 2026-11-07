@@ -442,9 +442,8 @@ Begin
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
-  { Turn pages, plan slices and images are queued here with no later Notify, so they would wait for the link's next poll. }
-  If Result Then
-    Wake;
+  { No Wake. A burst is queued first, so the link sees more than one frame, holds off, and answers a ping that is
+    already on the wire before its first bulk write. A producer off the link thread calls Notify after the burst. }
 End;
 
 Procedure TMonitorOutbox.Notify;

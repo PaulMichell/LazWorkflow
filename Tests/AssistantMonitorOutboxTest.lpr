@@ -268,8 +268,13 @@ Begin
     Outbox.AddControl('pong|');
     Outbox.PutState('status', 'status|');
     Outbox.AppendLog(1, 'log1|');
+    Check('each accepted control, state and log add wakes the writer', Counter.Count = 3);
+    { Since 901717e bulk is queued as a burst and woken once by Notify, so a ping is read before the first bulk
+      write (AssistantMonitorLinkTest 4.2). }
     Outbox.AddBulk(['bulk|']);
-    Check('each accepted add wakes the writer', Counter.Count = 4);
+    Check('a bulk add does not wake the writer', Counter.Count = 3);
+    Outbox.Notify;
+    Check('notify wakes the writer once', Counter.Count = 4);
     Outbox.AddControl('');
     Outbox.AppendLog(1, '');
     Check('a refused add does not wake the writer', Counter.Count = 4);
