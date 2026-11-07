@@ -28,7 +28,7 @@ Type
     StoredText, DiskText, OpenPath: String;
     ReplaceCount, SaveCount, EditorStamp: Integer;
     AllowInspect, AllowChanges, AllowBuild: Boolean;
-    ProjectRoot, BaseCommand, LastCommand: String;
+    ProjectRoot, BaseCommand, LastCommand, LastOptions: String;
     LaunchCount, FormCalls, DeleteCalls, RenameCalls, AddUnitCalls: Integer;
     PasText, LfmText, AddedUnit: String;
     AddedUses: Boolean;
@@ -46,6 +46,7 @@ Type
     Function CanTest: Boolean; Override;
     Function TestCommand(Const BuildId, OptionsJSON: String; Out Command, ErrorText: String): Boolean; Override;
     Function StartTests(Const BuildId, ExpectedCommand, OptionsJSON: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function TestStatus(Out ResultText, ErrorText: String): Boolean; Override;
     Function EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function DeletePath(Const Arguments, ResolvedPath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function RenamePath(Const Arguments, ResolvedFrom, ResolvedTo: String; Out ResultText, ErrorText: String): Boolean; Override;
@@ -187,9 +188,37 @@ Begin
       Exit;
     End;
   LastCommand := Command;
+  LastOptions := OptionsJSON;
   Inc(LaunchCount);
   ResultText := '{"started":true,"job_id":"test-job"}';
   Result := True;
+End;
+
+{ Same comparison as TAssistantIDEWorkspace.TestStatus: reapply the options from the start. A different command is stale. }
+Function TMemoryWorkspace.TestStatus(Out ResultText, ErrorText: String): Boolean;
+Var
+  Current, Note: String;
+  Stale: Boolean;
+  Root: TJSONObject;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If LastCommand = '' Then
+    Begin
+      ErrorText := 'No test command has been started.';
+      Exit;
+    End;
+  Stale := Not ApplyTestOptions(BaseCommand, ProjectRoot, LastOptions, Current, Note) Or (Current <> LastCommand);
+  Root := TJSONObject.Create;
+  Try
+    Root.Add('job_id', 'test-job');
+    Root.Add('stale', Stale);
+    ResultText := Root.AsJSON;
+    Result := True;
+  Finally
+    Root.Free;
+  End;
 End;
 
 Function TMemoryWorkspace.EnsureFormComponent(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
@@ -905,6 +934,92 @@ Begin
   End;
 End;
 
+Function ArgumentIndex(Const Command, Name: String): Integer;
+Var
+  Data, Args: TJSONData;
+  I: Integer;
+Begin
+  Result := -1;
+  Data := GetJSON(Command);
+  Try
+    Args := Data.FindPath('arguments');
+    If Not (Args Is TJSONArray) Then Exit;
+    For I := 0 To Args.Count - 1 Do
+      If Args.Items[I].AsString = Name Then
+        Exit(I);
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function OutputDirectory(Const Command: String): String;
+Var
+  Index: Integer;
+Begin
+  Index := ArgumentIndex(Command, '--output-dir');
+  If Index < 0 Then
+    Result := ''
+  Else
+    Result := ArgumentAt(Command, Index + 1);
+End;
+
+Function JsonBoolean(Const Text, Name: String; Out Value: Boolean): Boolean;
+Var
+  Data, Node: TJSONData;
+Begin
+  Result := False;
+  Value := False;
+  Try
+    Data := GetJSON(Text);
+  Except
+    Exit;
+  End;
+  Try
+    Node := Data.FindPath(Name);
+    If (Node = Nil) Or (Node.JSONType <> jtBoolean) Then Exit;
+    Value := Node.AsBoolean;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function CommandWithScript(Const Root, Script: String): String;
+Var
+  Obj: TJSONObject;
+  Args: TJSONArray;
+Begin
+  Obj := TJSONObject.Create;
+  Args := TJSONArray.Create;
+  Try
+    Obj.Add('executable', '/usr/bin/instantfpc');
+    Obj.Add('workingDirectory', Root);
+    Obj.Add('build_job_id', 'job-1');
+    Obj.Add('executableFingerprint', 'fingerprint');
+    Obj.Add('arguments', Args);
+    Args.Add(Script);
+    Result := Obj.AsJSON;
+  Finally
+    Obj.Free;
+  End;
+End;
+
+Function WithExtraArgument(Const Command, Value: String): String;
+Var
+  Data, Args: TJSONData;
+Begin
+  Result := '';
+  Data := GetJSON(Command);
+  Try
+    Args := Data.FindPath('arguments');
+    If Args Is TJSONArray Then
+      TJSONArray(Args).Add(Value);
+    Result := Data.AsJSON;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure WriteTextFile(Const Path, Text: String);
 Var
   Stream: TFileStream;
@@ -1055,9 +1170,11 @@ End;
 
 Procedure CheckNamedTests;
 Var
-  Root, ResultText, ErrorText, Command: String;
+  Root, ResultText, ErrorText, Command, Saved, DefineDir, HeapDir, ValDir, DebugDir, TraceDir: String;
   Obj: TJSONObject;
   Args: TJSONArray;
+  Launches: Integer;
+  Stale: Boolean;
 Begin
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-only-' + IntToStr(GetProcessID);
   ForceDirectories(IncludeTrailingPathDelimiter(Root) + 'Tests');
@@ -1082,6 +1199,7 @@ Begin
   Workspace.AllowBuild := True;
   Workspace.LaunchCount := 0;
   Workspace.LastCommand := '';
+  Workspace.LastOptions := '';
   Bridge.BeginRun(ctsProject);
   Check('valid names are passed as only pairs', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     OnlyRequest(['GoodTest', 'OtherTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
@@ -1102,6 +1220,79 @@ Begin
     OnlyRequest(['MissingTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
   Check('without only the command is unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     '{"build_job_id":"job-1"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  Launches := Workspace.LaunchCount;
+  Check('defines are passed as --define', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","defines":["DEBUG"]}', ResultText, ErrorText) And (Workspace.LaunchCount = Launches + 1));
+  Command := Workspace.LastCommand;
+  Check('define arguments follow the configured arguments', (ArgumentCount(Command) = 7) And
+    (ArgumentAt(Command, 3) = '--define') And (ArgumentAt(Command, 4) = 'DEBUG') And (ArgumentAt(Command, 5) = '--output-dir') And
+    (Pos(IncludeTrailingPathDelimiter(GetTempDir), ArgumentAt(Command, 6)) = 1));
+  DefineDir := ArgumentAt(Command, 6);
+  Check('heaptrc is passed with only', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And
+    (Workspace.LaunchCount = Launches + 2));
+  Command := Workspace.LastCommand;
+  Check('heaptrc follows the only pair', (ArgumentCount(Command) = 8) And (ArgumentAt(Command, 3) = '--only') And
+    (ArgumentAt(Command, 4) = 'GoodTest') And (ArgumentAt(Command, 5) = '--heaptrc') And (ArgumentAt(Command, 6) = '--output-dir'));
+  HeapDir := ArgumentAt(Command, 7);
+  Check('valgrind with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"valgrind"}', ResultText, ErrorText));
+  ValDir := OutputDirectory(Workspace.LastCommand);
+  Check('memory-check modes do not share an output directory', (HeapDir <> ValDir) And (Pos('-heaptrc-', HeapDir) > 0) And
+    (Pos('-valgrind-', ValDir) > 0) And DirectoryExists(HeapDir) And DirectoryExists(ValDir));
+  Check('a define with only is passed', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"defines":["DEBUG"]}', ResultText, ErrorText));
+  DebugDir := OutputDirectory(Workspace.LastCommand);
+  Check('another define with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"defines":["TRACE"]}', ResultText, ErrorText));
+  TraceDir := OutputDirectory(Workspace.LastCommand);
+  Check('define sets do not share an output directory', (DebugDir <> TraceDir) And (Pos('-dDEBUG-', DebugDir) > 0) And
+    (Pos('-dTRACE-', TraceDir) > 0));
+  Check('the same options stay current', Broker.Execute(Bridge.RunId, 'lazarus_test_status', '{"job_id":"test-job"}',
+    ResultText, ErrorText) And JsonBoolean(ResultText, 'stale', Stale) And Not Stale);
+  Saved := Workspace.BaseCommand;
+  Workspace.BaseCommand := WithExtraArgument(Saved, '--marker');
+  Check('reapplying options after a command change is stale', Broker.Execute(Bridge.RunId, 'lazarus_test_status',
+    '{"job_id":"test-job"}', ResultText, ErrorText) And JsonBoolean(ResultText, 'stale', Stale) And Stale);
+  Workspace.BaseCommand := Saved;
+  Launches := Workspace.LaunchCount;
+  Check('valgrind without only is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","memory_check":"valgrind"}', ResultText, ErrorText) And
+    (Pos('needs at least one only name', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
+  Check('a bad define name is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","defines":["bad-name"]}', ResultText, ErrorText) And
+    (Pos('Define name must match', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
+  Check('more than 8 defines are refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","defines":["A","B","C","D","E","F","G","H","I"]}', ResultText, ErrorText) And
+    (Pos('at most 8', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
+  Check('an unknown memory check is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","memory_check":"asan"}', ResultText, ErrorText) And
+    (Pos('memory_check must be', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
+  Workspace.BaseCommand := CommandWithScript(Root, 'echo');
+  Check('only on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    OnlyRequest(['GoodTest']), ResultText, ErrorText) And
+    (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
+    (Workspace.LaunchCount = Launches));
+  Check('defines on another command are refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","defines":["DEBUG"]}', ResultText, ErrorText) And
+    (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
+    (Workspace.LaunchCount = Launches));
+  Check('heaptrc on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And
+    (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
+    (Workspace.LaunchCount = Launches));
+  Workspace.BaseCommand := Saved;
+  Check('memory_check none leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","memory_check":"none"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  Check('empty defines leave the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","defines":[]}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  Check('an empty only list leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":[]}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  RemoveDir(DefineDir);
+  RemoveDir(HeapDir);
+  RemoveDir(ValDir);
+  RemoveDir(DebugDir);
+  RemoveDir(TraceDir);
   Workspace.AllowBuild := False;
   Workspace.BaseCommand := '';
   Workspace.ProjectRoot := '';
