@@ -941,8 +941,12 @@ Begin
       If Not FCredit.CanSend(Length(Json)) Then
         Begin
           FCredit.Hold(Seq, Json);
-          If FCredit.HeldBytes > MonitorLogBudgetBytes Then
-            EnqueueAccepted(EncodeMonitorBye(NewHostId, 'protocol'));
+          { One bye, then the same close CloseToListening uses. A later held frame must not queue another. }
+          If (FCredit.HeldBytes > MonitorLogBudgetBytes) And (Not FCloseRequested) Then
+            Begin
+              EnqueueAccepted(EncodeMonitorBye(NewHostId, 'protocol'));
+              CloseToListening;
+            End;
           Result := True;
           Exit;
         End;

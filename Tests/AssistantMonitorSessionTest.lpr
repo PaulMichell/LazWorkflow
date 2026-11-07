@@ -15,7 +15,7 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
-  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorSession,
+  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorSession,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
 
 Var
@@ -595,6 +595,74 @@ Begin
     Fresh.ReplaceLivePatch(1, Parts);
     Check('a placeholder live part puts nothing in the outbox', Fresh.OutboundCount = 0);
     Check('a placeholder live part is counted as dropped', Fresh.FramesDropped = Before + 3);
+  Finally
+    Fresh.Free;
+  End;
+End;
+
+{ A catalogue 3 event large enough to fill the credit window, and too large for an outbox chunk. }
+Function CreditEvent(Seq: Integer; Const Pad: String): String;
+Begin
+  Result := '{"v":3,"id":"credit-' + IntToStr(Seq) + '","type":"event","payload":{"seq":' + IntToStr(Seq) +
+    ',"text":"' + Pad + '"}}';
+End;
+
+{ Plan item 4.2. Frames held past the log budget queue one protocol bye and request close. Further held frames
+  do not queue another bye. }
+Procedure TestCreditOverflowByeOnce;
+Var
+  Fresh: TMonitorSession;
+  Pad, Json: String;
+  Seq, Extra, Byes: Integer;
+  Unacked, Held: Int64;
+  Bytes: RawByteString;
+  Frame: TMonitorFrame;
+  Status: TMonitorFrameStatus;
+  Message: TMonitorMessage;
+  Bye: TMonitorBye;
+  ErrorText: String;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    { Larger than an outbox chunk, so the window frames are not queued. Only the bye should appear. }
+    Pad := StringOfChar('x', 200000);
+    Seq := 1;
+    Unacked := 0;
+    Json := CreditEvent(Seq, Pad);
+    While Unacked + Length(Json) <= MonitorCreditWindowBytes Do
+      Begin
+        Fresh.TryQueueHostJson(Json);
+        Unacked := Unacked + Length(Json);
+        Inc(Seq);
+        Json := CreditEvent(Seq, Pad);
+      End;
+    Held := 0;
+    While Held + Length(Json) <= MonitorLogBudgetBytes Do
+      Begin
+        Fresh.TryQueueHostJson(Json);
+        Held := Held + Length(Json);
+        Inc(Seq);
+        Json := CreditEvent(Seq, Pad);
+      End;
+    Check('held frames under the budget do not close the link', Not Fresh.CloseRequested);
+    Check('held frames under the budget queue no bye', Fresh.OutboundCount = 0);
+    Check('the frame past the held budget is accepted', Fresh.TryQueueHostJson(Json));
+    Check('credit overflow requests close', Fresh.CloseRequested);
+    Check('credit overflow queues one frame', Fresh.OutboundCount = 1);
+    For Extra := 1 To 3 Do
+      Begin
+        Inc(Seq);
+        Check('a later held frame adds no bye', Fresh.TryQueueHostJson(CreditEvent(Seq, Pad)) And (Fresh.OutboundCount = 1));
+      End;
+    Byes := 0;
+    While Fresh.TakeOutboundFrame(Bytes) Do
+      If TryDecodeMonitorFrame(Bytes, Frame, Status) And TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText) And
+        (Message.Kind = mmkBye) Then
+        Begin
+          Inc(Byes);
+          Check('the credit bye reason is protocol', DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'protocol'));
+        End;
+    Check('credit overflow queues exactly one bye', Byes = 1);
   Finally
     Fresh.Free;
   End;
@@ -1421,6 +1489,7 @@ Begin
       TestPlanFrameBeforeBulk;
       TestLivePatchReplaces;
       TestEncodeFailureNotQueued;
+      TestCreditOverflowByeOnce;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except
