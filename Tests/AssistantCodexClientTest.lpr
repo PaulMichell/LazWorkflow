@@ -658,7 +658,8 @@ Begin
       LineEnding + LineEnding + 'Final-only summary');
     Check('tool preserves preceding reasoning', Tool.ThinkingBefore = Client.Thinking);
     Check('wrong tool completion refused', Not Client.CompleteTool('wrong', 'result', True));
-    Check('tool result sent', Client.CompleteTool('call-1', 'result', True));
+    Check('escaped oversized tool result sent without disconnecting',
+      Client.CompleteTool('call-1', StringOfChar(#9, 1100000) + 'é', True));
     Check('tool cannot complete twice', Not Client.CompleteTool('call-1', 'result', True));
     WaitState(crsCompleted);
     Check('thread usage notification correlated', Client.ContextUsage.Reported And

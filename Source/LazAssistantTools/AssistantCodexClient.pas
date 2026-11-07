@@ -683,7 +683,7 @@ End;
 Function TAssistantCodexClient.CompleteTool(Const CallId, Text, ProjectRoot, AttachmentsJson: String;
   Success: Boolean): Boolean;
 Var
-  I, Budget: Integer;
+  I, Budget, LowLength, HighLength, KeepLength: Integer;
   Refs: TAssistantImageRefArray;
   Items, Uri, ImageError, Note, Line: String;
 Begin
@@ -733,6 +733,33 @@ Begin
   If Length(Line) > CodexMaxFrameBytes Then
     Begin
       Note := Text + LineEnding + AssistantImageSendFailedPrefix + ' Image could not be prepared for upload.';
+      Line := '{"id":' + FTools[0].RequestId + ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
+        ',"contentItems":[{"type":"inputText","text":' + Quote(Note) + '}]}}';
+    End;
+  If Length(Line) > CodexMaxFrameBytes Then
+    Begin
+      { Bound the encoded frame, including JSON escaping. Keep UTF-8 intact and
+        tell the model to request a smaller range instead of losing the session. }
+      LowLength := 0;
+      HighLength := Length(Text);
+      While LowLength < HighLength Do
+        Begin
+          KeepLength := LowLength + (HighLength - LowLength + 1) Div 2;
+          Note := Copy(Text, 1, KeepLength) + LineEnding +
+            '[Tool output truncated to fit the transport frame. Request a smaller range.]';
+          Line := '{"id":' + FTools[0].RequestId + ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
+            ',"contentItems":[{"type":"inputText","text":' + Quote(Note) + '}]}}';
+          If Length(Line) <= CodexMaxFrameBytes Then
+            LowLength := KeepLength
+          Else
+            HighLength := KeepLength - 1;
+        End;
+      KeepLength := LowLength;
+      While (KeepLength > 0) And (KeepLength < Length(Text)) And
+        ((Ord(Text[KeepLength + 1]) And $C0) = $80) Do
+        Dec(KeepLength);
+      Note := Copy(Text, 1, KeepLength) + LineEnding +
+        '[Tool output truncated to fit the transport frame. Request a smaller range.]';
       Line := '{"id":' + FTools[0].RequestId + ',"result":{"success":' + LowerCase(BoolToStr(Success, True)) +
         ',"contentItems":[{"type":"inputText","text":' + Quote(Note) + '}]}}';
     End;
