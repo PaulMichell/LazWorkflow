@@ -53,7 +53,7 @@ Type
     Head: Integer;
     Used: Integer;
     Function FindLocked(Const Id: String): Integer;
-    Function Move(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
+    Function Transition(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
   Public
     Constructor Create;
     Destructor Destroy; Override;
@@ -174,7 +174,7 @@ Begin
   End;
 End;
 
-Function TMonitorCommandIntake.Move(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
+Function TMonitorCommandIntake.Transition(Const Id: String; State: TMonitorCommandState; Const Reason, DoneText: String): Boolean;
 Var
   Slot: Integer;
 Begin
@@ -198,17 +198,17 @@ End;
 
 Function TMonitorCommandIntake.NoteAccepted(Const Id: String): Boolean;
 Begin
-  Result := Move(Id, mcsAccepted, '', '');
+  Result := Transition(Id, mcsAccepted, '', '');
 End;
 
 Function TMonitorCommandIntake.NoteRejected(Const Id, Reason: String): Boolean;
 Begin
-  Result := Move(Id, mcsRejected, Reason, '');
+  Result := Transition(Id, mcsRejected, Reason, '');
 End;
 
 Function TMonitorCommandIntake.NoteDone(Const Id: String; Const DoneText: String): Boolean;
 Begin
-  Result := Move(Id, mcsDone, '', DoneText);
+  Result := Transition(Id, mcsDone, '', DoneText);
 End;
 
 Function TMonitorCommandIntake.Lookup(Const Id: String; Out Found: TMonitorCommandRecord): Boolean;

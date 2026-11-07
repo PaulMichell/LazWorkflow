@@ -232,6 +232,8 @@ Type
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure AdoptRunningHost;
+    Procedure RejectBusy(Const Id, MessageText: String);
+    Procedure AckQueued(Const Id: String; Admitted: TMonitorIntakeResult);
     Procedure QueueBulkFramesLocked(Const Frames: TStringArray);
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
@@ -1620,23 +1622,12 @@ Begin
   MessageText := 'The desktop control is not available.';
   { CanSend starts false until the first status frame. An idle form still accepts Send.
     FSendPending is the gap before the form reports Sending. It blocks like a running turn. }
-  If Kind = Ord(mmkSend) Then
-    Result := HostBusy Or FHostFlags.PlanAgentRunning
-  Else If Kind = Ord(mmkSetMode) Then
-    Result := HostBusy Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode)
-  Else If Kind = Ord(mmkNewConversation) Then
-    Result := HostBusy Or FHostFlags.PlanAgentRunning
-  Else If Kind = Ord(mmkRunPlan) Then
-    Result := HostBusy Or FHostFlags.PlanAgentRunning
-  Else If Kind = Ord(mmkWorkOnPlan) Then
-    Result := HostBusy
-  Else If Kind = Ord(mmkRunTask) Then
-    Result := HostBusy Or FHostFlags.PlanAgentRunning
-  Else If (Kind = Ord(mmkClosePlan)) Or (Kind = Ord(mmkInsertTask)) Then
-    Result := HostBusy Or FHostFlags.PlanAgentRunning
-  Else If (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkNewPlan)) Then
-    Result := HostBusy
-  Else If Kind = Ord(mmkSelectTarget) Then
+  Case Kind Of
+    Ord(mmkSend), Ord(mmkNewConversation), Ord(mmkRunPlan), Ord(mmkRunTask), Ord(mmkClosePlan), Ord(mmkInsertTask):
+      Result := HostBusy Or FHostFlags.PlanAgentRunning;
+    Ord(mmkSetMode): Result := HostBusy Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode);
+    Ord(mmkWorkOnPlan), Ord(mmkSelectPlan), Ord(mmkNewPlan): Result := HostBusy;
+    Ord(mmkSelectTarget):
     Begin
       { A bind stops in-flight work. Review is still the form's check. }
       Result := HostBusy Or FHostFlags.PlanAgentRunning;
@@ -1644,22 +1635,22 @@ Begin
         MessageText := 'Wait for the current reply to finish.'
       Else If FHostFlags.PlanAgentRunning Then
         MessageText := 'A plan run is already active.';
-    End
-  Else If Kind = Ord(mmkSelectConversation) Then
+    End;
+    Ord(mmkSelectConversation):
     Begin
       { The History combo refuses only while a reply is sending. }
       Result := HostBusy;
       If Result Then
         MessageText := 'Stop the current reply before switching History.';
-    End
-  Else If (Kind = Ord(mmkSetModel)) Or (Kind = Ord(mmkSetReasoning)) Or (Kind = Ord(mmkSetPermissions)) Then
+    End;
+    Ord(mmkSetModel), Ord(mmkSetReasoning), Ord(mmkSetPermissions):
     Begin
       { Review is still the form's check. A plan run is work in progress. }
       Result := HostBusy Or FHostFlags.PlanAgentRunning;
       If Result Then
         MessageText := 'Wait until the current work finishes before changing the model, effort, or permissions.';
-    End
-  Else If Kind = Ord(mmkSteer) Then
+    End;
+    Ord(mmkSteer):
     Begin
       { The gap before Sending is reported is not a turn to steer, and it is not a second prompt. }
       If FSendPending Then
@@ -1673,15 +1664,19 @@ Begin
           If FState <> mssBusy Then
             MessageText := 'Nothing is running to steer.';
         End;
-    End
-  Else If Kind = Ord(mmkStop) Then
-    Result := (FState = mssBusy) And (Not FHostFlags.CanStop);
+    End;
+    Ord(mmkStop): Result := (FState = mssBusy) And (Not FHostFlags.CanStop);
+  Else
+    Result := False;
+  End;
 End;
 
 Procedure TMonitorSession.EnterBusy(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
+Const
+  BusyKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkRunTask)];
 Begin
   { The form, not this accept, is what makes the session busy. }
-  If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkRunTask)) Then
+  If Kind In BusyKinds Then
     Begin
       FSendPending := True;
       FActiveCommandId := Id;
@@ -1699,16 +1694,34 @@ Begin
 End;
 
 Function RecordedCommand(Kind: Integer): Boolean;
+Const
+  RecordedKinds = [Ord(mmkSend), Ord(mmkSteer), Ord(mmkStop), Ord(mmkSetMode), Ord(mmkNewConversation), Ord(mmkRunPlan),
+    Ord(mmkStopPlan), Ord(mmkWorkOnPlan), Ord(mmkRunTask), Ord(mmkClosePlan), Ord(mmkInsertTask), Ord(mmkSelectPlan),
+    Ord(mmkSelectTarget), Ord(mmkSelectConversation), Ord(mmkSetModel), Ord(mmkSetReasoning), Ord(mmkSetPermissions), Ord(mmkNewPlan)];
 Begin
-  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkSteer)) Or (Kind = Ord(mmkStop)) Or (Kind = Ord(mmkSetMode)) Or
-    (Kind = Ord(mmkNewConversation)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkStopPlan)) Or
-    (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Or (Kind = Ord(mmkClosePlan)) Or
-    (Kind = Ord(mmkInsertTask)) Or (Kind = Ord(mmkSelectPlan)) Or (Kind = Ord(mmkSelectTarget)) Or
-    (Kind = Ord(mmkSelectConversation)) Or (Kind = Ord(mmkSetModel)) Or (Kind = Ord(mmkSetReasoning)) Or
-    (Kind = Ord(mmkSetPermissions)) Or (Kind = Ord(mmkNewPlan));
+  Result := Kind In RecordedKinds;
+End;
+
+Procedure TMonitorSession.RejectBusy(Const Id, MessageText: String);
+Begin
+  If (Id <> '') And (Id = FActiveCommandId) Then
+    Begin
+      FSendPending := False;
+      FActiveCommandId := '';
+    End;
+  FIntake.NoteRejected(Id, MonitorHostBusyReason);
+  QueueControl(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+End;
+
+Procedure TMonitorSession.AckQueued(Const Id: String; Admitted: TMonitorIntakeResult);
+Begin
+  If Admitted = mirQueued Then
+    QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
 End;
 
 Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
+Const
+  BusyKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkWorkOnPlan), Ord(mmkRunTask)];
 Var
   Blocked: Boolean;
   MessageText: String;
@@ -1736,18 +1749,11 @@ Begin
     Begin
       If CommandBlocked(Kind, MessageText) Then
         Begin
-          If (Id <> '') And (Id = FActiveCommandId) Then
-            Begin
-              FSendPending := False;
-              FActiveCommandId := '';
-            End;
-          FIntake.NoteRejected(Id, MonitorHostBusyReason);
-          QueueControl(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+          RejectBusy(Id, MessageText);
         End
       Else
         Begin
-          If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-            QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+          AckQueued(Id, Admitted);
           If FState = mssBusy Then
             FState := mssLive;
           QueueCommand(Kind, Id, PayloadJson);
@@ -1760,21 +1766,14 @@ Begin
     (FState = mssLive) And FHostFlags.CanSend And (Not FHostFlags.Sending) And (Not FHostFlags.PlanAgentRunning) Then
     Begin
       LogLine(1, 'steer submitted as send bind=' + FBindAddress + ' port=' + IntToStr(FPort));
-      If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-        QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+      AckQueued(Id, Admitted);
       EnterBusy(Ord(mmkSend), Id, PayloadJson);
       Exit;
     End;
   Blocked := CommandBlocked(Kind, MessageText);
   If Blocked Then
     Begin
-      If (Id <> '') And (Id = FActiveCommandId) Then
-        Begin
-          FSendPending := False;
-          FActiveCommandId := '';
-        End;
-      FIntake.NoteRejected(Id, MonitorHostBusyReason);
-      QueueControl(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+      RejectBusy(Id, MessageText);
       Exit;
     End;
   If Kind = Ord(mmkTurn) Then
@@ -1782,9 +1781,8 @@ Begin
       If ServeTurnFromMirror(Id, PayloadJson) Then
         Exit;
     End;
-  If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-    QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
-  If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Then
+  AckQueued(Id, Admitted);
+  If Kind In BusyKinds Then
     EnterBusy(Kind, Id, PayloadJson)
   Else
     QueueCommand(Kind, Id, PayloadJson);

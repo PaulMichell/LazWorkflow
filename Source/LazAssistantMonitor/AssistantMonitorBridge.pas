@@ -418,11 +418,12 @@ Begin
 End;
 
 Function LongRunningCommand(Kind: Integer): Boolean;
+Const
+  LongRunningKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkWorkOnPlan), Ord(mmkRunTask)];
 Begin
   { send is done when the turn ends. run_plan and run_task are done when the plan flag drops.
     A steer finishes when the form accepts it. }
-  Result := (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or
-    (Kind = Ord(mmkRunTask));
+  Result := Kind In LongRunningKinds;
 End;
 
 Function TAssistantMonitorBridge.OpenForm: TProjectAssistantForm;
