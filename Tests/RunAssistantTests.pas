@@ -41,22 +41,48 @@ Const
     'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest',
     'AssistantMonitorFormLoadTest');
 
+Type
+  TMemoryCheck = (mcNone, mcHeaptrc, mcValgrind);
+
 Var
-  Repo, LazarusRoot, OutputDir: String;
+  Repo, LazarusRoot, OutputDir, ValgrindExe: String;
   LibraryDirs, OnlyNames, Defines, Failures: TStringList;
   Gui, PackageCheck, CompileOnly, Independent: Boolean;
+  MemoryCheck: TMemoryCheck;
 
 Const
   MaxDefines = 8;
+  { Memory-check settings. Provisional until plan item 2.1 (Documents/Plan-20261107-025146.md) records what FPC 3.3.1
+    heaptrc and valgrind report; correct them here when it does. }
+  HeaptrcBuildFlags: Array[0..0] Of String = ('-gh');
+  HeaptrcEnvironment = 'HEAPTRC=keepreleased';
+  HeapReportMarker = 'unfreed memory blocks';
+  HeapCleanLine = '0 unfreed memory blocks : 0';
+  HeapFaultMarkers: Array[0..5] Of String = (
+    'Marked memory at $', 'Wrong signature $', 'Wrong release size', 'Wrong size at dealloc', 'Memory error detected',
+    'freed again');
+  ValgrindBuildFlags: Array[0..0] Of String = ('-gv');
+  ValgrindErrorExit = 99;
+  ValgrindSlowdown = 20;
+  MaxRunTimeoutSec = 3600;
 
 Procedure FailUsage(Const Message: String);
 Begin
   WriteLn(StdErr, Message);
   WriteLn(StdErr, 'instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout> [--only ProgramName]...');
   WriteLn(StdErr, '  [--output-dir Dir] [--library-dir Dir]... [--define NAME]... [--gui] [--compile-only]');
-  WriteLn(StdErr, '  [--package-check] [--independent]');
+  WriteLn(StdErr, '  [--package-check] [--independent] [--heaptrc | --valgrind]');
   WriteLn(StdErr, '--define NAME passes -dNAME to every fpc build and to the monitor package build;');
   WriteLn(StdErr, '  NAME matches [A-Za-z_][A-Za-z0-9_]*, at most ' + IntToStr(MaxDefines) + ' names.');
+  WriteLn(StdErr, '--heaptrc builds the test programs (not the packages) with ' + HeaptrcBuildFlags[0] + ' and runs them with ' +
+    HeaptrcEnvironment + ';');
+  WriteLn(StdErr, '  an unfreed block or a heap error reported by heaptrc fails the test.');
+  WriteLn(StdErr, '--valgrind builds the test programs (not the packages) with ' + ValgrindBuildFlags[0] +
+    ' and runs them under valgrind memcheck;');
+  WriteLn(StdErr, '  a memcheck error or definite leak fails the test. The run timeout is multiplied by ' +
+    IntToStr(ValgrindSlowdown) + ', capped at ' + IntToStr(MaxRunTimeoutSec) + ' s.');
+  WriteLn(StdErr, '--heaptrc and --valgrind cannot be combined, each needs at least one --only, and neither may be used');
+  WriteLn(StdErr, '  with --independent, --package-check or --gui.');
   Halt(2);
 End;
 
@@ -107,11 +133,64 @@ Begin
   End;
 End;
 
-Function RunCommand(Const LabelName: String; Command: TStrings; TimeoutSec: Integer): Boolean;
+Function ReadTextFile(Const Path: String): String;
+Var
+  Stream: TFileStream;
+Begin
+  Result := '';
+  If Not FileExists(Path) Then
+    Exit;
+  Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+  Try
+    SetLength(Result, Stream.Size);
+    If Result <> '' Then
+      Stream.ReadBuffer(Result[1], Length(Result));
+  Finally
+    Stream.Free;
+  End;
+End;
+
+{ Returns '' when the heaptrc exit report shows no unfreed blocks and no heap error, or else a message naming the line. }
+Function CheckHeapReport(Const LogText: String): String;
+Var
+  Lines: TStringList;
+  I, J: Integer;
+  Line: String;
+  Found: Boolean;
+Begin
+  Result := '';
+  Found := False;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := LogText;
+    For I := 0 To Lines.Count - 1 Do
+      Begin
+        Line := Trim(Lines[I]);
+        For J := 0 To High(HeapFaultMarkers) Do
+          If Pos(HeapFaultMarkers[J], Line) > 0 Then
+            Exit('heaptrc reported a heap error: ' + Line);
+        If Pos(HeapReportMarker, Line) > 0 Then
+          Begin
+            Found := True;
+            If Line <> HeapCleanLine Then
+              Exit('heaptrc reported unfreed blocks: ' + Line);
+          End;
+      End;
+  Finally
+    Lines.Free;
+  End;
+  If Not Found Then
+    Result := 'heaptrc report missing: no "' + HeapReportMarker + '" line in the output';
+End;
+
+{ Environment entries, when given, are added to a copy of this process's environment. AppendLog names a file whose
+  text is added to the log after the run. CheckHeap applies CheckHeapReport to the output. }
+Function RunCommand(Const LabelName: String; Command: TStrings; TimeoutSec: Integer; Environment: TStrings = Nil;
+  Const AppendLog: String = ''; CheckHeap: Boolean = False): Boolean;
 Var
   Proc: TProcess;
   I, BytesRead: Integer;
-  Exe, LogPath, OutputText, Tail: String;
+  Exe, LogPath, OutputText, Tail, Problem: String;
   Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
   StartTick: QWord;
@@ -137,6 +216,13 @@ Begin
     Proc.Options := [poUsePipes, poNoConsole, poStderrToOutPut];
     For I := 1 To Command.Count - 1 Do
       Proc.Parameters.Add(Command[I]);
+    If Assigned(Environment) Then
+      Begin
+        For I := 1 To GetEnvironmentVariableCount Do
+          Proc.Environment.Add(GetEnvironmentString(I));
+        For I := 0 To Environment.Count - 1 Do
+          Proc.Environment.Values[Environment.Names[I]] := Environment.ValueFromIndex[I];
+      End;
     Try
       Proc.Execute;
       StartTick := GetTickCount64;
@@ -173,10 +259,20 @@ Begin
         Move(Mem.Memory^, OutputText[1], Mem.Size);
       If TimedOut Then
         OutputText := OutputText + LineEnding + 'Timed out.' + LineEnding;
+      If AppendLog <> '' Then
+        OutputText := OutputText + LineEnding + '----- ' + AppendLog + ' -----' + LineEnding + ReadTextFile(AppendLog);
       WriteTextFile(LogPath, OutputText);
-      If TimedOut Or (Proc.ExitStatus <> 0) Then
+      Problem := '';
+      If CheckHeap And Not TimedOut Then
+        Problem := CheckHeapReport(OutputText);
+      If (AppendLog <> '') And Not TimedOut And (Proc.ExitStatus = ValgrindErrorExit) Then
+        Problem := 'valgrind reported errors (exit ' + IntToStr(ValgrindErrorExit) + ')';
+      If TimedOut Or (Proc.ExitStatus <> 0) Or (Problem <> '') Then
         Begin
-          Say('FAIL ' + LabelName + ': see ' + LogPath);
+          If Problem <> '' Then
+            Say('FAIL ' + LabelName + ': ' + Problem + '; see ' + LogPath)
+          Else
+            Say('FAIL ' + LabelName + ': see ' + LogPath);
           Tail := OutputText;
           If Length(Tail) > 4000 Then
             Tail := Copy(Tail, Length(Tail) - 3999, 4000);
@@ -464,6 +560,15 @@ Begin
               Defines.Add(ParamStr(I));
             End;
         End
+      Else If (Arg = '--heaptrc') Or (Arg = '--valgrind') Then
+        Begin
+          If ((Arg = '--heaptrc') And (MemoryCheck = mcValgrind)) Or ((Arg = '--valgrind') And (MemoryCheck = mcHeaptrc)) Then
+            FailUsage('--heaptrc and --valgrind cannot be combined.');
+          If Arg = '--heaptrc' Then
+            MemoryCheck := mcHeaptrc
+          Else
+            MemoryCheck := mcValgrind;
+        End
       Else
         FailUsage('Unknown argument: ' + Arg);
       Inc(I);
@@ -472,6 +577,30 @@ Begin
     FailUsage('--lazarus-root is required.');
   If Not DirectoryExists(LazarusRoot) Then
     FailUsage('Lazarus root was not found: ' + LazarusRoot);
+  If MemoryCheck <> mcNone Then
+    Begin
+      If MemoryCheck = mcHeaptrc Then
+        Arg := '--heaptrc'
+      Else
+        Arg := '--valgrind';
+      If OnlyNames.Count = 0 Then
+        FailUsage(Arg + ' needs at least one --only.');
+      If Independent Then
+        FailUsage(Arg + ' cannot be used with --independent.');
+      If PackageCheck Then
+        FailUsage(Arg + ' cannot be used with --package-check.');
+      If Gui Then
+        FailUsage(Arg + ' cannot be used with --gui.');
+    End;
+  If MemoryCheck = mcValgrind Then
+    Begin
+      ValgrindExe := ResolveExecutable('valgrind');
+      If ValgrindExe = '' Then
+        Begin
+          WriteLn(StdErr, 'valgrind is not installed.');
+          Halt(1);
+        End;
+    End;
 End;
 
 Function SelectedTests: TStringList;
@@ -520,6 +649,87 @@ Begin
   Result := '';
   For I := 0 To Defines.Count - 1 Do
     Result := Result + ' -d' + Defines[I];
+End;
+
+{ Memory-check flags go on the test program builds only, never on the package builds. }
+Procedure AddMemoryCheckFlags(Command: TStrings);
+Var
+  I: Integer;
+Begin
+  Case MemoryCheck Of
+    mcHeaptrc:
+      For I := 0 To High(HeaptrcBuildFlags) Do
+        Command.Add(HeaptrcBuildFlags[I]);
+    mcValgrind:
+      For I := 0 To High(ValgrindBuildFlags) Do
+        Command.Add(ValgrindBuildFlags[I]);
+  End;
+End;
+
+Function MemoryCheckText: String;
+Var
+  Command: TStringList;
+Begin
+  Result := '';
+  If MemoryCheck = mcNone Then
+    Exit;
+  Command := TStringList.Create;
+  Try
+    Command.Delimiter := ' ';
+    AddMemoryCheckFlags(Command);
+    If MemoryCheck = mcHeaptrc Then
+      Result := '; mode: heaptrc, test programs add ' + Command.DelimitedText + ' and run with ' + HeaptrcEnvironment
+    Else
+      Result := '; mode: valgrind, test programs add ' + Command.DelimitedText + ' and run under ' + ValgrindExe;
+  Finally
+    Command.Free;
+  End;
+End;
+
+Procedure RunTest(Const TestName: String; TimeoutSec: Integer);
+Var
+  Command, Environment: TStringList;
+  Binary, ValgrindLog: String;
+Begin
+  Binary := OutputBinary(OutputDir, TestName);
+  Command := TStringList.Create;
+  Environment := TStringList.Create;
+  Try
+    Case MemoryCheck Of
+      mcHeaptrc:
+        Begin
+          Command.Add(Binary);
+          Environment.Add(HeaptrcEnvironment);
+          RunCommand(TestName, Command, TimeoutSec, Environment, '', True);
+        End;
+      mcValgrind:
+        Begin
+          ValgrindLog := IncludeTrailingPathDelimiter(OutputDir) + TestName + '.valgrind.log';
+          If FileExists(ValgrindLog) Then
+            DeleteFile(ValgrindLog);
+          Command.Add(ValgrindExe);
+          Command.Add('--error-exitcode=' + IntToStr(ValgrindErrorExit));
+          Command.Add('--leak-check=full');
+          Command.Add('--errors-for-leak-kinds=definite');
+          Command.Add('--track-origins=yes');
+          Command.Add('--log-file=' + ValgrindLog);
+          Command.Add(Binary);
+          If TimeoutSec > MaxRunTimeoutSec Div ValgrindSlowdown Then
+            TimeoutSec := MaxRunTimeoutSec
+          Else
+            TimeoutSec := TimeoutSec * ValgrindSlowdown;
+          RunCommand(TestName, Command, TimeoutSec, Nil, ValgrindLog);
+        End;
+    Else
+      Begin
+        Command.Add(Binary);
+        RunCommand(TestName, Command, TimeoutSec);
+      End;
+    End;
+  Finally
+    Environment.Free;
+    Command.Free;
+  End;
 End;
 
 Function Restricted(Const LabelName: String; Const Sources: Array Of String; Const Target: String;
@@ -676,9 +886,10 @@ Begin
           Command.Add('-FE' + OutputDir);
           AddUnitFlags(Command, UnitDirs);
           AddBuildFlags(Command);
+          AddMemoryCheckFlags(Command);
           Command.Add(RepoFile('Tests/' + Tests[I] + '.lpr'));
           If RunCommand(Tests[I] + '-build', Command, BuildTimeout) And Not CompileOnly Then
-            RunArgs(Tests[I], [OutputBinary(OutputDir, Tests[I])], BuildTimeout);
+            RunTest(Tests[I], BuildTimeout);
         End;
       Command.Clear;
       Command.Add('fpc');
@@ -720,9 +931,9 @@ Begin
     ParseArguments;
     OutputDir := NewOutputDirectory(OutputDir);
     If Defines.Count = 0 Then
-      Say('Build flags: (none)')
+      Say('Build flags: (none)' + MemoryCheckText)
     Else
-      Say('Build flags:' + BuildFlagsText);
+      Say('Build flags:' + BuildFlagsText + MemoryCheckText);
     If Not RunSuite Then
       Halt(1);
   Finally
