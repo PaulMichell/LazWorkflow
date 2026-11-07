@@ -178,6 +178,63 @@ Begin
   End;
 End;
 
+{ A large append to a live block is cut into block_append slices in linear time. Each slice fits a page, is
+  valid JSON, and the slices join back to the appended text. AssistantMonitorLinkTest appends 800 KiB this way;
+  the quadratic cut took about 55 s on the IDE thread and tripped the 30 s heartbeat. }
+Procedure TestLargeAppend;
+Var
+  Log: TMonitorMirror;
+  Turn: TAssistantMonitorTurn;
+  Events: TMonitorMirrorEventArray;
+  Data: TJSONData;
+  Started: QWord;
+  Index, Appends, First: Integer;
+  Fits: Boolean;
+  Added, Joined: String;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Turn := SampleTurn('turn-big', 'start', 1);
+    Turn.Live := True;
+    Turn.Blocks[0].Running := True;
+    Log.ObserveTurn(Turn);
+    Log.CopyEvents(Events);
+    First := Length(Events);
+    Added := MarkedBody(800 * 1024);
+    Turn.Blocks[0].Body := 'start' + Added;
+    Started := GetTickCount64;
+    Log.ObserveTurn(Turn);
+    Check('an 800 KiB append is sliced in under 2 s', GetTickCount64 - Started < 2000);
+    Log.CopyEvents(Events);
+    Appends := 0;
+    Fits := True;
+    Joined := '';
+    For Index := First To High(Events) Do
+      If Events[Index].Kind = 'block_append' Then
+        Begin
+          Inc(Appends);
+          Fits := Fits And (Length(Events[Index].Data) + 256 <= MonitorSnapshotPageBytes);
+          Data := Nil;
+          Try
+            Data := GetJSON(String(Events[Index].Data));
+            If Data Is TJSONObject Then
+              Joined := Joined + TJSONObject(Data).Get('text', '')
+            Else
+              Fits := False;
+          Except
+            Fits := False;
+          End;
+          Data.Free;
+        End;
+    Check('the append is cut into slices', Appends >= Length(Added) Div MonitorAppendSliceBytes);
+    Check('every slice fits a page and is valid JSON', Fits);
+    Check('the slices join back to the appended text', Joined = Added);
+  Finally
+    Log.Free;
+  End;
+End;
+
 Procedure TestBodyEscape;
 Var
   Page: String;
@@ -394,6 +451,7 @@ Begin
   FailCount := 0;
   TestFoldAndReplay;
   TestBodyEscape;
+  TestLargeAppend;
   TestLiveBlocks;
   TestObserveLeavesCallerAlone;
   TestUtf8CutHelper;

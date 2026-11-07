@@ -649,6 +649,24 @@ Begin
     Result := 1;
 End;
 
+{ Bytes JsonEscapeText writes for the character of Step bytes at Index. A lone byte of $80 or more becomes
+  U+FFFD (3 bytes). A malformed longer sequence can still grow, so EmitAppends checks the escaped slice. }
+Function EscapedCharBytes(Const Text: RawByteString; Index, Step: Integer): Integer;
+Var
+  Lead: Byte;
+Begin
+  Result := Step;
+  If Step <> 1 Then
+    Exit;
+  Lead := Ord(Text[Index]);
+  If Lead >= $80 Then
+    Result := 3
+  Else If Lead In [Ord('"'), Ord('\'), 8, 9, 10, 12, 13] Then
+    Result := 2
+  Else If Lead < 32 Then
+    Result := 6;
+End;
+
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
   Index, BlockIndex: Integer;
@@ -666,31 +684,47 @@ Var
     Result := Length(Data) + 256 <= MonitorSnapshotPageBytes;
   End;
 
+  { Linear. The escaped size is summed per character and each slice is escaped once. Escaping every candidate
+    prefix made a large append quadratic: 800 KiB took about 55 s on the IDE thread. }
   Procedure EmitAppends(Const BlockId: String; Const Text: RawByteString; StartOffset: Integer);
   Var
-    At, Taken, Step: Integer;
+    At, Taken, Step, Escaped, Room, Want: Integer;
     Slice: RawByteString;
-    Data: String;
+    Prefix, Data: String;
   Begin
     At := 1;
     While At <= Length(Text) Do
       Begin
+        Prefix := '{"block_id":"' + JsonEscapeText(BlockId) + '","offset":' + IntToStr(StartOffset + At - 1) + ',"text":"';
+        { The framed event adds a short envelope around this object. }
+        Room := MonitorSnapshotPageBytes - 256 - Length(Prefix) - 2;
         Taken := 0;
+        Escaped := 0;
         While At + Taken <= Length(Text) Do
           Begin
             Step := Utf8Step(Text, At + Taken);
-            If (Taken > 0) And ((Taken + Step > MonitorAppendSliceBytes) Or
-              (Not SliceFits(BlockId, StartOffset + At - 1, Copy(Text, At, Taken + Step)))) Then
-              Break;
             If Taken + Step > MonitorAppendSliceBytes Then
+              Break;
+            Inc(Escaped, EscapedCharBytes(Text, At + Taken, Step));
+            If (Taken > 0) And (Escaped > Room) Then
               Break;
             Inc(Taken, Step);
           End;
         If Taken = 0 Then
           Taken := Utf8Step(Text, At);
-        Slice := Copy(Text, At, Taken);
-        Data := '{"block_id":"' + JsonEscapeText(BlockId) + '","offset":' + IntToStr(StartOffset + At - 1) + ',"text":"' +
-          JsonEscapeText(String(Slice)) + '"}';
+        Repeat
+          Slice := Copy(Text, At, Taken);
+          Data := Prefix + JsonEscapeText(String(Slice)) + '"}';
+          If (Length(Data) + 256 <= MonitorSnapshotPageBytes) Or (Taken <= Utf8Step(Text, At)) Then
+            Break;
+          { Malformed input escaped larger than counted. Halve the slice on a character boundary. }
+          Want := Taken Div 2;
+          Taken := 0;
+          While (At + Taken <= Length(Text)) And (Taken + Utf8Step(Text, At + Taken) <= Want) Do
+            Inc(Taken, Utf8Step(Text, At + Taken));
+          If Taken = 0 Then
+            Taken := Utf8Step(Text, At);
+        Until False;
         AppendLocked(FHead + 1, 'block_append', Data);
         Inc(At, Taken);
       End;
