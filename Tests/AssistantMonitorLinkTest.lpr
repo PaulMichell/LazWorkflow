@@ -1228,6 +1228,8 @@ Begin
       Inc(QuietEvents);
   Check('9.1 an unacknowledged client stops inside the credit window', (Events > 0) And (Events < 400) And
     (QuietEvents = 0));
+  WriteLn('detail credit before_ping state=', Ord(Session.State), ' events=', Events, ' dropped=', Session.FramesDropped,
+    ' error=', Session.LastError, ' read=', ErrorText);
   Sent := GetTickCount64;
   Check('9.1 credit ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'credit-ping', 66), After(3000)));
   GotPong := False;
@@ -1243,6 +1245,9 @@ Begin
         End;
     End;
   Check('9.1 ping is answered while the credit window is full', GotPong And (PongAt >= Sent) And (PongAt - Sent < 100));
+  If Not GotPong Then
+    WriteLn('detail credit no_pong state=', Ord(Session.State), ' dropped=', Session.FramesDropped, ' error=',
+      Session.LastError, ' read=', ErrorText, ' last_type=', Message.TypeName);
   If PongAt = 0 Then
     WriteLn('metric credit events=', Events, ' quiet=', QuietEvents, ' pong_ms=unset')
   Else
