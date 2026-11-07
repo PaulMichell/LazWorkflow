@@ -450,6 +450,73 @@ Begin
   Check('the preview is at most 80 bytes', Length(Preview) <= 80);
 End;
 
+Procedure TestLargeResumePages;
+Var
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
+  Outbox: TMonitorOutbox;
+  Index, BlockIndex, Pages, Taken, TurnIndex, Blocks: Integer;
+  Root: TJSONData;
+  Payload, Turn: TJSONObject;
+  Turns: TJSONArray;
+  Bytes: RawByteString;
+  FrameStatus: TMonitorFrameStatus;
+  Lane: TMonitorOutboxLane;
+Begin
+  Source := Default(TMonitorResumeSource);
+  Source.Found := True;
+  Source.Observed := True;
+  Source.ConversationId := 'large-chat';
+  Source.StreamId := 'ab12cd34';
+  SetLength(Source.Turns, 30);
+  For Index := 0 To High(Source.Turns) Do
+    Begin
+      Source.Turns[Index] := SampleTurn('turn-' + IntToStr(Index), 'reply', Index);
+      SetLength(Source.Turns[Index].Blocks, 300);
+      For BlockIndex := 0 To High(Source.Turns[Index].Blocks) Do
+        Begin
+          Source.Turns[Index].Blocks[BlockIndex].BlockId := 'block-' + IntToStr(Index) + '-' + IntToStr(BlockIndex);
+          Source.Turns[Index].Blocks[BlockIndex].Kind := 'answer';
+        End;
+    End;
+  Status := Default(TMonitorSyncStatus);
+  Answer := MonitorSyncResumeAnswer(Source, '', '', 'large-resume', 0, Status);
+  Pages := 0;
+  Blocks := 0;
+  Outbox := TMonitorOutbox.Create;
+  Try
+    For Index := 0 To High(Answer.Frames) Do
+      If Answer.Frames[Index].Kind = mskBulk Then
+        Begin
+          Inc(Pages);
+          Payload := FramePayload(Answer.Frames[Index].Json, Root);
+          Try
+            Turns := TJSONArray(Payload.Find('turns'));
+            For TurnIndex := 0 To Turns.Count - 1 Do
+              Begin
+                Turn := TJSONObject(Turns.Items[TurnIndex]);
+                Inc(Blocks, TJSONArray(Turn.Find('blocks')).Count);
+              End;
+            Check('outline page count matches the begin frame',
+              Payload.Get('page_count', 0) = Length(Answer.Frames) - 2);
+          Finally
+            Root.Free;
+          End;
+          If TryEncodeMonitorFrame(Answer.Frames[Index].Json, Bytes, FrameStatus) Then
+            Outbox.AddGeneratedBulk(Bytes, Answer.Generation);
+        End;
+    Taken := 0;
+    While Outbox.Take(Bytes, Lane) Do
+      Inc(Taken);
+    Check('a large conversation is paged', Pages > 1);
+    Check('paging preserves every block of every turn', Blocks = 9000);
+    Check('every large conversation page survives the outbox', (Pages > 0) And (Taken = Pages));
+  Finally
+    Outbox.Free;
+  End;
+End;
+
 { Plan item 4.1. A log full of unacknowledged events cannot drop the oldest to make room. The event that
   will not fit must still advance the head and move DroppedThrough, so a phone resuming from an older
   sequence takes a snapshot instead of a replay that looks complete. }
@@ -603,6 +670,7 @@ Begin
   TestUtf8CutHelper;
   TestStateChunksKeepCharacters;
   TestPreviewKeepsCharacters;
+  TestLargeResumePages;
   If FailCount = 0 Then
     WriteLn('AssistantMonitorMirrorTest passed')
   Else

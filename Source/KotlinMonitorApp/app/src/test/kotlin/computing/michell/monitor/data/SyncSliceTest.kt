@@ -105,6 +105,27 @@ class SyncSliceTest {
   }
 
   @Test
+  fun aLongTurnCanSpanSeveralOutlinePages() {
+    val stage = BaselineStage()
+    stage.begin(computing.michell.monitor.protocol.SyncFrame.SnapshotBegin(
+      "c1", "stream-a", 8L, "Title", "/work", 2, emptyList(), null, emptyList()
+    ))
+    for (page in 1..2) {
+      val block = OutlineBlock("b-$page", "answer", "ok", 1L, 4, prefixHash("body"))
+      val turn = OutlineTurn("t-1", 0, "prompt", listOf(block))
+      assertTrue(stage.page(computing.michell.monitor.protocol.SyncFrame.SnapshotPage(
+        "c1", "stream-a", 8L, page, 2, listOf(turn), null
+      )))
+    }
+    val commit = stage.end(computing.michell.monitor.protocol.SyncFrame.SnapshotEnd("c1", "stream-a", 8L))
+    assertTrue(commit != null)
+    val plan = reconcileBaseline("host-1", 1L, null, emptyList(), emptyList(), commit!!)
+    assertEquals(setOf("b-1", "b-2"), plan!!.upsertBlocks.map { it.blockId }.toSet())
+    assertEquals(listOf(0, 1), plan.upsertBlocks.map { it.ordinal })
+    assertEquals(setOf("b-1", "b-2"), plan.fetches.map { it.blockId }.toSet())
+  }
+
+  @Test
   fun anEmptyBaselineDoesNotReplaceRows() {
     val plan = reconcileBaseline(
       "host-1", 1L,

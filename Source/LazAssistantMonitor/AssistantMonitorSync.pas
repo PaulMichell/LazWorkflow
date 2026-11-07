@@ -203,13 +203,13 @@ Begin
   Result := Copy(Text, 1, MonitorUtf8CutLength(Text, MonitorPreviewBytes));
 End;
 
-Function OutlineTurn(Const Turn: TAssistantMonitorTurn): String;
+Function OutlineTurn(Const Turn: TAssistantMonitorTurn; FirstBlock, BlockCount: Integer): String;
 Var
   Index: Integer;
   Blocks, One: String;
 Begin
   Blocks := '';
-  For Index := 0 To High(Turn.Blocks) Do
+  For Index := FirstBlock To FirstBlock + BlockCount - 1 Do
     Begin
       One := '{"block_id":"' + JsonEscapeText(Turn.Blocks[Index].BlockId) + '","kind":"' +
         JsonEscapeText(Turn.Blocks[Index].Kind) + '","state":"' + BlockState(Turn.Blocks[Index]) + '","revision":' +
@@ -243,6 +243,41 @@ Var
   BeginPayload, PagePayload, OpenBlock, Body: String;
   Open: TAssistantMonitorBlock;
   HaveOpen: Boolean;
+  Pages: TStringArray;
+
+  Procedure FinishPage;
+  Begin
+    If Turns = '' Then
+      Exit;
+    SetLength(Pages, Length(Pages) + 1);
+    Pages[High(Pages)] := Turns;
+    Turns := '';
+  End;
+
+  Procedure AddTurn(Const Turn: TAssistantMonitorTurn; FirstBlock, BlockCount: Integer);
+  Const
+    OutlinePageBytes = 24 * 1024;
+  Var
+    Outline: String;
+    Half: Integer;
+  Begin
+    Outline := OutlineTurn(Turn, FirstBlock, BlockCount);
+    { A single long turn can have hundreds of tool blocks. Repeat its identity on
+      subsequent pages so every block arrives without exceeding the queue limit. }
+    If (Length(Outline) > OutlinePageBytes) And (BlockCount > 1) Then
+      Begin
+        Half := BlockCount Div 2;
+        AddTurn(Turn, FirstBlock, Half);
+        AddTurn(Turn, FirstBlock + Half, BlockCount - Half);
+        Exit;
+      End;
+    If (Turns <> '') And (Length(Turns) + Length(Outline) + 1 > OutlinePageBytes) Then
+      FinishPage;
+    If Turns <> '' Then
+      Turns := Turns + ',';
+    Turns := Turns + Outline;
+  End;
+
 Begin
   Result := Default(TMonitorSyncAnswer);
   Result.Head := Source.Head;
@@ -263,14 +298,12 @@ Begin
       Exit;
     End;
   Turns := '';
+  SetLength(Pages, 0);
   If Source.HasLive Then
-    Turns := OutlineTurn(Source.Live);
+    AddTurn(Source.Live, 0, Length(Source.Live.Blocks));
   For Index := 0 To High(Source.Turns) Do
-    Begin
-      If Turns <> '' Then
-        Turns := Turns + ',';
-      Turns := Turns + OutlineTurn(Source.Turns[Index]);
-    End;
+    AddTurn(Source.Turns[Index], 0, Length(Source.Turns[Index].Blocks));
+  FinishPage;
   HaveOpen := False;
   Open := Default(TAssistantMonitorBlock);
   If Source.HasLive Then
@@ -294,11 +327,15 @@ Begin
   BeginPayload := '{"conversation_id":"' + JsonEscapeText(Source.ConversationId) + '","stream_id":"' +
     JsonEscapeText(Source.StreamId) + '","seq":' + IntToStr(Source.Head) + ',"title":"' + JsonEscapeText(Source.Title) +
     '","project_root":"' + JsonEscapeText(Source.ProjectRoot) + '","turn_count":' +
-    IntToStr(Length(Source.Turns) + Ord(Source.HasLive)) + ',"page_count":1' + OpenBlock + '}';
+    IntToStr(Length(Source.Turns) + Ord(Source.HasLive)) + ',"page_count":' + IntToStr(Length(Pages)) + OpenBlock + '}';
   AddFrame(Result, mskControl, Envelope(ResumeId + '-begin', 'snapshot_begin', BeginPayload));
-  PagePayload := '{"conversation_id":"' + JsonEscapeText(Source.ConversationId) + '","stream_id":"' +
-    JsonEscapeText(Source.StreamId) + '","seq":' + IntToStr(Source.Head) + ',"page":1,"page_count":1,"turns":[' + Turns + ']}';
-  AddFrame(Result, mskBulk, Envelope(ResumeId + '-page', 'snapshot_page', PagePayload));
+  For Index := 0 To High(Pages) Do
+    Begin
+      PagePayload := '{"conversation_id":"' + JsonEscapeText(Source.ConversationId) + '","stream_id":"' +
+        JsonEscapeText(Source.StreamId) + '","seq":' + IntToStr(Source.Head) + ',"page":' + IntToStr(Index + 1) +
+        ',"page_count":' + IntToStr(Length(Pages)) + ',"turns":[' + Pages[Index] + ']}';
+      AddFrame(Result, mskBulk, Envelope(ResumeId + '-page-' + IntToStr(Index + 1), 'snapshot_page', PagePayload));
+    End;
   AddFrame(Result, mskBarrier, Envelope(ResumeId + '-end', 'snapshot_end', '{"conversation_id":"' +
     JsonEscapeText(Source.ConversationId) + '","stream_id":"' + JsonEscapeText(Source.StreamId) + '","seq":' +
     IntToStr(Source.Head) + '}'));
