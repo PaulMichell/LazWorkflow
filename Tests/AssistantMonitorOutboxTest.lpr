@@ -82,6 +82,24 @@ Begin
     Inc(Result);
 End;
 
+Procedure TestBarrierReadiness;
+Var
+  Outbox: TMonitorOutbox;
+Begin
+  Outbox := TMonitorOutbox.Create;
+  Try
+    Outbox.AddGeneratedBulk('page|', 7);
+    Outbox.HoldBarrier('end|', 7);
+    Check('blocked barrier is not counted as sendable', Outbox.HasFrame And (Outbox.PendingFrameCount = 1));
+    Check('generation page goes first', NextIs(Outbox, 'page|', molBulk));
+    Check('released barrier is pending', Outbox.HasFrame And (Outbox.PendingFrameCount = 1));
+    Check('released barrier goes next', NextIs(Outbox, 'end|', molControl));
+    Check('barrier drain leaves no pending frame', Not Outbox.HasFrame And (Outbox.PendingFrameCount = 0));
+  Finally
+    Outbox.Free;
+  End;
+End;
+
 Procedure TestLaneOrder;
 Var
   Outbox: TMonitorOutbox;
@@ -90,10 +108,12 @@ Var
 Begin
   Outbox := TMonitorOutbox.Create;
   Try
+    Check('new outbox has no pending frame', Not Outbox.HasFrame And (Outbox.PendingFrameCount = 0));
     Check('bulk accepts an item', Outbox.AddBulk(['bulk1|', 'bulk2|']));
     Check('log accepts two events', Outbox.AppendLog(1, 'log1|') And Outbox.AppendLog(2, 'log2|'));
     Check('state accepts a value', Outbox.PutState('status', 'state1|'));
     Check('control accepts a pong', Outbox.AddControl('pong1|'));
+    Check('pending count covers all four lanes', Outbox.HasFrame And (Outbox.PendingFrameCount = 6));
     Check('control is taken first', NextIs(Outbox, 'pong1|', molControl));
     Check('state is taken second', NextIs(Outbox, 'state1|', molState));
     Check('log is taken third, in order', NextIs(Outbox, 'log1|', molLog) And NextIs(Outbox, 'log2|', molLog));
@@ -151,10 +171,12 @@ Begin
     Outbox.AppendLog(3, 'log3|');
     Check('three log frames go out', Drain(Outbox) = 3);
     Check('all three are held', (Outbox.HeldLogCount = 3) And (Outbox.LaneCount(molLog) = 3));
+    Check('held log frames are not pending', Not Outbox.HasFrame And (Outbox.PendingFrameCount = 0));
     Check('held frames are not offered twice', Not Outbox.Take(Frame, Lane));
     Outbox.Acknowledge(2);
     Check('an acknowledgement releases up to its sequence', (Outbox.HeldLogCount = 1) And (Outbox.LaneCount(molLog) = 1));
     Outbox.RewindLog;
+    Check('rewound log frame is pending', Outbox.HasFrame And (Outbox.PendingFrameCount = 1));
     Check('a rewind offers the unacknowledged frame again', NextIs(Outbox, 'log3|', molLog));
     Check('a falling sequence is refused', Not Outbox.AppendLog(2, 'late|'));
     Check('a second chunk of the same event is accepted', Outbox.AppendLog(3, 'log3-part2|'));
@@ -288,6 +310,7 @@ End;
 Begin
   FailCount := 0;
   Try
+    TestBarrierReadiness;
     TestLaneOrder;
     TestControlBetweenChunks;
     TestStateCoalesces;

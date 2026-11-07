@@ -5,7 +5,7 @@ Unit AssistantMonitorLan;
   Size note: exceeds the 1000 line preference. This unit keeps accept, the
   simultaneous cap, and bind. The section 4 link thread is AssistantMonitorLink,
   not this unit.
-  Reviewed 2026-11-03: no form code and no relay class.
+  Reviewed 2026-11-07: no form code and no relay class.
 
   The listen thread keeps TInetServer for accept and the simultaneous cap. It
   hands each accepted socket to a link thread and does not read or write it.
@@ -90,6 +90,7 @@ Type
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
     Function IsController(Link: TMonitorLinkThread): Boolean; Override;
+    Function BeginLinkPass(Link: TMonitorLinkThread): TObject; Override;
     Function TakeSessionFrame(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Override;
     Function OutboundPending(Link: TMonitorLinkThread): Boolean; Override;
     Function OutboundCount(Link: TMonitorLinkThread): Integer; Override;
@@ -452,9 +453,9 @@ Var
 Begin
   Bytes := '';
   Result := False;
-  If Not IsController(Link) Then
+  If Not Link.ControllerForPass Then
     Exit;
-  Session := CopySession;
+  Session := TMonitorSession(Link.PassSession);
   Result := Assigned(Session) And Session.TakeOutboundFrame(Bytes);
 End;
 
@@ -725,21 +726,33 @@ Begin
   End;
 End;
 
+Function TMonitorLanCarrier.BeginLinkPass(Link: TMonitorLinkThread): TObject;
+Begin
+  Link.PassFrameCount := 0;
+  LockCarrier;
+  Try
+    Link.PassIsController := FController = Link;
+    If Link.PassIsController Then
+      Result := FSession
+    Else
+      Result := Nil;
+  Finally
+    UnlockCarrier;
+  End;
+  If Assigned(Result) And Link.ControllerForPass Then
+    Link.PassFrameCount := TMonitorSession(Result).PrepareOutboundCount;
+End;
+
 Function TMonitorLanCarrier.OutboundPending(Link: TMonitorLinkThread): Boolean;
 Begin
-  Result := IsController(Link) And Not OutboundEmpty;
+  Result := Link.ControllerForPass And (Link.PassFrameCount > 0);
 End;
 
 Function TMonitorLanCarrier.OutboundCount(Link: TMonitorLinkThread): Integer;
-Var
-  Session: TMonitorSession;
 Begin
   Result := 0;
-  If Not IsController(Link) Then
-    Exit;
-  Session := CopySession;
-  If Assigned(Session) Then
-    Result := Session.OutboundCount;
+  If Link.ControllerForPass Then
+    Result := Link.PassFrameCount;
 End;
 
 Procedure TMonitorLanCarrier.DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame);
@@ -763,9 +776,9 @@ Procedure TMonitorLanCarrier.NotePartialFrame(Link: TMonitorLinkThread; Open: Bo
 Var
   Session: TMonitorSession;
 Begin
-  If Not IsController(Link) Then
+  If Not Link.ControllerForPass Then
     Exit;
-  Session := CopySession;
+  Session := TMonitorSession(Link.PassSession);
   If Assigned(Session) Then
     Session.NotePartialFrame(Open);
 End;
@@ -774,9 +787,9 @@ Procedure TMonitorLanCarrier.NoteTime(Link: TMonitorLinkThread; NowMs: QWord);
 Var
   Session: TMonitorSession;
 Begin
-  If Not IsController(Link) Then
+  If Not Link.ControllerForPass Then
     Exit;
-  Session := CopySession;
+  Session := TMonitorSession(Link.PassSession);
   If Assigned(Session) Then
     Session.NoteTime(NowMs);
 End;
@@ -807,9 +820,9 @@ Var
   Session: TMonitorSession;
 Begin
   Result := False;
-  If Not IsController(Link) Then
+  If Not Link.ControllerForPass Then
     Exit;
-  Session := CopySession;
+  Session := TMonitorSession(Link.PassSession);
   Result := Assigned(Session) And Session.CloseRequested;
 End;
 

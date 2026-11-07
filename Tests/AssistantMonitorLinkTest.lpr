@@ -29,7 +29,7 @@ Uses
   {$ENDIF}
   Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
   AssistantMonitorLinkStubs, AssistantHttps, AssistantMonitorTls, AssistantMonitorLan, AssistantMonitorSession,
-  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantSessionObserve,
+  AssistantMonitorOutbox, AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantSessionObserve,
   AssistantMonitorSettings, WorkflowSettings, WorkflowLog;
 
 Const
@@ -1527,6 +1527,10 @@ Begin
     End;
   Finally
     StopListener;
+    {$IFDEF MONITOR_OUTBOX_METRICS}
+    WriteLn('metric outbox locks=', MonitorOutboxLocks, ' frames=', MonitorOutboxFrames,
+      ' locks/frame=', MonitorOutboxLocks / (MonitorOutboxFrames + Ord(MonitorOutboxFrames = 0)):0:2);
+    {$ENDIF}
     RemoveSettings;
     If Assigned(WorkflowLogger) Then
       WorkflowLogger.OnLog := Nil;

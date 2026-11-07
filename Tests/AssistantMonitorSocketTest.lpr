@@ -661,7 +661,7 @@ Begin
       WriteLn('detail reconnect read ', ErrorText);
     Check('reconnect accepted', PongTicks(Message, Ticks) And (Ticks = 7));
     If Message.Kind = mmkRejected Then
-      WriteLn('detail reconnect rejected ', Message.PayloadJson);
+      WriteLn('detail reconnect rejected ', String(Message.PayloadJson));
     SecondPrint := Again.Fingerprint;
     Check('sequential fingerprint matches', (SecondPrint <> '') And (SecondPrint = FirstPrint) And
       (SecondPrint = HostFingerprint));

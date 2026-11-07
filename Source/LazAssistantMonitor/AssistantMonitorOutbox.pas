@@ -115,11 +115,19 @@ Type
     Procedure DiscardBulk;
     Procedure Clear;
     Function PendingBytes: Int64;
+    Function HasFrame: Boolean;
+    Function PendingFrameCount: Integer;
     Function LaneCount(Lane: TMonitorOutboxLane): Integer;
     Function HeldLogCount: Integer;
     Property LogOverflowed: Boolean Read GetLogOverflowed;
     Property OnWake: TMonitorOutboxWake Read GetOnWake Write SetOnWake;
   End;
+
+{$IFDEF MONITOR_OUTBOX_METRICS}
+Var
+  MonitorOutboxLocks: LongInt;
+  MonitorOutboxFrames: LongInt;
+{$ENDIF}
 
 Implementation
 
@@ -250,6 +258,7 @@ End;
 
 Function TMonitorOutbox.GetLogOverflowed: Boolean;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Result := FLogOverflowed;
@@ -260,6 +269,7 @@ End;
 
 Function TMonitorOutbox.GetOnWake: TMonitorOutboxWake;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Result := FOnWake;
@@ -270,6 +280,7 @@ End;
 
 Procedure TMonitorOutbox.SetOnWake(Handler: TMonitorOutboxWake);
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     FOnWake := Handler;
@@ -292,6 +303,7 @@ Begin
   Result := FrameFits(Frame);
   If Not Result Then
     Exit;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Rings[molControl].Push(NewEntry(Frame, '', 0));
@@ -311,6 +323,7 @@ Begin
   Result := (Key <> '') And FrameFits(Frame);
   If Not Result Then
     Exit;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Ring := Rings[molState];
@@ -353,6 +366,7 @@ Begin
     If Not FrameFits(Frames[Index]) Then
       Exit(False);
   KeptEntries := Nil;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Ring := Rings[molState];
@@ -396,6 +410,7 @@ Begin
   Result := (Seq > 0) And FrameFits(Frame);
   If Not Result Then
     Exit;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Result := Seq >= LastLogSeq;
@@ -429,6 +444,7 @@ Begin
         Exit;
       Inc(Total, Length(Chunks[Index]));
     End;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     { An empty lane takes any item, so one large item can never stall. }
@@ -460,6 +476,7 @@ Begin
   Frame := '';
   Lane := molControl;
   Counted := True;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     If Rings[molControl].Pop(Entry) Then
@@ -484,6 +501,7 @@ Begin
       Lane := molBulk
     Else
       Exit;
+    {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxFrames);{$ENDIF}
     Frame := Entry.Bytes;
     { Log bytes stay counted until the phone acknowledges them. The barrier was never counted. }
     If Counted And (Lane <> molLog) Then
@@ -498,6 +516,7 @@ Procedure TMonitorOutbox.Acknowledge(UpTo: Int64);
 Var
   Entry: TMonitorOutboxEntry;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     While (Rings[molLog].Count > 0) And (Rings[molLog].Peek(0).Seq <= UpTo) Do
@@ -514,6 +533,7 @@ End;
 
 Procedure TMonitorOutbox.DiscardBulk;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Rings[molBulk].Clear;
@@ -542,6 +562,7 @@ Begin
   If Not FrameFits(Frame) Then
     Exit;
   Entry := NewEntry(Frame, '', Generation);
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Rings[molBulk].Push(Entry);
@@ -556,6 +577,7 @@ Procedure TMonitorOutbox.HoldBarrier(Const Frame: RawByteString; Generation: Int
 Begin
   If Not FrameFits(Frame) Then
     Exit;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     FBarrierFrame := Frame;
@@ -568,6 +590,7 @@ End;
 
 Procedure TMonitorOutbox.ClearLog;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Rings[molLog].Clear;
@@ -586,6 +609,7 @@ Procedure TMonitorOutbox.RewindLog;
 Var
   Held: Boolean;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Held := LogSent > 0;
@@ -601,6 +625,7 @@ Procedure TMonitorOutbox.Clear;
 Var
   Lane: TMonitorOutboxLane;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     For Lane := Low(TMonitorOutboxLane) To High(TMonitorOutboxLane) Do
@@ -623,6 +648,7 @@ Var
   Lane: TMonitorOutboxLane;
 Begin
   Result := 0;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     For Lane := Low(TMonitorOutboxLane) To High(TMonitorOutboxLane) Do
@@ -632,8 +658,31 @@ Begin
   End;
 End;
 
+Function TMonitorOutbox.HasFrame: Boolean;
+Begin
+  Result := PendingFrameCount > 0;
+End;
+
+Function TMonitorOutbox.PendingFrameCount: Integer;
+Var
+  Lane: TMonitorOutboxLane;
+Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
+  EnterCriticalSection(OutboxLock);
+  Try
+    Result := -LogSent;
+    For Lane := Low(TMonitorOutboxLane) To High(TMonitorOutboxLane) Do
+      Inc(Result, Rings[Lane].Count);
+    If (FBarrierFrame <> '') And Not BulkHasGeneration(FBarrierGeneration) Then
+      Inc(Result);
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+End;
+
 Function TMonitorOutbox.LaneCount(Lane: TMonitorOutboxLane): Integer;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Result := Rings[Lane].Count;
@@ -644,6 +693,7 @@ End;
 
 Function TMonitorOutbox.HeldLogCount: Integer;
 Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
   EnterCriticalSection(OutboxLock);
   Try
     Result := LogSent;

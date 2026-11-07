@@ -5,7 +5,7 @@ Unit AssistantMonitorLink;
   Size note: exceeds the 1000 line preference. The handshake, the poll loop,
   and the one-frame write quantum are one thread. Splitting them would hide
   the owed-read rule and the wake-handle lifetime.
-  Reviewed 2026-11-03: no form code and no second connection inside this thread.
+  Reviewed 2026-11-07: no form code and no second connection inside this thread.
 
   The listen thread accepts and stops. This thread owns the SSL object, including
   a non-blocking SSL_accept under the 10 s handshake deadline. It waits on the
@@ -52,6 +52,7 @@ Type
   TMonitorLinkHost = Class(TInterfacedObject)
   Public
     Function IsController(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
+    Function BeginLinkPass(Link: TMonitorLinkThread): TObject; Virtual;
     Function TakeSessionFrame(Link: TMonitorLinkThread; Out Bytes: RawByteString): Boolean; Virtual; Abstract;
     Function OutboundPending(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
     Function OutboundCount(Link: TMonitorLinkThread): Integer; Virtual; Abstract;
@@ -87,6 +88,7 @@ Type
     ReadWantsWrite: Boolean;
     WriteWantsWrite: Boolean;
     ReadAgain: Boolean;
+    FrameTakenThisPass: Boolean;
     ControllerLink: Boolean;
     Adopted: Boolean;
     DropLink: Boolean;
@@ -129,16 +131,21 @@ Type
     Function PollWait(TimeoutMs: Integer; WantWrite: Boolean): Boolean;
     Function NextTimeout: Integer;
     Function FrameReady: Boolean;
-    Function WantsWrite: Boolean;
+    Function WantsWrite(Ready: Boolean): Boolean;
     Function TakeFrame(Out Bytes: RawByteString): Boolean;
     Procedure AppendPending(Var Buffer: RawByteString; Buf: Pointer; Count: Integer);
     Procedure ConsumePending;
     Procedure DrainReads;
     Procedure WriteQuantum;
     Procedure ServiceOnce;
-    Procedure CheckDeadlines;
+    Procedure CheckDeadlines(Ready: Boolean);
     Procedure RunLink;
   Public
+    { Borrowed session, valid only on this link thread during its current pass. }
+    PassSession: TObject;
+    PassFrameCount: Integer;
+    PassIsController: Boolean;
+    Function ControllerForPass: Boolean;
     Constructor Create(NewSocket: cint; NewOwnsSocket: Boolean; Const NewCertificateDer, NewKeyDer: TBytes;
       NewHost: TMonitorLinkHost; Const NewBindAddress: String; NewPort: Word);
     Destructor Destroy; Override;
@@ -840,25 +847,35 @@ Begin
     Result := Lesser(Result, RemainingMs(NowMs, CloseSince + MonitorPartialFrameMs));
 End;
 
+Function TMonitorLinkHost.BeginLinkPass(Link: TMonitorLinkThread): TObject;
+Begin
+  Link.PassIsController := IsController(Link);
+  Result := Nil;
+End;
+
+Function TMonitorLinkThread.ControllerForPass: Boolean;
+Begin
+  Result := PassIsController And Not Replacing;
+End;
+
 Function TMonitorLinkThread.FrameReady: Boolean;
 Begin
   Result := Unsent <> '';
   If Result Or Not Assigned(Outbox) Then
     Exit;
-  Result := (Outbox.LaneCount(molControl) > 0) Or (Outbox.LaneCount(molState) > 0) Or (Outbox.LaneCount(molBulk) > 0) Or
-    (Outbox.HeldLogCount < Outbox.LaneCount(molLog));
+  Result := Outbox.HasFrame;
   If Result Or Replacing Or Not ControllerLink Then
     Exit;
   Result := Assigned(Host) And Host.OutboundPending(Self);
 End;
 
-Function TMonitorLinkThread.WantsWrite: Boolean;
+Function TMonitorLinkThread.WantsWrite(Ready: Boolean): Boolean;
 Begin
   If WriteOwed Then
     Exit(WriteWantsWrite);
   If ReadOwed Then
     Exit(ReadWantsWrite);
-  Result := FrameReady;
+  Result := Ready;
 End;
 
 Function TMonitorLinkThread.TakeFrame(Out Bytes: RawByteString): Boolean;
@@ -1002,6 +1019,7 @@ Begin
     Begin
       If Not TakeFrame(Unsent) Then
         Exit;
+      FrameTakenThisPass := True;
     End;
   If Unsent = '' Then
     Exit;
@@ -1058,7 +1076,7 @@ Begin
   WriteQuantum;
 End;
 
-Procedure TMonitorLinkThread.CheckDeadlines;
+Procedure TMonitorLinkThread.CheckDeadlines(Ready: Boolean);
 Var
   NowMs: QWord;
 Begin
@@ -1092,7 +1110,7 @@ Begin
     End;
   If CloseSince = 0 Then
     CloseSince := NowMs;
-  If (Not WriteOwed) And (Unsent = '') And Not FrameReady And Not ReadOwed Then
+  If (Not WriteOwed) And (Unsent = '') And Not Ready And Not ReadOwed Then
     Begin
       DropLink := True;
       DropReason := 'close requested';
@@ -1107,9 +1125,10 @@ End;
 
 Procedure TMonitorLinkThread.RunLink;
 Var
-  HeldOff: Boolean;
+  HeldOff, Ready: Boolean;
 Begin
   HeldOff := False;
+  Ready := False;
   If Not WakeOpen Then
     Begin
       DropReason := 'wake handle failed';
@@ -1123,19 +1142,25 @@ Begin
     Exit;
   While Not Terminated And Not DropLink Do
     Begin
-      If Adopted And Assigned(Host) And Not Host.IsController(Self) Then
+      If Replacing And Not ByeQueued Then
+        QueueReplaceBye;
+      { The previous snapshot drives poll interest. Refresh once after polling, so
+        a producer wake participates in the burst hold-off before ServiceOnce. }
+      PollWait(NextTimeout, WantsWrite(Ready));
+      DrainWake;
+      If Assigned(Host) Then
+        PassSession := Host.BeginLinkPass(Self);
+      If Adopted And Assigned(Host) And Not PassIsController Then
         Begin
           DropLink := True;
           DropReason := 'replaced';
           Break;
         End;
-      If Replacing And Not ByeQueued Then
-        QueueReplaceBye;
-      PollWait(NextTimeout, WantsWrite);
-      DrainWake;
+      Ready := FrameReady;
+      FrameTakenThisPass := False;
       { One queued frame is sent at once. A burst waits briefly so a ping that follows
         the queue is read before the first bulk write. }
-      If (Not HeldOff) And FrameReady And Not WriteOwed And Not ReadOwed And Assigned(Host) And
+      If (Not HeldOff) And Ready And Not WriteOwed And Not ReadOwed And Assigned(Host) And
         (Host.OutboundCount(Self) > 1) Then
         Begin
           { Read a ping that is already in TLS before the first bulk write of this burst. }
@@ -1148,14 +1173,17 @@ Begin
             End;
           HeldOff := True;
         End;
-      If Not FrameReady Then
+      If Not Ready Then
         HeldOff := False;
       If ControllerLink And Assigned(Host) Then
         Host.NoteTime(Self, GetTickCount64);
       ServiceOnce;
       If ControllerLink And Assigned(Host) Then
         Host.NotePartialFrame(Self, PartialSince <> 0);
-      CheckDeadlines;
+      { Reads and timers can queue frames after the readiness snapshot. Wait for
+        a pass that took no frame before treating a close as fully drained. }
+      CheckDeadlines(Ready Or FrameTakenThisPass);
+      PassSession := Nil;
     End;
 End;
 

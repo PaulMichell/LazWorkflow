@@ -147,6 +147,8 @@ Type
     { Highest event sequence the phone has acknowledged, and the highest put in the log lane. }
     FPhoneAcked: Int64;
     FQueuedLogSeq: Int64;
+    LastFillHead, LastFillAck, LastFillQueued: Int64;
+    LogFillSeen: Boolean;
     { Set when a resume names this stream. Catalogue 2 drains do not frame the log. }
     FLogResume: Boolean;
     { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
@@ -336,6 +338,7 @@ Type
     Function TakeOutboundFrameWithLane(Out Bytes: RawByteString; Out Lane: TMonitorOutboxLane): Boolean;
     Function OutboxPending: Boolean;
     Function OutboundCount: Integer;
+    Function PrepareOutboundCount: Integer;
     /// Next host frame id. Safe to call off the session lock.
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
@@ -589,6 +592,7 @@ Begin
   FIntake := TMonitorCommandIntake.Create;
   FPhoneAcked := 0;
   FQueuedLogSeq := 0;
+  LogFillSeen := False;
   FLogResume := False;
   FSendPending := False;
   FActiveCommandId := '';
@@ -1885,6 +1889,7 @@ Begin
     PublishState('conversation', MonitorConversationValueJson(FConversationId));
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
+  LogFillSeen := False;
   FPhoneAcked := ResumeMsg.Cursor;
   If Answer.Replay Then
     Begin
@@ -1898,6 +1903,7 @@ Begin
     Begin
       FLogResume := False;
       FQueuedLogSeq := 0;
+      LogFillSeen := False;
       { The open chat may still be loading. Push it when the mirror observes, even if the
         phone asked for a cache id that is not this conversation. }
       FAwaitingObservation := (ResumeMsg.ConversationId = '') Or (ResumeMsg.ConversationId = FConversationId) Or
@@ -2234,6 +2240,7 @@ Begin
     ClearConnection;
     If Assigned(FOutbox) Then
       FOutbox.Clear;
+    LogFillSeen := False;
     FCloseRequested := False;
     FState := mssListening;
   Finally
@@ -2468,6 +2475,7 @@ Begin
   Try
     FEpoch := LowerCase(Epoch);
     FLogResume := False;
+    LogFillSeen := False;
     If ConversationId = 'current' Then
       FConversationId := ''
     Else
@@ -2900,10 +2908,17 @@ Begin
       End;
     If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
       Exit;
+    If LogFillSeen And (LastFillHead = FMirror.Head) And (LastFillAck = FPhoneAcked) And
+      (LastFillQueued = FQueuedLogSeq) Then
+      Exit;
     Queued := FQueuedLogSeq;
     Acked := FPhoneAcked;
+    LastFillHead := FMirror.Head;
     MonitorSyncFill(FMirror, FOutbox, FConversationId, FEpoch, Acked, Queued, CloseLink);
     FQueuedLogSeq := Queued;
+    LastFillAck := Acked;
+    LastFillQueued := Queued;
+    LogFillSeen := True;
     If CloseLink Then
       CloseToListening;
   Finally
@@ -3368,10 +3383,15 @@ Begin
   Result := Assigned(FOutbox) And FOutbox.Take(Bytes, Lane);
 End;
 
-Function TMonitorSession.OutboxPending: Boolean;
+Function TMonitorSession.PrepareOutboundCount: Integer;
 Begin
   FillLogLane;
-  Result := OutboundCount > 0;
+  Result := OutboundCount;
+End;
+
+Function TMonitorSession.OutboxPending: Boolean;
+Begin
+  Result := PrepareOutboundCount > 0;
 End;
 
 Function TMonitorSession.OutboundCount: Integer;
@@ -3379,10 +3399,7 @@ Begin
   Result := 0;
   If Not Assigned(FOutbox) Then
     Exit;
-  Result := FOutbox.LaneCount(molControl) + FOutbox.LaneCount(molState) + FOutbox.LaneCount(molBulk) +
-    FOutbox.LaneCount(molLog) - FOutbox.HeldLogCount;
-  If Result < 0 Then
-    Result := 0;
+  Result := FOutbox.PendingFrameCount;
 End;
 
 Procedure TMonitorSession.PlanFetchReady;
