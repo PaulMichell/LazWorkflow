@@ -14,7 +14,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
+  Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorSession,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
 
@@ -352,6 +352,24 @@ Begin
   Check('discarded pair is not live', Session.State <> mssLive);
 End;
 
+{ PairedAt is UTC with a Z suffix. True when it is within a minute of the UTC clock. }
+Function PairedAtNearUtc(Const Text: String): Boolean;
+Var
+  Year, Month, Day, Hour, Minute, Second: Integer;
+  Stamp: TDateTime;
+Begin
+  Result := False;
+  If (Length(Text) <> 20) Or (Text[11] <> 'T') Or (Text[20] <> 'Z') Then
+    Exit;
+  If Not TryStrToInt(Copy(Text, 1, 4), Year) Or Not TryStrToInt(Copy(Text, 6, 2), Month) Or
+    Not TryStrToInt(Copy(Text, 9, 2), Day) Or Not TryStrToInt(Copy(Text, 12, 2), Hour) Or
+    Not TryStrToInt(Copy(Text, 15, 2), Minute) Or Not TryStrToInt(Copy(Text, 18, 2), Second) Then
+    Exit;
+  If Not TryEncodeDateTime(Year, Month, Day, Hour, Minute, Second, 0, Stamp) Then
+    Exit;
+  Result := Abs(Stamp - LocalTimeToUniversal(Now)) <= EncodeTime(0, 1, 0, 0);
+End;
+
 Procedure TestPairSuccess;
 Var
   Settings: TMonitorSettings;
@@ -366,6 +384,7 @@ Begin
   Check('pair save keeps port', Settings.Port = 56123);
   Check('pair save stores one client', Length(Settings.Clients) = 1);
   Check('stored client id', (Length(Settings.Clients) = 1) And (Settings.Clients[0].Id = SavedClientId));
+  Check('paired at matches UTC within a minute', (Length(Settings.Clients) = 1) And PairedAtNearUtc(Settings.Clients[0].PairedAt));
   CheckOtherSections('after pair save');
 End;
 

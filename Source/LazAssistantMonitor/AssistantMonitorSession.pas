@@ -405,7 +405,7 @@ Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; 
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantProtocol, AssistantMonitorSettings;
+  SyncObjs, DateUtils, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantProtocol, AssistantMonitorSettings;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -1471,7 +1471,7 @@ Begin
   FClients[Index].Name := FClientName;
   FClients[Index].Token := String(BytesEncodeBase64(TokenBytes, True, False, False));
   FClients[Index].Fingerprint := Pair.Fingerprint;
-  FClients[Index].PairedAt := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"', Now);
+  FClients[Index].PairedAt := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"', LocalTimeToUniversal(Now));
   If Not PersistClients(ErrorText) Then
     Begin
       SetLength(FClients, Index);
