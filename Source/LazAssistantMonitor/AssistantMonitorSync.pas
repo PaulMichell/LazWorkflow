@@ -116,75 +116,58 @@ End;
 
 Function FindSeq(Const Events: TMonitorMirrorEventArray; Seq: Int64): Integer;
 Var
-  Index: Integer;
+  Offset: Int64;
+  LowIndex, HighIndex, Middle: Integer;
 Begin
   Result := -1;
-  For Index := 0 To High(Events) Do
-    If Events[Index].Seq = Seq Then
-      Exit(Index);
+  If Length(Events) = 0 Then Exit;
+  Offset := Seq - Events[0].Seq;
+  If (Offset >= 0) And (Offset < Length(Events)) Then
+    If Events[Integer(Offset)].Seq = Seq Then Exit(Integer(Offset));
+  LowIndex := 0;
+  HighIndex := High(Events);
+  While LowIndex <= HighIndex Do
+    Begin
+      Middle := LowIndex + (HighIndex - LowIndex) Div 2;
+      If Events[Middle].Seq = Seq Then Exit(Middle);
+      If Events[Middle].Seq < Seq Then LowIndex := Middle + 1 Else HighIndex := Middle - 1;
+    End;
 End;
 
 Function MonitorSyncCanReplay(Mirror: TMonitorMirror; Seq: Int64): Boolean;
-Var
-  Events: TMonitorMirrorEventArray;
-  Next: Int64;
 Begin
-  Result := False;
-  Events := Nil;
-  If Not Assigned(Mirror) Or (Seq < 0) Or (Seq > Mirror.Head) Then
-    Exit;
-  Mirror.CopyEvents(Events);
-  Next := Seq + 1;
-  While Next <= Mirror.Head Do
-    Begin
-      If FindSeq(Events, Next) < 0 Then
-        Exit;
-      Inc(Next);
-    End;
-  Result := True;
-End;
-
-Function UnackedBytes(Const Events: TMonitorMirrorEventArray; Const ConversationId, StreamId: String;
-  PhoneAck, ThroughSeq: Int64): Int64;
-Var
-  Index: Integer;
-Begin
-  Result := 0;
-  For Index := 0 To High(Events) Do
-    If (Events[Index].Seq > PhoneAck) And (Events[Index].Seq <= ThroughSeq) Then
-      Result := Result + Length(EventFrame(ConversationId, StreamId, Events[Index]));
+  Result := Assigned(Mirror);
+  If Result Then Result := Mirror.CanReplay(Seq);
 End;
 
 Procedure MonitorSyncFill(Mirror: TMonitorMirror; Outbox: TMonitorOutbox; Const ConversationId, StreamId: String;
   PhoneAck: Int64; Var QueuedSeq: Int64; Out CloseLink: Boolean);
 Var
-  Events: TMonitorMirrorEventArray;
-  NextSeq: Int64;
-  Index: Integer;
+  Event: TMonitorMirrorEvent;
+  NextSeq, Unacked: Int64;
   Frame: String;
   Encoded: RawByteString;
 Begin
   CloseLink := False;
-  Events := Nil;
   Encoded := '';
   If Not Assigned(Mirror) Or Not Assigned(Outbox) Or (StreamId = '') Then
     Exit;
-  Mirror.CopyEvents(Events);
+  { The outbox owns queued frames through acknowledgement, including frames already sent. }
+  Outbox.Acknowledge(PhoneAck);
+  Unacked := Outbox.LogPayloadBytes;
   While QueuedSeq < Mirror.Head Do
     Begin
       NextSeq := QueuedSeq + 1;
-      Index := FindSeq(Events, NextSeq);
-      If Index < 0 Then
-        Exit;
-      If UnackedBytes(Events, ConversationId, StreamId, PhoneAck, NextSeq) > MonitorCreditWindowBytes Then
-        Exit;
-      Frame := EventFrame(ConversationId, StreamId, Events[Index]);
+      If Not Mirror.TryEvent(NextSeq, Event) Then Exit;
+      Frame := EventFrame(ConversationId, StreamId, Event);
+      If Unacked + Length(Frame) > MonitorCreditWindowBytes Then Exit;
       { The link writes these bytes. A raw JSON object is not a LAM1 frame. The producer built the object,
         so the header is written without another parse. }
       If Not EncodeMonitorFrameBytes(Frame, Encoded) Then
         Exit;
       If Not Outbox.AppendLog(NextSeq, Encoded) Then
         Exit;
+      Inc(Unacked, Length(Frame));
       QueuedSeq := NextSeq;
       If Outbox.LogOverflowed Then
         Begin
@@ -196,19 +179,16 @@ End;
 
 Function TailHeld(Const Source: TMonitorResumeSource; PhoneSeq: Int64): Boolean;
 Var
-  Next: Int64;
+  FirstIndex, LastIndex: Integer;
 Begin
   Result := False;
-  If (PhoneSeq < 0) Or (PhoneSeq > Source.Head) Or (PhoneSeq < Source.DroppedThrough) Then
-    Exit;
-  Next := PhoneSeq + 1;
-  While Next <= Source.Head Do
-    Begin
-      If FindSeq(Source.Events, Next) < 0 Then
-        Exit;
-      Inc(Next);
-    End;
-  Result := True;
+  If (PhoneSeq < 0) Or (PhoneSeq > Source.Head) Or (PhoneSeq < Source.DroppedThrough) Then Exit;
+  If PhoneSeq = Source.Head Then Exit(True);
+  FirstIndex := FindSeq(Source.Events, PhoneSeq + 1);
+  LastIndex := FindSeq(Source.Events, Source.Head);
+  { Sorted unique sequences form a complete tail exactly when count equals sequence distance. }
+  Result := (FirstIndex >= 0) And (LastIndex >= FirstIndex) And
+    (LastIndex - FirstIndex = Source.Head - PhoneSeq - 1);
 End;
 
 Function Fnv1a64(Const Text: RawByteString): String;

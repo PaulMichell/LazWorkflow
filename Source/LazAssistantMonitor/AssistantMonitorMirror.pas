@@ -24,7 +24,7 @@ Unit AssistantMonitorMirror;
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
   gone. The log-credit class stays because the mirror test still constructs it.
-  Reviewed 2026-11-05: strings are escaped by AssistantProtocol.JsonEscapeText,
+  Reviewed 2026-11-07: strings are escaped by AssistantProtocol.JsonEscapeText,
   which escapes every control and writes one pass into a sized buffer, because
   those pages are built on the IDE thread. }
 
@@ -120,6 +120,7 @@ Type
     FDroppedThrough: Int64;
     FBytes: Int64;
     FEvents: TMonitorMirrorEventArray;
+    EventHead: Integer;
     FTurns: Array Of TAssistantMonitorTurn;
     FLive: TAssistantMonitorTurn;
     FHasLive: Boolean;
@@ -149,6 +150,8 @@ Type
     Function TryReplayPatches(Const StreamId: String; Seq, ThroughSeq: Int64; Out Events: TMonitorMirrorEventArray; Out Head: Int64): Boolean;
     { Copy of the log. Tests read the grain without sending it. }
     Function CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
+    Function TryEvent(Seq: Int64; Out Event: TMonitorMirrorEvent): Boolean;
+    Function CanReplay(Seq: Int64): Boolean;
     { Turn is read only. The stored copy carries the bumped block revisions. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
@@ -347,6 +350,7 @@ Begin
   FDroppedThrough := 0;
   FBytes := 0;
   SetLength(FEvents, 0);
+  EventHead := 0;
   SetLength(FTurns, 0);
   FLive := Default(TAssistantMonitorTurn);
   FHasLive := False;
@@ -371,31 +375,36 @@ End;
 
 Function TMonitorMirror.DropOldestLocked: Boolean;
 Var
-  Index, Size: Integer;
+  Size: Integer;
   Dropped: Int64;
 Begin
   Result := False;
-  If Length(FEvents) = 0 Then
+  If EventHead = Length(FEvents) Then
     Exit;
   { An event the phone has not acknowledged stays, so a slow phone cannot lose the tail. }
-  If FEvents[0].Seq > FAckedSeq Then
+  If FEvents[EventHead].Seq > FAckedSeq Then
     Exit;
   Result := True;
-  Dropped := FEvents[0].Seq;
-  Size := Utf8Bytes(FEvents[0].Data) + Length(FEvents[0].Kind);
+  Dropped := FEvents[EventHead].Seq;
+  Size := Utf8Bytes(FEvents[EventHead].Data) + Length(FEvents[EventHead].Kind);
   NoteDropLocked(Dropped);
   FBytes := FBytes - Size;
   If FBytes < 0 Then
     FBytes := 0;
-  For Index := 0 To High(FEvents) - 1 Do
-    FEvents[Index] := FEvents[Index + 1];
-  SetLength(FEvents, Length(FEvents) - 1);
+  FEvents[EventHead] := Default(TMonitorMirrorEvent);
+  Inc(EventHead);
 End;
 
 Procedure TMonitorMirror.AppendLocked(Seq: Int64; Const Kind: String; Const Data: RawByteString);
 Var
   Size, Index: Integer;
 Begin
+  { Compact only after at least half the storage was retired. Drops themselves are constant time. }
+  If (EventHead > 0) And (EventHead >= Length(FEvents) Div 2) Then
+    Begin
+      FEvents := Copy(FEvents, EventHead, Length(FEvents) - EventHead);
+      EventHead := 0;
+    End;
   Size := Utf8Bytes(Data) + Length(Kind);
   If Size > FBudget Then
     Begin
@@ -429,22 +438,65 @@ End;
 
 Function TMonitorMirror.IndexOfSeqLocked(Seq: Int64): Integer;
 Var
-  Index: Integer;
+  LowIndex, HighIndex, Middle: Integer;
+  Offset: Int64;
 Begin
   Result := -1;
-  For Index := 0 To High(FEvents) Do
-    If FEvents[Index].Seq = Seq Then
-      Exit(Index);
+  If EventHead >= Length(FEvents) Then Exit;
+  Offset := Seq - FEvents[EventHead].Seq;
+  If (Offset < 0) Or (Seq > FEvents[High(FEvents)].Seq) Then Exit;
+  If Offset < Length(FEvents) - EventHead Then
+    If FEvents[EventHead + Integer(Offset)].Seq = Seq Then
+      Exit(EventHead + Integer(Offset));
+  { Unstored events leave gaps. Keep those tails searchable without a linear scan. }
+  LowIndex := EventHead;
+  HighIndex := High(FEvents);
+  While LowIndex <= HighIndex Do
+    Begin
+      Middle := LowIndex + (HighIndex - LowIndex) Div 2;
+      If FEvents[Middle].Seq = Seq Then Exit(Middle);
+      If FEvents[Middle].Seq < Seq Then LowIndex := Middle + 1 Else HighIndex := Middle - 1;
+    End;
 End;
 
 Function TMonitorMirror.PatchIndexLocked(Seq: Int64): Integer;
+Begin
+  Result := IndexOfSeqLocked(Seq);
+  If Result >= 0 Then
+    If FEvents[Result].Kind <> 'patch' Then Result := -1;
+End;
+
+Function TMonitorMirror.TryEvent(Seq: Int64; Out Event: TMonitorMirrorEvent): Boolean;
 Var
   Index: Integer;
 Begin
-  Result := -1;
-  For Index := 0 To High(FEvents) Do
-    If (FEvents[Index].Kind = 'patch') And (FEvents[Index].Seq = Seq) Then
-      Exit(Index);
+  Event := Default(TMonitorMirrorEvent);
+  EnterCriticalSection(FLock);
+  Try
+    Index := IndexOfSeqLocked(Seq);
+    Result := Index >= 0;
+    If Result Then Event := FEvents[Index];
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.CanReplay(Seq: Int64): Boolean;
+Var
+  FirstIndex, LastIndex: Integer;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := (Seq >= 0) And (Seq <= FHead) And (Seq >= FDroppedThrough);
+    If Result And (Seq < FHead) Then
+      Begin
+        FirstIndex := IndexOfSeqLocked(Seq + 1);
+        LastIndex := IndexOfSeqLocked(FHead);
+        Result := (FirstIndex >= 0) And (LastIndex >= FirstIndex) And (LastIndex - FirstIndex = FHead - Seq - 1);
+      End;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
 End;
 
 Procedure TMonitorMirror.ParkCurrentLocked;
@@ -462,7 +514,7 @@ Begin
   Park.AckedSeq := FAckedSeq;
   Park.DroppedThrough := FDroppedThrough;
   Park.Bytes := FBytes;
-  Park.Events := Copy(FEvents);
+  Park.Events := Copy(FEvents, EventHead, Length(FEvents) - EventHead);
   SetLength(Park.Turns, Length(FTurns));
   For Index := 0 To High(FTurns) Do
     CopyTurn(FTurns[Index], Park.Turns[Index]);
@@ -513,6 +565,7 @@ Begin
         FDroppedThrough := FParked[Index].DroppedThrough;
         FBytes := FParked[Index].Bytes;
         FEvents := Copy(FParked[Index].Events);
+        EventHead := 0;
         SetLength(FTurns, Length(FParked[Index].Turns));
         For TurnIndex := 0 To High(FParked[Index].Turns) Do
           CopyTurn(FParked[Index].Turns[TurnIndex], FTurns[TurnIndex]);
@@ -551,6 +604,7 @@ Begin
     FDroppedThrough := 0;
     FBytes := 0;
     SetLength(FEvents, 0);
+    EventHead := 0;
     SetLength(FTurns, 0);
     FLive := Default(TAssistantMonitorTurn);
     FHasLive := False;
@@ -613,17 +667,20 @@ Begin
         Result := True;
         Exit;
       End;
+    If (ThroughSeq > FHead) Or (ThroughSeq - Seq > Length(FEvents) - EventHead) Then Exit;
+    SetLength(Events, ThroughSeq - Seq);
     Need := Seq + 1;
+    Index := IndexOfSeqLocked(Need);
+    If Index < 0 Then Exit;
     Count := 0;
     While Need <= ThroughSeq Do
       Begin
-        Index := PatchIndexLocked(Need);
-        If Index < 0 Then
-          Exit;
-        SetLength(Events, Count + 1);
+        If Index >= Length(FEvents) Then Exit;
+        If (FEvents[Index].Seq <> Need) Or (FEvents[Index].Kind <> 'patch') Then Exit;
         Events[Count] := FEvents[Index];
         Inc(Count);
-        Need := Need + 1;
+        Inc(Index);
+        Inc(Need);
       End;
     Result := True;
   Finally
@@ -958,7 +1015,7 @@ Begin
         SetLength(Source.Turns, Length(FTurns));
         For TurnIndex := 0 To High(FTurns) Do
           CopyTurn(FTurns[TurnIndex], Source.Turns[TurnIndex]);
-        Source.Events := Copy(FEvents);
+        Source.Events := Copy(FEvents, EventHead, Length(FEvents) - EventHead);
         Source.Observed := FHasLive Or (Length(FTurns) > 0);
       End;
     Result := True;
@@ -1225,7 +1282,7 @@ Function TMonitorMirror.CopyEvents(Out Events: TMonitorMirrorEventArray): Intege
 Begin
   EnterCriticalSection(FLock);
   Try
-    Events := Copy(FEvents);
+    Events := Copy(FEvents, EventHead, Length(FEvents) - EventHead);
     Result := Length(Events);
   Finally
     LeaveCriticalSection(FLock);

@@ -529,8 +529,70 @@ Begin
   End;
 End;
 
+{ A generous five-second bound catches quadratic fill/replay while allowing shared CI hosts. }
+Procedure TestIndexedTailTiming;
+Const
+  EventCount = 20000;
+  TimeLimitMs = 5000;
+Var
+  Log: TMonitorMirror;
+  Outbox: TMonitorOutbox;
+  Events: TMonitorMirrorEventArray;
+  Event: TMonitorMirrorEvent;
+  Index, Taken: Integer;
+  Queued, Previous, Head: Int64;
+  Started, Elapsed: QWord;
+  CloseLink: Boolean;
+  Frame: RawByteString;
+  Lane: TMonitorOutboxLane;
+Begin
+  Log := TMonitorMirror.Create;
+  Outbox := TMonitorOutbox.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'timing', '/work', 'Timing');
+    For Index := 1 To EventCount Do Log.RememberPatch(Index, '{}');
+    Started := GetTickCount64;
+    Queued := 0;
+    Taken := 0;
+    While Queued < EventCount Do
+      Begin
+        Previous := Queued;
+        MonitorSyncFill(Log, Outbox, 'timing', 'ab12cd34', Previous, Queued, CloseLink);
+        If CloseLink Or (Queued = Previous) Then Break;
+        While Outbox.Take(Frame, Lane) Do Inc(Taken);
+      End;
+    Check('20,000 events fill in credit-sized batches', (Queued = EventCount) And (Taken = EventCount) And Not CloseLink);
+    Check('indexed tail can replay', MonitorSyncCanReplay(Log, 0));
+    Check('20,000 patches replay in sequence', Log.TryReplayPatches('ab12cd34', 0, EventCount, Events, Head) And
+      (Length(Events) = EventCount) And (Events[0].Seq = 1) And (Events[EventCount - 1].Seq = EventCount));
+    Elapsed := GetTickCount64 - Started;
+    WriteLn('20,000-event fill and replay: ', Elapsed, ' ms (bound ', TimeLimitMs, ' ms)');
+    Check('fill and replay stay under timing bound', Elapsed < TimeLimitMs);
+    Outbox.Acknowledge(Queued);
+    Check('ack removes running log bytes', Outbox.LogPayloadBytes = 0);
+    { Exercise retired storage, compaction and copies, then a gap followed by a valid suffix. }
+    Log.NoteAck('ab12cd34', EventCount);
+    Log.SetLogBudget(140000);
+    For Index := EventCount + 1 To EventCount * 2 Do Log.RememberPatch(Index, '{}');
+    Log.CopyEvents(Events);
+    Check('retired head is excluded from copies', (Events[0].Seq > 1) And (Events[High(Events)].Seq = EventCount * 2));
+    Check('indexed lookup survives drops and compaction', Log.TryEvent(EventCount * 2, Event) And (Event.Seq = EventCount * 2));
+    Log.SetLogBudget(1);
+    Log.RememberPatch(EventCount * 2 + 1, '{}');
+    Log.SetLogBudget(1000000);
+    Log.RememberPatch(EventCount * 2 + 2, '{}');
+    Check('a gap prevents replay across it', Not MonitorSyncCanReplay(Log, EventCount * 2));
+    Check('suffix after a gap remains replayable', MonitorSyncCanReplay(Log, EventCount * 2 + 1) And
+      Log.TryEvent(EventCount * 2 + 2, Event));
+  Finally
+    Outbox.Free;
+    Log.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
+  TestIndexedTailTiming;
   TestFoldAndReplay;
   TestUnstoredEventRecordsDrop;
   TestParkedConversationsAreBounded;

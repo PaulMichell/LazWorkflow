@@ -115,6 +115,7 @@ Type
     Procedure DiscardBulk;
     Procedure Clear;
     Function PendingBytes: Int64;
+    Function LogPayloadBytes: Int64;
     Function HasFrame: Boolean;
     Function PendingFrameCount: Integer;
     Function LaneCount(Lane: TMonitorOutboxLane): Integer;
@@ -130,6 +131,9 @@ Var
 {$ENDIF}
 
 Implementation
+
+Uses
+  AssistantMonitorFrames;
 
 Const
   MonitorOutboxRingStart = 16;
@@ -653,6 +657,19 @@ Begin
   Try
     For Lane := Low(TMonitorOutboxLane) To High(TMonitorOutboxLane) Do
       Inc(Result, LaneBytes[Lane]);
+  Finally
+    LeaveCriticalSection(OutboxLock);
+  End;
+End;
+
+Function TMonitorOutbox.LogPayloadBytes: Int64;
+Begin
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorOutboxLocks);{$ENDIF}
+  EnterCriticalSection(OutboxLock);
+  Try
+    { Keep the existing credit policy: JSON bytes, excluding the LAM1 header. }
+    Result := LaneBytes[molLog] - Int64(Rings[molLog].Count) * MonitorFrameHeaderSize;
+    If Result < 0 Then Result := 0;
   Finally
     LeaveCriticalSection(OutboxLock);
   End;
