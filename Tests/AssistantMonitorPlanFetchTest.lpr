@@ -268,6 +268,29 @@ Begin
     Not SentHas('The rest of the plan is on the desktop'));
 End;
 
+Procedure TestSameSizeEdit;
+Var
+  FileName: String;
+  Writer: TFileStream;
+  Bytes: RawByteString;
+Begin
+  FileName := IncludeTrailingPathDelimiter(ProjectRoot) + 'edit.md';
+  WriteBytes(FileName, StringOfChar('Q', SliceBound * 3));
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":3,"id":"pg-edit","type":"plan_get","payload":{"path":"edit.md","offset":0,"revision":""}}');
+  Check('5.7 same-size edit starts streaming', WaitSent('pg-edit', 3000) And SentHas('plan_data'));
+  { No cache notification: block hashes must catch an edit even within FileAge resolution. }
+  Bytes := StringOfChar('Z', SliceBound * 3);
+  Writer := TFileStream.Create(FileName, fmOpenWrite Or fmShareDenyNone);
+  Try
+    Writer.WriteBuffer(Bytes[1], Length(Bytes));
+  Finally
+    Writer.Free;
+  End;
+  Check('5.7 same-size edit is revision_changed', WaitSent('revision_changed', 3000));
+  Check('5.7 same-size edit never mixes new bytes', Not SentHas(StringOfChar('Z', 32)));
+End;
+
 Procedure TestReplacement;
 Var
   FileName: String;
@@ -409,6 +432,7 @@ Begin
       GoLive;
       TestMissingAndResume;
       TestReplacement;
+      TestSameSizeEdit;
       TestWholeFile;
       TestPlanDataOnBulkLane;
     Except

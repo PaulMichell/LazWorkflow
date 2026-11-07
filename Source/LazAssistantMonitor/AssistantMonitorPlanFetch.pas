@@ -329,25 +329,9 @@ Var
     End;
 
     Function IdentityMoved: Boolean;
-    Var
-      Probe: TFileStream;
-      NowBytes: Int64;
     Begin
-      Result := True;
       NowAge := FileAge(Resolved);
-      If NowAge <> Age Then
-        Exit;
-      Try
-        Probe := TFileStream.Create(Resolved, fmOpenRead Or fmShareDenyNone);
-      Except
-        Exit;
-      End;
-      Try
-        NowBytes := Probe.Size;
-      Finally
-        Probe.Free;
-      End;
-      Result := NowBytes <> Total;
+      Result := (NowAge <> Age) Or (Stream.Size <> Total);
     End;
 
     Function CacheChanged: Boolean;
@@ -374,7 +358,7 @@ Var
     Function ReadBlock(Index: Integer; Out Bytes: RawByteString): Boolean;
     Var
       Need, Got: Integer;
-      Reader: TFileStream;
+      { All reads use the job's stream, including verification after backpressure. }
     Begin
       Result := False;
       Bytes := '';
@@ -383,26 +367,17 @@ Var
         Need := Total - Int64(Index) * PlanBlockBytes;
       If Need < 1 Then
         Exit;
-      Try
-        Reader := TFileStream.Create(Resolved, fmOpenRead Or fmShareDenyNone);
-      Except
-        Exit;
-      End;
-      Try
-        Reader.Position := Int64(Index) * PlanBlockBytes;
-        SetLength(Bytes, Need);
-        Got := Reader.Read(Bytes[1], Need);
-        If Got <> Need Then
-          Begin
-            Bytes := '';
-            Exit;
-          End;
-        Result := BlockHash(Bytes) = Hashes[Index];
-        If Not Result Then
+      Stream.Position := Int64(Index) * PlanBlockBytes;
+      SetLength(Bytes, Need);
+      Got := Stream.Read(Bytes[1], Need);
+      If Got <> Need Then
+        Begin
           Bytes := '';
-      Finally
-        Reader.Free;
-      End;
+          Exit;
+        End;
+      Result := BlockHash(Bytes) = Hashes[Index];
+      If Not Result Then
+        Bytes := '';
     End;
 
     Function VerifiedSlice(ByteOffset: Int64; Out Bytes: RawByteString): Boolean;
@@ -449,64 +424,53 @@ Var
       Result := True;
     End;
 
-    Function SliceStill(ByteOffset: Int64; Const Expected: RawByteString): Boolean;
-    Var
-      Again: RawByteString;
-    Begin
-      Result := False;
-      If Expected = '' Then
-        Exit(True);
-      If Not VerifiedSlice(ByteOffset, Again) Then
-        Exit;
-      Result := Copy(Again, 1, Length(Expected)) = Expected;
-    End;
-
-    Function OfferData(Const Json: String): Boolean;
-    Var
-      Callback: TMonitorPlanFetchReady;
-      Stored: Boolean;
+    Function WaitForSpace: Boolean;
     Begin
       Result := False;
       While Not Terminated Do
         Begin
           If Not StillCurrent Then
             Exit;
-          { Re-check after any wait, so a replacement is not published as the next piece. }
-          If (At < Total) And Not SliceStill(At, Copy(Block, 1, Taken)) Then
-            Begin
-              Fail('revision_changed', PlanChangedMessage);
-              Exit;
-            End;
-          If IdentityMoved Or CacheChanged Then
-            Begin
-              Fail('revision_changed', PlanChangedMessage);
-              Exit;
-            End;
-          Stored := False;
-          Callback := Nil;
           Owner.Lock.Acquire;
           Try
-            If Generation <> Owner.FGeneration Then
-              Exit;
-            If Not Owner.FSlotFull Then
-              Begin
-                Owner.FSlot := Json;
-                Owner.FSlotBulk := True;
-                Owner.FSlotFull := True;
-                Callback := Owner.FOnReady;
-                Stored := True;
-              End;
+            Result := Not Owner.FSlotFull;
           Finally
             Owner.Lock.Release;
           End;
-          If Stored Then
-            Begin
-              If Assigned(Callback) Then
-                Callback;
-              Exit(True);
-            End;
+          If Result Then
+            Exit;
           Owner.Space.WaitFor(200);
         End;
+    End;
+
+    Function OfferData(Const Json: String): Boolean;
+    Var
+      Callback: TMonitorPlanFetchReady;
+    Begin
+      Result := False;
+      If Terminated Or Not StillCurrent Then
+        Exit;
+      { The sole producer waited for the slot before verifying this slice. }
+      If IdentityMoved Or CacheChanged Then
+        Begin
+          Fail('revision_changed', PlanChangedMessage);
+          Exit;
+        End;
+      Callback := Nil;
+      Owner.Lock.Acquire;
+      Try
+        If Generation <> Owner.FGeneration Then
+          Exit;
+        Owner.FSlot := Json;
+        Owner.FSlotBulk := True;
+        Owner.FSlotFull := True;
+        Callback := Owner.FOnReady;
+        Result := True;
+      Finally
+        Owner.Lock.Release;
+      End;
+      If Assigned(Callback) Then
+        Callback;
     End;
 
   Begin
@@ -595,89 +559,90 @@ Var
       If (At <> Total) Or (Carry <> '') Then
         Utf8Ok := False;
       BoundRevision := AssistantPlanHashHex(Hash);
-    Finally
-      Stream.Free;
-    End;
-    If Not StillCurrent Then
-      Exit;
-    If Not Utf8Ok Then
-      Begin
-        Fail('failed', 'The plan file is not valid UTF-8.');
-        Exit;
-      End;
-    If IdentityMoved Then
-      Begin
-        Fail('revision_changed', PlanChangedMessage);
-        Exit;
-      End;
-    Owner.Lock.Acquire;
-    Try
-      If SamePlanPath(Owner.FCachePath, RequestPath) Then
-        SeenCache := Owner.FCacheRevision
-      Else
-        SeenCache := '';
-    Finally
-      Owner.Lock.Release;
-    End;
-    If (AskedOffset > 0) And ((AskedRevision = '') Or (AskedRevision <> BoundRevision)) Then
-      Begin
-        Fail('revision_changed', PlanChangedMessage);
-        Exit;
-      End;
-    If AskedOffset > Total Then
-      Begin
-        Fail('protocol', 'Plan fetch offset is past the end of the file.');
-        Exit;
-      End;
-    Part := 0;
-    At := AskedOffset;
-    Repeat
       If Not StillCurrent Then
         Exit;
-      If IdentityMoved Or CacheChanged Then
+      If Not Utf8Ok Then
+        Begin
+          Fail('failed', 'The plan file is not valid UTF-8.');
+          Exit;
+        End;
+      If IdentityMoved Then
         Begin
           Fail('revision_changed', PlanChangedMessage);
           Exit;
         End;
-      If At < Total Then
+      Owner.Lock.Acquire;
+      Try
+        If SamePlanPath(Owner.FCachePath, RequestPath) Then
+          SeenCache := Owner.FCacheRevision
+        Else
+          SeenCache := '';
+      Finally
+        Owner.Lock.Release;
+      End;
+      If (AskedOffset > 0) And ((AskedRevision = '') Or (AskedRevision <> BoundRevision)) Then
         Begin
-          If Not VerifiedSlice(At, Block) Then
-            Begin
-              Fail('revision_changed', PlanChangedMessage);
-              Exit;
-            End;
-          Taken := Utf8PrefixLen(Block, Length(Block));
-          Json := '';
-          While Taken > 0 Do
-            Begin
-              Piece := String(Copy(Block, 1, Taken));
-              SetCodePage(RawByteString(Piece), CP_UTF8, False);
-              Last := At + Taken = Total;
-              FrameId := 'pf' + IntToStr(Generation) + 's' + IntToStr(Part);
-              Json := DataFrame(FrameId, AskedPath, BoundRevision, Piece, RequestId, At, Total, Last);
-              If (Json <> '') And (Length(Json) <= JsonBudget) Then
-                Break;
-              Taken := Utf8PrefixLen(Block, Taken Div 2);
-              Json := '';
-            End;
-          If (Taken < 1) Or (Json = '') Then
-            Begin
-              Fail('failed', 'The plan file could not be read.');
-              Exit;
-            End;
-        End
-      Else
-        Begin
-          Taken := 0;
-          Last := True;
-          FrameId := 'pf' + IntToStr(Generation) + 's' + IntToStr(Part);
-          Json := DataFrame(FrameId, AskedPath, BoundRevision, '', RequestId, At, Total, True);
+          Fail('revision_changed', PlanChangedMessage);
+          Exit;
         End;
-      If Not OfferData(Json) Then
-        Exit;
-      Inc(Part);
-      Inc(At, Taken);
-    Until Last;
+      If AskedOffset > Total Then
+        Begin
+          Fail('protocol', 'Plan fetch offset is past the end of the file.');
+          Exit;
+        End;
+      Part := 0;
+      At := AskedOffset;
+      Repeat
+        { Only this worker fills the slot. Verify once after the consumer makes room. }
+        If Not WaitForSpace Then
+          Exit;
+        If IdentityMoved Or CacheChanged Then
+          Begin
+            Fail('revision_changed', PlanChangedMessage);
+            Exit;
+          End;
+        If At < Total Then
+          Begin
+            If Not VerifiedSlice(At, Block) Then
+              Begin
+                Fail('revision_changed', PlanChangedMessage);
+                Exit;
+              End;
+            Taken := Utf8PrefixLen(Block, Length(Block));
+            Json := '';
+            While Taken > 0 Do
+              Begin
+                Piece := String(Copy(Block, 1, Taken));
+                SetCodePage(RawByteString(Piece), CP_UTF8, False);
+                Last := At + Taken = Total;
+                FrameId := 'pf' + IntToStr(Generation) + 's' + IntToStr(Part);
+                Json := DataFrame(FrameId, AskedPath, BoundRevision, Piece, RequestId, At, Total, Last);
+                If (Json <> '') And (Length(Json) <= JsonBudget) Then
+                  Break;
+                Taken := Utf8PrefixLen(Block, Taken Div 2);
+                Json := '';
+              End;
+            If (Taken < 1) Or (Json = '') Then
+              Begin
+                Fail('failed', 'The plan file could not be read.');
+                Exit;
+              End;
+          End
+        Else
+          Begin
+            Taken := 0;
+            Last := True;
+            FrameId := 'pf' + IntToStr(Generation) + 's' + IntToStr(Part);
+            Json := DataFrame(FrameId, AskedPath, BoundRevision, '', RequestId, At, Total, True);
+          End;
+        If Not OfferData(Json) Then
+          Exit;
+        Inc(Part);
+        Inc(At, Taken);
+      Until Last;
+    Finally
+      Stream.Free;
+    End;
   End;
 
 Begin
