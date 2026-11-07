@@ -94,7 +94,7 @@ Type
     Procedure DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame); Override;
     Procedure NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean); Override;
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Override;
-    Function AcceptLink(Out RejectFrame: TMonitorFrame): Boolean; Override;
+    Function AcceptLink(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Override;
     Function CloseRequested(Link: TMonitorLinkThread): Boolean; Override;
     Function PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread; Override;
     Procedure AdoptController(Link: TMonitorLinkThread); Override;
@@ -714,7 +714,7 @@ Begin
     Session.NoteTime(NowMs);
 End;
 
-Function TMonitorLanCarrier.AcceptLink(Out RejectFrame: TMonitorFrame): Boolean;
+Function TMonitorLanCarrier.AcceptLink(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean;
 Var
   Session: TMonitorSession;
   Message: TMonitorMessage;
@@ -726,7 +726,7 @@ Begin
   Session := CopySession;
   If Not Assigned(Session) Then
     Exit(True);
-  Result := Session.AcceptHandshake(RejectFrame);
+  Result := Session.AcceptHandshake(RejectFrame, IsLoopback);
   If Result Or (RejectFrame.Json = '') Then
     Exit;
   { The spare busy reject is not sent. disabled still is. }

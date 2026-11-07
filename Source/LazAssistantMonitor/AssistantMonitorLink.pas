@@ -59,7 +59,7 @@ Type
     Procedure DeliverFrame(Link: TMonitorLinkThread; Const Frame: TMonitorFrame); Virtual; Abstract;
     Procedure NotePartialFrame(Link: TMonitorLinkThread; Open: Boolean); Virtual; Abstract;
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Virtual; Abstract;
-    Function AcceptLink(Out RejectFrame: TMonitorFrame): Boolean; Virtual; Abstract;
+    Function AcceptLink(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Virtual; Abstract;
     Function CloseRequested(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
     { Retains the current controller, asks it to flush bye, and returns it. Nil if none. }
     Function PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread; Virtual; Abstract;
@@ -717,6 +717,9 @@ Procedure TMonitorLinkThread.BecomeController;
 Var
   Previous: TMonitorLinkThread;
   Reject: TMonitorFrame;
+  Peer: TInetSockAddr;
+  PeerLength: TSockLen;
+  IsLoopback: Boolean;
 Begin
   If Not Assigned(Host) Then
     Exit;
@@ -730,7 +733,11 @@ Begin
   End;
   If Terminated Or DropLink Then
     Exit;
-  If Not Host.AcceptLink(Reject) Then
+  Peer := Default(TInetSockAddr);
+  PeerLength := SizeOf(Peer);
+  IsLoopback := (fpGetPeerName(SocketHandle, @Peer, @PeerLength) = 0) And
+    (Peer.sin_family = AF_INET) And ((NToHL(Peer.sin_addr.s_addr) Shr 24) = 127);
+  If Not Host.AcceptLink(Reject, IsLoopback) Then
     Begin
       If Reject.Json <> '' Then
         SendReject(Reject);

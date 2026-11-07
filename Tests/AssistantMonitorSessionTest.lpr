@@ -326,12 +326,19 @@ Begin
   Result := HelloOk.Nonce;
 End;
 
-Procedure TestOpenLanAdmitsWithoutCode;
+Procedure TestLoopbackPairingPolicy;
 Var
   Settings: TMonitorSettings;
   ErrorText: String;
+  Spare: TMonitorFrame;
 Begin
   NewSocket;
+  DeliverHello('');
+  DeliverPair('');
+  ExpectRejected('LAN without code', 'pair_code', True);
+  Check('LAN rejection stores no client', LoadMonitorSettings(Settings, ErrorText) And (Length(Settings.Clients) = 0));
+  Session.NoteSocketClosed;
+  Check('loopback accepted', Session.AcceptHandshake(Spare, True));
   DeliverHello('');
   Carrier.ClearSent;
   Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
@@ -1546,7 +1553,7 @@ Begin
       If ErrorText <> '' Then
         WriteLn(ErrorText);
       Check('listen state', Session.State = mssListening);
-      TestOpenLanAdmitsWithoutCode;
+      TestLoopbackPairingPolicy;
       TestCodeAbsentUntilRequested;
       TestSecondControllerWhileAccepted;
       TestCommandBeforeAuth;

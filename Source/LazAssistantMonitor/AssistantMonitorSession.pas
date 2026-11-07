@@ -4,7 +4,7 @@ Unit AssistantMonitorSession;
   This unit does not use TInetServer. An in-memory carrier delivers frames
   through SetFrameHandler. No relay class is compiled. (c) 2026 Michell Computing.
 
-  Open LAN admits pair when no code is armed. RequestPairCode still checks the
+  Only loopback admits pair when no code is armed. RequestPairCode still checks the
   code and fingerprint. Random, hex, and base64url are fphashutils. HMAC is
   fpsha256.TSHA256.HMAC. JSON stays in the codec. The pair code, session token,
   and HMAC are never logged.
@@ -117,6 +117,7 @@ Type
     FClientName: String;
     FClientVersion: Integer;
     FCloseRequested: Boolean;
+    ConnectionLoopback: Boolean;
     FNowMs: QWord;
     FLastFrameMs: QWord;
     { Last frame the carrier accepted. Zero until this connection sends one. }
@@ -260,7 +261,7 @@ Type
     Function StartListening(Const BindAddress: String; Port: Integer; Out ErrorText: String): Boolean;
     Procedure StopListening;
     { False fills RejectFrame for the spare socket. The controller is unchanged. }
-    Function AcceptHandshake(Out RejectFrame: TMonitorFrame): Boolean;
+    Function AcceptHandshake(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean = False): Boolean;
     Procedure NoteSocketClosed;
     Procedure NotePartialFrame(Open: Boolean);
     Procedure NoteTime(NowMs: QWord);
@@ -1485,8 +1486,8 @@ Begin
           RejectLocked('expired', True);
           Exit;
         End;
-      { No code is armed. Admit the endpoint. Fingerprint and code are not checked. }
-      If FPairGate Then
+      { Only a verified loopback peer may pair without an armed code. }
+      If FPairGate Or Not ConnectionLoopback Then
         Begin
           RejectLocked('pair_code', True);
           Exit;
@@ -2140,7 +2141,7 @@ Begin
   DrainOutbound;
 End;
 
-Function TMonitorSession.AcceptHandshake(Out RejectFrame: TMonitorFrame): Boolean;
+Function TMonitorSession.AcceptHandshake(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean;
 Var
   Json: String;
 Begin
@@ -2153,6 +2154,7 @@ Begin
     If FState = mssListening Then
       Begin
         ClearConnection;
+        ConnectionLoopback := IsLoopback;
         FCloseRequested := False;
         FState := mssAccepted;
         Result := True;
