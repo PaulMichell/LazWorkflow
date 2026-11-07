@@ -103,6 +103,8 @@ Type
     FPumping: Boolean;
     { Epoch and conversation already copied to the connected phone. Cleared when it drops. }
     FDeliveredScreen: String;
+    EmptyScreenKey: String;
+    EmptyScreenCounter: Int64;
     Procedure LockBridge;
     Procedure UnlockBridge;
     { Caller holds FLock. True when this command was still listed. }
@@ -1001,7 +1003,7 @@ Var
   Session: TMonitorSession;
   Snapshot: TMonitorSnapshot;
   ConversationId, ProjectRoot, Title, Epoch, MirrorId, MirrorRoot, MirrorTitle, Key: String;
-  Cursor: Int64;
+  Cursor, Seen: Int64;
 Begin
   Form := OpenForm;
   If (Not Assigned(Form)) Or (Not Form.MonitorScreenReady) Then
@@ -1015,6 +1017,7 @@ Begin
   If (Not Assigned(Session)) Or (Not Session.ClientAuthenticated) Then
     Begin
       FDeliveredScreen := '';
+      EmptyScreenKey := '';
       Exit;
     End;
   Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
@@ -1024,10 +1027,18 @@ Begin
   Key := Epoch + #1 + ConversationId;
   If Key = FDeliveredScreen Then
     Exit;
-  FillSnapshot(Form, Snapshot);
-  { An empty page is not a conversation. The link thread sends a baseline once turns exist. }
-  If Not SnapshotHasOpenTurn(Snapshot) Then
+  Seen := AssistantMirrorCounter;
+  If (Key = EmptyScreenKey) And (Seen = EmptyScreenCounter) Then
     Exit;
+  FillSnapshot(Form, Snapshot);
+  { An empty page is not a conversation. Retry only after the observed screen changes. }
+  If Not SnapshotHasOpenTurn(Snapshot) Then
+    Begin
+      EmptyScreenKey := Key;
+      EmptyScreenCounter := Seen;
+      Exit;
+    End;
+  EmptyScreenKey := '';
   Session.ObserveSnapshot(Snapshot);
   FDeliveredScreen := Key;
 End;
