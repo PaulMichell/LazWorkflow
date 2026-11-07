@@ -63,6 +63,7 @@ object AssistantMonitorForm: TAssistantMonitorForm
       Width = 185
       Caption = 'Bind all interfaces (0.0.0.0)'
       TabOrder = 2
+      OnClick = BindAllCheckClick
     end
     object RemoteApprovalCheck: TCheckBox
       Left = 215

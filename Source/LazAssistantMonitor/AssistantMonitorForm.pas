@@ -55,8 +55,11 @@ Type
     Procedure RemoteApprovalCheckClick(Sender: TObject);
     Procedure StatusTimerTimer(Sender: TObject);
     Procedure ClientListClick(Sender: TObject);
+    Procedure BindAllCheckClick(Sender: TObject);
   Private
     ClientIds: TStringList;
+    ClientsRevision: LongInt;
+    ClientsLoaded: Boolean;
     { True while LoadFields fills the controls. Control events do not save then. }
     FieldsLoading: Boolean;
     Procedure LoadFields;
@@ -350,7 +353,7 @@ End;
 
 Function TAssistantMonitorForm.EndpointCaption: String;
 Var
-  Found: TStringList;
+  Found: TStrings;
   I: Integer;
   Line, Address: String;
   Port: Integer;
@@ -358,21 +361,17 @@ Begin
   Port := PortEdit.Value;
   If BindAllCheck.Checked Then
     Begin
-      Found := CollectIPv4;
-      Try
-        Line := '';
-        For I := 0 To Found.Count - 1 Do
-          Begin
-            Address := Found[I];
-            If IsLoopback(Address) Then
-              Continue;
-            If Line <> '' Then
-              Line := Line + ', ';
-            Line := Line + Address + ':' + IntToStr(Port);
-          End;
-      Finally
-        Found.Free;
-      End;
+      Found := AddressEdit.Items;
+      Line := '';
+      For I := 0 To Found.Count - 1 Do
+        Begin
+          Address := Found[I];
+          If IsLoopback(Address) Then
+            Continue;
+          If Line <> '' Then
+            Line := Line + ', ';
+          Line := Line + Address + ':' + IntToStr(Port);
+        End;
       If Line = '' Then
         Line := 'no LAN address found';
       Result := 'Phone endpoints  ' + Line + '. Emulator  127.0.0.1:' + IntToStr(Port);
@@ -446,30 +445,46 @@ Procedure TAssistantMonitorForm.RefreshClients;
 Var
   Settings: TMonitorSettings;
   ErrorText, Line, Selected: String;
-  I, Keep: Integer;
+  I, Keep, Revision, PreviousTop: Integer;
+  Ids, Names: TStringList;
 Begin
-  Selected := SelectedClientId;
-  ClientIds.Clear;
-  ClientList.Items.BeginUpdate;
+  Revision := MonitorSettingsRevision;
+  If ClientsLoaded And (ClientsRevision = Revision) Then
+    Exit;
+  ClientsRevision := Revision;
+  ClientsLoaded := True;
+  If Not LoadMonitorSettings(Settings, ErrorText) Then
+    Exit;
+  Ids := TStringList.Create;
+  Names := TStringList.Create;
   Try
-    ClientList.Items.Clear;
-    If Not LoadMonitorSettings(Settings, ErrorText) Then
-      Exit;
     For I := 0 To High(Settings.Clients) Do
       Begin
-        ClientIds.Add(Settings.Clients[I].Id);
-        If Settings.Clients[I].Name <> '' Then
-          Line := Settings.Clients[I].Name
-        Else
+        Ids.Add(Settings.Clients[I].Id);
+        Line := Settings.Clients[I].Name;
+        If Line = '' Then
           Line := Settings.Clients[I].Id;
-        ClientList.Items.Add(Line);
+        Names.Add(Line);
       End;
+    If (ClientIds.Text = Ids.Text) And (ClientList.Items.Text = Names.Text) Then
+      Exit;
+    Selected := SelectedClientId;
+    PreviousTop := ClientList.TopIndex;
+    ClientList.Items.BeginUpdate;
+    Try
+      ClientIds.Assign(Ids);
+      ClientList.Items.Assign(Names);
+      Keep := ClientIds.IndexOf(Selected);
+      ClientList.ItemIndex := Keep;
+      If ClientList.Count > 0 Then
+        ClientList.TopIndex := PreviousTop;
+    Finally
+      ClientList.Items.EndUpdate;
+    End;
   Finally
-    ClientList.Items.EndUpdate;
+    Names.Free;
+    Ids.Free;
   End;
-  Keep := ClientIds.IndexOf(Selected);
-  If Keep >= 0 Then
-    ClientList.ItemIndex := Keep;
 End;
 
 Procedure TAssistantMonitorForm.RefreshState;
@@ -511,6 +526,8 @@ End;
 
 Procedure TAssistantMonitorForm.FormShow(Sender: TObject);
 Begin
+  FillAddressChoices;
+  ClientsLoaded := False;
   RefreshClients;
   RefreshState;
 End;
@@ -627,4 +644,11 @@ Begin
   RefreshState;
 End;
 
+Procedure TAssistantMonitorForm.BindAllCheckClick(Sender: TObject);
+Begin
+  If FieldsLoading Then
+    Exit;
+  FillAddressChoices;
+  RefreshState;
+End;
 End.

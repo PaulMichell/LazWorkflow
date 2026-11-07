@@ -43,6 +43,7 @@ Type
 
 Function DefaultMonitorSettings: TMonitorSettings;
 Function LoadMonitorSettings(Out Settings: TMonitorSettings; Out ErrorText: String): Boolean;
+Function MonitorSettingsRevision: LongInt;
 Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: String): Boolean;
 { Mints host_id once and keeps it in the monitor settings. }
 Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;
@@ -55,6 +56,14 @@ Implementation
 
 Uses
   fpjson, fphashutils, WorkflowSettings, AssistantMonitorCodec;
+
+Var
+  SettingsRevision: LongInt = 0;
+
+Function MonitorSettingsRevision: LongInt;
+Begin
+  Result := InterlockedCompareExchange(SettingsRevision, 0, 0);
+End;
 
 Function IsIPv4Address(Const Text: String): Boolean;
 Var
@@ -309,6 +318,8 @@ Begin
         Clients.Add(Client);
       End;
     Result := WriteWorkflowSection(MonitorSettingsSection, Section, ErrorText);
+    If Result Then
+      InterlockedIncrement(SettingsRevision);
   Finally
     Section.Free;
   End;

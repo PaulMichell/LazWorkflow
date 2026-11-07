@@ -97,6 +97,50 @@ Begin
     WriteLn('settings did not load: ', ErrorText);
 End;
 
+Procedure TestTimerKeepsClientList;
+Var
+  Form: TAssistantMonitorForm;
+  Settings: TMonitorSettings;
+  ErrorText: String;
+  I, PreviousTop: Integer;
+Begin
+  StoreSettings;
+  If Not Stored(Settings) Then
+    Exit;
+  SetLength(Settings.Clients, 80);
+  For I := 0 To High(Settings.Clients) Do
+    Begin
+      Settings.Clients[I].Id := 'client-' + IntToStr(I);
+      Settings.Clients[I].Name := 'Phone ' + IntToStr(I);
+    End;
+  If Not SaveMonitorSettings(Settings, ErrorText) Then
+    Raise Exception.Create(ErrorText);
+  Form := TAssistantMonitorForm.Create(Nil);
+  Try
+    Form.Show;
+    Application.ProcessMessages;
+    Form.ClientList.ItemIndex := 45;
+    Form.ClientList.TopIndex := 40;
+    PreviousTop := Form.ClientList.TopIndex;
+    For I := 1 To 5 Do
+      Form.StatusTimerTimer(Nil);
+    Check('idle timer preserves client selection', Form.ClientList.ItemIndex = 45);
+    Check('idle timer preserves client scroll position', Form.ClientList.TopIndex = PreviousTop);
+    If Not SaveMonitorSettings(Settings, ErrorText) Then
+      Raise Exception.Create(ErrorText);
+    Form.StatusTimerTimer(Nil);
+    Check('unchanged saved clients preserve scroll position', Form.ClientList.TopIndex = PreviousTop);
+    Settings.Clients[45].Name := 'Renamed phone';
+    If Not SaveMonitorSettings(Settings, ErrorText) Then
+      Raise Exception.Create(ErrorText);
+    Form.StatusTimerTimer(Nil);
+    Check('timer observes changed client names', Form.ClientList.Items[45] = 'Renamed phone');
+    Check('changed clients preserve selection by id', Form.ClientList.ItemIndex = 45);
+  Finally
+    Form.Free;
+  End;
+End;
+
 Procedure TestOpenDoesNotSave;
 Var
   Form: TAssistantMonitorForm;
@@ -131,6 +175,7 @@ Begin
     UseTemporarySettings;
     Try
       TestOpenDoesNotSave;
+      TestTimerKeepsClientList;
     Finally
       RemoveTemporarySettings;
     End;
