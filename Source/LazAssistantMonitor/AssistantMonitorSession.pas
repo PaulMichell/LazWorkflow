@@ -437,6 +437,28 @@ Begin
   Result := LowerCase(String(Hex));
 End;
 
+{ True when Left and Right are the same bytes. The loop does not stop at the first mismatch. }
+Function ConstantTimeEqual(Const Left, Right: String): Boolean;
+Var
+  Index, Limit, Diff, LeftByte, RightByte: Integer;
+Begin
+  Diff := Length(Left) Xor Length(Right);
+  Limit := Length(Left);
+  If Length(Right) > Limit Then
+    Limit := Length(Right);
+  For Index := 1 To Limit Do
+    Begin
+      LeftByte := 0;
+      RightByte := 0;
+      If Index <= Length(Left) Then
+        LeftByte := Ord(Left[Index]);
+      If Index <= Length(Right) Then
+        RightByte := Ord(Right[Index]);
+      Diff := Diff Or (LeftByte Xor RightByte);
+    End;
+  Result := Diff = 0;
+End;
+
 Function NormalizeHex(Const Text: String): String;
 Var
   I: Integer;
@@ -1444,7 +1466,7 @@ Begin
           RejectLocked('fingerprint', True);
           Exit;
         End;
-      If UpperCase(Trim(Pair.Code)) <> FPairCode Then
+      If Not ConstantTimeEqual(UpperCase(Trim(Pair.Code)), FPairCode) Then
         Begin
           Inc(FPairFailures);
           If FPairFailures >= MonitorPairFailureLimit Then
@@ -1529,7 +1551,7 @@ Begin
       Exit;
     End;
   Expected := MonitorAuthMac(FClients[Index].Token, FNonceHex);
-  If (Expected = '') Or (LowerCase(Auth.Hmac) <> Expected) Then
+  If (Expected = '') Or (Not ConstantTimeEqual(LowerCase(Auth.Hmac), Expected)) Then
     Begin
       RejectLocked('auth', True);
       Exit;
