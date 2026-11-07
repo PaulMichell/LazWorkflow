@@ -9,6 +9,8 @@ import android.app.Activity
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -211,7 +213,7 @@ private fun ConversationPane(
     followHead = true
     programmatic.value = true
     try {
-      listState.scrollToItem(rows.lastIndex, Int.MAX_VALUE)
+      listState.scrollToTail(rows.lastIndex)
     } finally {
       programmatic.value = false
     }
@@ -220,8 +222,8 @@ private fun ConversationPane(
     if (!followHead || rows.isEmpty()) return@LaunchedEffect
     programmatic.value = true
     try {
-      // A large offset pins the growing last block, not only its first line.
-      listState.scrollToItem(rows.lastIndex, Int.MAX_VALUE)
+      // Pin the end of the growing block using its measured height.
+      listState.scrollToTail(rows.lastIndex)
     } finally {
       programmatic.value = false
     }
@@ -272,6 +274,15 @@ private fun ConversationPane(
       }
     }
   }
+}
+
+/** A huge scroll offset makes LazyColumn measure the intervening transcript on the UI thread. */
+private suspend fun LazyListState.scrollToTail(index: Int) {
+  scrollToItem(index)
+  val layout = layoutInfo
+  val last = layout.visibleItemsInfo.lastOrNull { it.index == index } ?: return
+  val overflow = (last.offset + last.size - layout.viewportEndOffset).coerceAtLeast(0)
+  if (overflow > 0) scrollBy(overflow.toFloat())
 }
 
 private fun slotKey(slot: VirtualSlot): String = "${slot.turnIndex}:${slot.live}"

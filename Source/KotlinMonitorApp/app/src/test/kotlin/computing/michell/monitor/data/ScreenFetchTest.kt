@@ -50,6 +50,19 @@ class ScreenFetchTest {
   }
 
   @Test
+  fun aLongLiveTurnFetchesItsTailBeforeOldTools() {
+    val fetch = ScreenFetch()
+    val blocks = (0 until 9000).map { index ->
+      WireBlock("tool", "tool-$index", "", "", "", "", false, true, 0, emptyList(), deferred = true)
+    } + WireBlock("answer", "latest", "", "", "", "", true, true, 0, emptyList(), deferred = true)
+    val live = WireTurn(1, "live", "build", "", "", "", live = true, blocks = blocks)
+    val first = fetch.replaceBoard("c1", emptyList(), live)
+    assertEquals("latest", (first.single() as FetchGrant.Block).fetch.blockId)
+    val visible = fetch.noteVisible(setOf(1))
+    assertEquals("tool-8999", (visible.single() as FetchGrant.Block).fetch.blockId)
+  }
+
+  @Test
   fun aPlanFetchKeepsTheOpenSlotAndHistoryWaits() {
     val fetch = ScreenFetch()
     val live = turn(1, "t-live", deferred = true, running = true)

@@ -191,6 +191,7 @@ fun reconcileBaseline(
   val clearRepairs = ArrayList<String>()
   val fetches = ArrayList<BlockFetch>()
   val open = commit.openBlock
+  val ordinals = HashMap<String, Int>()
   for (outline in commit.turns) {
     val previous = turnById[outline.turnId]
     upsertTurns += TurnRecord(
@@ -206,6 +207,8 @@ fun reconcileBaseline(
       previous?.errorText ?: ""
     )
     for (named in outline.blocks) {
+      val ordinal = ordinals[outline.turnId] ?: 0
+      ordinals[outline.turnId] = ordinal + 1
       val cached = blockById[named.blockId]
       val delivered = open != null && open.blockId == named.blockId && openBlockDelivered(open)
       val cachedHash = if (cached == null) "" else prefixHash(cached.body)
@@ -222,7 +225,7 @@ fun reconcileBaseline(
         commit.conversationId,
         outline.turnId,
         named.blockId,
-        upsertBlocks.count { row -> row.turn == outline.turnId },
+        ordinal,
         named.kind.ifEmpty { cached?.kind ?: "answer" },
         cached?.title ?: "",
         body,

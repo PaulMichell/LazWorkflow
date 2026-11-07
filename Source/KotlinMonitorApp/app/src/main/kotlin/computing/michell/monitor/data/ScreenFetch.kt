@@ -48,7 +48,11 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   private var planHeld = false
 
   fun offerRepair(fetch: BlockFetch, open: Boolean): List<FetchGrant> {
-    owed[fetch.blockId] = OwedBlock(fetch, owed[fetch.blockId]?.turnIndex ?: -1, open || owed[fetch.blockId]?.open == true)
+    val row = OwedBlock(fetch, owed[fetch.blockId]?.turnIndex ?: -1, open || owed[fetch.blockId]?.open == true)
+    owed[fetch.blockId] = row
+    // Baselines may announce thousands of repairs before Room publishes their turn indices.
+    // These cannot be granted yet; avoid scanning the growing board for each announcement.
+    if (!row.open && row.turnIndex !in wantedTurns()) return emptyList()
     return release()
   }
 
@@ -59,14 +63,16 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
     val rows = if (live == null) turns else turns + live
     for (turn in rows) {
       knownTurns += turn.turnIndex
-      val openTurn = live != null && turn.id == live.id
+      val openBlockId = if (live != null && turn.id == live.id) {
+        turn.blocks.lastOrNull { it.running }?.blockId ?: turn.blocks.lastOrNull()?.blockId
+      } else null
       for (block in turn.blocks) {
         if (!block.deferred || block.blockId.isEmpty()) continue
         still += block.blockId
         val previous = owed[block.blockId]
         val fetch = previous?.fetch?.takeIf { row -> row.conversationId.isNotEmpty() }
           ?: BlockFetch(conversationId, block.blockId, 0, "", "bg-" + block.blockId)
-        owed[block.blockId] = OwedBlock(fetch, turn.turnIndex, openTurn || block.running || previous?.open == true)
+        owed[block.blockId] = OwedBlock(fetch, turn.turnIndex, block.blockId == openBlockId || block.running)
       }
     }
     val gone = owed.keys.filter { id -> id !in still && id !in inFlight }
@@ -124,7 +130,7 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   private fun planKey(): String = "plan:" + planPath
 
   private fun release(): List<FetchGrant> {
-    if (!connected) return emptyList()
+    if (!connected || free() == 0) return emptyList()
     val grants = ArrayList<FetchGrant>()
     val open = owed.values.firstOrNull { row -> row.open && row.fetch.blockId !in inFlight }
     if (open != null && free() > 0) grants += take(open)
@@ -134,7 +140,7 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
       grants += FetchGrant.Plan(planPath, planOffset, planRevision)
     }
     val wanted = wantedTurns()
-    val history = owed.values.filter { row -> !row.open && row.fetch.blockId !in inFlight && row.turnIndex in wanted }
+    val history = owed.values.filter { row -> !row.open && row.fetch.blockId !in inFlight && row.turnIndex in wanted }.asReversed()
     for (row in history) {
       if (free() <= reserved()) break
       grants += take(row)
