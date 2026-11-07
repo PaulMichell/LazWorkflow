@@ -259,11 +259,9 @@ Begin
     CarrierRef := Nil;
     Carrier := Nil;
   End;
+  { Do not Halt on success. Halt skips this block's temporary finalization, and heaptrc then reports those strings as leaks. }
   If FailCount = 0 Then
-    Begin
-      WriteLn('All AssistantMonitorLockupTest tests passed.');
-      Halt(0);
-    End
+    WriteLn('All AssistantMonitorLockupTest tests passed.')
   Else
     Begin
       WriteLn(FailCount, ' AssistantMonitorLockupTest test(s) failed.');

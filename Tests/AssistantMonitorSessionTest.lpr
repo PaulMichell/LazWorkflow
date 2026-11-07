@@ -1159,6 +1159,8 @@ Begin
     Check('disabled decision ignored', Not Session.ApplyApprovalDecision('tool-off', True));
     Check('disabled decision leaves none', ReadAssistantApprovalDecision = aadNone);
   Finally
+    { Disarm first. A later signal must not touch this freed event. }
+    DisarmAssistantApprovalWait(Event);
     RTLEventDestroy(Event);
   End;
 End;
@@ -1263,6 +1265,8 @@ Begin
     Check('closed id decision ignored', Not Session.ApplyApprovalDecision('tool-desk', True));
     Check('closed id leaves none', ReadAssistantApprovalDecision = aadNone);
   Finally
+    { Disarm first. A later signal must not touch this freed event. }
+    DisarmAssistantApprovalWait(Event);
     RTLEventDestroy(Event);
   End;
 End;
@@ -1285,6 +1289,8 @@ Begin
     Check('allow after cancel stays stopped', ReadAssistantApprovalDecision = aadStopped);
     Check('allow after cancel records no tool execution', Not Session.ToolExecutionRecorded);
   Finally
+    { Disarm first. A later signal must not touch this freed event. }
+    DisarmAssistantApprovalWait(Event);
     RTLEventDestroy(Event);
   End;
 End;
@@ -1431,11 +1437,9 @@ Begin
     Carrier := Nil;
     CleanupSettings;
   End;
+  { Do not Halt on success. Halt skips this block's temporary finalization, and heaptrc then reports those strings as leaks. }
   If FailCount = 0 Then
-    Begin
-      WriteLn('All AssistantMonitorSessionTest tests passed.');
-      Halt(0);
-    End
+    WriteLn('All AssistantMonitorSessionTest tests passed.')
   Else
     Begin
       WriteLn(FailCount, ' AssistantMonitorSessionTest test(s) failed.');
