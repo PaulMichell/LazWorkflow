@@ -10,7 +10,9 @@ Program RunAssistantTests;
   --define NAME passes -dNAME to every fpc build and to the monitor package build. --heaptrc and --valgrind
   build and run only the named test programs, so each needs at least one --only. They cannot be combined, and
   neither may be used with --independent, --package-check or --gui. Valgrind multiplies the run timeout by 20,
-  capped at 3600 seconds, and runs far slower than heaptrc.
+  capped at 3600 seconds, and runs far slower than heaptrc. A valgrind build omits -gl and then
+  objcopy --strip-debug, because Valgrind 3.24 aborts in its DWARF reader on these binaries.
+  Tests/FpcTimezone.supp hides the RTL timezone init reports.
 
   Size note (2026-11-07): over 1000 lines once the memory-check probes of plan item 2.4 (Documents/Plan-20261107-025146.md)
   were added. Plan item 2.3 names Tests/RunAssistantTestsOptions.inc as the place to move the option handling when the
@@ -77,8 +79,9 @@ Var
 
 Const
   MaxDefines = 8;
-  { Memory-check settings. Provisional until plan item 2.1 (Documents/Plan-20261107-025146.md) records what FPC 3.3.1
-    heaptrc and valgrind report; correct them here when it does. }
+  { Memory-check settings. Confirmed 2026-11-07 against FPC 3.3.1 and Valgrind 3.24.0.
+    -gh with HEAPTRC=keepreleased reports leaks and a freed-block write. -gv loads cmem; -Facmem is not added.
+    A global leak is still reachable, not definitely lost, so valgrind is the use-after-free check. }
   HeaptrcBuildFlags: Array[0..0] Of String = ('-gh');
   HeaptrcEnvironment = 'HEAPTRC=keepreleased';
   HeapReportMarker = 'unfreed memory blocks';
@@ -773,7 +776,11 @@ Begin
         Command.Add('--error-exitcode=' + IntToStr(ValgrindErrorExit));
         Command.Add('--leak-check=full');
         Command.Add('--errors-for-leak-kinds=definite');
-        Command.Add('--track-origins=yes');
+        { FPC string compares report uninitialised padding under cmem. Invalid reads and writes still count.
+          --track-origins cannot be combined with this switch. }
+        Command.Add('--undef-value-errors=no');
+        { FPC 3.3.1 timezone init reports on every program. See Tests/FpcTimezone.supp. }
+        Command.Add('--suppressions=' + RepoFile('Tests/FpcTimezone.supp'));
         Command.Add('--log-file=' + ValgrindLog);
         If TimeoutSec > MaxRunTimeoutSec Div ValgrindSlowdown Then
           TimeoutSec := MaxRunTimeoutSec
@@ -1027,7 +1034,9 @@ Begin
           Command.Clear;
           Command.Add('fpc');
           Command.Add('-v0');
-          Command.Add('-gl');
+          { Valgrind 3.24 aborts in its DWARF reader on an FPC -gl binary. Symbols remain without -gl. }
+          If MemoryCheck <> mcValgrind Then
+            Command.Add('-gl');
           Command.Add('-Cr');
           Command.Add('-Co');
           Command.Add('-FU' + OutputDir);
@@ -1037,7 +1046,13 @@ Begin
           AddMemoryCheckFlags(Command);
           Command.Add(RepoFile('Tests/' + Tests[I] + '.lpr'));
           If RunCommand(Tests[I] + '-build', Command, BuildTimeout) And Not CompileOnly Then
-            RunTest(Tests[I], BuildTimeout);
+            Begin
+              { Valgrind 3.24 aborts in readelf on the debug sections of these binaries. }
+              If MemoryCheck = mcValgrind Then
+                If Not RunArgs('strip-debug-' + Tests[I], ['objcopy', '--strip-debug', OutputBinary(OutputDir, Tests[I])], 60) Then
+                  Continue;
+              RunTest(Tests[I], BuildTimeout);
+            End;
         End;
       Command.Clear;
       Command.Add('fpc');

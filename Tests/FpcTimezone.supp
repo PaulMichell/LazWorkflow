@@ -1,0 +1,53 @@
+# FPC 3.3.1 timezone init reads past a short zone-file field and compares
+# uninitialised stack. It is in every program, clean or planted. Suppress it
+# so --valgrind can still fail a real use-after-free. Do not suppress the
+# program itself.
+
+{
+   fpc-timezone-init-addr
+   Memcheck:Addr16
+   ...
+   fun:UNIX_$$_INITLOCALTIME
+}
+
+{
+   fpc-timezone-init-cond
+   Memcheck:Cond
+   ...
+   fun:UNIX_$$_INITLOCALTIME
+}
+
+{
+   fpc-timezone-read-addr
+   Memcheck:Addr16
+   ...
+   fun:UNIX_$$_READTIMEZONEFILE*
+}
+
+{
+   fpc-timezone-read-cond
+   Memcheck:Cond
+   ...
+   fun:UNIX_$$_READTIMEZONEFILE*
+}
+
+{
+   fpc-timezone-local-addr
+   Memcheck:Addr16
+   ...
+   fun:UNIX_$$_DOGETLOCALTIMEZONEEX*
+}
+
+{
+   fpc-timezone-local-cond
+   Memcheck:Cond
+   ...
+   fun:UNIX_$$_DOGETLOCALTIMEZONEEX*
+}
+
+{
+   fpc-sysentry-timezone-addr
+   Memcheck:Addr16
+   fun:SYSTEM_$$_INDEXBYTE*
+   fun:SYSTEM_$$_SYSENTRY*
+}
