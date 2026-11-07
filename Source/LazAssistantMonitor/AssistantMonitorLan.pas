@@ -21,7 +21,7 @@ Unit AssistantMonitorLan;
 
   Accepted-socket non-blocking is not SetSocketBlockingMode and not
   TSocketServer.SetNonBlocking. Those helpers do not cover the accepted handle.
-  The two calls below are the helpers' own fpfcntl or ioctlsocket lines.
+  AssistantMonitorLink shares the helpers' own fpfcntl or ioctlsocket calls.
   Every accepted socket also gets TCP keepalive, a backstop under the session heartbeat.
   The kernel port is sockets.fpGetSockName on TInetServer.FPSocket.
   TInetServer.Port is not read. Bind failures are TThread.Queue to the main thread. }
@@ -61,6 +61,7 @@ Type
     FBoundPort: Word;
     FLastError: String;
     FJoined: Boolean;
+    Procedure ResetControllerSession;
     Procedure LockCarrier;
     Procedure UnlockCarrier;
     Procedure StoreError(Const ErrorText: String);
@@ -173,24 +174,11 @@ Type
     Procedure Run;
   End;
 
-Procedure LogMonitor(Level: Integer; Const Text: String);
-Begin
-  If Not Assigned(WorkflowLogger) Then
-    Exit;
-  Case Level Of
-    1: WorkflowLogger.Info(MonitorLogArea, Text);
-    2: WorkflowLogger.Warning(MonitorLogArea, Text);
-    3: WorkflowLogger.Error(MonitorLogArea, Text);
-  Else
-    WorkflowLogger.Debug(MonitorLogArea, Text);
-  End;
-End;
-
 Procedure TMonitorBindNotice.Run;
 Begin
   Try
     Try
-      LogMonitor(3, MessageText);
+      MonitorLog(3, MessageText);
     Except
       On E: Exception Do
         ReportPluginException(MonitorLogArea, E);
@@ -217,28 +205,6 @@ Begin
   End;
 End;
 
-{ The FCL helpers leave the accepted handle blocking. These are their own calls. }
-Procedure SetAcceptedHandleNonBlocking(Handle: THandle);
-{$IFDEF UNIX}
-Var
-  Flags: Integer;
-{$ENDIF}
-{$IFDEF WINDOWS}
-Var
-  NonBlock: u_long;
-{$ENDIF}
-Begin
-{$IFDEF UNIX}
-  Flags := fpfcntl(Handle, F_GETFL, 0);
-  If Flags >= 0 Then
-    fpfcntl(Handle, F_SETFL, Flags Or O_NONBLOCK);
-{$ENDIF}
-{$IFDEF WINDOWS}
-  NonBlock := 1; { u_long. FIONBIO treats a non-zero value as non-blocking. }
-  ioctlsocket(Handle, Longint(FIONBIO), @NonBlock);
-{$ENDIF}
-End;
-
 { Backstop for a peer that vanished without a FIN. Linux also takes the probe timing,
   other systems keep their default timing. A failed call leaves the heartbeat in charge. }
 Procedure EnableAcceptedKeepAlive(Handle: THandle);
@@ -255,7 +221,7 @@ Begin
   Value := 1;
   If fpsetsockopt(Handle, SOL_SOCKET, SO_KEEPALIVE, @Value, SizeOf(Value)) <> 0 Then
     Begin
-      LogMonitor(2, 'keepalive not enabled error=' + IntToStr(socketerror));
+      MonitorLog(2, 'keepalive not enabled error=' + IntToStr(socketerror));
       Exit;
     End;
 {$IFDEF LINUX}
@@ -483,7 +449,7 @@ Begin
       Exit;
     End;
   Result := True;
-  LogMonitor(1, 'listen start bind=' + FBindAddress + ' port=' + IntToStr(BoundPort));
+  MonitorLog(1, 'listen start bind=' + FBindAddress + ' port=' + IntToStr(BoundPort));
 End;
 
 Procedure TMonitorLanCarrier.Stop;
@@ -522,7 +488,7 @@ Begin
       Exit;
     End;
   Thread.WaitFor;
-  LogMonitor(1, 'listen stop bind=' + FBindAddress + ' port=' + IntToStr(Thread.BoundPort));
+  MonitorLog(1, 'listen stop bind=' + FBindAddress + ' port=' + IntToStr(Thread.BoundPort));
   LockCarrier;
   Try
     If FThread = Thread Then
@@ -641,10 +607,22 @@ Begin
   End;
 End;
 
+Procedure TMonitorLanCarrier.ResetControllerSession;
+Var
+  Session: TMonitorSession;
+Begin
+  Session := CopySession;
+  If Assigned(Session) Then
+    Begin
+      Session.SetOutboundWake(Nil);
+      Session.NoteSocketClosed;
+    End;
+  NoteControllerDropped;
+End;
+
 Procedure TMonitorLanCarrier.DetachController;
 Var
   Had: Boolean;
-  Session: TMonitorSession;
 Begin
   LockCarrier;
   Try
@@ -655,13 +633,7 @@ Begin
   End;
   If Not Had Then
     Exit;
-  Session := CopySession;
-  If Assigned(Session) Then
-    Begin
-      Session.SetOutboundWake(Nil);
-      Session.NoteSocketClosed;
-    End;
-  NoteControllerDropped;
+  ResetControllerSession;
 End;
 
 Function TMonitorLanCarrier.IsController(Link: TMonitorLinkThread): Boolean;
@@ -808,8 +780,6 @@ Begin
 End;
 
 Function TMonitorLanCarrier.ReleaseController(Link: TMonitorLinkThread): Boolean;
-Var
-  Session: TMonitorSession;
 Begin
   LockCarrier;
   Try
@@ -821,13 +791,7 @@ Begin
   End;
   If Not Result Then
     Exit;
-  Session := CopySession;
-  If Assigned(Session) Then
-    Begin
-      Session.SetOutboundWake(Nil);
-      Session.NoteSocketClosed;
-    End;
-  NoteControllerDropped;
+  ResetControllerSession;
 End;
 
 { TMonitorListenThread }
@@ -925,7 +889,7 @@ Begin
           Stream.Free;
         Except
           On E: Exception Do
-            LogMonitor(2, 'listen socket release ' + E.Message);
+            MonitorLog(2, 'listen socket release ' + E.Message);
         End;
     End;
   SetLength(FSlots, 0);
@@ -947,13 +911,13 @@ Begin
     ListenServer.StopAccepting(True);
   Except
     On E: Exception Do
-      LogMonitor(2, 'listen stop accepting ' + E.Message);
+      MonitorLog(2, 'listen stop accepting ' + E.Message);
   End;
   Try
     ListenServer.Free;
   Except
     On E: Exception Do
-      LogMonitor(2, 'listen server release ' + E.Message);
+      MonitorLog(2, 'listen server release ' + E.Message);
   End;
 End;
 
@@ -975,19 +939,19 @@ Begin
   Result := False;
   If Not Assigned(Data) Then
     Exit;
-  SetAcceptedHandleNonBlocking(Data.Handle);
+  SetHandleNonBlocking(Data.Handle);
   EnableAcceptedKeepAlive(Data.Handle);
   Dup := DuplicateAcceptedSocket(Data.Handle);
   If Dup < 0 Then
     Begin
-      LogMonitor(2, 'could not detach the accepted socket bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
+      MonitorLog(2, 'could not detach the accepted socket bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Exit;
     End;
   Link := TMonitorLinkThread.Create(Dup, True, FCertificateDer, FKeyDer, FCarrier, FBindAddress, FBoundPort);
   If Not Link.WakeOpen Then
     Begin
       Link.Free;
-      LogMonitor(3, 'wake handle failed bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
+      MonitorLog(3, 'wake handle failed bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Exit;
     End;
   { The stream is handed over before Start. A link that finishes at once releases it in Execute's Finally, so
@@ -1013,7 +977,7 @@ Begin
           Link.Free;
         Except
           On FreeError: Exception Do
-            LogMonitor(2, 'link release after failed hand-off ' + FreeError.Message);
+            MonitorLog(2, 'link release after failed hand-off ' + FreeError.Message);
         End;
       End;
   End;
@@ -1042,7 +1006,7 @@ Begin
   { StartAccepting already closed this socket. OnConnect is not called.
     Closing it here must not call StopAccepting. }
   If Assigned(Data) Then
-    LogMonitor(2, 'connection dropped bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort) + ' bytes=0');
+    MonitorLog(2, 'connection dropped bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort) + ' bytes=0');
 End;
 {$POP}
 
@@ -1075,7 +1039,7 @@ Begin
               Stream.Free;
             Except
               On E: Exception Do
-                LogMonitor(2, 'listen socket release ' + E.Message);
+                MonitorLog(2, 'listen socket release ' + E.Message);
             End;
           If Index > High(FSlots) Then
             Index := High(FSlots);

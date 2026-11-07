@@ -163,6 +163,8 @@ Type
     Procedure Execute; Override;
   End;
 
+Procedure SetHandleNonBlocking(Handle: cint);
+
 Implementation
 
 Uses
@@ -183,19 +185,6 @@ Const
   ReplaceIdle = 0;
   ReplaceClaimed = 1;
   ReplacePublished = 2;
-
-Procedure LogLink(Level: Integer; Const Text: String);
-Begin
-  If Not Assigned(WorkflowLogger) Then
-    Exit;
-  Case Level Of
-    1: WorkflowLogger.Info(MonitorLogArea, Text);
-    2: WorkflowLogger.Warning(MonitorLogArea, Text);
-    3: WorkflowLogger.Error(MonitorLogArea, Text);
-  Else
-    WorkflowLogger.Debug(MonitorLogArea, Text);
-  End;
-End;
 
 Function Lesser(Left, Right: Integer): Integer;
 Begin
@@ -478,7 +467,7 @@ Begin
     Stream.Free;
   Except
     On E: Exception Do
-      LogLink(2, 'accepted socket release ' + E.Message);
+      MonitorLog(2, 'accepted socket release ' + E.Message);
   End;
 End;
 
@@ -516,7 +505,7 @@ Begin
         SocketSsl.Shutdown;
       Except
         On E: Exception Do
-          LogLink(2, 'ssl shutdown ' + E.Message);
+          MonitorLog(2, 'ssl shutdown ' + E.Message);
       End;
       SocketSsl.Free;
     End;
@@ -609,7 +598,7 @@ Begin
         Raw := SslCtxNew(SslMethodV23);
       If Raw = Nil Then
         Begin
-          LogLink(3, 'monitor TLS context was not created bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+          MonitorLog(3, 'monitor TLS context was not created bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
           Exit;
         End;
       Context := TSSLContext.Create(Raw);
@@ -620,18 +609,18 @@ Begin
       Context.SetEcdhAuto(True);
       If Context.UseCertificateASN1(Length(CertificateDer), CertificateDer) <> 1 Then
         Begin
-          LogLink(3, 'monitor certificate was not loaded bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+          MonitorLog(3, 'monitor certificate was not loaded bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
           Exit;
         End;
       If SslCtxUsePrivateKeyASN1(EVP_PKEY_RSA, Context.CTX, KeyDer, Length(KeyDer)) <> 1 Then
         Begin
-          LogLink(3, 'monitor key was not loaded bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+          MonitorLog(3, 'monitor key was not loaded bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
           Exit;
         End;
       SocketSsl := TSSL.Create(Context);
       If SocketSsl.SetFd(SocketHandle) <> 1 Then
         Begin
-          LogLink(3, 'monitor socket was not attached bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+          MonitorLog(3, 'monitor socket was not attached bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
           Exit;
         End;
       Ssl := SocketSsl;
@@ -641,7 +630,7 @@ Begin
       Result := True;
     Except
       On E: Exception Do
-        LogLink(3, 'tls setup bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' ' + E.Message);
+        MonitorLog(3, 'tls setup bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' ' + E.Message);
     End;
   Finally
     FreeAndNil(SocketSsl);
@@ -675,7 +664,7 @@ Begin
     If NowMs >= HandshakeStart + MonitorPartialFrameMs Then
       Begin
         DropReason := 'handshake timeout';
-        LogLink(2, 'handshake timeout bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+        MonitorLog(2, 'handshake timeout bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
         Exit;
       End;
     Code := SocketSsl.Accept;
@@ -684,7 +673,7 @@ Begin
         If Not MonitorTlsVersionAdequate(String(SocketSsl.Version)) Then
           Begin
             DropReason := 'tls version';
-            LogLink(2, 'TLS version is below 1.2 bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+            MonitorLog(2, 'TLS version is below 1.2 bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
             Exit;
           End;
         Exit(True);
@@ -697,7 +686,7 @@ Begin
         Else
           Begin
             DropReason := 'handshake failed';
-            LogLink(2, 'handshake failed bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' error=' + IntToStr(Err));
+            MonitorLog(2, 'handshake failed bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' error=' + IntToStr(Err));
             Exit;
           End;
       End;
@@ -940,7 +929,7 @@ Begin
     Begin
       DropLink := True;
       DropReason := 'bad frame';
-      LogLink(2, 'frame rejected status=' + IntToStr(Ord(Status)) + ' bytes=' + IntToStr(Length(Pending)) + ' bind=' +
+      MonitorLog(2, 'frame rejected status=' + IntToStr(Ord(Status)) + ' bytes=' + IntToStr(Length(Pending)) + ' bind=' +
         BindAddress + ' port=' + IntToStr(BoundPort));
     End;
   If Length(Pending) = 0 Then
@@ -1088,7 +1077,7 @@ Begin
     Begin
       DropLink := True;
       DropReason := 'partial frame timeout';
-      LogLink(2, 'partial frame timeout bytes=' + IntToStr(Length(Pending)) + ' bind=' + BindAddress + ' port=' +
+      MonitorLog(2, 'partial frame timeout bytes=' + IntToStr(Length(Pending)) + ' bind=' + BindAddress + ' port=' +
         IntToStr(BoundPort));
       Exit;
     End;
@@ -1133,7 +1122,7 @@ Begin
   If Not WakeOpen Then
     Begin
       DropReason := 'wake handle failed';
-      LogLink(3, 'wake handle failed bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+      MonitorLog(3, 'wake handle failed bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
       Exit;
     End;
   If Not Handshake Then
@@ -1206,7 +1195,7 @@ Begin
         DropReason := 'stopped'
       Else
         DropReason := 'closed';
-    LogLink(1, 'disconnect bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' ' + DropReason);
+    MonitorLog(1, 'disconnect bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' ' + DropReason);
     ShutdownLink;
     { Free the accepted stream before the session reset, so the simultaneous cap
       does not keep a finished socket until the accept idle. }

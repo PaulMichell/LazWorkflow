@@ -97,7 +97,7 @@ Function MonitorTasksValueJson(Const Rows: Array Of TAssistantMonitorTaskRow): S
 Implementation
 
 Uses
-  fpjson, jsonparser, AssistantProtocol, AssistantMonitorFrames;
+  fpjson, jsonparser, AssistantProtocol, AssistantMonitorFrames, AssistantMonitorText;
 
 Const
   { Bytes of the prompt kept as a turn's preview. }
@@ -191,30 +191,9 @@ Begin
     (LastIndex - FirstIndex = Source.Head - PhoneSeq - 1);
 End;
 
-Function Fnv1a64(Const Text: RawByteString): String;
-Var
-  Hash: UInt64;
-  Index: Integer;
-Begin
-  {$PUSH}{$Q-}{$R-}
-  Hash := UInt64(14695981039346656037);
-  For Index := 1 To Length(Text) Do
-    Begin
-      Hash := Hash Xor Ord(Text[Index]);
-      Hash := Hash * UInt64(1099511628211);
-    End;
-  {$POP}
-  Result := LowerCase(HexStr(Hash, 16));
-End;
-
 Function BlockState(Const Block: TAssistantMonitorBlock): String;
 Begin
-  If Block.Running Then
-    Result := 'running'
-  Else If Block.Ok Then
-    Result := 'ok'
-  Else
-    Result := 'failed';
+  Result := MonitorBlockState(Block.Running, Block.Ok);
 End;
 
 { At most MonitorPreviewBytes of the prompt, cut between UTF-8 characters. A cut inside a character would be
@@ -254,14 +233,6 @@ End;
 Function Envelope(Const Id, TypeName, Payload: String): String;
 Begin
   Result := '{"v":3,"id":"' + JsonEscapeText(Id) + '","type":"' + TypeName + '","payload":' + Payload + '}';
-End;
-
-Function YesNo(Condition: Boolean): String;
-Begin
-  If Condition Then
-    Result := 'true'
-  Else
-    Result := 'false';
 End;
 
 Function MonitorSyncResumeAnswer(Const Source: TMonitorResumeSource; Const RequestedId, PhoneStream, ResumeId: String;
@@ -495,18 +466,18 @@ End;
 
 Function MonitorStatusValueJson(Const View: TAssistantMonitorView): String;
 Begin
-  Result := '{"busy":' + YesNo(View.Sending Or View.PlanRunning) + ',"sending":' + YesNo(View.Sending) + ',"plan_running":' +
-    YesNo(View.PlanRunning) + ',"phase":' + Quoted(View.Phase) + ',"status_text":' + Quoted(View.StatusText) +
-    ',"started_at":' + Quoted(View.StartedAt) + ',"can_send":' + YesNo(View.CanSend) + ',"can_steer":' +
-    YesNo(View.CanSteer) + ',"can_stop":' + YesNo(View.CanStop) + ',"can_change_mode":' + YesNo(View.CanChangeMode) +
+  Result := '{"busy":' + MonitorBoolean(View.Sending Or View.PlanRunning) + ',"sending":' + MonitorBoolean(View.Sending) + ',"plan_running":' +
+    MonitorBoolean(View.PlanRunning) + ',"phase":' + Quoted(View.Phase) + ',"status_text":' + Quoted(View.StatusText) +
+    ',"started_at":' + Quoted(View.StartedAt) + ',"can_send":' + MonitorBoolean(View.CanSend) + ',"can_steer":' +
+    MonitorBoolean(View.CanSteer) + ',"can_stop":' + MonitorBoolean(View.CanStop) + ',"can_change_mode":' + MonitorBoolean(View.CanChangeMode) +
     ',"error_text":' + Quoted(View.ErrorText) + '}';
 End;
 
 Function MonitorResumeStatusValueJson(Const Status: TMonitorSyncStatus): String;
 Begin
-  Result := '{"busy":' + YesNo(Status.Busy) + ',"sending":' + YesNo(Status.Sending) + ',"plan_running":' +
-    YesNo(Status.PlanRunning) + ',"phase":"","status_text":"","can_send":' + YesNo(Status.CanSend) + ',"can_steer":' +
-    YesNo(Status.CanSteer) + ',"can_stop":' + YesNo(Status.CanStop) + ',"can_change_mode":' + YesNo(Status.CanChangeMode) +
+  Result := '{"busy":' + MonitorBoolean(Status.Busy) + ',"sending":' + MonitorBoolean(Status.Sending) + ',"plan_running":' +
+    MonitorBoolean(Status.PlanRunning) + ',"phase":"","status_text":"","can_send":' + MonitorBoolean(Status.CanSend) + ',"can_steer":' +
+    MonitorBoolean(Status.CanSteer) + ',"can_stop":' + MonitorBoolean(Status.CanStop) + ',"can_change_mode":' + MonitorBoolean(Status.CanChangeMode) +
     ',"started_at":"","error_text":""}';
 End;
 
@@ -521,14 +492,14 @@ End;
 Function MonitorSessionValueJson(Const View: TAssistantMonitorView): String;
 Begin
   Result := '{"model":' + Quoted(View.Model) + ',"backend":' + Quoted(View.Backend) + ',"signed_in":' +
-    YesNo(View.SignedIn) + ',"effort":' + Quoted(View.Effort) + ',"skill":' + Quoted(View.Skill) + ',"context_text":' +
-    Quoted(View.ContextText) + ',"remote_approval":' + YesNo(View.RemoteApproval) + ',"approval_caption":' +
+    MonitorBoolean(View.SignedIn) + ',"effort":' + Quoted(View.Effort) + ',"skill":' + Quoted(View.Skill) + ',"context_text":' +
+    Quoted(View.ContextText) + ',"remote_approval":' + MonitorBoolean(View.RemoteApproval) + ',"approval_caption":' +
     Quoted(View.ApprovalCaption) + '}';
 End;
 
 Function MonitorModeValueJson(Const View: TAssistantMonitorView): String;
 Begin
-  Result := '{"mode":' + Quoted(View.Mode) + ',"locked":' + YesNo(View.ModeLocked) + '}';
+  Result := '{"mode":' + Quoted(View.Mode) + ',"locked":' + MonitorBoolean(View.ModeLocked) + '}';
 End;
 
 Function MonitorTargetValueJson(Const View: TAssistantMonitorView): String;
@@ -561,7 +532,7 @@ End;
 
 Function MonitorConversationsValueJson(Const Current: String; Truncated: Boolean; Ids, Titles: TStrings): String;
 Begin
-  Result := '{"current":' + Quoted(Current) + ',"truncated":' + YesNo(Truncated) + ',"choices":[' +
+  Result := '{"current":' + Quoted(Current) + ',"truncated":' + MonitorBoolean(Truncated) + ',"choices":[' +
     MonitorChoiceArrayJson(Ids, Titles) + ']}';
 End;
 
@@ -591,9 +562,9 @@ Begin
         RowsJson := RowsJson + ',';
       RowsJson := RowsJson + '{"index":' + IntToStr(Rows[Index].Index) + ',"level":' + IntToStr(Rows[Index].Level) +
         ',"title":' + Quoted(Rows[Index].Title) + ',"parent_title":' + Quoted(Rows[Index].ParentTitle) + ',"status":' +
-        Quoted(Rows[Index].Status) + ',"actionable":' + YesNo(Rows[Index].Actionable) + '}';
+        Quoted(Rows[Index].Status) + ',"actionable":' + MonitorBoolean(Rows[Index].Actionable) + '}';
     End;
-  Result := '{"path":' + Quoted(Path) + ',"title":' + Quoted(Title) + ',"running":' + YesNo(Running) + ',"revision":' +
+  Result := '{"path":' + Quoted(Path) + ',"title":' + Quoted(Title) + ',"running":' + MonitorBoolean(Running) + ',"revision":' +
     Quoted(Revision) + ',"rows":[' + RowsJson + ']}';
 End;
 

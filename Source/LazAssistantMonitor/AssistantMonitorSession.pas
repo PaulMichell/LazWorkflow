@@ -1234,15 +1234,7 @@ End;
 
 Procedure TMonitorSession.LogLine(Level: Integer; Const Text: String);
 Begin
-  If Not Assigned(WorkflowLogger) Then
-    Exit;
-  Case Level Of
-    1: WorkflowLogger.Info(MonitorLogArea, Text);
-    2: WorkflowLogger.Warning(MonitorLogArea, Text);
-    3: WorkflowLogger.Error(MonitorLogArea, Text);
-  Else
-    WorkflowLogger.Debug(MonitorLogArea, Text);
-  End;
+  MonitorLog(Level, Text);
 End;
 
 Procedure TMonitorSession.ClearConnection;

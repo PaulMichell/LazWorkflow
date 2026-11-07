@@ -58,7 +58,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, LazFileUtils, AssistantPlan, AssistantPlanDocument, AssistantMonitorFrames,
-  AssistantMonitorOutbox;
+  AssistantMonitorOutbox, AssistantMonitorText;
 
 Const
   PlanSliceBytes = 24 * 1024;
@@ -136,46 +136,6 @@ Begin
     Payload.Free;
     Root.Free;
   End;
-End;
-
-Function Utf8Need(Lead: Byte): Integer;
-Begin
-  If Lead < $80 Then
-    Result := 1
-  Else If (Lead >= $C2) And (Lead <= $DF) Then
-    Result := 2
-  Else If (Lead >= $E0) And (Lead <= $EF) Then
-    Result := 3
-  Else If (Lead >= $F0) And (Lead <= $F4) Then
-    Result := 4
-  Else
-    Result := 0;
-End;
-
-Function SequenceOk(Const Bytes: RawByteString; Index, Need: Integer): Boolean;
-Var
-  Lead, Second: Byte;
-Begin
-  Result := False;
-  Lead := Ord(Bytes[Index]);
-  If Need = 1 Then
-    Exit(True);
-  Second := Ord(Bytes[Index + 1]);
-  If (Second < $80) Or (Second > $BF) Then
-    Exit;
-  If (Lead = $E0) And (Second < $A0) Then
-    Exit;
-  If (Lead = $ED) And (Second > $9F) Then
-    Exit;
-  If (Lead = $F0) And (Second < $90) Then
-    Exit;
-  If (Lead = $F4) And (Second > $8F) Then
-    Exit;
-  If (Need > 2) And ((Ord(Bytes[Index + 2]) < $80) Or (Ord(Bytes[Index + 2]) > $BF)) Then
-    Exit;
-  If (Need > 3) And ((Ord(Bytes[Index + 3]) < $80) Or (Ord(Bytes[Index + 3]) > $BF)) Then
-    Exit;
-  Result := True;
 End;
 
 Function AcceptUtf8(Var Carry: RawByteString; Const Chunk: RawByteString; FinalBlock: Boolean): Boolean;

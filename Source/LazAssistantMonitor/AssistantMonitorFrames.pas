@@ -67,10 +67,25 @@ Var
 Procedure MonitorNoteJsonParse;
 {$ENDIF}
 
+Procedure MonitorLog(Level: Integer; Const Text: String);
+
 Implementation
 
 Uses
-  sockets, base64, fpjson, jsonparser;
+  sockets, base64, fpjson, jsonparser, AssistantMonitorText, WorkflowLog;
+
+Procedure MonitorLog(Level: Integer; Const Text: String);
+Begin
+  If Not Assigned(WorkflowLogger) Then
+    Exit;
+  Case Level Of
+    1: WorkflowLogger.Info('AssistantMonitor', Text);
+    2: WorkflowLogger.Warning('AssistantMonitor', Text);
+    3: WorkflowLogger.Error('AssistantMonitor', Text);
+  Else
+    WorkflowLogger.Debug('AssistantMonitor', Text);
+  End;
+End;
 
 {$IFDEF MONITOR_COUNT_PARSES}
 Procedure MonitorNoteJsonParse;
@@ -111,84 +126,9 @@ Begin
   Result := (Json <> '') And WriteMonitorFrameBytes(Json, Bytes);
 End;
 
-Function IsStrictUtf8(Const Bytes: RawByteString): Boolean;
-Var
-  Index, Len, Need, Second: Integer;
-  Lead: Byte;
-Begin
-  Result := False;
-  Index := 1;
-  Len := Length(Bytes);
-  While Index <= Len Do
-    Begin
-      Lead := Ord(Bytes[Index]);
-      If Lead < $80 Then
-        Need := 1
-      Else If (Lead >= $C2) And (Lead <= $DF) Then
-        Need := 2
-      Else If (Lead >= $E0) And (Lead <= $EF) Then
-        Need := 3
-      Else If (Lead >= $F0) And (Lead <= $F4) Then
-        Need := 4
-      Else
-        Exit;
-      If Index + Need - 1 > Len Then
-        Exit;
-      If Need > 1 Then
-        Begin
-          Second := Ord(Bytes[Index + 1]);
-          If (Second < $80) Or (Second > $BF) Then
-            Exit;
-          If (Lead = $E0) And (Second < $A0) Then
-            Exit;
-          If (Lead = $ED) And (Second > $9F) Then
-            Exit;
-          If (Lead = $F0) And (Second < $90) Then
-            Exit;
-          If (Lead = $F4) And (Second > $8F) Then
-            Exit;
-        End;
-      If Need > 2 Then
-        If (Ord(Bytes[Index + 2]) < $80) Or (Ord(Bytes[Index + 2]) > $BF) Then
-          Exit;
-      If Need > 3 Then
-        If (Ord(Bytes[Index + 3]) < $80) Or (Ord(Bytes[Index + 3]) > $BF) Then
-          Exit;
-      Inc(Index, Need);
-    End;
-  Result := True;
-End;
-
-Function IsUtf8Continuation(Value: Char): Boolean;
-Begin
-  Result := (Ord(Value) And $C0) = $80;
-End;
-
 Function MonitorUtf8CutLength(Const Text: RawByteString; Limit: Integer): Integer;
-Var
-  Back: Integer;
 Begin
-  If Limit <= 0 Then
-    Exit(0);
-  If Length(Text) <= Limit Then
-    Exit(Length(Text));
-  { Text[Result + 1] is the first byte left out. A continuation byte there means the cut is inside a character.
-    A UTF-8 character has at most three continuation bytes; more than that is not UTF-8, so cut at Limit. }
-  Result := Limit;
-  Back := 0;
-  While (Result > 0) And (Back < 3) And IsUtf8Continuation(Text[Result + 1]) Do
-    Begin
-      Dec(Result);
-      Inc(Back);
-    End;
-  If (Result > 0) And IsUtf8Continuation(Text[Result + 1]) Then
-    Exit(Limit);
-  If Result = 0 Then
-    Begin
-      Result := 1;
-      While (Result < Length(Text)) And (Result < 4) And IsUtf8Continuation(Text[Result + 1]) Do
-        Inc(Result);
-    End;
+  Result := AssistantMonitorText.MonitorUtf8CutLength(Text, Limit);
 End;
 
 Function ReadNetworkLength(Const Bytes: RawByteString): Cardinal;

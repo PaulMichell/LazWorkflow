@@ -200,7 +200,7 @@ Type
 Implementation
 
 Uses
-  SyncObjs, fpjson, AssistantProtocol;
+  SyncObjs, fpjson, AssistantProtocol, AssistantMonitorText;
 
 Function Utf8Bytes(Const Text: RawByteString): Integer;
 Begin
@@ -226,47 +226,18 @@ Begin
   Result := Suffix <> '';
 End;
 
-Function YesNo(Condition: Boolean): String;
-Begin
-  If Condition Then
-    Result := 'true'
-  Else
-    Result := 'false';
-End;
-
 { Marks the turn the desktop is showing. point_end is the last page of that turn. }
 Function MarkPoint(Const Json: String; Point, PointEnd: Boolean): String;
 Begin
   Result := Json;
   If (Not Point) Or (Json = '') Or (Json[1] <> '{') Then
     Exit;
-  Result := '{"point":true,"point_end":' + YesNo(PointEnd) + ',' + Copy(Json, 2, MaxInt);
+  Result := '{"point":true,"point_end":' + MonitorBoolean(PointEnd) + ',' + Copy(Json, 2, MaxInt);
 End;
 
 Function BlockStateName(Const Block: TAssistantMonitorBlock): String;
 Begin
-  If Block.Running Then
-    Result := 'running'
-  Else If Block.Ok Then
-    Result := 'ok'
-  Else
-    Result := 'failed';
-End;
-
-Function OutlineHash(Const Text: RawByteString): String;
-Var
-  Hash: UInt64;
-  Index: Integer;
-Begin
-  {$PUSH}{$Q-}{$R-}
-  Hash := UInt64(14695981039346656037);
-  For Index := 1 To Length(Text) Do
-    Begin
-      Hash := Hash Xor Ord(Text[Index]);
-      Hash := Hash * UInt64(1099511628211);
-    End;
-  {$POP}
-  Result := LowerCase(HexStr(Hash, 16));
+  Result := MonitorBlockState(Block.Running, Block.Ok);
 End;
 
 Function TurnOutlineJson(Const Turn: TAssistantMonitorTurn): String;
@@ -282,7 +253,7 @@ Begin
       Blocks := Blocks + '{"block_id":"' + JsonEscapeText(Turn.Blocks[Index].BlockId) + '","kind":"' +
         JsonEscapeText(Turn.Blocks[Index].Kind) + '","revision":' + IntToStr(Turn.Blocks[Index].Revision) +
         ',"body_bytes":' + IntToStr(Length(UTF8String(Turn.Blocks[Index].Body))) + ',"hash":"' +
-        OutlineHash(UTF8String(Turn.Blocks[Index].Body)) + '"}';
+        Fnv1a64(UTF8String(Turn.Blocks[Index].Body)) + '"}';
     End;
   Result := '{"turn_index":' + IntToStr(Turn.TurnIndex) + ',"turn_id":"' + JsonEscapeText(Turn.Id) + '","mode":"' +
     JsonEscapeText(Turn.Mode) + '","prompt_preview":"' + JsonEscapeText(Turn.PromptPreview) + '","created_at":"' +
@@ -304,7 +275,7 @@ Begin
     Body := '';
   Result := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","turn_id":"' + JsonEscapeText(TurnId) + '","kind":"' +
     JsonEscapeText(Block.Kind) + '","title":"' + JsonEscapeText(Block.Title) + '","state":"' +
-    JsonEscapeText(BlockStateName(Block)) + '","body":"' + Body + '","deferred":' + YesNo(Not BlockFitsInline(Block)) +
+    JsonEscapeText(BlockStateName(Block)) + '","body":"' + Body + '","deferred":' + MonitorBoolean(Not BlockFitsInline(Block)) +
     ',"bytes":' + IntToStr(Utf8Bytes(Block.Body)) + '}';
 End;
 
@@ -708,23 +679,9 @@ Begin
 End;
 
 Function Utf8Step(Const Text: RawByteString; Index: Integer): Integer;
-Var
-  Lead: Byte;
 Begin
-  Result := 1;
-  If (Index < 1) Or (Index > Length(Text)) Then
-    Exit;
-  Lead := Ord(Text[Index]);
-  If Lead < $80 Then
-    Exit;
-  If (Lead And $E0) = $C0 Then
-    Result := 2
-  Else If (Lead And $F0) = $E0 Then
-    Result := 3
-  Else If (Lead And $F8) = $F0 Then
-    Result := 4;
-  If Index + Result - 1 > Length(Text) Then
-    Result := 1;
+  Result := MonitorUtf8Step(Text, Index);
+  If Result = 0 Then Result := 1;
 End;
 
 { Bytes JsonEscapeText writes for the character of Step bytes at Index. A lone byte of $80 or more becomes
@@ -896,7 +853,7 @@ Begin
         If Not Found Then
           AppendLocked(FHead + 1, 'image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
             JsonEscapeText(Local.Id) + '","name":"' + JsonEscapeText(Local.Images[Index].Name) + '","mime":"' +
-            JsonEscapeText(Local.Images[Index].Mime) + '","bytes":0,"missing":' + YesNo(Local.Images[Index].Missing) + '}');
+            JsonEscapeText(Local.Images[Index].Mime) + '","bytes":0,"missing":' + MonitorBoolean(Local.Images[Index].Missing) + '}');
       End;
     { Local is already unique, so it is stored without a second copy. }
     If Local.Live Then

@@ -37,7 +37,7 @@ Function TryPackImage(Const Id, ImageId, Mime: String; Width, Height, Revision: 
 Implementation
 
 Uses
-  AssistantMonitorFrames, AssistantMonitorOutbox;
+  AssistantMonitorFrames, AssistantMonitorOutbox, AssistantMonitorText;
 
 Function ImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
 Begin
@@ -271,93 +271,12 @@ End;
   source byte with EscapedByteLen, and the two must agree exactly. Every control is escaped. }
 Function EscapedByteLen(C: Char): Integer;
 Begin
-  Case C Of
-    '"', '\', #8, #9, #10, #12, #13: Result := 2;
-  Else
-    If Ord(C) < 32 Then
-      Result := 6
-    Else
-      Result := 1;
-  End;
+  Result := AssistantMonitorText.EscapedByteLen(C);
 End;
 
 Function EscapeChunkData(Const Text: String): String;
-Const
-  HexDigits = '0123456789ABCDEF';
-Var
-  Index, OutLen, At, Code: Integer;
-  C: Char;
 Begin
-  OutLen := 0;
-  For Index := 1 To Length(Text) Do
-    Inc(OutLen, EscapedByteLen(Text[Index]));
-  SetLength(Result, OutLen);
-  At := 1;
-  For Index := 1 To Length(Text) Do
-    Begin
-      C := Text[Index];
-      Case C Of
-        '"':
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := '"';
-            Inc(At, 2);
-          End;
-        '\':
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := '\';
-            Inc(At, 2);
-          End;
-        #8:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'b';
-            Inc(At, 2);
-          End;
-        #9:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 't';
-            Inc(At, 2);
-          End;
-        #10:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'n';
-            Inc(At, 2);
-          End;
-        #12:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'f';
-            Inc(At, 2);
-          End;
-        #13:
-          Begin
-            Result[At] := '\';
-            Result[At + 1] := 'r';
-            Inc(At, 2);
-          End;
-      Else
-        If Ord(C) < 32 Then
-          Begin
-            Code := Ord(C);
-            Result[At] := '\';
-            Result[At + 1] := 'u';
-            Result[At + 2] := '0';
-            Result[At + 3] := '0';
-            Result[At + 4] := HexDigits[(Code Div 16) + 1];
-            Result[At + 5] := HexDigits[(Code Mod 16) + 1];
-            Inc(At, 6);
-          End
-        Else
-          Begin
-            Result[At] := C;
-            Inc(At);
-          End;
-      End;
-    End;
+  Result := AssistantMonitorText.EscapeChunkData(Text);
 End;
 
 Function ChunkFrame(Const Id, ItemId, ItemType, Data: String; Part, PartCount: Integer): String;
@@ -369,30 +288,9 @@ End;
 
 { Bytes of one UTF-8 code point starting at Index, or 1 for a stray byte. Never zero when Index is in range. }
 Function Utf8UnitLen(Const Text: String; Index: Integer): Integer;
-Var
-  Lead, Need, Follow: Integer;
 Begin
-  Result := 1;
-  If (Index < 1) Or (Index > Length(Text)) Then
-    Exit(0);
-  Lead := Ord(Text[Index]);
-  If Lead < $80 Then
-    Exit;
-  If (Lead And $E0) = $C0 Then
-    Need := 2
-  Else If (Lead And $F0) = $E0 Then
-    Need := 3
-  Else If (Lead And $F8) = $F0 Then
-    Need := 4
-  Else
-    Exit;
-  Follow := 1;
-  While (Index + Follow <= Length(Text)) And (Follow < Need) And ((Ord(Text[Index + Follow]) And $C0) = $80) Do
-    Inc(Follow);
-  If Follow = Need Then
-    Result := Need;
+  Result := MonitorUtf8Step(Text, Index);
 End;
-
 { Source bytes from Start whose escaped form fits in DataBudget, ending on a code point. }
 Function ChunkSourceLen(Const Item: String; Start, DataBudget: Integer): Integer;
 Var
