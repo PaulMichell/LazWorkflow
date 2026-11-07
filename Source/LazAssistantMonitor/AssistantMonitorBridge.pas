@@ -8,7 +8,7 @@ Unit AssistantMonitorBridge;
 
   Size note: exceeds the 1000 line preference. What remains is the change-triggered
   observation and the IDE command pump. Dirty-block patch construction is gone.
-  Reviewed 2026-11-03: the 1 s timer is a backstop. A counter wake queues one pump,
+  Reviewed 2026-11-07: the 1 s timer is a backstop. A counter wake queues one pump,
   coalesced to 20 ms. The change pump publishes plan rows and does not read the plan file.
   The live pump uses FillMonitorLiveChanges and does not copy an unchanged block body.
   No provider or socket code in this unit. State values are written by AssistantMonitorSync.
@@ -125,7 +125,19 @@ Type
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
 
     Procedure RetryDeferredResumes;
-    Procedure PublishStateKeys(Form: TProjectAssistantForm);
+    Function PublicationSession(Form: TProjectAssistantForm): TMonitorSession;
+    Procedure PublishStatus(Form: TProjectAssistantForm);
+    Procedure PublishSession(Form: TProjectAssistantForm);
+    Procedure PublishMode(Form: TProjectAssistantForm);
+    Procedure PublishTarget(Form: TProjectAssistantForm);
+    Procedure PublishTargets(Form: TProjectAssistantForm);
+    Procedure PublishConversations(Form: TProjectAssistantForm);
+    Procedure PublishModels(Form: TProjectAssistantForm);
+    Procedure PublishReasoning(Form: TProjectAssistantForm);
+    Procedure PublishPermissions(Form: TProjectAssistantForm);
+    Procedure PublishPlanChoices(Form: TProjectAssistantForm);
+    Procedure PublishPlan(Form: TProjectAssistantForm);
+    Procedure PublishTasks(Form: TProjectAssistantForm);
     Procedure PushStatus(Form: TProjectAssistantForm);
     Procedure PushLiveState;
     Procedure NoteOpenLogPosition;
@@ -478,17 +490,17 @@ End;
 
 Procedure TAssistantMonitorBridge.PublishSamplingLists(Form: TProjectAssistantForm);
 Var
-  PublishModels, PublishReasoning, PublishPermissions: Boolean;
+  ModelsNeeded, ReasoningNeeded, PermissionsNeeded: Boolean;
 Begin
   If Not Assigned(Form) Then
     Exit;
-  If Not Form.TakeSamplingListPublish(PublishModels, PublishReasoning, PublishPermissions) Then
+  If Not Form.TakeSamplingListPublish(ModelsNeeded, ReasoningNeeded, PermissionsNeeded) Then
     Exit;
-  If PublishModels Then
+  If ModelsNeeded Then
     PushModels(Form);
-  If PublishReasoning Then
+  If ReasoningNeeded Then
     PushReasoning(Form);
-  If PublishPermissions Then
+  If PermissionsNeeded Then
     PushPermissions(Form);
 End;
 
@@ -616,76 +628,226 @@ End;
 
 { Every string in these values is escaped by the AssistantMonitorSync writers. Status text, paths,
   titles and notes reach the phone as they are, including quotes, backslashes and controls. }
-Procedure TAssistantMonitorBridge.PublishStateKeys(Form: TProjectAssistantForm);
-Var
-  Session: TMonitorSession;
-  View: TAssistantMonitorView;
-  Rows: TAssistantMonitorPlanRows;
-  Tasks: TAssistantMonitorTaskRows;
-  Paths, Captions, Ids, Titles: TStringList;
-  Current, Backend, Note, ConversationId, ProjectRoot, Title: String;
-  Truncated: Boolean;
+Function TAssistantMonitorBridge.PublicationSession(Form: TProjectAssistantForm): TMonitorSession;
 Begin
+  Result := Nil;
   If Not Assigned(Form) Then
     Exit;
   LockBridge;
   Try
-    Session := FSession;
+    Result := FSession;
   Finally
     UnlockBridge;
   End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishStatus(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+Begin
+  Session := PublicationSession(Form);
   If Not Assigned(Session) Then
     Exit;
-  { History current is empty for the open chat. The mirror id is what New and Send write. }
+  Form.FillMonitorView(View);
+  View.RemoteApproval := MonitorRemoteApprovalEnabled;
+  ApplyHostFlags(View);
+  Session.PublishState('status', MonitorStatusValueJson(View));
+End;
+
+Procedure TAssistantMonitorBridge.PublishSession(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+  ConversationId, ProjectRoot, Title: String;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  { History current is empty for the open chat; publish only a durable identity. }
   Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If (ConversationId <> '') And (ConversationId <> 'current') Then
     Session.PublishState('conversation', MonitorConversationValueJson(ConversationId));
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('status', MonitorStatusValueJson(View));
   Session.PublishState('session', MonitorSessionValueJson(View));
+End;
+
+Procedure TAssistantMonitorBridge.PublishMode(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Form.FillMonitorView(View);
+  View.RemoteApproval := MonitorRemoteApprovalEnabled;
+  ApplyHostFlags(View);
   Session.PublishState('mode', MonitorModeValueJson(View));
+End;
+
+Procedure TAssistantMonitorBridge.PublishTarget(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Form.FillMonitorView(View);
+  View.RemoteApproval := MonitorRemoteApprovalEnabled;
+  ApplyHostFlags(View);
   Session.PublishState('target', MonitorTargetValueJson(View));
+End;
+
+Procedure TAssistantMonitorBridge.PublishTargets(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Paths, Captions: TStringList;
+  Current: String;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
   Paths := TStringList.Create;
   Captions := TStringList.Create;
-  Ids := TStringList.Create;
-  Titles := TStringList.Create;
   Try
     Form.FillMonitorTargetChoices(Paths, Captions, Current);
     Session.PublishState('targets', MonitorTargetsValueJson(Current, Paths, Captions));
-    Paths.Clear;
-    Captions.Clear;
-    Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
-    Session.PublishState('conversations', MonitorConversationsValueJson(Current, Truncated, Ids, Titles));
-    Ids.Clear;
-    Titles.Clear;
-    Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('models', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
-    Ids.Clear;
-    Captions.Clear;
-    Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
-    Session.PublishState('reasoning', MonitorNamedChoicesValueJson(Current, '', Note, False, Ids, Captions));
-    Ids.Clear;
-    Captions.Clear;
-    Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('permissions', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
-    Paths.Clear;
-    Captions.Clear;
-    Form.FillMonitorPlanChoices(Paths, Captions);
-    Session.PublishState('plan_choices', MonitorPlanChoicesValueJson(Paths, Captions));
-    Form.FillMonitorPlan(Rows);
-    Session.PublishState('plan', MonitorPlanValueJson(View.PlanPath, View.PlanTitle, View.PlanRunning,
-      Form.PlanDocumentRevision, Rows));
-    Session.NotePlanCachedRevision(View.PlanPath, Form.PlanDocumentRevision);
-    Form.FillMonitorTasks(Tasks);
-    Session.PublishState('tasks', MonitorTasksValueJson(Tasks));
   Finally
-    Titles.Free;
-    Ids.Free;
     Captions.Free;
     Paths.Free;
   End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishConversations(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Ids, Titles: TStringList;
+  Current: String;
+  Truncated: Boolean;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Ids := TStringList.Create;
+  Titles := TStringList.Create;
+  Try
+    Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
+    Session.PublishState('conversations', MonitorConversationsValueJson(Current, Truncated, Ids, Titles));
+  Finally
+    Titles.Free;
+    Ids.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishModels(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Ids, Captions: TStringList;
+  Current, Backend, Note: String;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
+    Session.PublishState('models', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishReasoning(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Ids, Captions: TStringList;
+  Current, Note: String;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
+    Session.PublishState('reasoning', MonitorNamedChoicesValueJson(Current, '', Note, False, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishPermissions(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Ids, Captions: TStringList;
+  Current, Backend, Note: String;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Ids := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
+    Session.PublishState('permissions', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
+  Finally
+    Captions.Free;
+    Ids.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishPlanChoices(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Paths, Captions: TStringList;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Paths := TStringList.Create;
+  Captions := TStringList.Create;
+  Try
+    Form.FillMonitorPlanChoices(Paths, Captions);
+    Session.PublishState('plan_choices', MonitorPlanChoicesValueJson(Paths, Captions));
+  Finally
+    Captions.Free;
+    Paths.Free;
+  End;
+End;
+
+Procedure TAssistantMonitorBridge.PublishPlan(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  View: TAssistantMonitorView;
+  Rows: TAssistantMonitorPlanRows;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Form.FillMonitorView(View);
+  Form.FillMonitorPlan(Rows);
+  Session.PublishState('plan', MonitorPlanValueJson(View.PlanPath, View.PlanTitle, View.PlanRunning,
+    Form.PlanDocumentRevision, Rows));
+  Session.NotePlanCachedRevision(View.PlanPath, Form.PlanDocumentRevision);
+End;
+
+Procedure TAssistantMonitorBridge.PublishTasks(Form: TProjectAssistantForm);
+Var
+  Session: TMonitorSession;
+  Tasks: TAssistantMonitorTaskRows;
+Begin
+  Session := PublicationSession(Form);
+  If Not Assigned(Session) Then
+    Exit;
+  Form.FillMonitorTasks(Tasks);
+  Session.PublishState('tasks', MonitorTasksValueJson(Tasks));
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);
@@ -693,7 +855,10 @@ Begin
   Try
     If Not Assigned(Form) Then
       Exit;
-    PublishStateKeys(Form);
+    PublishStatus(Form);
+    PublishSession(Form);
+    { Sending and plan activity also lock or unlock the mode selector. }
+    PublishMode(Form);
     { A connection reload sets the flags. The requested lists follow this status frame. }
     PublishSamplingLists(Form);
   Finally
@@ -1039,7 +1204,7 @@ End;
 
 Procedure TAssistantMonitorBridge.PublishPlanRows(Form: TProjectAssistantForm);
 Begin
-  PublishStateKeys(Form);
+  PublishPlan(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushPlan(Form: TProjectAssistantForm);
@@ -1050,7 +1215,8 @@ Begin
   If Not Assigned(Form) Then
     Exit;
   Form.NoteMonitorPlanRevision;
-  PublishStateKeys(Form);
+  PublishPlanChoices(Form);
+  PublishPlan(Form);
   Form.FillMonitorPlan(Rows);
   Form.FillMonitorView(View);
   FPlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
@@ -1067,83 +1233,32 @@ End;
 
 Procedure TAssistantMonitorBridge.PushTargets(Form: TProjectAssistantForm);
 Begin
-  PublishStateKeys(Form);
+  PublishTargets(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushModels(Form: TProjectAssistantForm);
-Var
-  Ids, Captions: TStringList;
-  Current, Backend, Note: String;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Ids := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    PublishStateKeys(Form);
-  Finally
-    Captions.Free;
-    Ids.Free;
-  End;
+  PublishModels(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushReasoning(Form: TProjectAssistantForm);
-Var
-  Ids, Captions: TStringList;
-  Current, Note: String;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Ids := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    PublishStateKeys(Form);
-  Finally
-    Captions.Free;
-    Ids.Free;
-  End;
+  PublishReasoning(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushPermissions(Form: TProjectAssistantForm);
-Var
-  Ids, Captions: TStringList;
-  Current, Backend, Note: String;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Ids := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    PublishStateKeys(Form);
-  Finally
-    Captions.Free;
-    Ids.Free;
-  End;
+  PublishPermissions(Form);
 End;
 
 Procedure TAssistantMonitorBridge.PushConversations(Form: TProjectAssistantForm);
-Var
-  Ids, Titles: TStringList;
-  Current: String;
-  Truncated: Boolean;
 Begin
-  If Not Assigned(Form) Then
-    Exit;
-  Ids := TStringList.Create;
-  Titles := TStringList.Create;
-  Try
-    PublishStateKeys(Form);
-  Finally
-    Titles.Free;
-    Ids.Free;
-  End;
+  PublishConversations(Form);
 End;
 
 Procedure TAssistantMonitorBridge.DeliverNotice(Job: TMonitorNoticeJob);
 Var
   Form: TProjectAssistantForm;
-  View: TAssistantMonitorView;
-  Tasks: TAssistantMonitorTaskRows;
   Session: TMonitorSession;
 Begin
   If Not Assigned(Job) Then
@@ -1155,12 +1270,13 @@ Begin
     asnMode:
       If Assigned(Form) Then
         Begin
-          PublishStateKeys(Form);
+          PublishMode(Form);
         End;
     asnTarget:
       If Assigned(Form) Then
         Begin
-          PublishStateKeys(Form);
+          PublishTarget(Form);
+          PublishTargets(Form);
         End;
     asnPlan:
       If Assigned(Form) Then
@@ -1168,7 +1284,7 @@ Begin
     asnTasks:
       If Assigned(Form) Then
         Begin
-          PublishStateKeys(Form);
+          PublishTasks(Form);
         End;
     asnStatus, asnError, asnSession:
       { The idle flags and the model travel here. A patch alone can miss both. }
@@ -1488,8 +1604,11 @@ Begin
   Form := OpenForm;
   If Not Assigned(Form) Then
     Exit;
-  { Status and the plan are not in the head pages. A running plan must not wait for the next row change. }
+  { A screen wake needs the scalar state and tasks even when none has changed since pairing.
+    Menu lists are requested separately by menu_choices; sampling flags are consumed by PushStatus. }
   PushStatus(Form);
+  PublishTarget(Form);
+  PublishTasks(Form);
   PushPlan(Form);
 End;
 

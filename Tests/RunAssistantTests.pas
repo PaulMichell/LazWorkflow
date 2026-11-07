@@ -44,13 +44,13 @@ Const
     'AssistantMonitorCommandIntakeTest', 'AssistantMonitorProtocolV3Test', 'AssistantMonitorSocketTest',
     'AssistantMonitorLinkTest', 'AssistantMonitorGrainTest', 'AssistantMonitorPlanFetchTest',
     'AssistantMonitorChaosTest', 'AssistantMonitorAcceptance');
-  GuiTestNames: Array[0..18] Of String = (
+  GuiTestNames: Array[0..19] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',
     'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest',
     'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest',
     'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest',
-    'AssistantMonitorFormLoadTest');
+    'AssistantMonitorFormLoadTest', 'AssistantMonitorBridgeTest');
   { Planted-fault probes run only when named with --only. Each runs twice: with ProbeCleanArg it must pass, and with
     no argument, under --heaptrc or --valgrind, the memory check must report the planted fault. }
   ProbeTestNames: Array[0..1] Of String = ('MemoryCheckProbeLeak', 'MemoryCheckProbeUseAfterFree');
