@@ -106,7 +106,7 @@ Type
     FPairCodeUntil: QWord;
     FPairFailures: Integer;
     FCodeExpired: Boolean;
-    { True only after RequestPairCode, until that code succeeds. Open LAN admits a pair while this is false. }
+    { True only after RequestPairCode, until that code succeeds. Only loopback admits a pair while this is false. }
     FPairGate: Boolean;
     FNonce: TBytes;
     FNonceHex: String;
