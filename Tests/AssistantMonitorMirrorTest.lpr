@@ -3,6 +3,7 @@ Program AssistantMonitorMirrorTest;
 { The monitor log keeps each conversation, folds old events into the model, and pages a snapshot.
   State chunks and prompt previews are cut between UTF-8 characters (plan item 2.3).
   Observing a turn leaves the caller's record untouched (plan item 3.2).
+  An event that cannot be stored still advances the head and is noted as a drop (plan item 4.1).
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -91,14 +92,15 @@ Begin
     Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
     Log.RememberPatch(1, StringOfChar('a', 40));
     Log.RememberPatch(2, StringOfChar('b', 40));
-    Check('an unacked patch is not dropped to make room', Log.DroppedThrough = 0);
-    Check('resume still has the unacked patch', Log.TryReplayPatches('ab12cd34', 0, 1, Events, Head) And
-      (Length(Events) = 1) And (Events[0].Seq = 1));
+    Check('an unacked patch is not dropped to make room', (Log.CopyEvents(Events) = 1) And (Events[0].Seq = 1) And
+      (Log.ByteCount = 45));
+    Check('an event that will not fit is noted as a drop', (Log.DroppedThrough = 2) And (Log.Head = 2));
+    Check('resume behind the drop is not a patch tail', Not Log.TryReplayPatches('ab12cd34', 0, 2, Events, Head));
     Log.NoteAck('ab12cd34', 1);
-    Log.RememberPatch(2, StringOfChar('b', 40));
-    Check('an ack lets the older patch be folded', Log.DroppedThrough >= 1);
-    Check('resume at the kept patch is a tail', Log.TryReplayPatches('ab12cd34', 1, 2, Events, Head) And
-      (Length(Events) = 1) And (Events[0].Seq = 2));
+    Log.RememberPatch(3, StringOfChar('c', 40));
+    Check('an ack lets the older patch be folded', (Log.CopyEvents(Events) = 1) And (Events[0].Seq = 3));
+    Check('resume after the drop is the kept patch', Log.TryReplayPatches('ab12cd34', 2, 3, Events, Head) And
+      (Length(Events) = 1) And (Events[0].Seq = 3));
     Check('a new stream is not a conversation yet', Not Log.HasConversation);
     Log.ObserveTurn(SampleTurn('turn-a', StringOfChar('x', MonitorInlineBodyBytes + 1), 0));
     Check('an observed turn is the open conversation', Log.HasConversation);
@@ -447,9 +449,51 @@ Begin
   Check('the preview is at most 80 bytes', Length(Preview) <= 80);
 End;
 
+{ Plan item 4.1. A log full of unacknowledged events cannot drop the oldest to make room. The event that
+  will not fit must still advance the head and move DroppedThrough, so a phone resuming from an older
+  sequence takes a snapshot instead of a replay that looks complete. }
+Procedure TestUnstoredEventRecordsDrop;
+Var
+  Log: TMonitorMirror;
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
+  Turn: TAssistantMonitorTurn;
+  BeforeHead: Int64;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Log.ObserveTurn(SampleTurn('turn-a', 'body', 0));
+    Log.SetLogBudget(64);
+    Check('the unacked log is already over the small budget', Log.ByteCount > 64);
+    Check('nothing has been dropped yet', Log.DroppedThrough = 0);
+    BeforeHead := Log.Head;
+    { No NoteAck. The oldest event stays, so the next append cannot be stored. }
+    Log.SetTitle('Two');
+    Log.SetTitle('Three');
+    Check('an event that cannot be stored moves DroppedThrough', Log.DroppedThrough = BeforeHead + 2);
+    Check('an event that cannot be stored advances the head', Log.Head = BeforeHead + 2);
+    Check('the model still holds the observed turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a'));
+    Check('the resume source is the open conversation', Log.CaptureResume('conversation-a', Source) And Source.Found And
+      Source.Observed And (Source.DroppedThrough = Log.DroppedThrough));
+    Status := Default(TMonitorSyncStatus);
+    Answer := MonitorSyncResumeAnswer(Source, 'conversation-a', 'ab12cd34', 'resume-old', 0, Status);
+    Check('a resume from an old sequence is not a replay', Not Answer.Replay);
+    Check('a resume from an old sequence is a snapshot', (Not Answer.NotReady) And (Length(Answer.Frames) >= 1) And
+      (Pos('"type":"snapshot_begin"', Answer.Frames[0].Json) > 0));
+    Check('the snapshot carries the title the log could not store', Pos('"title":"Three"', Answer.Frames[0].Json) > 0);
+    Answer := MonitorSyncResumeAnswer(Source, 'conversation-a', 'ab12cd34', 'resume-now', Source.Head, Status);
+    Check('a resume at the head is still a replay', Answer.Replay And (Not Answer.NotReady));
+  Finally
+    Log.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFoldAndReplay;
+  TestUnstoredEventRecordsDrop;
   TestBodyEscape;
   TestLargeAppend;
   TestLiveBlocks;

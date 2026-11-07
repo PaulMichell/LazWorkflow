@@ -10,8 +10,9 @@ Unit AssistantMonitorMirror;
 
   Catalogue 2 patch tails live in the same log so resume can replay them.
   Item 5.6 stopped sending snapshot, transcript, and turn_data; pages replace
-  those frames. A patch larger than the budget is not stored.
-  Resume behind a dropped record needs a snapshot.
+  those frames. A patch larger than the budget is not stored. An event that
+  will not fit while older events are still unacknowledged is recorded the
+  same way. Resume behind a dropped record needs a snapshot.
 
   ObserveTurn never writes into the turn it is given. Its arrays are shared
   with the caller's snapshot, which another thread may read (plan item 3.2 of
@@ -401,7 +402,16 @@ Begin
   While (Length(FEvents) > 0) And (FBytes + Size > FBudget) And DropOldestLocked Do
     ;
   If FBytes + Size > FBudget Then
-    Exit;
+    Begin
+      { The oldest events are still unacknowledged, so they stay. This event is
+        not stored. The model already holds its effect. Advance the head and
+        note the drop so the sequence is not reused and a resume behind it
+        takes a snapshot, as an oversize event already does. }
+      NoteDropLocked(Seq);
+      If Seq > FHead Then
+        FHead := Seq;
+      Exit;
+    End;
   Index := Length(FEvents);
   SetLength(FEvents, Index + 1);
   FEvents[Index].Seq := Seq;
