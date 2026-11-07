@@ -418,8 +418,6 @@ Begin
   If Not SaveMonitorSettings(Settings, ErrorText) Then
     StatusMemo.Text := ErrorText;
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
-  If Assigned(MonitorLiveSession) Then
-    MonitorLiveSession.SetRemoteApproval(Settings.RemoteApproval);
 End;
 
 Procedure TAssistantMonitorForm.ShowBindFailure(Const Address: String; Port: Integer; Const ErrorText: String);
@@ -574,27 +572,16 @@ End;
 Procedure TAssistantMonitorForm.RevokeActionExecute(Sender: TObject);
 Var
   ClientId, ErrorText: String;
-  Settings: TMonitorSettings;
-  I, Kept: Integer;
 Begin
   ClientId := SelectedClientId;
   If ClientId = '' Then
     Exit;
   If Assigned(MonitorLiveSession) Then
     MonitorLiveSession.RevokeClient(ClientId)
-  Else
+  Else If Not RevokeMonitorClient(ClientId, ErrorText) Then
     Begin
-      If Not LoadMonitorSettings(Settings, ErrorText) Then
-        Exit;
-      Kept := 0;
-      For I := 0 To High(Settings.Clients) Do
-        If Settings.Clients[I].Id <> ClientId Then
-          Begin
-            Settings.Clients[Kept] := Settings.Clients[I];
-            Inc(Kept);
-          End;
-      SetLength(Settings.Clients, Kept);
-      SaveMonitorSettings(Settings, ErrorText);
+      StatusMemo.Text := ErrorText;
+      Exit;
     End;
   RefreshClients;
   RefreshState;

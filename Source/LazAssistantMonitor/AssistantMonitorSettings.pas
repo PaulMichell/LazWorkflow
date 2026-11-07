@@ -43,6 +43,10 @@ Type
 
 Function DefaultMonitorSettings: TMonitorSettings;
 Function LoadMonitorSettings(Out Settings: TMonitorSettings; Out ErrorText: String): Boolean;
+/// Removes the client from an in-memory list; persistence remains the caller's responsibility.
+Procedure RevokeMonitorClient(Var Clients: TMonitorClientArray; Const ClientId: String); Overload;
+/// Revokes a stored client when no session is running.
+Function RevokeMonitorClient(Const ClientId: String; Out ErrorText: String): Boolean; Overload;
 Function MonitorSettingsRevision: LongInt;
 Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: String): Boolean;
 { Mints host_id once and keeps it in the monitor settings. }
@@ -63,6 +67,31 @@ Var
 Function MonitorSettingsRevision: LongInt;
 Begin
   Result := InterlockedCompareExchange(SettingsRevision, 0, 0);
+End;
+
+Procedure RevokeMonitorClient(Var Clients: TMonitorClientArray; Const ClientId: String);
+Var
+  I, Kept: Integer;
+Begin
+  Kept := 0;
+  For I := 0 To High(Clients) Do
+    If Clients[I].Id <> ClientId Then
+      Begin
+        Clients[Kept] := Clients[I];
+        Inc(Kept);
+      End;
+  SetLength(Clients, Kept);
+End;
+
+Function RevokeMonitorClient(Const ClientId: String; Out ErrorText: String): Boolean;
+Var
+  Settings: TMonitorSettings;
+Begin
+  Result := LoadMonitorSettings(Settings, ErrorText);
+  If Not Result Then
+    Exit;
+  RevokeMonitorClient(Settings.Clients, ClientId);
+  Result := SaveMonitorSettings(Settings, ErrorText);
 End;
 
 Function IsIPv4Address(Const Text: String): Boolean;

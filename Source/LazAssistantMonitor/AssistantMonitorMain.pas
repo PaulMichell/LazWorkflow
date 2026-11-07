@@ -139,7 +139,6 @@ Begin
   Else If ErrorText <> '' Then
     WorkflowLogger.Warning('AssistantMonitor', 'host id was not stored: ' + ErrorText);
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
-  LiveSession.SetRemoteApproval(Settings.RemoteApproval);
   ErrorText := '';
   Result := True;
   WorkflowLogger.Info('AssistantMonitor', 'listen start bind=' + Address + ' port=' + IntToStr(Settings.Port));

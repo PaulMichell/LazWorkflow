@@ -33,7 +33,7 @@ Interface
 Uses
   SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
   AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantMonitorSync, AssistantMonitorPlanFetch,
-  AssistantSessionObserve;
+  AssistantSessionObserve, AssistantMonitorSettings;
 
 Const
   MonitorPairCodeLength = 10;
@@ -102,7 +102,6 @@ Type
     FSendPending: Boolean;
     FActiveCommandId: String;
     FActiveCommandKind: Integer;
-    FRemoteApproval: Boolean;
     FPairCode: String;
     FPairCodeUntil: QWord;
     FPairFailures: Integer;
@@ -175,13 +174,7 @@ Type
     FPendingApprovalClose: Boolean;
     FPendingApprovalCloseId: String;
     FPendingApprovalCloseReason: String;
-    FClients: Array Of Record
-      Id: String;
-      Name: String;
-      Token: String;
-      Fingerprint: String;
-      PairedAt: String;
-    End;
+    FClients: TMonitorClientArray;
     Procedure LockSession;
     Procedure UnlockSession;
     Function ClockMs: QWord;
@@ -243,6 +236,7 @@ Type
     Procedure CheckTimeoutsLocked;
     Procedure InboundFrame(Const Frame: TMonitorFrame);
     Function GetLastError: String;
+    Function GetRemoteApproval: Boolean;
     Function GetBoundAddress: String;
     Function GetConnectedClientName: String;
     { Locked reads for the link and IDE threads. The session lock is recursive, so a holder may call them. }
@@ -372,7 +366,7 @@ Type
     Property BoundAddress: String Read GetBoundAddress;
     Property BoundPort: Integer Read FPort;
     Property ConnectedClientName: String Read GetConnectedClientName;
-    Property RemoteApproval: Boolean Read FRemoteApproval;
+    Property RemoteApproval: Boolean Read GetRemoteApproval;
     Function SecondsSinceFrame: Integer;
     /// True after auth. A hello that has not been proved cannot take the open screen.
     Function ClientAuthenticated: Boolean;
@@ -406,7 +400,7 @@ Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; 
 Implementation
 
 Uses
-  SyncObjs, DateUtils, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantProtocol, AssistantMonitorSettings;
+  SyncObjs, DateUtils, fpjson, jsonparser, fpsha256, fphashutils, WorkflowLog, AssistantProtocol, AssistantMonitorApproval;
 
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 Var
@@ -597,7 +591,6 @@ Begin
   FBindAddress := '';
   FPort := 0;
   FHostFingerprint := '';
-  FRemoteApproval := False;
   FPairCode := '';
   FPairCodeUntil := 0;
   FPairFailures := 0;
@@ -1325,44 +1318,24 @@ Procedure TMonitorSession.LoadClients;
 Var
   Settings: TMonitorSettings;
   ErrorText: String;
-  I: Integer;
 Begin
-  SetLength(FClients, 0);
+  FClients := Nil;
   If Not LoadMonitorSettings(Settings, ErrorText) Then
     Begin
       FLastError := ErrorText;
-      FRemoteApproval := False;
       Exit;
     End;
-  FRemoteApproval := Settings.RemoteApproval;
-  SetLength(FClients, Length(Settings.Clients));
-  For I := 0 To High(Settings.Clients) Do
-    Begin
-      FClients[I].Id := Settings.Clients[I].Id;
-      FClients[I].Name := Settings.Clients[I].Name;
-      FClients[I].Token := Settings.Clients[I].Token;
-      FClients[I].Fingerprint := Settings.Clients[I].Fingerprint;
-      FClients[I].PairedAt := Settings.Clients[I].PairedAt;
-    End;
+  FClients := Settings.Clients;
 End;
 
 Function TMonitorSession.PersistClients(Out ErrorText: String): Boolean;
 Var
   Settings: TMonitorSettings;
-  I: Integer;
 Begin
   ErrorText := '';
   If Not LoadMonitorSettings(Settings, ErrorText) Then
     Settings := DefaultMonitorSettings;
-  SetLength(Settings.Clients, Length(FClients));
-  For I := 0 To High(FClients) Do
-    Begin
-      Settings.Clients[I].Id := FClients[I].Id;
-      Settings.Clients[I].Name := FClients[I].Name;
-      Settings.Clients[I].Token := FClients[I].Token;
-      Settings.Clients[I].Fingerprint := FClients[I].Fingerprint;
-      Settings.Clients[I].PairedAt := FClients[I].PairedAt;
-    End;
+  Settings.Clients := FClients;
   Result := SaveMonitorSettings(Settings, ErrorText);
   If Not Result Then
     FLastError := ErrorText;
@@ -1853,7 +1826,7 @@ Begin
   Status.CanSteer := FHostFlags.CanSteer;
   Status.CanStop := FHostFlags.CanStop;
   Status.CanChangeMode := FHostFlags.CanChangeMode;
-  Status.ApprovalActive := FRemoteApproval And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
+  Status.ApprovalActive := MonitorRemoteApprovalEnabled And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
   Status.ApprovalToolId := FPendingApprovalId;
   PublishRememberedState;
   { The tool id and the conversation id are escaped by the AssistantMonitorSync writers. }
@@ -1931,7 +1904,7 @@ End;
 Function TMonitorSession.ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
 Begin
   Result := False;
-  If (ToolId = '') Or (Not FRemoteApproval) Then
+  If (ToolId = '') Or (Not MonitorRemoteApprovalEnabled) Then
     Exit;
   If ClosedToolSeen(ToolId) Then
     Exit;
@@ -1952,7 +1925,7 @@ End;
 Function TMonitorSession.ApprovalRejectReason(Const ToolId: String): String;
 Begin
   Result := '';
-  If (ToolId = '') Or (Not FRemoteApproval) Then
+  If (ToolId = '') Or (Not MonitorRemoteApprovalEnabled) Then
     Exit;
   If ReadAssistantApprovalDecision = aadStopped Then
     Exit('stopped');
@@ -2364,31 +2337,24 @@ Begin
     NoteCommandDone(DoneId);
 End;
 
+Function TMonitorSession.GetRemoteApproval: Boolean;
+Begin
+  Result := MonitorRemoteApprovalEnabled;
+End;
+
 Procedure TMonitorSession.SetRemoteApproval(Enabled: Boolean);
 Begin
-  LockSession;
-  Try
-    FRemoteApproval := Enabled;
-  Finally
-    UnlockSession;
-  End;
+  ApplyMonitorRemoteApproval(Enabled);
 End;
 
 Procedure TMonitorSession.RevokeClient(Const ClientId: String);
 Var
-  Index, I: Integer;
   ErrorText: String;
   Live: Boolean;
 Begin
   LockSession;
   Try
-    Index := FindClient(ClientId);
-    If Index >= 0 Then
-      Begin
-        For I := Index To High(FClients) - 1 Do
-          FClients[I] := FClients[I + 1];
-        SetLength(FClients, Length(FClients) - 1);
-      End;
+    RevokeMonitorClient(FClients, ClientId);
     RememberRevoked(ClientId);
     PersistClients(ErrorText);
     Live := (FConnectionClientId = ClientId) And ((FState = mssLive) Or (FState = mssBusy));

@@ -16,7 +16,7 @@ Uses
   {$ENDIF}
   Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorOutbox,
-  AssistantMonitorSession,
+  AssistantMonitorSession, AssistantMonitorApproval,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
 
 Var
@@ -118,6 +118,52 @@ Begin
   Check('loaded bind', Settings.BindAddress = '10.1.2.3');
   Check('loaded clients empty', Length(Settings.Clients) = 0);
   CheckOtherSections('after monitor save');
+End;
+
+Procedure TestOfflineRevoke;
+Var
+  Settings: TMonitorSettings;
+  ErrorText: String;
+Begin
+  Check('offline revoke loads settings', LoadMonitorSettings(Settings, ErrorText));
+  SetLength(Settings.Clients, 2);
+  Settings.Clients[0].Id := 'offline-remove';
+  Settings.Clients[0].Token := 'remove-token';
+  Settings.Clients[1].Id := 'offline-keep';
+  Settings.Clients[1].Name := 'Kept client';
+  Settings.Clients[1].Token := 'keep-token';
+  Settings.Clients[1].Fingerprint := 'keep-fingerprint';
+  Settings.Clients[1].PairedAt := 'keep-date';
+  Check('offline revoke seeds clients', SaveMonitorSettings(Settings, ErrorText));
+  Check('offline revoke succeeds', RevokeMonitorClient('offline-remove', ErrorText));
+  Check('offline revoke reloads', LoadMonitorSettings(Settings, ErrorText));
+  Check('offline revoke keeps other client', (Length(Settings.Clients) = 1) And
+    (Settings.Clients[0].Id = 'offline-keep') And (Settings.Clients[0].Name = 'Kept client') And
+    (Settings.Clients[0].Token = 'keep-token') And (Settings.Clients[0].Fingerprint = 'keep-fingerprint') And
+    (Settings.Clients[0].PairedAt = 'keep-date'));
+  Check('offline revoke keeps configuration', (Settings.Port = 56123) And (Settings.BindAddress = '10.1.2.3') And
+    (Not Settings.RemoteApproval));
+  Check('offline revoke missing id succeeds', RevokeMonitorClient('missing-client', ErrorText));
+  Check('offline revoke cleans up', RevokeMonitorClient('offline-keep', ErrorText));
+  CheckOtherSections('after offline revoke');
+End;
+
+Procedure TestSharedApprovalFlag;
+Var
+  OtherSession: TMonitorSession;
+Begin
+  ApplyMonitorRemoteApproval(True);
+  OtherSession := TMonitorSession.Create;
+  Try
+    Check('new session reads shared approval flag', OtherSession.RemoteApproval And Session.RemoteApproval);
+    OtherSession.SetRemoteApproval(False);
+    Check('session setter updates shared approval flag', (Not MonitorRemoteApprovalEnabled) And (Not Session.RemoteApproval));
+    ApplyMonitorRemoteApproval(True);
+    Check('global update reaches existing session', Session.RemoteApproval);
+  Finally
+    OtherSession.Free;
+    ApplyMonitorRemoteApproval(False);
+  End;
 End;
 
 Function LastJson: String;
@@ -1488,10 +1534,12 @@ Begin
       PrepareSettings;
       SeedOtherSections;
       TestSettingsLoadSave;
+      TestOfflineRevoke;
       Carrier := TMonitorMemoryCarrier.Create;
       CarrierRef := Carrier;
       Session := TMonitorSession.Create;
       Session.AttachCarrier(CarrierRef);
+      TestSharedApprovalFlag;
       Session.SetHostFingerprint('ab12cd34');
       Session.NoteTime(5000);
       Check('listen starts', Session.StartListening('10.1.2.3', 56123, ErrorText));
