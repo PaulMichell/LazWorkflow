@@ -37,6 +37,8 @@ Type
     FCacheRevision: String;
     FSlot: String;
     FSlotFull: Boolean;
+    { True when the stored frame is plan_data. An error frame stays on control. }
+    FSlotBulk: Boolean;
     Procedure EnsureWorker;
   Public
     Constructor Create;
@@ -47,7 +49,8 @@ Type
     Procedure NoteCachedRevision(Const Path, Revision: String);
     Procedure Cancel;
     Function Ready: Boolean;
-    Function Take(Out Json: String): Boolean;
+    { Bulk is true for plan_data. Error frames are not bulk. The session queues with that lane and does not parse. }
+    Function Take(Out Json: String; Out Bulk: Boolean): Boolean;
     Property OnReady: TMonitorPlanFetchReady Read FOnReady Write FOnReady;
   End;
 
@@ -266,7 +269,7 @@ Var
     End;
   End;
 
-  Function StoreFrame(Const Json: String): Boolean;
+  Function StoreFrame(Const Json: String; Bulk: Boolean): Boolean;
   Var
     Callback: TMonitorPlanFetchReady;
   Begin
@@ -281,6 +284,7 @@ Var
           If Not Owner.FSlotFull Then
             Begin
               Owner.FSlot := Json;
+              Owner.FSlotBulk := Bulk;
               Owner.FSlotFull := True;
               Callback := Owner.FOnReady;
               Result := True;
@@ -320,7 +324,7 @@ Var
       If Not StillCurrent Then
         Exit;
       FrameId := 'pf' + IntToStr(Generation) + 'e';
-      StoreFrame(ErrorFrame(FrameId, Reason, MessageText, RequestId));
+      StoreFrame(ErrorFrame(FrameId, Reason, MessageText, RequestId), False);
     End;
 
     Function IdentityMoved: Boolean;
@@ -486,6 +490,7 @@ Var
             If Not Owner.FSlotFull Then
               Begin
                 Owner.FSlot := Json;
+                Owner.FSlotBulk := True;
                 Owner.FSlotFull := True;
                 Callback := Owner.FOnReady;
                 Stored := True;
@@ -710,7 +715,7 @@ Begin
             On Exception Do
               If StillCurrent Then
                 StoreFrame(ErrorFrame('pf' + IntToStr(Generation) + 'e', 'failed', 'The plan file could not be read.',
-                  RequestId));
+                  RequestId), False);
           End;
         End
       Else
@@ -729,6 +734,7 @@ Begin
   FGeneration := 0;
   FHasJob := False;
   FSlotFull := False;
+  FSlotBulk := False;
 End;
 
 Destructor TMonitorPlanFetch.Destroy;
@@ -768,6 +774,7 @@ Begin
     FHasJob := True;
     FSlot := '';
     FSlotFull := False;
+    FSlotBulk := False;
   Finally
     Lock.Release;
   End;
@@ -794,6 +801,7 @@ Begin
     FHasJob := False;
     FSlot := '';
     FSlotFull := False;
+    FSlotBulk := False;
   Finally
     Lock.Release;
   End;
@@ -813,16 +821,19 @@ Begin
   End;
 End;
 
-Function TMonitorPlanFetch.Take(Out Json: String): Boolean;
+Function TMonitorPlanFetch.Take(Out Json: String; Out Bulk: Boolean): Boolean;
 Begin
   Json := '';
+  Bulk := False;
   Lock.Acquire;
   Try
     Result := FSlotFull;
     If Not Result Then
       Exit;
     Json := FSlot;
+    Bulk := FSlotBulk;
     FSlot := '';
+    FSlotBulk := False;
     FSlotFull := False;
   Finally
     Lock.Release;

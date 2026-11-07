@@ -163,7 +163,6 @@ Var
   Index: Integer;
   Frame: String;
   Encoded: RawByteString;
-  Status: TMonitorFrameStatus;
 Begin
   CloseLink := False;
   Events := Nil;
@@ -180,8 +179,9 @@ Begin
       If UnackedBytes(Events, ConversationId, StreamId, PhoneAck, NextSeq) > MonitorCreditWindowBytes Then
         Exit;
       Frame := EventFrame(ConversationId, StreamId, Events[Index]);
-      { The link writes these bytes. A raw JSON object is not a LAM1 frame. }
-      If Not TryEncodeMonitorFrame(Frame, Encoded, Status) Then
+      { The link writes these bytes. A raw JSON object is not a LAM1 frame. The producer built the object,
+        so the header is written without another parse. }
+      If Not EncodeMonitorFrameBytes(Frame, Encoded) Then
         Exit;
       If Not Outbox.AppendLog(NextSeq, Encoded) Then
         Exit;
@@ -375,10 +375,13 @@ Begin
   Lane := mslControl;
   StateKey := '';
   Result := False;
-  { Parsed, not searched as text. fpjson AsJSON writes "type" : "plan_data", with spaces, so a search for
-    "type":" missed the plan fetch frames and sent 24 KiB slices on the control lane. 5.1 removes the parse. }
+  { Parsed, not searched as text. fpjson AsJSON writes "type" : "plan_data", with spaces. Known producers
+    pass the lane to QueueFrame and do not call this. Unknown-origin frames still do. }
   Data := Nil;
   Try
+    {$IFDEF MONITOR_COUNT_PARSES}
+    MonitorNoteJsonParse;
+    {$ENDIF}
     Data := GetJSON(Json);
   Except
     Data := Nil;

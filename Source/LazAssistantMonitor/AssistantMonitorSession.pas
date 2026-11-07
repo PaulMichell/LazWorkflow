@@ -20,7 +20,8 @@ Unit AssistantMonitorSession;
   Catalogue 2 live-patch and log-credit helpers stay because the session and
   mirror tests still call them. Deleting those would change assertions those
   tests own.
-  Reviewed 2026-11-03: no socket or form code in this unit. }
+  Reviewed 2026-11-07: no socket or form code in this unit. Known producers pass a lane
+  to QueueFrame and do not parse the frame again. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -187,8 +188,12 @@ Type
     Procedure UnlockSession;
     Function ClockMs: QWord;
     Function NewHostId: String;
-    { Caller holds the session lock. False when a bulk frame is refused. }
+    { Caller holds the session lock. False when a bulk frame is refused. Unknown origin: classifies and validates. }
     Function QueueSend(Const Json: String): Boolean;
+    { Caller holds the session lock. The producer already named the lane, so Json is not parsed.
+      Seq is the log sequence, or the resume generation for bulk and barrier. Zero uses the plain bulk lane. }
+    Function QueueFrame(Const Json: String; Lane: TMonitorSyncLane; Const StateKey: String; Seq: Int64): Boolean;
+    Function QueueControl(Const Json: String): Boolean;
     Function Transmit(Const Json: String): Boolean;
     Procedure LogLine(Level: Integer; Const Text: String);
     Procedure ClearConnection;
@@ -781,6 +786,9 @@ Begin
   Seq := 0;
   Data := Nil;
   Try
+    {$IFDEF MONITOR_COUNT_PARSES}
+    MonitorNoteJsonParse;
+    {$ENDIF}
     Data := GetJSON(Json);
   Except
     Data := Nil;
@@ -952,6 +960,84 @@ Begin
   CloseToListening;
 End;
 
+Function TMonitorSession.QueueControl(Const Json: String): Boolean;
+Begin
+  Result := QueueFrame(Json, mslControl, '', 0);
+End;
+
+Function TMonitorSession.QueueFrame(Const Json: String; Lane: TMonitorSyncLane; Const StateKey: String; Seq: Int64): Boolean;
+Var
+  Bytes: RawByteString;
+  One: Array Of RawByteString;
+  Replaced: Integer;
+Begin
+  Result := False;
+  If (Json = '') Or Not Assigned(FOutbox) Then
+    Exit;
+  If (Lane = mslLog) And (Seq > 0) And Assigned(FCredit) Then
+    Begin
+      If Not FCredit.CanSend(Length(Json)) Then
+        Begin
+          FCredit.Hold(Seq, Json);
+          { One bye, then the same close CloseToListening uses. A later held frame must not queue another. }
+          If (FCredit.HeldBytes > MonitorLogBudgetBytes) And (Not FCloseRequested) Then
+            Begin
+              QueueControl(EncodeMonitorBye(NewHostId, 'protocol'));
+              CloseToListening;
+            End;
+          Result := True;
+          Exit;
+        End;
+      FCredit.NoteSent(Seq, Length(Json));
+    End;
+  If Not EncodeMonitorFrameBytes(Json, Bytes) Then
+    Begin
+      Inc(FFramesDropped);
+      LogLine(2, 'frame not encoded type=' + FrameTypeHint(Json) + ' status=mfsTooLarge bytes=' + IntToStr(Length(Json)));
+      CloseToListening;
+      Exit;
+    End;
+  SetLength(One, 1);
+  One[0] := Bytes;
+  Case Lane Of
+    mslState:
+      Begin
+        If FOutbox.ReplaceState(StateKey, One, Replaced) Then
+          Result := True
+        Else
+          CloseToListening;
+      End;
+    mslLog:
+      Result := FOutbox.AppendLog(Seq, Bytes);
+    mslBulk:
+      Begin
+        { A positive Seq is a resume generation. Plan and block slices pass zero and use the budgeted bulk lane. }
+        If Seq > 0 Then
+          Begin
+            FOutbox.AddGeneratedBulk(Bytes, Seq);
+            Result := True;
+          End
+        Else If FOutbox.AddBulk(One) Then
+          Result := True
+        Else
+          QueueOverload(Json);
+      End;
+    mslBarrier:
+      Begin
+        If Seq > 0 Then
+          FOutbox.HoldBarrier(Bytes, Seq)
+        Else
+          FOutbox.HoldBarrier(Bytes, 1);
+        Result := True;
+      End;
+  Else
+    If FOutbox.AddControl(Bytes) Then
+      Result := True
+    Else
+      CloseToListening;
+  End;
+End;
+
 Function TMonitorSession.QueueSend(Const Json: String): Boolean;
 Var
   Lane: THostLane;
@@ -973,7 +1059,7 @@ Begin
           { One bye, then the same close CloseToListening uses. A later held frame must not queue another. }
           If (FCredit.HeldBytes > MonitorLogBudgetBytes) And (Not FCloseRequested) Then
             Begin
-              EnqueueAccepted(EncodeMonitorBye(NewHostId, 'protocol'));
+              QueueControl(EncodeMonitorBye(NewHostId, 'protocol'));
               CloseToListening;
             End;
           Result := True;
@@ -1347,7 +1433,7 @@ Var
   Json: String;
 Begin
   Json := EncodeMonitorRejected(NewHostId, Reason, MonitorCatalogueVersion, FClientVersion);
-  QueueSend(Json);
+  QueueControl(Json);
   LogLine(2, 'rejected reason=' + Reason + ' bytes=' + IntToStr(Length(Json)) + ' bind=' + FBindAddress +
     ' port=' + IntToStr(FPort));
   If DoClose Then
@@ -1424,7 +1510,7 @@ Begin
   HelloOk.ProjectRoot := FProjectRoot;
   HelloOk.Title := FTitle;
   HelloOk.HostId := FInstallationHostId;
-  QueueSend(EncodeMonitorHelloOk(NewHostId, HelloOk));
+  QueueControl(EncodeMonitorHelloOk(NewHostId, HelloOk));
 End;
 
 Procedure TMonitorSession.HandlePair(Const PayloadJson: String);
@@ -1507,7 +1593,7 @@ Begin
   FPairGate := False;
   FState := mssLive;
   AdoptRunningHost;
-  QueueSend(EncodeMonitorPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
+  QueueControl(EncodeMonitorPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
   LogLine(1, 'pair success client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
@@ -1568,7 +1654,7 @@ Var
 Begin
   If Not DecodeMonitorTicks(PayloadJson, Ticks) Then
     Ticks.Ticks := 0;
-  QueueSend(EncodeMonitorTicks(mmkPong, NewHostId, Ticks.Ticks));
+  QueueControl(EncodeMonitorTicks(mmkPong, NewHostId, Ticks.Ticks));
 End;
 
 Procedure TMonitorSession.HandleBye;
@@ -1697,7 +1783,7 @@ Begin
         Exit;
       If Admitted = mirDuplicate Then
         Begin
-          QueueSend(EncodeMonitorCommandState(NewHostId, Prior.Id, MonitorCommandStateName(Prior.State), Prior.Reason));
+          QueueControl(EncodeMonitorCommandState(NewHostId, Prior.Id, MonitorCommandStateName(Prior.State), Prior.Reason));
           Exit;
         End;
     End;
@@ -1711,12 +1797,12 @@ Begin
               FActiveCommandId := '';
             End;
           FIntake.NoteRejected(Id, MonitorHostBusyReason);
-          QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+          QueueControl(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
         End
       Else
         Begin
           If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-            QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+            QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
           If FState = mssBusy Then
             FState := mssLive;
           QueueCommand(Kind, Id, PayloadJson);
@@ -1730,7 +1816,7 @@ Begin
     Begin
       LogLine(1, 'steer submitted as send bind=' + FBindAddress + ' port=' + IntToStr(FPort));
       If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-        QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+        QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
       EnterBusy(Ord(mmkSend), Id, PayloadJson);
       Exit;
     End;
@@ -1743,7 +1829,7 @@ Begin
           FActiveCommandId := '';
         End;
       FIntake.NoteRejected(Id, MonitorHostBusyReason);
-      QueueSend(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
+      QueueControl(EncodeMonitorError(NewHostId, MonitorHostBusyReason, MessageText, Id));
       Exit;
     End;
   If Kind = Ord(mmkTurn) Then
@@ -1752,7 +1838,7 @@ Begin
         Exit;
     End;
   If RecordedCommand(Kind) And (Admitted = mirQueued) Then
-    QueueSend(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+    QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
   If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkWorkOnPlan)) Or (Kind = Ord(mmkRunTask)) Then
     EnterBusy(Kind, Id, PayloadJson)
   Else
@@ -1773,7 +1859,7 @@ Begin
     End;
   If Not DecodeMonitorResume(PayloadJson, ResumeMsg) Then
     Begin
-      QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
+      QueueControl(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
       Exit;
     End;
   If Assigned(FOutbox) Then
@@ -1830,7 +1916,7 @@ Begin
       FAwaitingObservation := False;
     End;
   If Length(ResumeMsg.Commands) > 0 Then
-    QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
+    QueueControl(CommandStatesFor(NewHostId, ResumeMsg.Commands));
 End;
 
 Function TMonitorSession.ClosedToolSeen(Const ToolId: String): Boolean;
@@ -2006,7 +2092,7 @@ Begin
     Exit;
   SetLength(Chunks, Length(Frames));
   For Index := 0 To High(Frames) Do
-    If Not EncodeHostFrame(Frames[Index], Chunks[Index]) Then
+    If Not EncodeMonitorFrameBytes(Frames[Index], Chunks[Index]) Then
       Begin
         QueueOverload(Frames[0]);
         Exit;
@@ -2050,7 +2136,7 @@ Begin
   If (ClockMs >= QuietSince + MonitorHeartbeatMs) And ((PingQueuedMs = 0) Or (ClockMs >= PingQueuedMs + MonitorHeartbeatMs)) Then
     Begin
       PingQueuedMs := ClockMs;
-      QueueSend(EncodeMonitorTicks(mmkPing, NewHostId, Int64(ClockMs)));
+      QueueControl(EncodeMonitorTicks(mmkPing, NewHostId, Int64(ClockMs)));
     End;
 End;
 
@@ -2097,7 +2183,7 @@ Begin
   LockSession;
   Try
     If Connected Then
-      QueueSend(EncodeMonitorBye(NewHostId, 'disabled'));
+      QueueControl(EncodeMonitorBye(NewHostId, 'disabled'));
     FCloseRequested := True;
     ClearConnection;
     FState := mssStopped;
@@ -2334,7 +2420,7 @@ Begin
     If Live Then
       Begin
         FState := mssRevoked;
-        QueueSend(EncodeMonitorBye(NewHostId, 'revoked'));
+        QueueControl(EncodeMonitorBye(NewHostId, 'revoked'));
         FCloseRequested := True;
         LogLine(1, 'revoke client=' + ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
       End;
@@ -2360,7 +2446,7 @@ Begin
     If (LiveId <> '') And ((FState = mssLive) Or (FState = mssBusy)) Then
       Begin
         FState := mssRevoked;
-        QueueSend(EncodeMonitorBye(NewHostId, 'revoked'));
+        QueueControl(EncodeMonitorBye(NewHostId, 'revoked'));
         FCloseRequested := True;
       End;
   Finally
@@ -2690,30 +2776,68 @@ Begin
   FStateValues[High(FStateValues)] := ValueJson;
 End;
 
+{ One parse of the value. The envelope is built from that value, so QueueFrame does not parse it again.
+  An invalid value is dropped, which is what a raw embed of broken JSON used to fail in TryEncodeMonitorFrame. }
+Function StateValueIsJson(Const ValueJson: String): Boolean;
+Var
+  Data: TJSONData;
+Begin
+  Result := False;
+  Data := Nil;
+  Try
+    Try
+      If ValueJson = '' Then
+        Exit;
+      {$IFDEF MONITOR_COUNT_PARSES}
+      MonitorNoteJsonParse;
+      {$ENDIF}
+      Data := GetJSON(ValueJson);
+    Except
+      Exit;
+    End;
+    Result := Assigned(Data);
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TMonitorSession.PublishState(Const Key, ValueJson: String);
 Var
   Frames: TStringArray;
   Encoded: Array Of RawByteString;
   Index, Replaced: Integer;
+  Lane: TMonitorSyncLane;
 Begin
   If (Key = '') Or (Not Assigned(FOutbox)) Then
     Exit;
   RememberState(Key, ValueJson);
-  Frames := MonitorSyncStateFrames(NewHostId, Key, ValueJson);
-  SetLength(Encoded, 0);
-  For Index := 0 To High(Frames) Do
+  If Not StateValueIsJson(ValueJson) Then
     Begin
-      SetLength(Encoded, Length(Encoded) + 1);
-      If Not EncodeHostFrame(Frames[Index], Encoded[High(Encoded)]) Then
-        Exit;
+      Inc(FFramesDropped);
+      Exit;
     End;
+  Frames := MonitorSyncStateFrames(NewHostId, Key, ValueJson);
   If Key = 'approval' Then
+    Lane := mslControl
+  Else
+    Lane := mslState;
+  { Chunks of one key are one ReplaceState. QueueFrame replaces a single part, so a loop would keep only the last. }
+  If (Lane = mslState) And (Length(Frames) > 1) Then
     Begin
-      For Index := 0 To High(Encoded) Do
-        FOutbox.AddControl(Encoded[Index]);
-    End
-  Else If Not FOutbox.ReplaceState(Key, Encoded, Replaced) Then
-    CloseForQueueFailure(Frames[0]);
+      SetLength(Encoded, Length(Frames));
+      For Index := 0 To High(Frames) Do
+        If Not EncodeMonitorFrameBytes(Frames[Index], Encoded[Index]) Then
+          Begin
+            Inc(FFramesDropped);
+            Exit;
+          End;
+      If Not FOutbox.ReplaceState(Key, Encoded, Replaced) Then
+        CloseToListening;
+      Exit;
+    End;
+  For Index := 0 To High(Frames) Do
+    If Not QueueFrame(Frames[Index], Lane, Key, 0) Then
+      Exit;
 End;
 
 Procedure TMonitorSession.PublishRememberedState;
@@ -2727,20 +2851,28 @@ End;
 Procedure TMonitorSession.QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
 Var
   Index: Integer;
-  Bytes: RawByteString;
+  Json: String;
+  Lane: TMonitorSyncLane;
 Begin
   If Not Assigned(FOutbox) Then
     Exit;
   For Index := 0 To High(Answer.Frames) Do
     Begin
-      If Not EncodeHostFrame(Answer.Frames[Index].Json, Bytes) Then
-        Continue;
+      Json := Answer.Frames[Index].Json;
+      { Oversize is skipped, as the old encode failure was. A fitting frame is queued without a parse. }
+      If (Json = '') Or (Length(Json) > MonitorMaxPayloadBytes) Then
+        Begin
+          If Json <> '' Then
+            Inc(FFramesDropped);
+          Continue;
+        End;
       Case Answer.Frames[Index].Kind Of
-        mskBulk: FOutbox.AddGeneratedBulk(Bytes, Answer.Generation);
-        mskBarrier: FOutbox.HoldBarrier(Bytes, Answer.Generation);
+        mskBulk: Lane := mslBulk;
+        mskBarrier: Lane := mslBarrier;
       Else
-        FOutbox.AddControl(Bytes);
+        Lane := mslControl;
       End;
+      QueueFrame(Json, Lane, '', Answer.Generation);
     End;
 End;
 
@@ -2893,7 +3025,7 @@ Begin
   If Not (Data Is TJSONObject) Then
     Begin
       Data.Free;
-      QueueSend(EncodeMonitorError(NewHostId, 'protocol', 'Block fetch payload is not valid.', Id));
+      QueueControl(EncodeMonitorError(NewHostId, 'protocol', 'Block fetch payload is not valid.', Id));
       Exit;
     End;
   Obj := TJSONObject(Data);
@@ -2911,13 +3043,13 @@ Begin
     finds it in the mirror, so it is one the host wrote. Both are still escaped below. }
   If (BlockId = '') Or (Offset < 0) Or (Not Assigned(FMirror)) Or (Not FMirror.FetchBlock(BlockId, Body)) Then
     Begin
-      QueueSend(EncodeMonitorError(NewHostId, 'not_found', 'Block was not found.', Id));
+      QueueControl(EncodeMonitorError(NewHostId, 'not_found', 'Block was not found.', Id));
       Exit;
     End;
   HeldRevision := FMirror.BlockRevision(BlockId);
   If HasRevision And (AskedRevision <> HeldRevision) Then
     Begin
-      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"revision_changed","payload":{"ref":"' + JsonEscapeText(Id) +
+      QueueControl('{"v":3,"id":"' + NewHostId + '","type":"revision_changed","payload":{"ref":"' + JsonEscapeText(Id) +
         '","block_id":"' + JsonEscapeText(BlockId) + '","revision":' + IntToStr(HeldRevision) + '}}');
       Exit;
     End;
@@ -2945,7 +3077,7 @@ Begin
       Payload.Add('text', Piece);
       Payload.Add('total_bytes', Total);
       Payload.Add('last', Last);
-      QueueSend('{"v":3,"id":"' + NewHostId + '","type":"block_data","payload":' + Payload.AsJSON + '}');
+      QueueFrame('{"v":3,"id":"' + NewHostId + '","type":"block_data","payload":' + Payload.AsJSON + '}', mslBulk, '', 0);
     Finally
       Payload.Free;
     End;
@@ -3039,7 +3171,7 @@ Begin
     Notice.ModeCaption := ModeCaption;
     Notice.DecisionsAccepted := False;
     Notice.Reason := '';
-    QueueSend(EncodeMonitorApprovalRequested(NewHostId, Notice));
+    QueueControl(EncodeMonitorApprovalRequested(NewHostId, Notice));
   Finally
     UnlockSession;
   End;
@@ -3057,7 +3189,7 @@ Begin
       FDisplayApprovalId := '';
     If FPendingApprovalId = ToolId Then
       FPendingApprovalId := '';
-    QueueSend(EncodeMonitorApprovalClosed(NewHostId, ToolId, 'desktop'));
+    QueueControl(EncodeMonitorApprovalClosed(NewHostId, ToolId, 'desktop'));
     FToolExecuted := False;
   Finally
     UnlockSession;
@@ -3278,6 +3410,8 @@ End;
 Procedure TMonitorSession.PullPlanSlice(Pulls: Boolean);
 Var
   Json: String;
+  Bulk: Boolean;
+  Lane: TMonitorSyncLane;
 Begin
   If Not Assigned(FPlanFetch) Or Not FPlanFetch.Ready Then
     Exit;
@@ -3288,9 +3422,13 @@ Begin
   Try
     If (FState <> mssLive) And (FState <> mssBusy) Then
       Exit;
-    If Not FPlanFetch.Take(Json) Then
+    If Not FPlanFetch.Take(Json, Bulk) Then
       Exit;
-    If Not QueueSend(Json) Then
+    If Bulk Then
+      Lane := mslBulk
+    Else
+      Lane := mslControl;
+    If Not QueueFrame(Json, Lane, '', 0) Then
       FPlanFetch.Cancel;
   Finally
     UnlockSession;

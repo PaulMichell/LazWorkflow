@@ -15,7 +15,8 @@ Uses
   cthreads,
   {$ENDIF}
   Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
-  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorSession,
+  AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorOutbox,
+  AssistantMonitorSession,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
 
 Var
@@ -618,6 +619,30 @@ Begin
     Fresh.Free;
   End;
 End;
+
+{ Plan item 5.1. Compile with -dMONITOR_COUNT_PARSES. One state frame parses its value once and does not parse
+  the envelope again to classify it or to write the LAM1 header. }
+{$IFDEF MONITOR_COUNT_PARSES}
+Procedure TestStateFrameParsesOnce;
+Var
+  Fresh: TMonitorSession;
+  Bytes: RawByteString;
+  Lane: TMonitorOutboxLane;
+  Parsed: Integer;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    MonitorJsonParseCount := 0;
+    Fresh.PublishState('status', '{"busy":false}');
+    Parsed := MonitorJsonParseCount;
+    Check('one state frame parses at most once', Parsed <= 1);
+    Check('one state frame is queued on the state lane', Fresh.TakeOutboundFrameWithLane(Bytes, Lane) And (Lane = molState));
+    Check('one state frame is a LAM1 frame', Copy(Bytes, 1, 4) = MonitorFrameMagic);
+  Finally
+    Fresh.Free;
+  End;
+End;
+{$ENDIF}
 
 { A catalogue 3 event large enough to fill the credit window, and too large for an outbox chunk. }
 Function CreditEvent(Seq: Integer; Const Pad: String): String;
@@ -1508,6 +1533,9 @@ Begin
       TestPlanFrameBeforeBulk;
       TestLivePatchReplaces;
       TestEncodeFailureNotQueued;
+      {$IFDEF MONITOR_COUNT_PARSES}
+      TestStateFrameParsesOnce;
+      {$ENDIF}
       TestCreditOverflowByeOnce;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');

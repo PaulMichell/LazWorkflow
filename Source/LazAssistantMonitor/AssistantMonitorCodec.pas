@@ -783,23 +783,32 @@ End;
 Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
 Var
   Root: TJSONObject;
+  Owned: Integer;
 Begin
   Result := '';
   If (Kind = mmkUnknown) Or (Not MonitorMessageIdIsSafe(Id)) Then
     Exit;
   Root := TJSONObject.Create;
+  Owned := -1;
   Try
     Root.Add('v', MonitorCatalogueVersion);
     Root.Add('id', Id);
     Root.Add('type', MonitorMessageKindName(Kind));
+    { The caller still owns Payload. Add it for AsJSON, then extract it so Root.Free does not free it.
+      Cloning a snapshot or image part only to serialise it was the copy 5.1 removes. }
     If Assigned(Payload) Then
-      Root.Add('payload', TJSONObject(Payload.Clone))
+      Begin
+        Root.Add('payload', Payload);
+        Owned := Root.Count - 1;
+      End
     Else
       Root.Add('payload', TJSONObject.Create);
     Result := Root.AsJSON;
     If Length(Result) > MonitorMaxPayloadBytes Then
       Result := '';
   Finally
+    If Owned >= 0 Then
+      Root.Extract(Owned);
     Root.Free;
   End;
 End;
@@ -963,6 +972,9 @@ Begin
   Data := Nil;
   Try
     Try
+      {$IFDEF MONITOR_COUNT_PARSES}
+      MonitorNoteJsonParse;
+      {$ENDIF}
       Data := GetJSON(Json);
     Except
       On E: Exception Do

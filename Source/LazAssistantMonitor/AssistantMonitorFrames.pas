@@ -40,6 +40,9 @@ Type
   End;
 
 Function TryEncodeMonitorFrame(Const Json: String; Out Bytes: RawByteString; Out Status: TMonitorFrameStatus): Boolean;
+{ Header and payload bytes only. No UTF-8 scan and no JSON parse. False when Json is empty or over the cap.
+  Callers that did not build the object themselves use TryEncodeMonitorFrame. }
+Function EncodeMonitorFrameBytes(Const Json: String; Out Bytes: RawByteString): Boolean;
 Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
 { Header only. mfsTooLarge means close the socket and do not read PayloadLen body bytes.
   The payload buffer is not allocated. }
@@ -53,10 +56,56 @@ Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
   whole character is kept, so a caller that cuts in a loop always moves forward. Zero when Limit <= 0. }
 Function MonitorUtf8CutLength(Const Text: RawByteString; Limit: Integer): Integer;
 
+{$IFDEF MONITOR_COUNT_PARSES}
+{ Incremented once per GetJSON on the outbound queue path. Tests pass -dMONITOR_COUNT_PARSES. }
+Var
+  MonitorJsonParseCount: Integer;
+Procedure MonitorNoteJsonParse;
+{$ENDIF}
+
 Implementation
 
 Uses
   sockets, base64, fpjson, jsonparser;
+
+{$IFDEF MONITOR_COUNT_PARSES}
+Procedure MonitorNoteJsonParse;
+Begin
+  Inc(MonitorJsonParseCount);
+End;
+{$ENDIF}
+
+{ Shared by the validating encoder and the trusted encoder. Length is already capped. }
+Function WriteMonitorFrameBytes(Const Payload: RawByteString; Out Bytes: RawByteString): Boolean;
+Var
+  NetLen: Cardinal;
+Begin
+  Result := False;
+  Bytes := '';
+  If Length(Payload) > MonitorMaxPayloadBytes Then
+    Exit;
+  SetLength(Bytes, MonitorFrameHeaderSize + Length(Payload));
+  Bytes[1] := 'L';
+  Bytes[2] := 'A';
+  Bytes[3] := 'M';
+  Bytes[4] := '1';
+  Bytes[5] := Chr(MonitorFrameVersion);
+  Bytes[6] := Chr(0);
+  Bytes[7] := Chr(0);
+  Bytes[8] := Chr(0);
+  NetLen := htonl(Cardinal(Length(Payload)));
+  { Move is the read of NetLen. A typed store keeps the htonl result visible to the compiler. }
+  PCardinal(@Bytes[9])^ := NetLen;
+  If Length(Payload) > 0 Then
+    Move(Payload[1], Bytes[MonitorFrameHeaderSize + 1], Length(Payload));
+  Result := True;
+End;
+
+Function EncodeMonitorFrameBytes(Const Json: String; Out Bytes: RawByteString): Boolean;
+Begin
+  Bytes := '';
+  Result := (Json <> '') And WriteMonitorFrameBytes(Json, Bytes);
+End;
 
 Function IsStrictUtf8(Const Bytes: RawByteString): Boolean;
 Var
@@ -230,6 +279,9 @@ Begin
     Try
       If Marked = '' Then
         Exit;
+      {$IFDEF MONITOR_COUNT_PARSES}
+      MonitorNoteJsonParse;
+      {$ENDIF}
       Data := GetJSON(Marked);
     Except
       Exit;
@@ -242,7 +294,6 @@ End;
 
 Function TryEncodeMonitorFrame(Const Json: String; Out Bytes: RawByteString; Out Status: TMonitorFrameStatus): Boolean;
 Var
-  NetLen: Cardinal;
   Payload: RawByteString;
 Begin
   Result := False;
@@ -261,22 +312,9 @@ Begin
       Status := mfsBadJson;
       Exit;
     End;
-  SetLength(Bytes, MonitorFrameHeaderSize + Length(Payload));
-  Bytes[1] := 'L';
-  Bytes[2] := 'A';
-  Bytes[3] := 'M';
-  Bytes[4] := '1';
-  Bytes[5] := Chr(MonitorFrameVersion);
-  Bytes[6] := Chr(0);
-  Bytes[7] := Chr(0);
-  Bytes[8] := Chr(0);
-  NetLen := htonl(Cardinal(Length(Payload)));
-  { Move is the read of NetLen. A typed store keeps the htonl result visible to the compiler. }
-  PCardinal(@Bytes[9])^ := NetLen;
-  If Length(Payload) > 0 Then
-    Move(Payload[1], Bytes[MonitorFrameHeaderSize + 1], Length(Payload));
-  Status := mfsOk;
-  Result := True;
+  Result := WriteMonitorFrameBytes(Payload, Bytes);
+  If Result Then
+    Status := mfsOk;
 End;
 
 Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
