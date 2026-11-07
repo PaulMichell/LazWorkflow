@@ -30,7 +30,7 @@ Uses
   Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
   AssistantMonitorLinkStubs, AssistantHttps, AssistantMonitorTls, AssistantMonitorLan, AssistantMonitorSession,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantSessionObserve,
-  AssistantMonitorSettings, WorkflowSettings;
+  AssistantMonitorSettings, WorkflowSettings, WorkflowLog;
 
 Const
   { Workload size for the harness, not a queue cap. }
@@ -76,6 +76,12 @@ Type
     Procedure Fire;
   End;
 
+  { DebugLn has no output in this console program. Session and link log lines, such as why a link closed, are
+    written as "log" lines so a failing run explains itself. }
+  TLogEcho = Class
+    Procedure Echo(Level: TWorkflowLogLevel; Const Area, Message: String);
+  End;
+
 Var
   FailCount: Integer;
   SettingsRoot: String;
@@ -88,6 +94,12 @@ Var
   Answerer: TResumeAnswerer;
   ErrorText: String;
   BulkSerial: Integer;
+  LogEcho: TLogEcho;
+
+Procedure TLogEcho.Echo(Level: TWorkflowLogLevel; Const Area, Message: String);
+Begin
+  WriteLn('log ', GetTickCount64, ' ', Ord(Level), ' [', Area, '] ', Message);
+End;
 
 Procedure Check(Const Title: String; Condition: Boolean);
 Begin
@@ -1470,6 +1482,9 @@ Begin
   LanRef := Nil;
   Session := Nil;
   Answerer := Nil;
+  LogEcho := TLogEcho.Create;
+  If Assigned(WorkflowLogger) Then
+    WorkflowLogger.OnLog := @LogEcho.Echo;
   If Not EnsureOpenSSLReady(ErrorText) Then
     Begin
       WriteLn('FAIL OpenSSL ', ErrorText);
@@ -1494,6 +1509,9 @@ Begin
   Finally
     StopListener;
     RemoveSettings;
+    If Assigned(WorkflowLogger) Then
+      WorkflowLogger.OnLog := Nil;
+    LogEcho.Free;
   End;
   If FailCount = 0 Then
     Begin
