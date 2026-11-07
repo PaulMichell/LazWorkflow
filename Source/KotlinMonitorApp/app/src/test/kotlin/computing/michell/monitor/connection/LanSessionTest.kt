@@ -362,6 +362,30 @@ class LanSessionTest {
   }
 
   @Test
+  fun firstPairUsesPresentedCertificateAndPinsOnlyAfterSuccess() {
+    val store = HostStore(MemoryStringMap())
+    val presented = "ab".repeat(32)
+    val link = ScriptedLink(peerFingerprint = presented)
+    val session = LanSession(store, TlsConnector { _, _, fingerprint ->
+      assertEquals("", fingerprint)
+      link
+    })
+    try {
+      session.connect("10.0.0.8", 56122, "123456")
+      waitUntil { link.frames().size >= 2 }
+      val pair = decodePair(envelope(link.frames()[1]).payloadJson)!!
+      assertEquals("123456", pair.code)
+      assertEquals(presented, pair.fingerprint)
+      assertEquals("", store.load().fingerprint)
+      link.push(frameOf(computing.michell.monitor.protocol.encodePairOk("paired", "client-1", "token-1")))
+      waitUntil { store.load().paired && store.load().fingerprint == presented }
+      assertEquals("token-1", store.load().sessionToken)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun openEndpointSendsHelloThenEmptyPair() {
     val store = HostStore(MemoryStringMap())
     val link = ScriptedLink()
@@ -841,7 +865,10 @@ private fun waitUntil(timeoutMs: Long = 5_000, condition: () -> Boolean) {
   }
 }
 
-private class ScriptedLink(private val rejectWrite: (ByteArray) -> Unit = {}) : TlsLink {
+private class ScriptedLink(
+  override val peerFingerprint: String = "",
+  private val rejectWrite: (ByteArray) -> Unit = {}
+) : TlsLink {
   private val chunks = mutableListOf<ByteArray>()
   private val inbound = QueueStream()
   val readEntries = AtomicInteger(0)

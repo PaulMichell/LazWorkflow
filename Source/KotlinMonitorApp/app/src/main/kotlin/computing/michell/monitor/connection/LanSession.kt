@@ -210,6 +210,7 @@ class PinnedTrustManager(private val pinnedFingerprint: String) : X509TrustManag
 }
 
 interface TlsLink : Closeable {
+  val peerFingerprint: String get() = ""
   val input: InputStream
   val output: OutputStream
 }
@@ -264,6 +265,7 @@ class SslSocketConnector : TlsConnector {
 }
 
 private class SocketLink(private val socket: SSLSocket) : TlsLink {
+  override val peerFingerprint: String = sha256Hex(socket.session.peerCertificates.first().encoded)
   override val input: InputStream = socket.inputStream
   override val output: OutputStream = socket.outputStream
   override fun close() {
@@ -941,7 +943,7 @@ class LanSession(
       return if (epochCounter.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
     }
     if (openPair) {
-      val pair = encodePair(newId(), pairCode, pinned)
+      val pair = encodePair(newId(), pairCode, opened.peerFingerprint)
       if (!writeJson(pair, opened)) {
         if (epochCounter.get() == epoch) closeLink() else closeOwned(opened)
         return if (epochCounter.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
@@ -1133,6 +1135,8 @@ class LanSession(
         val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)
         if (paired != null) {
           store.savePairing(paired.clientId, paired.sessionToken)
+          val presented = normalizeFingerprint(owned.peerFingerprint)
+          if (presented.length == 64) store.save(store.load().copy(fingerprint = presented))
           pairCode = ""
           offerControl(resumeNow("", 0), owned, outbound)
         }
