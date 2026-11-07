@@ -75,7 +75,6 @@ Type
   End;
 
 Procedure ShowAssistantMonitorForm;
-Procedure StopAssistantMonitorListener;
 
 Implementation
 
@@ -293,11 +292,6 @@ End;
 Function ListenerRunning: Boolean;
 Begin
   Result := AssistantMonitorListenerRunning;
-End;
-
-Procedure StopAssistantMonitorListener;
-Begin
-  AssistantMonitorMain.StopAssistantMonitorListener;
 End;
 
 Procedure ShowAssistantMonitorForm;

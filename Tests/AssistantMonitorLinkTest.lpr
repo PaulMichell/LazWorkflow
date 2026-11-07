@@ -616,6 +616,7 @@ Begin
     WriteLn('detail session ', ErrorText);
   Lan := TMonitorLanCarrier.Create('127.0.0.1', 0, MonitorCertificateFile, MonitorKeyFile);
   LanRef := Lan;
+  Lan.AttachSession(Session);
   Session.AttachCarrier(LanRef);
   Check('carrier starts', Lan.Start(ErrorText) And (Lan.BoundPort <> 0));
   If ErrorText <> '' Then

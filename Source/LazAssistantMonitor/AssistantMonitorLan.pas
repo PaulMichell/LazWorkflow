@@ -61,7 +61,6 @@ Type
     FBoundPort: Word;
     FLastError: String;
     FJoined: Boolean;
-    FInboundQueue: Array Of TMonitorFrame;
     Procedure LockCarrier;
     Procedure UnlockCarrier;
     Procedure StoreError(Const ErrorText: String);
@@ -71,8 +70,6 @@ Type
     Procedure NoteClosed;
     Function CopyHandler: TMonitorFrameHandler;
     Function CopySession: TMonitorSession;
-    Procedure EnqueueInbound(Const Frame: TMonitorFrame);
-    Function PopInbound(Out Frame: TMonitorFrame): Boolean;
     Function OutboundEmpty: Boolean;
     Procedure WakeController;
     Procedure ForgetController(Link: TMonitorLinkThread);
@@ -85,7 +82,6 @@ Type
     Function Send(Const Frame: TMonitorFrame; Out ErrorText: String): Boolean;
     Function State: TMonitorCarrierState;
     Procedure SetFrameHandler(Handler: TMonitorFrameHandler);
-    Procedure DiscardUnsent;
     Procedure AttachSession(Session: TMonitorSession);
     { Kernel port after Bind. Zero before a successful bind. }
     Function BoundPort: Word;
@@ -132,7 +128,6 @@ Type
     FSlots: Array Of TMonitorLinkSlot;
     Procedure Fail(Const ErrorText: String);
     Procedure StopLinks;
-    Procedure FreeSockets;
     Procedure ReleaseServer;
     Procedure CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
     Procedure HandleConnect(Sender: TObject; Data: TSocketStream);
@@ -310,7 +305,6 @@ Begin
   FBoundPort := 0;
   FLastError := '';
   FJoined := False;
-  SetLength(FInboundQueue, 0);
 End;
 
 Destructor TMonitorLanCarrier.Destroy;
@@ -381,7 +375,6 @@ Begin
   Try
     FState := mcsClosed;
     FBoundPort := 0;
-    SetLength(FInboundQueue, 0);
   Finally
     UnlockCarrier;
   End;
@@ -402,38 +395,6 @@ Begin
   LockCarrier;
   Try
     Result := FSession;
-  Finally
-    UnlockCarrier;
-  End;
-End;
-
-Procedure TMonitorLanCarrier.EnqueueInbound(Const Frame: TMonitorFrame);
-Begin
-  LockCarrier;
-  Try
-    SetLength(FInboundQueue, Length(FInboundQueue) + 1);
-    FInboundQueue[High(FInboundQueue)] := Frame;
-  Finally
-    UnlockCarrier;
-  End;
-End;
-
-Function TMonitorLanCarrier.PopInbound(Out Frame: TMonitorFrame): Boolean;
-Var
-  Index: Integer;
-Begin
-  Frame.Version := 0;
-  Frame.Flags := 0;
-  Frame.Json := '';
-  LockCarrier;
-  Try
-    Result := Length(FInboundQueue) > 0;
-    If Not Result Then
-      Exit;
-    Frame := FInboundQueue[0];
-    For Index := 0 To High(FInboundQueue) - 1 Do
-      FInboundQueue[Index] := FInboundQueue[Index + 1];
-    SetLength(FInboundQueue, Length(FInboundQueue) - 1);
   Finally
     UnlockCarrier;
   End;
@@ -569,7 +530,6 @@ Begin
     FJoined := False;
     FState := mcsClosed;
     FBoundPort := 0;
-    SetLength(FInboundQueue, 0);
   Finally
     UnlockCarrier;
   End;
@@ -612,43 +572,31 @@ Begin
   End;
 End;
 
-Procedure TMonitorLanCarrier.DiscardUnsent;
-Begin
-  { The session outbox is the queue. DiscardUnsentBulk already cleared it. }
-End;
-
 Procedure TMonitorLanCarrier.SetFrameHandler(Handler: TMonitorFrameHandler);
-Var
-  Method: TMethod;
-  Previous: TMonitorSession;
 Begin
-  Previous := Nil;
   LockCarrier;
   Try
-    Previous := FSession;
     FHandler := Handler;
-    Method := TMethod(Handler);
-    If TObject(Method.Data) Is TMonitorSession Then
-      FSession := TMonitorSession(Method.Data)
-    Else If Not Assigned(Method.Code) Then
-      FSession := Nil;
   Finally
     UnlockCarrier;
   End;
-  If Assigned(Previous) And (Previous <> FSession) Then
-    Previous.NoteLinkPulls(False);
-  If Assigned(FSession) Then
-    FSession.NoteLinkPulls(True);
 End;
 
 Procedure TMonitorLanCarrier.AttachSession(Session: TMonitorSession);
+Var
+  Previous: TMonitorSession;
 Begin
   LockCarrier;
   Try
+    Previous := FSession;
     FSession := Session;
   Finally
     UnlockCarrier;
   End;
+  If Assigned(Previous) And (Previous <> Session) Then
+    Previous.NoteLinkPulls(False);
+  If Assigned(Session) Then
+    Session.NoteLinkPulls(True);
 End;
 
 Function TMonitorLanCarrier.BoundPort: Word;
@@ -907,7 +855,7 @@ End;
 
 Destructor TMonitorListenThread.Destroy;
 Begin
-  FreeSockets;
+  StopLinks;
   ReleaseServer;
   If Assigned(FReady) Then
     RTLEventDestroy(FReady);
@@ -981,11 +929,6 @@ Begin
         End;
     End;
   SetLength(FSlots, 0);
-End;
-
-Procedure TMonitorListenThread.FreeSockets;
-Begin
-  StopLinks;
 End;
 
 Procedure TMonitorListenThread.ReleaseServer;
@@ -1217,7 +1160,7 @@ Begin
           End;
     End;
   Finally
-    FreeSockets;
+    StopLinks;
     ReleaseServer;
     If Assigned(FCarrier) And FBindOk Then
       FCarrier.NoteClosed;

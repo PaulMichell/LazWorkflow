@@ -1390,16 +1390,13 @@ Begin
   Event := RTLEventCreate;
   Try
     ArmAssistantApprovalWait(Event);
-    Check('bare signal is not allow', Not Session.BareApprovalSignalIsAllow);
+    SignalAssistantApprovalWait;
     Check('bare signal leaves none', ReadAssistantApprovalDecision = aadNone);
-    Check('no tool execution before cancel', Not Session.ToolExecutionRecorded);
     Session.NoteApprovalCancel('tool-stop');
     Check('cancel stores stopped', ReadAssistantApprovalDecision = aadStopped);
-    Check('cancel records no tool execution', Not Session.ToolExecutionRecorded);
     Check('later allow does not replace stopped', ReadAssistantApprovalDecision = aadStopped);
-    Session.ApplyApprovalDecision('tool-stop', True);
+    Check('allow after cancel is rejected', Not Session.ApplyApprovalDecision('tool-stop', True));
     Check('allow after cancel stays stopped', ReadAssistantApprovalDecision = aadStopped);
-    Check('allow after cancel records no tool execution', Not Session.ToolExecutionRecorded);
   Finally
     { Disarm first. A later signal must not touch this freed event. }
     DisarmAssistantApprovalWait(Event);

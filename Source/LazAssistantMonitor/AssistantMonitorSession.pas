@@ -47,9 +47,6 @@ Const
   MonitorHeartbeatMs = 10000;
   MonitorDeadSessionMs = 30000;
   MonitorPartialFrameMs = 10000;
-  MonitorCoalesceWindowMs = 100;
-  { Idle sweep. Resume is not a user command and is never answered host_busy here. }
-  MonitorCommandWaitMs = 5000;
   { Kept so older tests compile. The log budget is MonitorLogBudgetBytes. }
   MonitorRingCapacity = 256;
   { Closed approval ids remembered for this IDE session. Older ids are forgotten. }
@@ -133,7 +130,6 @@ Type
     FFramesDropped: Integer;
     FLastError: String;
     FHostSeq: Integer;
-    FToolExecuted: Boolean;
     FPendingApprovalId: String;
     FDisplayApprovalId: String;
     FClosedToolIds: Array[0..MonitorClosedToolMemory - 1] Of String;
@@ -233,7 +229,7 @@ Type
     Procedure StorePlanSend(Const Json: String);
     Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure QueueOverload(Const Json: String);
-    Procedure CloseForQueueFailure(Const Json: String);
+    Procedure CloseForQueueFailure;
     Procedure NoteLogAck(Const PayloadJson: TMonitorPayload);
     Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: TMonitorPayload);
@@ -359,9 +355,7 @@ Type
     Procedure PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);
     Procedure CloseDisplayApproval(Const ToolId: String);
     Function ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
-    Function BareApprovalSignalIsAllow: Boolean;
     Procedure NoteApprovalCancel(Const ToolId: String);
-    Function ToolExecutionRecorded: Boolean;
     { Splits a payload into outbox chunk frames and queues every frame. Drains. }
     Procedure SendBulkPayload(Const ItemId, ItemType, PayloadJson: String);
     { Queues frames already split for the outbox. Drains. }
@@ -398,7 +392,6 @@ Type
     Function Send(Const Frame: TMonitorFrame; Out ErrorText: String): Boolean;
     Function State: TMonitorCarrierState;
     Procedure SetFrameHandler(Handler: TMonitorFrameHandler);
-    Procedure DiscardUnsent;
     Procedure DeliverJson(Const Json: String);
     Function SentCount: Integer;
     Function SentJson(Index: Integer): String;
@@ -546,10 +539,6 @@ Begin
   FHandler := Handler;
 End;
 
-Procedure TMonitorMemoryCarrier.DiscardUnsent;
-Begin
-End;
-
 Procedure TMonitorMemoryCarrier.DeliverJson(Const Json: String);
 Var
   Frame: TMonitorFrame;
@@ -633,7 +622,6 @@ Begin
   FFramesDropped := 0;
   FLastError := '';
   FHostSeq := 0;
-  FToolExecuted := False;
   FPendingCommand := False;
   FPendingCommandKind := 0;
   FPendingCommandId := '';
@@ -831,11 +819,11 @@ Begin
   For Index := 0 To High(Frames) Do
     If Not EncodeHostFrame(Frames[Index], Encoded[Index]) Then
       Begin
-        CloseForQueueFailure(Frames[Index]);
+        CloseForQueueFailure;
         Exit;
       End;
   If Not FOutbox.ReplaceState('plan', Encoded, Replaced) Then
-    CloseForQueueFailure(Frames[0])
+    CloseForQueueFailure
   Else If Replaced > 0 Then
     Inc(FFramesDropped);
 End;
@@ -947,14 +935,9 @@ Begin
     CloseToListening;
 End;
 
-Procedure TMonitorSession.CloseForQueueFailure(Const Json: String);
+Procedure TMonitorSession.CloseForQueueFailure;
 Begin
   { A control or state frame that cannot be queued closes the link. Bye is best effort. }
-  If FrameIsBye(Json) Then
-    Begin
-      CloseToListening;
-      Exit;
-    End;
   CloseToListening;
 End;
 
@@ -1069,7 +1052,7 @@ Begin
     Begin
       If Not EncodeHostFrame(Json, Bytes) Then
         Begin
-          CloseForQueueFailure(Json);
+          CloseForQueueFailure;
           Exit;
         End;
       SetLength(One, 1);
@@ -1080,7 +1063,7 @@ Begin
             If FOutbox.ReplaceState(StateKey, One, Replaced) Then
               Result := True
             Else
-              CloseForQueueFailure(Json);
+              CloseForQueueFailure;
           End;
         mslLog:
           Result := FOutbox.AppendLog(MonitorSyncEventSeq(Json), Bytes);
@@ -1100,7 +1083,7 @@ Begin
         If FOutbox.AddControl(Bytes) Then
           Result := True
         Else
-          CloseForQueueFailure(Json);
+          CloseForQueueFailure;
       End;
       Exit;
     End;
@@ -1112,7 +1095,7 @@ Begin
           Result := True;
         End
       Else
-        CloseForQueueFailure(Json);
+        CloseForQueueFailure;
       Exit;
     End;
   Lane := HostLane(Json);
@@ -1128,7 +1111,7 @@ Begin
   If Lane = hlPlan Then
     Begin
       If Not FOutbox.ReplaceState('plan', One, Replaced) Then
-        CloseForQueueFailure(Json)
+        CloseForQueueFailure
       Else
         Begin
           If Replaced > 0 Then
@@ -1153,7 +1136,7 @@ Begin
       Result := True;
     End
   Else
-    CloseForQueueFailure(Json);
+    CloseForQueueFailure;
 End;
 
 Function TMonitorSession.Transmit(Const Json: String): Boolean;
@@ -1470,7 +1453,6 @@ Begin
       Exit;
     End;
   FConnectionClientId := Hello.ClientId;
-  FExpectPair := False;
   If IsRevoked(Hello.ClientId) Then
     Begin
       RejectLocked('revoked', True);
@@ -2511,8 +2493,6 @@ Begin
   Finally
     UnlockSession;
   End;
-  If Assigned(FCarrier) Then
-    FCarrier.DiscardUnsent;
 End;
 
 Procedure TMonitorSession.RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
@@ -2617,11 +2597,11 @@ Begin
     For Index := 0 To High(Frames) Do
       If Not EncodeHostFrame(Frames[Index], Encoded[Index]) Then
         Begin
-          CloseForQueueFailure(Frames[Index]);
+          CloseForQueueFailure;
           Exit;
         End;
     If Not FOutbox.ReplaceState('live', Encoded, Replaced) Then
-      CloseForQueueFailure(Frames[0])
+      CloseForQueueFailure
     Else
       Begin
         If Replaced > 0 Then
@@ -3191,7 +3171,6 @@ Begin
     If FPendingApprovalId = ToolId Then
       FPendingApprovalId := '';
     QueueControl(EncodeMonitorApprovalClosed(NewHostId, ToolId, 'desktop'));
-    FToolExecuted := False;
   Finally
     UnlockSession;
   End;
@@ -3206,21 +3185,9 @@ Begin
       FPendingApprovalId := ToolId;
     StoreAssistantApprovalDecision(aadStopped);
     SignalAssistantApprovalWait;
-    FToolExecuted := False;
   Finally
     UnlockSession;
   End;
-End;
-
-Function TMonitorSession.BareApprovalSignalIsAllow: Boolean;
-Begin
-  SignalAssistantApprovalWait;
-  Result := ReadAssistantApprovalDecision = aadAllow;
-End;
-
-Function TMonitorSession.ToolExecutionRecorded: Boolean;
-Begin
-  Result := FToolExecuted;
 End;
 
 Procedure TMonitorSession.SendPackedFrames(Const Frames: TStringArray);

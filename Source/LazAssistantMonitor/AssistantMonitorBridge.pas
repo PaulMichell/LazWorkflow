@@ -61,10 +61,8 @@ Type
     Kind: Integer;
     ClientId: String;
     Payload: TMonitorPayload;
-    Generation: Integer;
     Cancelled: Boolean;
     Claimed: Boolean;
-    BusySent: Boolean;
     Finished: Boolean;
     Defer: Boolean;
     ExecuteQueued: Boolean;
@@ -127,7 +125,7 @@ Type
     { True while the window is still opening. A resume waits instead of saying it is missing. }
     Function ResumeFormPending(Command: TMonitorQueuedCommand): Boolean;
     Procedure ApplyHostFlags(Const View: TAssistantMonitorView);
-    Procedure PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+    Procedure PushSnapshot(Form: TProjectAssistantForm);
     Procedure PublishSamplingLists(Form: TProjectAssistantForm);
     Procedure FillSnapshot(Form: TProjectAssistantForm; Out Snapshot: TMonitorSnapshot);
 
@@ -906,11 +904,10 @@ Begin
   Snapshot.HasLive := Form.FillMonitorTurn(MonitorLiveTurnIndex, Snapshot.Live, ErrorText);
 End;
 
-Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm; Const RefId: String);
+Procedure TAssistantMonitorBridge.PushSnapshot(Form: TProjectAssistantForm);
 Var
   Snapshot: TMonitorSnapshot;
   Session: TMonitorSession;
-  Id: String;
 Begin
   If Not Assigned(Form) Then
     Exit;
@@ -923,9 +920,6 @@ Begin
   If Not Assigned(Session) Then
     Exit;
   FillSnapshot(Form, Snapshot);
-  Id := RefId;
-  If Id = '' Then
-    Id := HostId;
   If Session.MirrorEpoch = '' Then
     PublishEpoch;
   { BeginStream clears a new epoch. Copy the open turn after that, or the phone gets an empty page. }
@@ -1292,8 +1286,6 @@ Begin
     Exit;
   Form := OpenForm;
   Case Job.Kind Of
-    asnTranscript, asnPhase:
-      ;
     asnMode:
       If Assigned(Form) Then
         Begin
@@ -1317,7 +1309,7 @@ Begin
       { The idle flags and the model travel here. A patch alone can miss both. }
       PushStatus(Form);
     asnSnapshot:
-      PushSnapshot(Form, '');
+      PushSnapshot(Form);
     asnIdentity:
       PublishEpoch;
     asnApproval:
@@ -1720,7 +1712,6 @@ Begin
   Command.Payload := PayloadJson;
   Command.Cancelled := False;
   Command.Claimed := False;
-  Command.BusySent := False;
   Command.Finished := False;
   Command.Defer := False;
   Command.ExecuteQueued := True;

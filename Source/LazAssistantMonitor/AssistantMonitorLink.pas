@@ -489,8 +489,6 @@ Begin
   If WakeWrite < 0 Then
     Exit;
   Mark := 1;
-  If Mark = 0 Then
-    Exit;
 {$IFDEF UNIX}
   If fpWrite(WakeWrite, Mark, 1) < 0 Then
     Exit;

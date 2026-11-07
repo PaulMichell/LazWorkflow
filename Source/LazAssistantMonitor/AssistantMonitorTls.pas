@@ -1,6 +1,6 @@
 Unit AssistantMonitorTls;
 
-{ Host certificate and TLS accept handler for the monitor (c) 2026 Michell Computing.
+{ Host certificate minting for the monitor (c) 2026 Michell Computing.
 
   OpenSSL load is AssistantHttps.EnsureOpenSSLReady. The one-time mint calls
   protected CreateSelfSignedCertificate. CreateCertificateAndKey stores DER
@@ -16,7 +16,7 @@ Unit AssistantMonitorTls;
 Interface
 
 Uses
-  SysUtils, ssockets, opensslsockets;
+  SysUtils, opensslsockets;
 
 Const
   MonitorCertificateCommonName = 'LazAssistantMonitor';
@@ -25,21 +25,12 @@ Const
   MonitorCertificateMaxBytes = 65536;
 
 Type
-  { Loads the shared host DER and refuses a handshake below TLS 1.2.
-    Does not override InitContext and does not offer h2. }
+  { Exposes one-time host certificate minting from the OpenSSL handler. }
   TMonitorTlsHandler = Class(TOpenSSLSocketHandler)
   Public
     Constructor Create; Override;
-    Function Accept: Boolean; Override;
-    Procedure LoadHostMaterial(Const CertificateDer, KeyDer: TBytes);
     { One-time mint into this handler. Does not write the certificate files. }
     Function MintHostMaterial(Out ErrorText: String): Boolean;
-  End;
-
-  { Event target for TInetServer.OnCreateClientSocketHandler. }
-  TMonitorTlsServer = Class
-  Public
-    Procedure CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
   End;
 
 { Creates the certificate and key once. A second call keeps the same files. }
@@ -50,8 +41,6 @@ Function MonitorHostFingerprint(Out Fingerprint, ErrorText: String): Boolean;
 Function MonitorFingerprintText(Const Fingerprint: String): String;
 { Same predicate as H2TLSVersionAdequate: TLS 1.2 or higher. }
 Function MonitorTlsVersionAdequate(Const VersionText: String): Boolean;
-{ New handler with the shared DER loaded. Nil when the files cannot be read. }
-Function NewMonitorAcceptHandler(Out ErrorText: String): TMonitorTlsHandler;
 { One DER file. The listen thread passes the paths copied at start. }
 Function LoadMonitorDerFile(Const Path: String; Out Data: TBytes; Out ErrorText: String): Boolean;
 
@@ -181,18 +170,6 @@ Begin
     CertificateData.ALPNProtocols := '';
 End;
 
-Procedure TMonitorTlsHandler.LoadHostMaterial(Const CertificateDer, KeyDer: TBytes);
-Begin
-  CertificateData.ALPNProtocols := '';
-  VerifyPeerCert := False;
-  CertificateData.Certificate.FileName := '';
-  CertificateData.Certificate.Value := CopyBytes(CertificateDer);
-  CertificateData.PrivateKey.FileName := '';
-  CertificateData.PrivateKey.Value := CopyBytes(KeyDer);
-  CertificateData.PFX.FileName := '';
-  CertificateData.PFX.Value := Nil;
-End;
-
 Function TMonitorTlsHandler.MintHostMaterial(Out ErrorText: String): Boolean;
 Begin
   ErrorText := '';
@@ -216,28 +193,6 @@ Begin
       Exit;
     End;
   Result := True;
-End;
-
-Function TMonitorTlsHandler.Accept: Boolean;
-Begin
-  Result := False;
-  VerifyPeerCert := False;
-  If Assigned(CertificateData) Then
-    CertificateData.ALPNProtocols := '';
-  If Not Assigned(CertificateData) Or CertificateData.Certificate.Empty Or CertificateData.PrivateKey.Empty Then
-    Begin
-      SetSSLLastErrorString('Monitor host certificate is not loaded.');
-      Exit;
-    End;
-  Result := Inherited Accept;
-  If Not Result Then
-    Exit;
-  If Not Assigned(SSL) Or Not MonitorTlsVersionAdequate(SSL.Version) Then
-    Begin
-      SetSSLLastErrorString('TLS version is below 1.2.');
-      Shutdown(False);
-      Result := False;
-    End;
 End;
 
 Function EnsureMonitorHostCertificate(Out ErrorText: String): Boolean;
@@ -324,41 +279,5 @@ Function LoadMonitorDerFile(Const Path: String; Out Data: TBytes; Out ErrorText:
 Begin
   Result := ReadDerFile(Path, Data, ErrorText);
 End;
-
-Function NewMonitorAcceptHandler(Out ErrorText: String): TMonitorTlsHandler;
-Var
-  CertificateDer, KeyDer: TBytes;
-Begin
-  Result := Nil;
-  ErrorText := '';
-  CertificateDer := Nil;
-  KeyDer := Nil;
-  If Not EnsureMonitorHostCertificate(ErrorText) Then
-    Exit;
-  If Not ReadDerFile(MonitorCertificateFile, CertificateDer, ErrorText) Then
-    Exit;
-  If Not ReadDerFile(MonitorKeyFile, KeyDer, ErrorText) Then
-    Exit;
-  Result := TMonitorTlsHandler.Create;
-  Result.LoadHostMaterial(CertificateDer, KeyDer);
-End;
-
-{$PUSH}{$HINTS OFF}
-Procedure TMonitorTlsServer.CreateClientHandler(Sender: TObject; Out AHandler: TSocketHandler);
-Var
-  ErrorText: String;
-  Handler: TMonitorTlsHandler;
-Begin
-  AHandler := Nil;
-  Handler := NewMonitorAcceptHandler(ErrorText);
-  If Not Assigned(Handler) Then
-    Begin
-      If ErrorText = '' Then
-        ErrorText := 'Could not create the monitor TLS handler.';
-      Raise Exception.Create(ErrorText);
-    End;
-  AHandler := Handler;
-End;
-{$POP}
 
 End.

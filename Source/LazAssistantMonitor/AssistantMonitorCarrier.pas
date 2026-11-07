@@ -32,7 +32,6 @@ Type
     Function State: TMonitorCarrierState;
     Procedure SetFrameHandler(Handler: TMonitorFrameHandler);
     { Drops frames accepted by Send and not yet written. A new conversation must not wait behind them. }
-    Procedure DiscardUnsent;
   End;
 
 Implementation
