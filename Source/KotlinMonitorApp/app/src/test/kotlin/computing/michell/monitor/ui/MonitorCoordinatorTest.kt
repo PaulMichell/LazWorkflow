@@ -233,6 +233,18 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun firstHelloRequestsABaselineInsteadOfClaimingTheDesktopHead() {
+    val coordinator = open()
+    val hello = HelloOkMessage("nonce", "ide", "epoch", 200, "conversation-1", "/work", "Chat", "")
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello)))).orEmpty()
+    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
+    val asked = decodeResume(tryDecodeEnvelope(sent.json).message.payloadJson)!!
+    assertEquals("", asked.epoch)
+    assertEquals(0L, asked.cursor)
+    assertEquals(0L, coordinator.state.hostCursor)
+  }
+
+  @Test
   fun helloResumesFromTheStoredCursor() {
     val coordinator = open()
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())

@@ -562,7 +562,7 @@ class MonitorCoordinator(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
       // A saved epoch must not reject the chat the desktop is about to send.
       hostEpoch = announced,
-      hostCursor = if (keepPlace) local.hostCursor else if (hello.cursor > 0L) hello.cursor else local.hostCursor,
+      hostCursor = if (keepPlace) local.hostCursor else 0L,
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
       conversationTitle = hello.title.ifEmpty { local.conversationTitle },
       catchingUp = true
@@ -600,7 +600,9 @@ class MonitorCoordinator(
     if (resumeConversation.isNotEmpty()) {
       return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), resumeConversation, resumeStream, resumeSeq))
     }
-    if (local.conversationId.isNotEmpty() && (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
+    val board = content.current()
+    val haveBody = board.turns.isNotEmpty() || board.live != null
+    if (haveBody && local.conversationId.isNotEmpty() && (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
       return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), local.conversationId, local.hostEpoch, local.hostCursor))
     }
     return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
