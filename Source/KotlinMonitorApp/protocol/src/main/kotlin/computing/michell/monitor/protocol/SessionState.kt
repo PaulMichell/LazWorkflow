@@ -1,6 +1,6 @@
 package computing.michell.monitor.protocol
 
-/* Client session rules for catalogue version 1 (c) 2026 Michell Computing.
+/* Client session rules for catalogue version 3 (c) 2026 Michell Computing.
 
    No socket and no Android UI. An unknown type, and a send or steer the text
    limit rejects, do not change phase. Image parts are bounded as they arrive.
@@ -165,7 +165,7 @@ class SessionState {
     if (kind == MessageKind.Auth) authSent = true
   }
 
-  /** Catalogue 3 slices are live traffic. They are not a catalogue 2 status frame. */
+  /** Catalogue 3 slices are live traffic.  */
   fun noteSyncTraffic() {
     if (phase == SessionPhase.Accepted && authSent) phase = SessionPhase.Live
   }
@@ -194,20 +194,11 @@ class SessionState {
     val sending: Boolean
     val planRunning: Boolean
     when (val body = message.inbound) {
-      is InboundPayload.Snapshot -> {
-        sending = body.value.view.sending
-        planRunning = body.value.view.planRunning || body.value.planRunning
-      }
       is InboundPayload.Status -> {
         sending = body.view.sending
         planRunning = body.view.planRunning
       }
       else -> when (message.kind) {
-        MessageKind.Snapshot -> {
-          val snapshot = decodeSnapshot(message.payloadJson) ?: return
-          sending = snapshot.view.sending
-          planRunning = snapshot.view.planRunning || snapshot.planRunning
-        }
         MessageKind.Status -> {
           val view = decodeStatusPayload(message.payloadJson) ?: return
           sending = view.sending

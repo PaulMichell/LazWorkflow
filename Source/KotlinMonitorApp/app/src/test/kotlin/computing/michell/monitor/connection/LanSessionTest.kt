@@ -637,10 +637,10 @@ class LanSessionTest {
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Ping, "held")))
       started.await()
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-1")))
-      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Snapshot, "snap-1")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Mode, "snap-1")))
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.ApprovalRequested, "approval")))
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-2")))
-      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Snapshot, "snap-2")))
+      assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Mode, "snap-2")))
       assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "status-3")))
       hold.complete(Unit)
       withTimeout(5_000) {
@@ -1003,4 +1003,3 @@ private class FixedCertificate(private val der: ByteArray) : X509Certificate() {
   override fun getNonCriticalExtensionOIDs(): Set<String> = emptySet()
   override fun getExtensionValue(oid: String?): ByteArray? = null
 }
-

@@ -14,7 +14,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
+  AssistantMonitorCommands, Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
   AssistantMonitorCarrier, AssistantMonitorSession, AssistantPlanDocument, AssistantSessionObserve, AssistantMonitorSettings,
   AssistantMonitorOutbox, AssistantMonitorSync, WorkflowSettings;
 
@@ -120,9 +120,9 @@ Begin
   Session.NoteSocketClosed;
   Check('5.4 handshake accepted', Session.AcceptHandshake(Spare, True));
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
+  Carrier.DeliverJson(EncodeCommandHello('hello', 'Phone', '1', ''));
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+  Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
   Check('5.4 paired', Session.State = mssLive);
 End;
 
@@ -398,7 +398,6 @@ Begin
   Check('2.4 a 72 KiB plan is more than one slice', DataCount > 1);
   Check('2.4 every plan_data frame leaves from the bulk lane', (DataCount > 0) And (OffLane = 0));
 End;
-
 Procedure Prepare;
 Var
   Guid: TGuid;

@@ -1,7 +1,7 @@
 Program AssistantMonitorBridgeTest;
 
 { State publication follows the bridge refresh and notice paths (c) 2026 Michell Computing.
-  Uses the real form and bridge with a memory carrier. Drain on every outbox wake so state
+  Uses AssistantMonitorCommands, the real form and bridge with a memory carrier. Drain on every outbox wake so state
   coalescing cannot hide repeated publications. No provider is started and the form is not shown. }
 
 {$IFDEF FPC}
@@ -15,7 +15,7 @@ Uses
   {$ENDIF}
   Interfaces, Forms, Classes, SysUtils, FileUtil, fpjson, jsonparser, AssistantTestIDEHost,
   WorkflowSettings, ProjectAssistantForm, AssistantSessionObserve, AssistantMonitorSession,
-  AssistantMonitorBridge, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames;
+  AssistantMonitorBridge, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCommands;
 
 Const
   MenuKeys: Array[0..6] Of String = ('plan_choices', 'plan', 'targets', 'conversations', 'models', 'reasoning', 'permissions');
@@ -113,8 +113,8 @@ Begin
     Session.NoteTime(5000);
     Check('listen starts', Session.StartListening('127.0.0.1', 56124, ErrorText));
     Check('handshake accepted', Session.AcceptHandshake(Spare, True));
-    Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
-    Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+    Carrier.DeliverJson(EncodeCommandHello('hello', 'Phone', '1', ''));
+    Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
     Check('memory session is live', Session.State = mssLive);
     RegisterAssistantMonitor;
     AttachAssistantMonitorBridge(Session);

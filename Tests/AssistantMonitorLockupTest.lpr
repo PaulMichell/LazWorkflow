@@ -8,10 +8,6 @@ Program AssistantMonitorLockupTest;
 
   - A bulk frame the outbox cannot hold is refused. The phone gets a retryable
     overloaded error. It is not counted in FramesDropped.
-  - A catchup snapshot that is still over the frame cap after every compaction
-    level encodes to nothing. TAssistantMonitorBridge.SendCatchupSnapshot then logs
-    a warning and sends nothing at all. That method is private and needs the IDE
-    form, so this test makes the same session and codec calls in the same order.
   - Plan item 3.1 of Documents/Plan-20261105-130659.md: a finished remote approval
     wait disarms its event before destroying it. Run this binary under -gh or
     valgrind to confirm that a later cancel or decision touches no freed block.
@@ -32,8 +28,6 @@ Uses
   AssistantMonitorCarrier, AssistantMonitorSession, AssistantSessionObserve, AssistantMonitorApproval, AssistantConfig;
 
 Const
-  { SendCatchupSnapshot tries compaction levels 0 to 6. }
-  BridgeCompactionLevels = 7;
   ApprovalToolId = 'tool-after-wait';
 
 Type
@@ -79,7 +73,7 @@ End;
 
 Function BulkFrame(Index: Integer): String;
 Begin
-  Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot","payload":{}}';
+  Result := '{"v":3,"id":"bulk-' + IntToStr(Index) + '","type":"chunk","payload":{}}';
 End;
 
 Function CountSentKind(Kind: TMonitorMessageKind): Integer;
@@ -130,54 +124,18 @@ Begin
     If Session.TryQueueHostJson(BulkFrame(Index)) Then
       Inc(Queued);
   Check('small bulk frames are queued', Queued = 2);
-  Huge := '{"v":2,"id":"huge-1","type":"snapshot_page","payload":{"body":"' + StringOfChar('x', 40000) + '"}}';
+  Huge := '{"v":3,"id":"huge-1","type":"snapshot_page","payload":{"body":"' + StringOfChar('x', 40000) + '"}}';
   Before := Session.FramesDropped;
   Check('a frame the outbox cannot hold is refused', Not Session.TryQueueHostJson(Huge));
   Check('a refused bulk frame is not counted as sent', Session.FramesDropped = Before);
   Session.DrainOutbound;
-  Check('the queued bulk frames still reach the carrier', CountSentKind(mmkSnapshot) = 2);
+  Check('the queued bulk frames still reach the carrier', CountSentKind(mmkChunk) = 2);
   Check('the refused page is not sent', CountSentKind(mmkSnapshotPage) = 0);
   Check('the phone is told to ask again', CountSentKind(mmkError) = 1);
   Check('the refusal is overloaded', OverloadedSent);
 End;
 
-Procedure TestCatchupThatDoesNotFit;
-Var
-  Snapshot: TMonitorSnapshot;
-  Epoch, ConversationId, ProjectRoot, Title, Json: String;
-  Cursor: Int64;
-  Level, Encoded: Integer;
-Begin
-  Session.DrainOutbound;
-  Carrier.ClearSent;
-  Session.CopyMirrorIdentity(Epoch, ConversationId, ProjectRoot, Title, Cursor);
-  Snapshot := SmallSnapshot;
-  Json := EncodeResumeSnapshot('resume-2', 1, Epoch, ConversationId, ProjectRoot, Title, Snapshot);
-  Check('a small catchup fits', Json <> '');
-  { CompactCatchupSnapshot only shortens Live, StoredTurns, PlanRows and TaskRows. They are already empty here, so
-    every level of the bridge loop encodes this same snapshot. No level shortens View.ContextText. }
-  Snapshot.View.ContextText := StringOfChar('c', MonitorMaxPayloadBytes);
-  Encoded := 0;
-  Json := '';
-  For Level := 0 To BridgeCompactionLevels - 1 Do
-    Begin
-      Check('the snapshot cursor is reserved at level ' + IntToStr(Level),
-        Session.CommitSnapshotCursor('lockup-level-' + IntToStr(Level), Cursor));
-      Json := EncodeResumeSnapshot('resume-2', Cursor, Epoch, ConversationId, ProjectRoot, Title, Snapshot);
-      If Json <> '' Then
-        Begin
-          Inc(Encoded);
-          Break;
-        End;
-    End;
-  Check('an oversized catchup encodes at no compaction level', Encoded = 0);
-  { The bridge's next step: send only when a level fitted. Otherwise log and exit. }
-  If Json <> '' Then
-    Session.SendHostJson(Json);
-  Session.DrainOutbound;
-  Check('nothing is sent for that resume', Carrier.SentCount = 0);
-  Check('no error tells the phone the snapshot was too large', CountSentKind(mmkError) = 0);
-End;
+
 
 { Plan item 3.1. Disarm clears only the event it is given, so a newer waiter keeps its own. }
 Procedure TestDisarmKeepsNewerEvent;
@@ -244,7 +202,6 @@ Begin
       Session.AttachCarrier(CarrierRef);
       Session.BeginMirrorEpoch(MintMonitorEpoch, 'lockup', '/work', 'Lockup');
       TestCatchupRefusedIsAnError;
-      TestCatchupThatDoesNotFit;
       TestDisarmKeepsNewerEvent;
       TestApprovalWaitDisarms;
     Except

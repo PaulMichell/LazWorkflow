@@ -46,7 +46,7 @@ fun worthCaching(ui: MonitorUi): Boolean {
 
 /** A committed cursor is a finished patch or catchup. An open part set is not. */
 fun cursorCommitted(before: MonitorUi, after: MonitorUi): Boolean {
-  if (after.hostEpoch.isEmpty() || after.catchingUp || after.patchOpenCursor != 0L) return false
+  if (after.hostEpoch.isEmpty() || after.catchingUp) return false
   if (after.hostEpoch != before.hostEpoch) return true
   return after.hostCursor > before.hostCursor
 }

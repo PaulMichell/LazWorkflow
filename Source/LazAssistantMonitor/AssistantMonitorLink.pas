@@ -40,7 +40,7 @@ Unit AssistantMonitorLink;
 Interface
 
 Uses
-  Classes, SysUtils, SyncObjs, ctypes, AssistantMonitorFrames, AssistantMonitorOutbox;
+  AssistantMonitorCommands, Classes, SysUtils, SyncObjs, ctypes, AssistantMonitorFrames, AssistantMonitorOutbox;
 
 Const
   MonitorReplaceFlushMs = 500;
@@ -571,7 +571,7 @@ Var
 Begin
   If InterlockedCompareExchange(ByeState, 1, 0) <> 0 Then
     Exit;
-  Json := EncodeMonitorBye('replaced', 'replaced');
+  Json := EncodeCommandBye('replaced', 'replaced');
   If Not EncodeFrame(Json, Bytes) Then
     Exit;
   If Assigned(Outbox) Then

@@ -63,15 +63,15 @@ fun chaosEventJson(seq: Long): String {
   return """{"conversation_id":"$ChaosConversationId","stream_id":"$ChaosStreamId","seq":$seq,"event":"$kind","data":$data}"""
 }
 
-fun chaosEventFrame(seq: Long): ByteArray = framed("""{"v":2,"id":"e$seq","type":"event","payload":${chaosEventJson(seq)}}""")
+fun chaosEventFrame(seq: Long): ByteArray = framed("""{"v":3,"id":"e$seq","type":"event","payload":${chaosEventJson(seq)}}""")
 
 fun chaosStatusFrame(busy: Boolean): ByteArray {
-  val json = """{"v":2,"id":"status","type":"status","payload":{"available":true,"busy":$busy,"sending":false,"mode_locked":false,"plan_running":false,"phase":"idle","status_text":"","model":"","backend":"","signed_in":true,"approval_caption":"","effort":"","skill":"","context_text":"","can_send":true,"can_steer":false,"can_stop":false,"can_change_mode":true,"remote_approval":false,"error_text":"","elapsed_ms":0}}"""
+  val json = """{"v":3,"id":"status","type":"status","payload":{"available":true,"busy":$busy,"sending":false,"mode_locked":false,"plan_running":false,"phase":"idle","status_text":"","model":"","backend":"","signed_in":true,"approval_caption":"","effort":"","skill":"","context_text":"","can_send":true,"can_steer":false,"can_stop":false,"can_change_mode":true,"remote_approval":false,"error_text":"","elapsed_ms":0}}"""
   return framed(json)
 }
 
 fun chaosCommandFrame(): ByteArray {
-  return framed("""{"v":2,"id":"$ChaosCommandId","type":"send","payload":{"text":"ask"}}""")
+  return framed("""{"v":3,"id":"$ChaosCommandId","type":"send","payload":{"text":"ask"}}""")
 }
 
 private fun framed(json: String): ByteArray {

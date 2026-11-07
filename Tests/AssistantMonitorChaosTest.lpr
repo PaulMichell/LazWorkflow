@@ -98,7 +98,7 @@ Var
   Events: TJSONArray;
   Index: Integer;
   Event: TJSONObject;
-  Seq: Int64;
+  Turn: TAssistantMonitorTurn;
 Begin
   Failed := '';
   Path := IncludeTrailingPathDelimiter(RepositoryRoot) + 'Tests' + PathDelim + 'Fixtures' + PathDelim + 'Monitor' +
@@ -115,13 +115,38 @@ Begin
     BodyText := ObjectRoot.Get('finalBody', '');
     Events := ObjectRoot.Arrays['events'];
     Mirror.BeginStream(ObjectRoot.Get('streamId', ''), ObjectRoot.Get('conversationId', ''), '/work', 'Chaos');
+    Turn := Default(TAssistantMonitorTurn);
+    Turn.Id := 'turn-1';
+    Turn.TurnIndex := 1;
+    Turn.Live := True;
     For Index := 0 To Events.Count - 1 Do
       Begin
         Event := Events.Objects[Index];
-        Seq := Event.Get('seq', 0);
-        Mirror.RememberPatch(Seq, Event.AsJSON);
-        If Index = 2 Then
-          Mirror.RememberPatch(Seq, Event.AsJSON);
+        Case Event.Get('event', '') Of
+          'turn_open': Mirror.ObserveTurn(Turn);
+          'block_open':
+            Begin
+              SetLength(Turn.Blocks, 1);
+              Turn.Blocks[0].BlockId := 'block-1';
+              Turn.Blocks[0].Kind := 'answer';
+              Turn.Blocks[0].Running := True;
+              Mirror.ObserveTurn(Turn);
+            End;
+          'block_append':
+            Begin
+              Turn.Blocks[0].Body := BodyText;
+              Mirror.ObserveTurn(Turn);
+              Mirror.ObserveTurn(Turn);
+            End;
+          'block_close':
+            Begin
+              Turn.Blocks[0].Running := False;
+              Turn.Blocks[0].Ok := True;
+              Mirror.ObserveTurn(Turn);
+            End;
+        Else
+          Raise Exception.Create('Unknown chaos event');
+        End;
       End;
     HeadSeq := Mirror.Head;
     Body := BodyText;

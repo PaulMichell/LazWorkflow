@@ -8,11 +8,7 @@ Unit AssistantMonitorMirror;
   model. It does not read the form. Older events are dropped once the log
   passes its byte budget; the model already holds their effect.
 
-  Catalogue 2 patch tails live in the same log so resume can replay them.
-  Item 5.6 stopped sending snapshot, transcript, and turn_data; pages replace
-  those frames. A patch larger than the budget is not stored. An event that
-  will not fit while older events are still unacknowledged is recorded the
-  same way. Resume behind a dropped record needs a snapshot.
+  Resume behind a dropped event needs a snapshot.
 
   Parked conversations are capped at MonitorParkedConversations. A resume for
   one that was dropped is not ready, and the phone takes a snapshot.
@@ -23,7 +19,7 @@ Unit AssistantMonitorMirror;
 
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
-  gone. The log-credit class stays because the mirror test still constructs it.
+  gone. Catalogue 3 events are the only retained protocol records.
   Reviewed 2026-11-07: strings are escaped by AssistantProtocol.JsonEscapeText,
   which escapes every control and writes one pass into a sized buffer, because
   those pages are built on the IDE thread. }
@@ -135,7 +131,6 @@ Type
     Function UnparkLocked(Const ConversationId, StreamId: String): Boolean;
     Procedure AppendLocked(Seq: Int64; Const Kind: String; Const Data: RawByteString);
     Function IndexOfSeqLocked(Seq: Int64): Integer;
-    Function PatchIndexLocked(Seq: Int64): Integer;
     Procedure CopyTurn(Const Source: TAssistantMonitorTurn; Var Dest: TAssistantMonitorTurn);
     Function FindTurnLocked(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
   Public
@@ -145,9 +140,7 @@ Type
     { New stream. The previous conversation's events are not this stream. }
     Procedure BeginStream(Const StreamId, ConversationId, ProjectRoot, Title: String);
     Procedure SetTitle(Const Title: String);
-    Procedure RememberPatch(Seq: Int64; Const PatchJson: RawByteString);
     { True when every patch after Seq is still in the log. Seq equal to the head is an empty tail. }
-    Function TryReplayPatches(Const StreamId: String; Seq, ThroughSeq: Int64; Out Events: TMonitorMirrorEventArray; Out Head: Int64): Boolean;
     { Copy of the log. Tests read the grain without sending it. }
     Function CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
     Function TryEvent(Seq: Int64; Out Event: TMonitorMirrorEvent): Boolean;
@@ -175,26 +168,6 @@ Type
     Function ByteCount: Int64;
     Procedure NoteAck(Const StreamId: String; Seq: Int64);
     Function AckedSeq: Int64;
-  End;
-
-  { Send window for log frames. The caller holds the session lock. }
-  TMonitorLogCredit = Class
-  Private
-    FUnacked: Int64;
-    FSentSeq: Array Of Int64;
-    FSentBytes: Array Of Integer;
-    FHeldSeq: Array Of Int64;
-    FHeldJson: Array Of String;
-    FHeldBytes: Int64;
-  Public
-    Constructor Create;
-    Function CanSend(Bytes: Integer): Boolean;
-    Procedure NoteSent(Seq: Int64; Bytes: Integer);
-    Procedure NoteAck(Seq: Int64);
-    Procedure Hold(Seq: Int64; Const Json: String);
-    Function TakeHeld(Out Seq: Int64; Out Json: String): Boolean;
-    Function UnackedBytes: Int64;
-    Function HeldBytes: Int64;
   End;
 
 Implementation
@@ -430,13 +403,6 @@ Begin
     End;
 End;
 
-Function TMonitorMirror.PatchIndexLocked(Seq: Int64): Integer;
-Begin
-  Result := IndexOfSeqLocked(Seq);
-  If Result >= 0 Then
-    If FEvents[Result].Kind <> 'patch' Then Result := -1;
-End;
-
 Function TMonitorMirror.TryEvent(Seq: Int64; Out Event: TMonitorMirrorEvent): Boolean;
 Var
   Index: Integer;
@@ -596,64 +562,6 @@ Begin
       Exit;
     FTitle := Title;
     AppendLocked(FHead + 1, 'title_changed', '{"title":"' + JsonEscapeText(Title) + '"}');
-  Finally
-    LeaveCriticalSection(FLock);
-  End;
-End;
-
-Procedure TMonitorMirror.RememberPatch(Seq: Int64; Const PatchJson: RawByteString);
-Begin
-  EnterCriticalSection(FLock);
-  Try
-    If (Seq <= 0) Or (PatchJson = '') Or (Seq <= FDroppedThrough) Then
-      Exit;
-    If PatchIndexLocked(Seq) >= 0 Then
-      Exit;
-    AppendLocked(Seq, 'patch', PatchJson);
-  Finally
-    LeaveCriticalSection(FLock);
-  End;
-End;
-
-Function TMonitorMirror.TryReplayPatches(Const StreamId: String; Seq, ThroughSeq: Int64; Out Events: TMonitorMirrorEventArray;
-  Out Head: Int64): Boolean;
-Var
-  Need: Int64;
-  Index, Count: Integer;
-Begin
-  Result := False;
-  SetLength(Events, 0);
-  Head := 0;
-  EnterCriticalSection(FLock);
-  Try
-    Head := ThroughSeq;
-    If FStreamId = '' Then
-      Exit;
-    If LowerCase(StreamId) <> FStreamId Then
-      Exit;
-    If (Seq < 0) Or (Seq > ThroughSeq) Or (Seq < FDroppedThrough) Then
-      Exit;
-    If Seq = ThroughSeq Then
-      Begin
-        Result := True;
-        Exit;
-      End;
-    If (ThroughSeq > FHead) Or (ThroughSeq - Seq > Length(FEvents) - EventHead) Then Exit;
-    SetLength(Events, ThroughSeq - Seq);
-    Need := Seq + 1;
-    Index := IndexOfSeqLocked(Need);
-    If Index < 0 Then Exit;
-    Count := 0;
-    While Need <= ThroughSeq Do
-      Begin
-        If Index >= Length(FEvents) Then Exit;
-        If (FEvents[Index].Seq <> Need) Or (FEvents[Index].Kind <> 'patch') Then Exit;
-        Events[Count] := FEvents[Index];
-        Inc(Count);
-        Inc(Index);
-        Inc(Need);
-      End;
-    Result := True;
   Finally
     LeaveCriticalSection(FLock);
   End;
@@ -1284,107 +1192,6 @@ Begin
   Finally
     LeaveCriticalSection(FLock);
   End;
-End;
-
-Constructor TMonitorLogCredit.Create;
-Begin
-  Inherited Create;
-  FUnacked := 0;
-  SetLength(FSentSeq, 0);
-  SetLength(FSentBytes, 0);
-  SetLength(FHeldSeq, 0);
-  SetLength(FHeldJson, 0);
-  FHeldBytes := 0;
-End;
-
-Function TMonitorLogCredit.CanSend(Bytes: Integer): Boolean;
-Begin
-  Result := (Bytes >= 0) And (FUnacked + Bytes <= MonitorCreditWindowBytes);
-End;
-
-Procedure TMonitorLogCredit.NoteSent(Seq: Int64; Bytes: Integer);
-Var
-  Index: Integer;
-Begin
-  If Bytes < 1 Then
-    Exit;
-  Index := Length(FSentSeq);
-  SetLength(FSentSeq, Index + 1);
-  SetLength(FSentBytes, Index + 1);
-  FSentSeq[Index] := Seq;
-  FSentBytes[Index] := Bytes;
-  FUnacked := FUnacked + Bytes;
-End;
-
-Procedure TMonitorLogCredit.NoteAck(Seq: Int64);
-Var
-  Index, Kept: Integer;
-Begin
-  Kept := 0;
-  FUnacked := 0;
-  For Index := 0 To High(FSentSeq) Do
-    If FSentSeq[Index] > Seq Then
-      Begin
-        FSentSeq[Kept] := FSentSeq[Index];
-        FSentBytes[Kept] := FSentBytes[Index];
-        FUnacked := FUnacked + FSentBytes[Kept];
-        Inc(Kept);
-      End;
-  SetLength(FSentSeq, Kept);
-  SetLength(FSentBytes, Kept);
-End;
-
-Procedure TMonitorLogCredit.Hold(Seq: Int64; Const Json: String);
-Var
-  Index: Integer;
-Begin
-  For Index := 0 To High(FHeldSeq) Do
-    If FHeldSeq[Index] = Seq Then
-      Begin
-        FHeldBytes := FHeldBytes - Length(FHeldJson[Index]) + Length(Json);
-        FHeldJson[Index] := Json;
-        Exit;
-      End;
-  Index := Length(FHeldSeq);
-  SetLength(FHeldSeq, Index + 1);
-  SetLength(FHeldJson, Index + 1);
-  FHeldSeq[Index] := Seq;
-  FHeldJson[Index] := Json;
-  FHeldBytes := FHeldBytes + Length(Json);
-End;
-
-Function TMonitorLogCredit.TakeHeld(Out Seq: Int64; Out Json: String): Boolean;
-Var
-  Index: Integer;
-Begin
-  Result := False;
-  Seq := 0;
-  Json := '';
-  If Length(FHeldSeq) = 0 Then
-    Exit;
-  Seq := FHeldSeq[0];
-  Json := FHeldJson[0];
-  FHeldBytes := FHeldBytes - Length(Json);
-  If FHeldBytes < 0 Then
-    FHeldBytes := 0;
-  For Index := 0 To High(FHeldSeq) - 1 Do
-    Begin
-      FHeldSeq[Index] := FHeldSeq[Index + 1];
-      FHeldJson[Index] := FHeldJson[Index + 1];
-    End;
-  SetLength(FHeldSeq, Length(FHeldSeq) - 1);
-  SetLength(FHeldJson, Length(FHeldJson) - 1);
-  Result := True;
-End;
-
-Function TMonitorLogCredit.UnackedBytes: Int64;
-Begin
-  Result := FUnacked;
-End;
-
-Function TMonitorLogCredit.HeldBytes: Int64;
-Begin
-  Result := FHeldBytes;
 End;
 
 End.

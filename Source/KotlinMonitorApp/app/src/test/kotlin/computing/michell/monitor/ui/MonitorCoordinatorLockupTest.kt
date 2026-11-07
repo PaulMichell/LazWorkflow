@@ -12,11 +12,7 @@ import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WirePatch
-import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.encodePatch
-import computing.michell.monitor.protocol.encodeSnapshot
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -27,15 +23,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MonitorCoordinatorLockupTest {
-  @Test
-  fun aPatchDoesNotReplaceTheStoredBody() {
-    val coordinator = MonitorCoordinator(LockupSession(), LockupClock(1_000L), LockupDisplay)
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeSnapshot("snap", snapshot("first")))))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodePatch("late", patch("second", 9)))))
-    assertNull(coordinator.state.live)
-    assertEquals(0, coordinator.state.hostCursor)
-    assertFalse(coordinator.holdingLink)
-  }
 
   @Test
   fun disconnectKeepsTheCommittedRows() {
@@ -67,23 +54,7 @@ class MonitorCoordinatorLockupTest {
   }
 }
 
-private fun snapshot(body: String): WireSnapshot {
-  return WireSnapshot(
-    emptyView().copy(canSend = true, busy = true),
-    emptyList(),
-    WireTurn(1, "turn-1", "build", "", body, "", live = true, blocks = listOf(block(body))),
-    "",
-    "",
-    false,
-    emptyList(),
-    emptyList(),
-    ApprovalNotice(false, "", "", "", "", false)
-  )
-}
 
-private fun patch(body: String, cursor: Long): WirePatch {
-  return WirePatch("epoch", cursor, 1, "turn-1", listOf(block(body)), false, false, false, "", true, false, false, 0)
-}
 
 private fun block(body: String): WireBlock {
   return WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())

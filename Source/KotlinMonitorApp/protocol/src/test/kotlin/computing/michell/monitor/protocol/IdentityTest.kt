@@ -26,13 +26,7 @@ class IdentityTest {
     assertEquals("Shown", hello.title)
     assertTrue(hello.catchingUp)
     assertEquals("bb", hello.announcedEpoch)
-    val patch = notePatchIdentity(hello, "bb", 1)
-    assertEquals("aa", patch.epoch)
-    assertEquals(4L, patch.cursor)
-    val caught = noteCatchupIdentity(hello, "bb", 0, "snapshot")
-    assertEquals("bb", caught!!.epoch)
-    assertEquals(0L, caught.cursor)
-    assertFalse(caught.catchingUp)
+
   }
 
   @Test
@@ -45,14 +39,5 @@ class IdentityTest {
     assertEquals("Shown", fresh.title)
   }
 
-  @Test
-  fun duplicateAndGapDoNotAdvance() {
-    val place = MirrorPlace(epoch = "aa", cursor = 4)
-    assertEquals(place, notePatchIdentity(place, "aa", 4))
-    assertEquals(place, notePatchIdentity(place, "aa", 2))
-    assertEquals(place, notePatchIdentity(place, "aa", 9))
-    assertNull(noteCatchupIdentity(place, "aa", 4, "events"))
-    assertNull(noteCatchupIdentity(place, "aa", 9, "events"))
-    assertEquals(9L, noteCatchupIdentity(place, "aa", 9, "snapshot")!!.cursor)
-  }
+
 }

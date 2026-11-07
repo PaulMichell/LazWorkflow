@@ -34,7 +34,6 @@ import computing.michell.monitor.data.DefaultImageBudgetBytes
 import computing.michell.monitor.data.DefaultImageBudgetMiB
 import computing.michell.monitor.data.MonitorImageDirectoryName
 import computing.michell.monitor.data.RetentionLimits
-import computing.michell.monitor.data.importLegacyCache
 import computing.michell.monitor.data.openMonitorDatabase
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.dictation.acceptSpeechCallback
@@ -74,11 +73,7 @@ import computing.michell.monitor.protocol.ImageAssembly
 import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.InboundPayload
 import computing.michell.monitor.protocol.MirrorPlace
-import computing.michell.monitor.protocol.WireCatchup
-import computing.michell.monitor.protocol.WirePatch
-import computing.michell.monitor.protocol.applyPhoneCatchup
 import computing.michell.monitor.protocol.applyBlockDataJson
-import computing.michell.monitor.protocol.applyPhonePatch
 import computing.michell.monitor.protocol.noteHelloIdentity
 import computing.michell.monitor.protocol.notePhoneClosed
 import computing.michell.monitor.protocol.notePhoneEpoch
@@ -101,7 +96,6 @@ import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeMode
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeRejected
-import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeTarget
 import computing.michell.monitor.protocol.decodeTargets
@@ -187,8 +181,6 @@ data class MonitorUi(
   val banner: String = "",
   val draft: String = "",
   val disconnected: Boolean = false,
-  val liveRevision: Int = -1,
-  val transcriptParts: Map<Int, List<WireBlock>> = emptyMap(),
   val imageReasons: Map<String, String> = emptyMap(),
   val reachedLive: Boolean = false,
   val pairHold: Boolean = false,
@@ -209,8 +201,6 @@ data class MonitorUi(
   val hostGeneration: Int = 0,
   val conversationGeneration: Int = 0,
   val connectionGeneration: Int = 0,
-  val transcriptConnection: Int = 0,
-  val transcriptTurnId: String = "",
   val hostEpoch: String = "",
   val hostCursor: Long = 0,
   val catchingUp: Boolean = false,
@@ -220,9 +210,6 @@ data class MonitorUi(
   val conversationTitle: String = "",
   val closedConversationId: String = "",
   val closedTitle: String = "",
-  val patchParts: Map<Int, List<WireBlock>> = emptyMap(),
-  val patchPartCount: Int = 0,
-  val patchOpenCursor: Long = 0,
   val resumeOnce: Boolean = false,
   val closedPending: Boolean = false,
   val closedQueued: Boolean = false,
@@ -675,7 +662,6 @@ fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
   if (!message.changesState && message.kind != MessageKind.Error) return state
   if (message.inbound !is InboundPayload.None) return reduceInbound(state, message.inbound)
   return when (message.kind) {
-    MessageKind.Snapshot, MessageKind.Transcript, MessageKind.TurnData -> state
     MessageKind.SnapshotPage -> applySnapshotPage(state, message.payloadJson)
     MessageKind.Status -> applyStatus(state, message.payloadJson)
     MessageKind.Mode -> applyMode(state, message.payloadJson)
@@ -706,9 +692,6 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
     banner = shown,
     generation = if (already) state.generation else state.generation + 1,
     connectionGeneration = if (already) state.connectionGeneration else state.connectionGeneration + 1,
-    liveRevision = -1,
-    transcriptParts = emptyMap(),
-    transcriptTurnId = "",
     rescueSteer = false,
     view = clearRemoteActions(state.view)
   )
@@ -728,7 +711,7 @@ private fun MonitorUi.withMirror(place: MirrorPlace): MonitorUi {
 private fun phoneOf(state: MonitorUi): PhoneScreen {
   return PhoneScreen(
     state.hostEpoch, state.hostCursor, state.catchingUp, state.announcedEpoch, state.turns, state.live,
-    state.patchOpenCursor, state.patchPartCount, state.patchParts, state.resumeOnce, state.closedConversationId,
+    state.resumeOnce, state.closedConversationId,
     state.closedTitle, "", state.conversationId, state.projectRoot, state.conversationTitle
   )
 }
@@ -742,9 +725,6 @@ private fun MonitorUi.withPhone(phone: PhoneScreen): MonitorUi {
     announcedEpoch = phone.announcedEpoch,
     turns = phone.turns,
     live = phone.live,
-    patchOpenCursor = phone.patchOpenCursor,
-    patchPartCount = phone.patchPartCount,
-    patchParts = phone.patchParts,
     resumeOnce = phone.resumeOnce,
     closedConversationId = phone.closedId,
     closedTitle = phone.closedTitle,
@@ -775,81 +755,11 @@ private fun applyBlockDataMessage(state: MonitorUi, payloadJson: String): Monito
   return state.withPhone(applyBlockDataJson(phoneOf(state), payloadJson))
 }
 
-private fun applyPatch(state: MonitorUi, patch: WirePatch): MonitorUi {
-  val before = phoneOf(state)
-  val phone = applyPhonePatch(before, patch)
-  val next = state.withPhone(phone)
-  val accepted = phone.live != before.live || phone.cursor != before.cursor || phone.patchParts != before.patchParts
-  if (!accepted) return next
-  return applyPatchFlags(next, patch).copy(reachedLive = true, clockToken = state.clockToken + 1)
-}
 
-private fun applyPatchFlags(state: MonitorUi, patch: WirePatch): MonitorUi {
-  val flagged = state.view.copy(
-    busy = patch.busy,
-    sending = patch.sending,
-    planRunning = patch.planRunning,
-    phase = patch.phase,
-    canSend = patch.canSend,
-    canSteer = patch.canSteer,
-    canStop = patch.canStop,
-    elapsedMs = patch.elapsedMs
-  )
-  val view = if (patch.hasView) {
-    flagged.copy(
-      model = keptModel(state.view.model, patch.model, patch.signedIn),
-      signedIn = patch.signedIn,
-      statusText = patch.statusText
-    )
-  } else {
-    flagged
-  }
-  return state.copy(planRunning = patch.planRunning, view = view)
-}
 
-private fun applyCatchup(state: MonitorUi, catchup: WireCatchup): MonitorUi {
-  if (catchup.epoch.isEmpty()) return state
-  if (catchup.mode == "snapshot") {
-    val snapshot = catchup.snapshot ?: return state
-    val replaced = applySnapshot(state, snapshot)
-    val phone = applyPhoneCatchup(
-      phoneOf(state), catchup.epoch, catchup.cursor, catchup.conversationId, catchup.projectRoot, catchup.title,
-      snapshot.storedTurns, snapshot.live
-    )
-    return replaced.copy(
-      hostEpoch = phone.epoch,
-      hostCursor = phone.cursor,
-      catchingUp = false,
-      announcedEpoch = "",
-      turns = if (state.catchingUp) phone.turns else replaced.turns,
-      live = if (state.catchingUp) phone.live else replaced.live,
-      conversationId = phone.conversationId,
-      projectRoot = phone.projectRoot,
-      conversationTitle = phone.title,
-      patchParts = emptyMap(),
-      patchPartCount = 0,
-      patchOpenCursor = 0,
-      resumeOnce = false
-    )
-  }
-  if (catchup.mode != "events" || state.catchingUp) return state
-  if (state.hostEpoch.isNotEmpty() && catchup.epoch != state.hostEpoch) return state
-  var next = state
-  for (patch in catchup.patches) {
-    val before = next.resumeOnce
-    next = applyPatch(next, patch)
-    if (next.resumeOnce && !before) break
-  }
-  return next.copy(
-    conversationId = if (catchup.conversationId.isNotEmpty()) catchup.conversationId else next.conversationId,
-    projectRoot = if (catchup.projectRoot.isNotEmpty()) catchup.projectRoot else next.projectRoot,
-    conversationTitle = if (catchup.title.isNotEmpty()) catchup.title else next.conversationTitle
-  )
-}
 
 private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
   return when (inbound) {
-    is InboundPayload.Snapshot, is InboundPayload.TranscriptPart, is InboundPayload.Turn -> state
     is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
     is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
     is InboundPayload.Target -> applyTargetFrame(state, inbound.value.kind, inbound.value.display, inbound.value.root)
@@ -869,8 +779,6 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
     }
     is InboundPayload.ImageMissing -> state.copy(imageReasons = state.imageReasons + (inbound.value.imageId to inbound.value.reason))
     is InboundPayload.HelloOk -> applyHelloIdentity(state, inbound.value)
-    is InboundPayload.Patch -> applyPatch(state, inbound.value)
-    is InboundPayload.Catchup -> applyCatchup(state, inbound.value)
     is InboundPayload.ConversationClosed -> state.withPhone(
       notePhoneClosed(phoneOf(state), inbound.value.conversationId, inbound.value.title)
     )
@@ -878,48 +786,6 @@ private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi 
   }
 }
 
-private fun applySnapshot(state: MonitorUi, snapshot: WireSnapshot): MonitorUi {
-  val incoming = snapshot.live
-  if (incoming == null) {
-    val cleared = resetConversation(state, false, state.hostGeneration, state.conversationGeneration + 1)
-    return overlaySnapshot(
-      cleared.copy(view = cleared.view.copy(model = shownModel(state.view.model))),
-      snapshot,
-      state.generation + 1
-    )
-  }
-  val previousId = state.live?.id ?: ""
-  val acceptedNew = state.hostEpoch.isEmpty() && previousId.isNotEmpty() && previousId != incoming.id
-  val conversationGeneration = if (acceptedNew) state.conversationGeneration + 1 else state.conversationGeneration
-  val live = mergeLiveTurn(state.live, incoming, !acceptedNew)
-  val sameTurn = previousId.isNotEmpty() && previousId == incoming.id &&
-    state.transcriptConnection == state.connectionGeneration
-  val approval = snapshot.approval
-  return state.copy(
-    view = snapshot.view.copy(model = keptModel(state.view.model, snapshot.view.model, snapshot.view.signedIn)),
-    turns = snapshot.storedTurns,
-    live = live,
-    history = retainLoaded(state.history, snapshot.storedTurns),
-    planPath = snapshot.planPath,
-    planTitle = snapshot.planTitle,
-    planRunning = snapshot.planRunning,
-    planRows = snapshot.planRows,
-    planBody = keptPlanBody(state.planPath, state.planBody, snapshot.planPath, ""),
-    selectedPlan = -1,
-    approval = if (approval.active) approval else null,
-    approvalOpen = approval.active,
-    liveRevision = if (sameTurn) state.liveRevision else -1,
-    transcriptParts = if (sameTurn) state.transcriptParts else emptyMap(),
-    transcriptTurnId = if (sameTurn) state.transcriptTurnId else "",
-    reachedLive = true,
-    pairHold = false,
-    disconnected = false,
-    banner = "",
-    generation = state.generation + 1,
-    rescueSteer = false,
-    conversationGeneration = conversationGeneration
-  ).clearedMenuLists()
-}
 
 /** Snapshot drops the drawer lists. The following host frames fill them again. */
 internal fun MonitorUi.clearedMenuLists(): MonitorUi {
@@ -942,30 +808,6 @@ internal fun MonitorUi.clearedMenuLists(): MonitorUi {
   )
 }
 
-fun overlaySnapshot(cleared: MonitorUi, snapshot: WireSnapshot, generation: Int): MonitorUi {
-  val approval = snapshot.approval
-  return cleared.copy(
-    view = snapshot.view.copy(model = keptModel(cleared.view.model, snapshot.view.model, snapshot.view.signedIn)),
-    turns = snapshot.storedTurns,
-    live = null,
-    history = emptyMap(),
-    planPath = snapshot.planPath,
-    planTitle = snapshot.planTitle,
-    planRunning = snapshot.planRunning,
-    planRows = snapshot.planRows,
-    planBody = keptPlanBody(cleared.planPath, cleared.planBody, snapshot.planPath, ""),
-    selectedPlan = -1,
-    approval = if (approval.active) approval else null,
-    approvalOpen = approval.active,
-    reachedLive = true,
-    pairHold = false,
-    disconnected = false,
-    banner = "",
-    generation = generation,
-    liveRevision = -1,
-    transcriptParts = emptyMap()
-  ).clearedMenuLists()
-}
 
 private fun applySnapshotPage(state: MonitorUi, payloadJson: String): MonitorUi {
   val applied = applySnapshotPageJson(state.turns, state.live, payloadJson) ?: return state
@@ -1407,7 +1249,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private suspend fun showCachedThenConnect(record: computing.michell.monitor.connection.HostRecord) {
     val restored = try {
       withContext(Dispatchers.IO) {
-        importLegacyCache(imageRoot.parentFile ?: imageRoot, conversations, imageRoot)
         conversations.retain()
         val key = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
         val open = newestConversation(conversations.listForHost(key), key)

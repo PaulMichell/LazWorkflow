@@ -36,7 +36,7 @@ Uses
   cthreads,
   BaseUnix, UnixType,
   {$ENDIF}
-  Classes, SysUtils, SyncObjs, sockets, ssockets, openssl, fpopenssl, opensslsockets,
+  AssistantMonitorCommands, Classes, SysUtils, SyncObjs, sockets, ssockets, openssl, fpopenssl, opensslsockets,
   AssistantMonitorLinkStubs,
   AssistantHttps, AssistantMonitorTls, AssistantMonitorLan, AssistantMonitorSession,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier,
@@ -161,7 +161,7 @@ Begin
       Begin
         Inc(SendCount);
         Text := '';
-        If DecodeMonitorText(PayloadJson, Text) Then
+        If DecodeCommandText(PayloadJson, Text) Then
           LastSendText := Text;
       End
     Else If Kind = Ord(mmkStop) Then
@@ -348,7 +348,6 @@ Begin
   Until GetTickCount64 >= Deadline;
   Result := (Sink.Sends >= ExpectedSends) And (Sink.Stops >= ExpectedStops);
 End;
-
 Function WaitSession(Expected: TMonitorSessionState; Ms: Integer): Boolean;
 Var
   Deadline: QWord;
@@ -512,19 +511,19 @@ Begin
     If ErrorText <> '' Then
       WriteLn('detail handshake ', ErrorText);
     Check('accepted', WaitSession(mssAccepted, 2000));
-    Check('hello', Client.WriteJson(EncodeMonitorHello('hello', 'Phone', '1', ''), After(2000)));
-    Check('pair', Client.WriteJson(EncodeMonitorPair('pair', Session.PairCode, HostFingerprint), After(2000)));
+    Check('hello', Client.WriteJson(EncodeCommandHello('hello', 'Phone', '1', ''), After(2000)));
+    Check('pair', Client.WriteJson(EncodeCommandPair('pair', Session.PairCode, HostFingerprint), After(2000)));
     Check('pair_ok', Client.ReadMessage(After(3000), Message, ErrorText) And (Message.Kind = mmkPairOk));
     If ErrorText <> '' Then
       WriteLn('detail pair_ok ', ErrorText);
-    Check('pair_ok payload', DecodeMonitorPairOk(Message.PayloadJson, PairOk) And (PairOk.ClientId <> '') And
+    Check('pair_ok payload', DecodeCommandPairOk(Message.PayloadJson, PairOk) And (PairOk.ClientId <> '') And
       (PairOk.SessionToken <> ''));
     Check('session live', WaitSession(mssLive, 2000));
-    Check('send encodes', TryEncodeMonitorSend('send-1', 'hello from the phone', SendJson, ErrorText));
+    Check('send encodes', TryEncodeCommandSend('send-1', 'hello from the phone', SendJson, ErrorText));
     Check('send frame', Client.WriteJson(SendJson, After(2000)));
     Check('sink records send', WaitSink(1, 0, 3000));
     Check('send text', Sink.SendText = 'hello from the phone');
-    StopJson := EncodeMonitorEmpty(mmkStop, 'stop-1');
+    StopJson := EncodeCommandEmpty(mmkStop, 'stop-1');
     Check('stop frame', Client.WriteJson(StopJson, After(2000)));
     Check('sink records stop', WaitSink(1, 1, 3000));
     Check('sink does not call the form', Not Sink.CalledForm);

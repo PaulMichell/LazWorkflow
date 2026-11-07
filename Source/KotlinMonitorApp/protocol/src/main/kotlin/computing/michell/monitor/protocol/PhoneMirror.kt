@@ -1,6 +1,6 @@
 package computing.michell.monitor.protocol
 
-/* Phone mirror rules. Catalogue 2 patch and catchup are not applied.
+/* Phone mirror rules for catalogue 3.
    A new epoch still files the closed id. No socket and no Android types.
    (c) 2026 Michell Computing. */
 
@@ -11,9 +11,6 @@ data class PhoneScreen(
   val announcedEpoch: String = "",
   val turns: List<WireTurn> = emptyList(),
   val live: WireTurn? = null,
-  val patchOpenCursor: Long = 0,
-  val patchPartCount: Int = 0,
-  val patchParts: Map<Int, List<WireBlock>> = emptyMap(),
   val resumeOnce: Boolean = false,
   val closedId: String = "",
   val closedTitle: String = "",
@@ -71,21 +68,6 @@ fun notePhoneEpoch(screen: PhoneScreen, epoch: String): PhoneScreen {
   return screen.copy(catchingUp = true, announcedEpoch = epoch, fileClosedId = file)
 }
 
-/** Catalogue 2 content is not applied. The screen stays with the store. */
-fun applyPhonePatch(screen: PhoneScreen, patch: WirePatch): PhoneScreen = screen
-
-/** Catalogue 2 catchup is not applied. An empty page does not replace the conversation. */
-fun applyPhoneCatchup(
-  screen: PhoneScreen,
-  epoch: String,
-  cursor: Long,
-  conversationId: String,
-  projectRoot: String,
-  title: String,
-  turns: List<WireTurn>,
-  live: WireTurn?
-): PhoneScreen = screen
-
 /** A block_data frame replaces from offset 0, or appends when offset is the stored length. */
 fun applyBlockDataJson(screen: PhoneScreen, payloadJson: String): PhoneScreen {
   val obj = parseObject(payloadJson) ?: return screen
@@ -118,5 +100,4 @@ fun applyBlockData(screen: PhoneScreen, blockId: String, offset: Int, text: Stri
     blockFetchIds = emptyList()
   )
 }
-
 

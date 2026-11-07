@@ -16,7 +16,7 @@ object MonitorLimits {
   const val FrameVersion = 1
   const val FrameHeaderSize = 12
   const val MaxPayloadBytes = 262144
-  const val CatalogueVersion = 2
+  const val CatalogueVersion = 3
   const val ListenPort = 56122
   const val MaxMessageIdChars = 64
   const val MaxSendChars = 65536

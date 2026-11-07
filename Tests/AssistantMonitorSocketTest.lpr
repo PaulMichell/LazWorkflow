@@ -21,7 +21,7 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix, UnixType,
   {$ENDIF}
-  Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
+  AssistantMonitorCommands, Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
   fpsha256, fphashutils, AssistantMonitorLinkStubs,
   AssistantHttps, AssistantMonitorTls, AssistantMonitorLan, AssistantMonitorSession,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier,
@@ -429,7 +429,7 @@ Var
   Rejected: TMonitorRejected;
 Begin
   Reason := '';
-  Result := (Message.Kind = mmkRejected) And DecodeMonitorRejected(Message.PayloadJson, Rejected);
+  Result := (Message.Kind = mmkRejected) And DecodeCommandRejected(Message.PayloadJson, Rejected);
   If Result Then
     Reason := Rejected.Reason;
 End;
@@ -439,7 +439,7 @@ Var
   Bye: TMonitorBye;
 Begin
   Reason := '';
-  Result := (Message.Kind = mmkBye) And DecodeMonitorBye(Message.PayloadJson, Bye);
+  Result := (Message.Kind = mmkBye) And DecodeCommandBye(Message.PayloadJson, Bye);
   If Result Then
     Reason := Bye.Reason;
 End;
@@ -476,7 +476,7 @@ Var
   Body: TMonitorTicks;
 Begin
   Ticks := 0;
-  Result := (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Body);
+  Result := (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Body);
   If Result Then
     Ticks := Body.Ticks;
 End;
@@ -606,7 +606,7 @@ Begin
     Check('fingerprint matches certificate', (FirstPrint <> '') And (FirstPrint = HostFingerprint));
     If FirstPrint <> HostFingerprint Then
       WriteLn('detail peer=', FirstPrint, ' file=', HostFingerprint);
-    Check('frame round-trip write', First.WriteJson(EncodeMonitorTicks(mmkPing, 'ping1', 42), After(3000)));
+    Check('frame round-trip write', First.WriteJson(EncodeCommandTicks(mmkPing, 'ping1', 42), After(3000)));
     Check('frame round-trip read', First.ReadMessage(After(3000), Message, ErrorText));
     If ErrorText <> '' Then
       WriteLn('detail round-trip ', ErrorText);
@@ -617,7 +617,7 @@ Begin
     Stall := OpenHandshakeStall(Port);
     Check('handshake stall connected', Stall >= 0);
     Started := GetTickCount64;
-    Check('live ping during handshake stall', First.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-stall', 9), After(1000)));
+    Check('live ping during handshake stall', First.WriteJson(EncodeCommandTicks(mmkPing, 'ping-stall', 9), After(1000)));
     Check('live pong during handshake stall', First.ReadMessage(After(800), Message, ErrorText) And PongTicks(Message, Ticks) And
       (Ticks = 9));
     Elapsed := GetTickCount64 - Started;
@@ -638,7 +638,7 @@ Begin
     If Reason <> 'replaced' Then
       WriteLn('detail replaced reason=', Reason, ' type=', Message.TypeName);
     Check('second reaches accepted', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
-    Check('second ping', Spare.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-spare', 11), After(3000)));
+    Check('second ping', Spare.WriteJson(EncodeCommandTicks(mmkPing, 'ping-spare', 11), After(3000)));
     Check('second pong', Spare.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 11));
     If ErrorText <> '' Then
       WriteLn('detail second pong ', ErrorText);
@@ -647,7 +647,7 @@ Begin
       WriteLn('detail replaced close ', ErrorText);
     FreeAndNil(First);
 
-    Check('bye write', Spare.WriteJson(EncodeMonitorBye('bye1', 'client'), After(3000)));
+    Check('bye write', Spare.WriteJson(EncodeCommandBye('bye1', 'client'), After(3000)));
     Check('listening after bye', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
     FreeAndNil(Spare);
 
@@ -656,7 +656,7 @@ Begin
     If ErrorText <> '' Then
       WriteLn('detail reconnect ', ErrorText);
     Check('reconnect reaches accepted', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
-    Check('reconnect frame write', Again.WriteJson(EncodeMonitorTicks(mmkPing, 'ping2', 7), After(3000)));
+    Check('reconnect frame write', Again.WriteJson(EncodeCommandTicks(mmkPing, 'ping2', 7), After(3000)));
     Check('reconnect frame read', Again.ReadMessage(After(3000), Message, ErrorText));
     If ErrorText <> '' Then
       WriteLn('detail reconnect read ', ErrorText);
@@ -668,7 +668,7 @@ Begin
       (SecondPrint = HostFingerprint));
     If SecondPrint <> FirstPrint Then
       WriteLn('detail second print=', SecondPrint, ' first=', FirstPrint);
-    Check('bye before partial', Again.WriteJson(EncodeMonitorBye('bye2', 'client'), After(3000)));
+    Check('bye before partial', Again.WriteJson(EncodeCommandBye('bye2', 'client'), After(3000)));
     Check('listening before partial', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
     FreeAndNil(Again);
 
@@ -690,7 +690,7 @@ Begin
     If Reason <> 'replaced' Then
       WriteLn('detail partial replaced reason=', Reason, ' type=', Message.TypeName, ' ', ErrorText);
     Check('probe is controller', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
-    Check('probe ping', Probe.WriteJson(EncodeMonitorTicks(mmkPing, 'ping-probe', 3), After(3000)));
+    Check('probe ping', Probe.WriteJson(EncodeCommandTicks(mmkPing, 'ping-probe', 3), After(3000)));
     Check('probe pong', Probe.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 3));
     If ErrorText <> '' Then
       WriteLn('detail probe pong ', ErrorText);

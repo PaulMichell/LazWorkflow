@@ -17,9 +17,6 @@ Unit AssistantMonitorSession;
 
   Size note: exceeds the 1000 line preference. What remains is connection state,
   command intake, and approval. The lane arrays and the second resume are gone.
-  Catalogue 2 live-patch and log-credit helpers stay because the session and
-  mirror tests still call them. Deleting those would change assertions those
-  tests own.
   Reviewed 2026-11-07: no socket or form code in this unit. Known producers pass a lane
   to QueueFrame and do not parse the frame again. }
 
@@ -31,7 +28,7 @@ Unit AssistantMonitorSession;
 Interface
 
 Uses
-  SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
+  AssistantMonitorImages, AssistantMonitorState, AssistantMonitorCommands, SysUtils, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorMirror,
   AssistantMonitorOutbox, AssistantMonitorCommandIntake, AssistantMonitorSync, AssistantMonitorPlanFetch,
   AssistantSessionObserve, AssistantMonitorSettings;
 
@@ -47,11 +44,8 @@ Const
   MonitorHeartbeatMs = 10000;
   MonitorDeadSessionMs = 30000;
   MonitorPartialFrameMs = 10000;
-  { Kept so older tests compile. The log budget is MonitorLogBudgetBytes. }
-  MonitorRingCapacity = 256;
   { Closed approval ids remembered for this IDE session. Older ids are forgotten. }
   MonitorClosedToolMemory = 64;
-  MonitorRingJsonCap = 2 * 1024 * 1024;
   MonitorCrockfordAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   MonitorServerName = 'LazAssistantMonitor';
   MonitorLogArea = 'AssistantMonitor';
@@ -145,7 +139,7 @@ Type
     FQueuedLogSeq: Int64;
     LastFillHead, LastFillAck, LastFillQueued: Int64;
     LogFillSeen: Boolean;
-    { Set when a resume names this stream. Catalogue 2 drains do not frame the log. }
+    { Set when a resume names this stream and log delivery can begin. }
     FLogResume: Boolean;
     { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
     FAwaitingObservation: Boolean;
@@ -156,16 +150,8 @@ Type
     FProjectRoot: String;
     FTitle: String;
     FCommittedCursor: Int64;
-    FNextCursor: Int64;
-    FReservedCursor: Int64;
-    FReservedPayload: RawByteString;
-    FReservedHanded: Boolean;
-    { Cursor of the live set currently in the state lane. Not a second queue. }
-    FLiveCursor: Int64;
-    FHasLivePatch: Boolean;
     FMirror: TMonitorMirror;
     FPlanFetch: TMonitorPlanFetch;
-    FCredit: TMonitorLogCredit;
     FObserved: TMonitorSnapshot;
     FHasObserved: Boolean;
     FPendingCommand: Boolean;
@@ -214,7 +200,6 @@ Type
 
     Function ServeTurnFromMirror(Const Id: String; Const PayloadJson: TMonitorPayload): Boolean;
     Procedure ServeBlockGet(Const Id: String; Const PayloadJson: TMonitorPayload);
-    Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
     { One LAM1 frame for Json. False counts the frame in FFramesDropped and logs its type and status.
       Raw JSON is never returned in Bytes. The caller decides whether the failure closes the link. }
     Function EncodeHostFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
@@ -225,7 +210,6 @@ Type
     Procedure QueueOverload(Const Json: String);
     Procedure CloseForQueueFailure;
     Procedure NoteLogAck(Const PayloadJson: TMonitorPayload);
-    Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: TMonitorPayload);
     Function ClosedToolSeen(Const ToolId: String): Boolean;
     Procedure RememberClosedTool(Const ToolId: String);
@@ -288,13 +272,6 @@ Type
     Procedure SetMirrorLogBudget(Bytes: Int64);
     { Marks the stream acked through Seq so a later append may fold older events. }
     Procedure NoteMirrorAck(Seq: Int64);
-    { Same cursor while the bytes are unsent or already handed unchanged. }
-    Function CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
-    Procedure NoteMirrorHanded(Cursor: Int64);
-    /// Stores a handed patch. A record that does not fit is dropped and stated.
-    Procedure RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
-    /// True when every cursor after the client is still a patch in the log. Does not read a form.
-    Function TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
     { IDE thread. Copies one turn into the model and appends the events that describe the change. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
@@ -312,11 +289,6 @@ Type
     /// Copies the open epoch. False when none has been minted. Does not mint the next one.
     Function CopyClosedMirror(Out Closed: TMonitorConversationClosed): Boolean;
     Procedure CopyMirrorIdentity(Out Epoch, ConversationId, ProjectRoot, Title: String; Out Cursor: Int64);
-    /// Next snapshot cursor. The caller sends the catchup, then NoteMirrorHanded.
-    Function CommitSnapshotCursor(Const BodyStamp: RawByteString; Out Cursor: Int64): Boolean;
-    { Replaces the unsent live part set. Does not append a transcript. }
-    Procedure ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
-    Procedure FlushLivePatch;
     /// Queues into the outbox and does not drain. False when bulk is refused.
     Function TryQueueHostJson(Const Json: String): Boolean;
     /// Memory-carrier flush. A link that pulls the outbox ignores this.
@@ -398,8 +370,6 @@ Type
 { HMAC-SHA256 of the raw nonce bytes, keyed by the stored token string. Lowercase hex. }
 Function MonitorAuthMac(Const SessionToken, NonceHex: String): String;
 { False when the ring can answer. The caller must not fill a form snapshot on that path. }
-Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
-
 Implementation
 
 Uses
@@ -573,7 +543,6 @@ Begin
   FMirror := TMonitorMirror.Create;
   FPlanFetch := TMonitorPlanFetch.Create;
   FPlanFetch.OnReady := @PlanFetchReady;
-  FCredit := TMonitorLogCredit.Create;
   FOutbox := TMonitorOutbox.Create;
   FIntake := TMonitorCommandIntake.Create;
   FPhoneAcked := 0;
@@ -634,12 +603,6 @@ Begin
   FProjectRoot := '';
   FTitle := '';
   FCommittedCursor := 0;
-  FNextCursor := 0;
-  FReservedCursor := 0;
-  FReservedPayload := '';
-  FReservedHanded := False;
-  FHasLivePatch := False;
-  FLiveCursor := 0;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -656,7 +619,6 @@ Begin
   FreeAndNil(FPlanFetch);
   FreeAndNil(FIntake);
   FreeAndNil(FOutbox);
-  FreeAndNil(FCredit);
   FreeAndNil(FMirror);
   DoneCriticalSection(FLock);
   Inherited Destroy;
@@ -687,7 +649,7 @@ Begin
 End;
 
 Type
-  THostLane = (hlControl, hlLive, hlPlan, hlBulk);
+  THostLane = (hlControl, hlPlan, hlBulk);
 
 Function HostLane(Const Json: String): THostLane;
 Var
@@ -701,9 +663,8 @@ Begin
   If Message.TypeName = 'event' Then
     Exit(hlBulk);
   Case Message.Kind Of
-    mmkPatch: Result := hlLive;
     mmkPlan: Result := hlPlan;
-    mmkSnapshot, mmkTranscript, mmkCatchup, mmkImageData, mmkSnapshotPage, mmkChunk: Result := hlBulk;
+    mmkImageData, mmkSnapshotPage, mmkChunk: Result := hlBulk;
   Else
     Result := hlControl;
   End;
@@ -764,46 +725,6 @@ Begin
     Result := 'bulk';
 End;
 
-Function TMonitorSession.LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
-Var
-  Data: TJSONData;
-  Root, Payload: TJSONObject;
-  TypeName: String;
-Begin
-  Result := False;
-  Seq := 0;
-  Data := Nil;
-  Try
-    {$IFDEF MONITOR_COUNT_PARSES}
-    MonitorNoteJsonParse;
-    {$ENDIF}
-    Data := GetJSON(Json);
-  Except
-    Data := Nil;
-  End;
-  If Not (Data Is TJSONObject) Then
-    Begin
-      Data.Free;
-      Exit;
-    End;
-  Root := TJSONObject(Data);
-  Try
-    TypeName := Root.Get('type', '');
-    If (TypeName <> 'patch') And (TypeName <> 'event') Then
-      Exit;
-    If Not (Root.Find('payload') Is TJSONObject) Then
-      Exit;
-    Payload := TJSONObject(Root.Find('payload'));
-    If TypeName = 'patch' Then
-      Seq := Payload.Get('cursor', Int64(0))
-    Else
-      Seq := Payload.Get('seq', Int64(0));
-    Result := Seq > 0;
-  Finally
-    Data.Free;
-  End;
-End;
-
 Procedure TMonitorSession.StorePlanFrames(Const Frames: TStringArray);
 Var
   Encoded: Array Of RawByteString;
@@ -853,25 +774,6 @@ Begin
   QueueSend(Json);
 End;
 
-Procedure TMonitorSession.ReleaseHeldLog;
-Var
-  Seq: Int64;
-  Json: String;
-Begin
-  If Not Assigned(FCredit) Then
-    Exit;
-  While FCredit.TakeHeld(Seq, Json) Do
-    Begin
-      If Not FCredit.CanSend(Length(Json)) Then
-        Begin
-          FCredit.Hold(Seq, Json);
-          Exit;
-        End;
-      FCredit.NoteSent(Seq, Length(Json));
-      EnqueueAccepted(Json);
-    End;
-End;
-
 Procedure TMonitorSession.NoteLogAck(Const PayloadJson: TMonitorPayload);
 Var
   Data: TJSONData;
@@ -906,9 +808,6 @@ Begin
   Finally
     UnlockSession;
   End;
-  If Assigned(FCredit) Then
-    FCredit.NoteAck(Seq);
-  ReleaseHeldLog;
   FillLogLane;
 End;
 
@@ -951,22 +850,6 @@ Begin
   Result := False;
   If (Json = '') Or Not Assigned(FOutbox) Then
     Exit;
-  If (Lane = mslLog) And (Seq > 0) And Assigned(FCredit) Then
-    Begin
-      If Not FCredit.CanSend(Length(Json)) Then
-        Begin
-          FCredit.Hold(Seq, Json);
-          { One bye, then the same close CloseToListening uses. A later held frame must not queue another. }
-          If (FCredit.HeldBytes > MonitorLogBudgetBytes) And (Not FCloseRequested) Then
-            Begin
-              QueueControl(EncodeMonitorBye(NewHostId, 'protocol'));
-              CloseToListening;
-            End;
-          Result := True;
-          Exit;
-        End;
-      FCredit.NoteSent(Seq, Length(Json));
-    End;
   If Not EncodeMonitorFrameBytes(Json, Bytes) Then
     Begin
       Inc(FFramesDropped);
@@ -1028,22 +911,6 @@ Begin
   Result := False;
   If (Json = '') Or Not Assigned(FOutbox) Then
     Exit;
-  If LogFrameSeq(Json, Seq) And Assigned(FCredit) Then
-    Begin
-      If Not FCredit.CanSend(Length(Json)) Then
-        Begin
-          FCredit.Hold(Seq, Json);
-          { One bye, then the same close CloseToListening uses. A later held frame must not queue another. }
-          If (FCredit.HeldBytes > MonitorLogBudgetBytes) And (Not FCloseRequested) Then
-            Begin
-              QueueControl(EncodeMonitorBye(NewHostId, 'protocol'));
-              CloseToListening;
-            End;
-          Result := True;
-          Exit;
-        End;
-      FCredit.NoteSent(Seq, Length(Json));
-    End;
   If MonitorSyncClassify(Json, SyncLane, StateKey) Then
     Begin
       If Not EncodeHostFrame(Json, Bytes) Then
@@ -1097,13 +964,6 @@ Begin
   Lane := HostLane(Json);
   SetLength(One, 1);
   One[0] := Bytes;
-  { Catalogue 2 live patches are not sent. Events travel on the log lane. }
-  If Lane = hlLive Then
-    Begin
-      Inc(FFramesDropped);
-      Result := True;
-      Exit;
-    End;
   If Lane = hlPlan Then
     Begin
       If Not FOutbox.ReplaceState('plan', One, Replaced) Then
@@ -1260,8 +1120,6 @@ Begin
       FOutbox.ReplaceState('live', EmptyState, Dropped);
       FOutbox.ReplaceState('plan', EmptyState, Dropped);
     End;
-  FHasLivePatch := False;
-  FLiveCursor := 0;
   If Assigned(FPlanFetch) Then
     FPlanFetch.Cancel;
 End;
@@ -1381,7 +1239,7 @@ Procedure TMonitorSession.RejectLocked(Const Reason: String; DoClose: Boolean);
 Var
   Json: String;
 Begin
-  Json := EncodeMonitorRejected(NewHostId, Reason, MonitorCatalogueVersion, FClientVersion);
+  Json := EncodeCommandRejected(NewHostId, Reason, MonitorCatalogueVersion, FClientVersion);
   QueueControl(Json);
   LogLine(2, 'rejected reason=' + Reason + ' bytes=' + IntToStr(Length(Json)) + ' bind=' + FBindAddress +
     ' port=' + IntToStr(FPort));
@@ -1407,7 +1265,7 @@ Begin
       RejectLocked('protocol', True);
       Exit;
     End;
-  If Not DecodeMonitorHello(PayloadJson, Hello) Then
+  If Not DecodeCommandHello(PayloadJson, Hello) Then
     Begin
       RejectLocked('protocol', True);
       Exit;
@@ -1458,7 +1316,7 @@ Begin
   HelloOk.ProjectRoot := FProjectRoot;
   HelloOk.Title := FTitle;
   HelloOk.HostId := FInstallationHostId;
-  QueueControl(EncodeMonitorHelloOk(NewHostId, HelloOk));
+  QueueControl(EncodeCommandHelloOk(NewHostId, HelloOk));
 End;
 
 Procedure TMonitorSession.HandlePair(Const PayloadJson: TMonitorPayload);
@@ -1473,7 +1331,7 @@ Begin
       RejectLocked('auth', True);
       Exit;
     End;
-  If Not DecodeMonitorPair(PayloadJson, Pair) Then
+  If Not DecodeCommandPair(PayloadJson, Pair) Then
     Begin
       RejectLocked('protocol', True);
       Exit;
@@ -1541,7 +1399,7 @@ Begin
   FPairGate := False;
   FState := mssLive;
   AdoptRunningHost;
-  QueueControl(EncodeMonitorPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
+  QueueControl(EncodeCommandPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
   LogLine(1, 'pair success client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
@@ -1556,7 +1414,7 @@ Begin
       RejectLocked('auth', True);
       Exit;
     End;
-  If Not DecodeMonitorAuth(PayloadJson, Auth) Then
+  If Not DecodeCommandAuth(PayloadJson, Auth) Then
     Begin
       RejectLocked('protocol', True);
       Exit;
@@ -1600,9 +1458,9 @@ Procedure TMonitorSession.HandlePing(Const PayloadJson: TMonitorPayload);
 Var
   Ticks: TMonitorTicks;
 Begin
-  If Not DecodeMonitorTicks(PayloadJson, Ticks) Then
+  If Not DecodeCommandTicks(PayloadJson, Ticks) Then
     Ticks.Ticks := 0;
-  QueueControl(EncodeMonitorTicks(mmkPong, NewHostId, Ticks.Ticks));
+  QueueControl(EncodeCommandTicks(mmkPong, NewHostId, Ticks.Ticks));
 End;
 
 Procedure TMonitorSession.HandleBye;
@@ -1717,7 +1575,7 @@ End;
 Procedure TMonitorSession.AckQueued(Const Id: String; Admitted: TMonitorIntakeResult);
 Begin
   If Admitted = mirQueued Then
-    QueueControl(EncodeMonitorCommandState(NewHostId, Id, 'queued', ''));
+    QueueControl(EncodeCommandStateFrame(NewHostId, Id, 'queued', ''));
 End;
 
 Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
@@ -1742,7 +1600,7 @@ Begin
         Exit;
       If Admitted = mirDuplicate Then
         Begin
-          QueueControl(EncodeMonitorCommandState(NewHostId, Prior.Id, MonitorCommandStateName(Prior.State), Prior.Reason));
+          QueueControl(EncodeCommandStateFrame(NewHostId, Prior.Id, MonitorCommandStateName(Prior.State), Prior.Reason));
           Exit;
         End;
     End;
@@ -1801,7 +1659,7 @@ Begin
       RejectLocked('auth', True);
       Exit;
     End;
-  If Not DecodeMonitorResume(PayloadJson, ResumeMsg) Then
+  If Not DecodeCommandResume(PayloadJson, ResumeMsg) Then
     Begin
       QueueControl(EncodeMonitorError(NewHostId, 'protocol', 'Resume payload is not valid.', Id));
       Exit;
@@ -1939,7 +1797,7 @@ Var
   Decision: TMonitorApprovalDecision;
   Reason: String;
 Begin
-  If Not DecodeMonitorApprovalDecision(PayloadJson, Decision) Then
+  If Not DecodeStateApprovalDecision(PayloadJson, Decision) Then
     Exit;
   If ApplyApprovalDecision(Decision.ToolId, Decision.Allow) Then
     Exit;
@@ -2082,7 +1940,7 @@ Begin
   If (ClockMs >= QuietSince + MonitorHeartbeatMs) And ((PingQueuedMs = 0) Or (ClockMs >= PingQueuedMs + MonitorHeartbeatMs)) Then
     Begin
       PingQueuedMs := ClockMs;
-      QueueControl(EncodeMonitorTicks(mmkPing, NewHostId, Int64(ClockMs)));
+      QueueControl(EncodeCommandTicks(mmkPing, NewHostId, Int64(ClockMs)));
     End;
 End;
 
@@ -2129,7 +1987,7 @@ Begin
   LockSession;
   Try
     If Connected Then
-      QueueControl(EncodeMonitorBye(NewHostId, 'disabled'));
+      QueueControl(EncodeCommandBye(NewHostId, 'disabled'));
     FCloseRequested := True;
     ClearConnection;
     FState := mssStopped;
@@ -2137,7 +1995,6 @@ Begin
   Finally
     UnlockSession;
   End;
-  FlushLivePatch;
   DrainOutbound;
 End;
 
@@ -2161,9 +2018,9 @@ Begin
         Exit;
       End;
     If FState = mssStopped Then
-      Json := EncodeMonitorRejected(NewHostId, 'disabled', MonitorCatalogueVersion, 0)
+      Json := EncodeCommandRejected(NewHostId, 'disabled', MonitorCatalogueVersion, 0)
     Else
-      Json := EncodeMonitorRejected(NewHostId, 'busy', MonitorCatalogueVersion, 0);
+      Json := EncodeCommandRejected(NewHostId, 'busy', MonitorCatalogueVersion, 0);
     RejectFrame.Json := Json;
     If FState = mssStopped Then
       LogLine(2, 'rejected reason=disabled bind=' + FBindAddress + ' port=' + IntToStr(FPort))
@@ -2361,7 +2218,7 @@ Begin
     If Live Then
       Begin
         FState := mssRevoked;
-        QueueControl(EncodeMonitorBye(NewHostId, 'revoked'));
+        QueueControl(EncodeCommandBye(NewHostId, 'revoked'));
         FCloseRequested := True;
         LogLine(1, 'revoke client=' + ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
       End;
@@ -2387,7 +2244,7 @@ Begin
     If (LiveId <> '') And ((FState = mssLive) Or (FState = mssBusy)) Then
       Begin
         FState := mssRevoked;
-        QueueControl(EncodeMonitorBye(NewHostId, 'revoked'));
+        QueueControl(EncodeCommandBye(NewHostId, 'revoked'));
         FCloseRequested := True;
       End;
   Finally
@@ -2423,10 +2280,6 @@ Begin
     FProjectRoot := ProjectRoot;
     FTitle := Title;
     FCommittedCursor := 0;
-    FNextCursor := 0;
-    FReservedCursor := 0;
-    FReservedPayload := '';
-    FReservedHanded := False;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
   Finally
     UnlockSession;
@@ -2440,8 +2293,6 @@ Var
 Begin
   LockSession;
   Try
-    FHasLivePatch := False;
-    FLiveCursor := 0;
     If Assigned(FOutbox) Then
       Begin
         FOutbox.DiscardBulk;
@@ -2467,12 +2318,6 @@ Begin
     If Cursor < 0 Then
       Cursor := 0;
     FCommittedCursor := Cursor;
-    FNextCursor := Cursor;
-    FReservedCursor := 0;
-    FReservedPayload := '';
-    FReservedHanded := False;
-    FHasLivePatch := False;
-    FLiveCursor := 0;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
   Finally
     UnlockSession;
@@ -2494,115 +2339,6 @@ Begin
   LockSession;
   Try
     Result := FCommittedCursor;
-  Finally
-    UnlockSession;
-  End;
-End;
-
-Function TMonitorSession.CommitMirrorCursor(Const Payload: RawByteString; Out Cursor: Int64): Boolean;
-Begin
-  Result := False;
-  Cursor := 0;
-  LockSession;
-  Try
-    If FEpoch = '' Then
-      Exit;
-    If (FReservedCursor <> 0) And (Not FReservedHanded) Then
-      Begin
-        FReservedPayload := Payload;
-        Cursor := FReservedCursor;
-        Result := True;
-        Exit;
-      End;
-    If (FReservedCursor <> 0) And FReservedHanded And (Payload = FReservedPayload) Then
-      Begin
-        Cursor := FReservedCursor;
-        Result := True;
-        Exit;
-      End;
-    If FNextCursor = High(Int64) Then
-      Exit;
-    Inc(FNextCursor);
-    FReservedCursor := FNextCursor;
-    FReservedPayload := Payload;
-    FReservedHanded := False;
-    Cursor := FReservedCursor;
-    Result := True;
-  Finally
-    UnlockSession;
-  End;
-End;
-
-Procedure TMonitorSession.ReplaceLivePatch(Cursor: Int64; Const Frames: TStringArray);
-Var
-  Encoded: Array Of RawByteString;
-  Index, Replaced: Integer;
-Begin
-  LockSession;
-  Try
-    If Not Assigned(FOutbox) Then
-      Exit;
-    SetLength(Encoded, 0);
-    If Length(Frames) = 0 Then
-      Begin
-        If FOutbox.ReplaceState('live', Encoded, Replaced) And (Replaced > 0) Then
-          Inc(FFramesDropped, Replaced);
-        FHasLivePatch := False;
-        FLiveCursor := 0;
-        Exit;
-      End;
-    SetLength(Encoded, Length(Frames));
-    For Index := 0 To High(Frames) Do
-      If Not EncodeHostFrame(Frames[Index], Encoded[Index]) Then
-        Begin
-          CloseForQueueFailure;
-          Exit;
-        End;
-    If Not FOutbox.ReplaceState('live', Encoded, Replaced) Then
-      CloseForQueueFailure
-    Else
-      Begin
-        If Replaced > 0 Then
-          Inc(FFramesDropped, Replaced);
-        FLiveCursor := Cursor;
-        FHasLivePatch := True;
-      End;
-  Finally
-    UnlockSession;
-  End;
-End;
-
-Procedure TMonitorSession.FlushLivePatch;
-Var
-  Cursor: Int64;
-  Had: Boolean;
-Begin
-  LockSession;
-  Try
-    Had := FHasLivePatch;
-    Cursor := FLiveCursor;
-    FHasLivePatch := False;
-    FLiveCursor := 0;
-  Finally
-    UnlockSession;
-  End;
-  { The set is already in the state lane. Handed means the outbox accepted it. }
-  If Had Then
-    NoteMirrorHanded(Cursor);
-  If Not LinkPulls Then
-    DrainOutbound;
-End;
-
-Procedure TMonitorSession.NoteMirrorHanded(Cursor: Int64);
-Begin
-  LockSession;
-  Try
-    If (Cursor <> 0) And (Cursor = FReservedCursor) Then
-      Begin
-        FReservedHanded := True;
-        If Cursor > FCommittedCursor Then
-          FCommittedCursor := Cursor;
-      End;
   Finally
     UnlockSession;
   End;
@@ -2633,63 +2369,6 @@ Begin
   Finally
     UnlockSession;
   End;
-End;
-
-Procedure TMonitorSession.RememberHandedPatch(Cursor: Int64; Const PatchJson: RawByteString);
-Begin
-  If Not Assigned(FMirror) Then
-    Exit;
-  LockSession;
-  Try
-    If (Cursor <= 0) Or (PatchJson = '') Or (Cursor > FCommittedCursor) Or (Cursor <= FMirror.DroppedThrough) Then
-      Exit;
-  Finally
-    UnlockSession;
-  End;
-  FMirror.RememberPatch(Cursor, PatchJson);
-End;
-
-Function TMonitorSession.TryResumeEvents(Const Epoch: String; Cursor: Int64; Out Catchup: TMonitorCatchup): Boolean;
-Var
-  Events: TMonitorMirrorEventArray;
-  Head: Int64;
-  Index: Integer;
-  Patch: TMonitorPatch;
-Begin
-  Result := False;
-  Catchup := Default(TMonitorCatchup);
-  SetLength(Catchup.Patches, 0);
-  SetLength(Events, 0);
-  If Not Assigned(FMirror) Then
-    Exit;
-  LockSession;
-  Try
-    Catchup.Mode := mcmEvents;
-    Catchup.Epoch := FEpoch;
-    Catchup.Cursor := FCommittedCursor;
-    Catchup.ConversationId := FConversationId;
-    Catchup.ProjectRoot := FProjectRoot;
-    Catchup.Title := FTitle;
-    Catchup.HasSnapshot := False;
-    If FEpoch = '' Then
-      Exit;
-    If LowerCase(Epoch) <> FEpoch Then
-      Exit;
-    If (Cursor < 0) Or (Cursor > FCommittedCursor) Then
-      Exit;
-  Finally
-    UnlockSession;
-  End;
-  If Not FMirror.TryReplayPatches(Epoch, Cursor, Catchup.Cursor, Events, Head) Then
-    Exit;
-  For Index := 0 To High(Events) Do
-    Begin
-      If Not DecodeMonitorPatch(String(Events[Index].Data), Patch) Then
-        Exit;
-      SetLength(Catchup.Patches, Length(Catchup.Patches) + 1);
-      Catchup.Patches[High(Catchup.Patches)] := Patch;
-    End;
-  Result := True;
 End;
 
 Procedure TMonitorSession.ObserveTurn(Const Turn: TAssistantMonitorTurn);
@@ -3033,11 +2712,11 @@ Begin
   Result := False;
   TurnIndex := 0;
   SetLength(Frames, 0);
-  If Not DecodeMonitorTurnRequest(PayloadJson, TurnIndex) Then
+  If Not DecodeCommandTurnRequest(PayloadJson, TurnIndex) Then
     Exit;
   If Not FetchMirrorTurn(TurnIndex, Turn) Then
     Exit;
-  If Not PackMonitorBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
+  If Not PackImageBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
     Frames) Then
     Exit;
   QueueBulkFramesLocked(Frames);
@@ -3078,21 +2757,6 @@ Begin
   End;
 End;
 
-Function TMonitorSession.CommitSnapshotCursor(Const BodyStamp: RawByteString; Out Cursor: Int64): Boolean;
-Begin
-  Result := CommitMirrorCursor('catchup-snapshot' + #1 + BodyStamp, Cursor);
-End;
-
-Function ResumeNeedsFormSnapshot(Session: TMonitorSession; Const Epoch: String; Cursor: Int64): Boolean;
-Var
-  Catchup: TMonitorCatchup;
-Begin
-  Result := True;
-  If Not Assigned(Session) Then
-    Exit;
-  Result := Not Session.TryResumeEvents(Epoch, Cursor, Catchup);
-End;
-
 Procedure TMonitorSession.PublishDisplayApproval(Const ToolId, ToolName, Summary, ModeCaption: String);
 Var
   Notice: TAssistantApprovalNotice;
@@ -3110,7 +2774,7 @@ Begin
     Notice.ModeCaption := ModeCaption;
     Notice.DecisionsAccepted := False;
     Notice.Reason := '';
-    QueueControl(EncodeMonitorApprovalRequested(NewHostId, Notice));
+    QueueControl(EncodeStateApprovalRequested(NewHostId, Notice));
   Finally
     UnlockSession;
   End;
@@ -3128,7 +2792,7 @@ Begin
       FDisplayApprovalId := '';
     If FPendingApprovalId = ToolId Then
       FPendingApprovalId := '';
-    QueueControl(EncodeMonitorApprovalClosed(NewHostId, ToolId, 'desktop'));
+    QueueControl(EncodeStateApprovalClosed(NewHostId, ToolId, 'desktop'));
   Finally
     UnlockSession;
   End;
@@ -3168,7 +2832,7 @@ Begin
   SetLength(Frames, 0);
   LockSession;
   Try
-    If Not PackMonitorBulkItem(ItemId, ItemType, PayloadJson, Frames) Then
+    If Not PackImageBulkItem(ItemId, ItemType, PayloadJson, Frames) Then
       Begin
         Inc(FFramesDropped);
         Exit;
@@ -3187,7 +2851,7 @@ Begin
   SetLength(Frames, 0);
   LockSession;
   Try
-    If Not PackMonitorBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
+    If Not PackImageBulkItem(Id, 'snapshot_page', MonitorTurnPageJson(FConversationId, FEpoch, FCommittedCursor, Turn),
       Frames) Then
       Begin
         Inc(FFramesDropped);
@@ -3424,12 +3088,12 @@ Begin
       Else
         Replies[Index].State := 'unknown';
     End;
-  Result := EncodeMonitorCommandStates(Id, Replies);
+  Result := EncodeCommandStateFrames(Id, Replies);
 End;
 
 Procedure TMonitorSession.PublishCommandState(Const Id, State, Reason, DoneText: String);
 Begin
-  SendHostJson(EncodeMonitorCommandState(AllocateHostId, Id, State, Reason, DoneText));
+  SendHostJson(EncodeCommandStateFrame(AllocateHostId, Id, State, Reason, DoneText));
 End;
 
 Procedure TMonitorSession.NoteCommandAccepted(Const Id: String);

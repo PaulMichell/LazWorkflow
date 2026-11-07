@@ -406,7 +406,6 @@ private fun messageBytes(message: MonitorMessage): Int {
     // Transcript, TurnData, ImageData, ImageUnavailable, ApprovalRequested,
     // ApprovalClosed, InsertResult, Error, Rejected, Bye, PairOk, HelloOk, and Ping are never coalesced.
     private val CoalescedKinds = setOf(
-      MessageKind.Snapshot,
       MessageKind.Status,
       MessageKind.Mode,
       MessageKind.Target,
@@ -414,10 +413,7 @@ private fun messageBytes(message: MonitorMessage): Int {
       MessageKind.Tasks
     )
     private val PlanBefore = setOf(
-      MessageKind.Snapshot,
       MessageKind.SnapshotPage,
-      MessageKind.Transcript,
-      MessageKind.Catchup,
       MessageKind.ImageData,
       MessageKind.ImageUnavailable,
       MessageKind.Chunk
@@ -698,7 +694,6 @@ class LanSession(
     scope.launch { closeForBackground(epoch) }
     wakes.trySend(Unit)
   }
-
   /** Wi-Fi is up. Reset the LAN backoff and connect at once if the link is down. */
   fun onWifiAvailable() {
     lanAvailable = true
@@ -1048,7 +1043,6 @@ class LanSession(
       HeartbeatStep.None -> {}
     }
   }
-
   private fun clockMs(): Long = clock.nanoTime() / 1_000_000L
 
   private suspend fun readFrames(epoch: Int, current: TlsLink, outbound: ConnectionWriter) {

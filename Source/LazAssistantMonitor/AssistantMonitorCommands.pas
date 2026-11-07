@@ -63,7 +63,7 @@ Function DecodeCommandTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMoni
 Function ReadCommandIds(Obj: TJSONObject; Out Ids: TStringArray): Boolean;
 Function EncodeCommandResume(Const Id, Epoch: String; Cursor: Int64): String;
 Function DecodeCommandResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
-Function EncodeCommandStateFrame(Const Id, Ref, State, Reason: String; Const DoneText: String): String;
+Function EncodeCommandStateFrame(Const Id, Ref, State, Reason: String; Const DoneText: String = ''): String;
 Function EncodeCommandStateFrames(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 
 Implementation

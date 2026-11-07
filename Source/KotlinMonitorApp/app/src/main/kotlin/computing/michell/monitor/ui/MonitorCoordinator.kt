@@ -467,7 +467,7 @@ class MonitorCoordinator(
         noteHello(message)
         effects += resumeNow()
       }
-      MessageKind.Snapshot, MessageKind.SnapshotPage, MessageKind.Catchup, MessageKind.Patch, MessageKind.BlockData -> {
+      MessageKind.SnapshotPage, MessageKind.BlockData -> {
         // Slices, fetches, and the baseline own the board. These frames must not paint it.
       }
       MessageKind.ConversationClosed -> {
@@ -793,5 +793,4 @@ class MonitorCoordinator(
   )
 
 }
-
 

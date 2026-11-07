@@ -50,8 +50,8 @@ Function PlanPayload(Const Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings;
   Const Epoch: String; Cursor: Int64; Const Body: String; Complete: Boolean): TJSONObject;
 Function EncodeStatePlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings; Captions: TStrings;
-  Const Epoch: String; Cursor: Int64; Const Body: String; Complete: Boolean): String;
+  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
+  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''; Complete: Boolean = False): String;
 Function PackStatePlanFrames(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
   Out Frames: TStringArray): Boolean;
@@ -65,6 +65,9 @@ Function EncodeStateConversationClosed(Const Id, Epoch: String; Cursor: Int64;
 Function DecodeStateConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
 
 Implementation
+
+Uses
+  AssistantMonitorImages;
 
 Function EncodeStateTarget(Const Id, Kind, Display, Root: String): String;
 Var
@@ -749,7 +752,7 @@ Begin
       Exit(True);
     End;
   { The plan lane replaces this set, so a later edit is not stuck behind the previous chunks. }
-  Result := PackMonitorBulkItem(Id, 'plan', PayloadJson, Frames);
+  Result := PackImageBulkItem(Id, 'plan', PayloadJson, Frames);
 End;
 
 Function DecodeStatePlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;

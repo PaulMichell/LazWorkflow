@@ -17,7 +17,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames,
+  AssistantMonitorCommands, Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames,
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorSession, AssistantSessionObserve, WorkflowSettings;
 
 Const
@@ -450,9 +450,9 @@ Begin
     Exit;
   If Not Session.AcceptHandshake(Spare, True) Then
     Exit;
-  Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
+  Carrier.DeliverJson(EncodeCommandHello('hello', 'Phone', '1', ''));
   { Loopback with no armed code admits the pair. }
-  Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+  Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
   Result := Session.State = mssLive;
 End;
 
@@ -528,7 +528,7 @@ Begin
   Session.ObserveTurn(Turn);
   Session.DrainOutbound;
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorResume('resume-escape', '', 0));
+  Carrier.DeliverJson(EncodeCommandResume('resume-escape', '', 0));
   CheckEverySentFrame('session resume');
   Value := FindSentState('approval', Root);
   Try

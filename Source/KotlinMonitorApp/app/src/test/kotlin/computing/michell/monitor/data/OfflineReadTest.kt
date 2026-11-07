@@ -244,36 +244,6 @@ class OfflineReadTest {
     }
   }
 
-  @Test
-  fun anImportedCacheRowIsReadableAndResumesAsABaseline() = runBlocking {
-    val room = openRoom()
-    val root = tempDir("monitor-cache-root")
-    try {
-      val cache = File(root, MonitorCacheDirectoryName)
-      cache.mkdirs()
-      File(cache, "c-aa.json").writeText(encodeOfflineCache(OfflineCacheDocument(
-        listOf(WireTurn(1, "t-1", "Build", "2026-10-29T09:20:00Z", "Add a heartbeat", "")),
-        emptyList(), null, "", "", emptyList(), -1, "unsent"
-      )))
-      File(cache, CacheIndexFileName).writeText(
-        "{ \"entries\" : [ { \"fingerprint\" : \"host-1\", \"project_root\" : \"/work\", \"conversation_id\" : \"conversation-1\", " +
-          "\"title\" : \"Shown\", \"updated_ms\" : 9, \"turn_count\" : 1, \"file\" : \"c-aa.json\", \"images\" : [ ] } ] }"
-      )
-      importLegacyCache(root, ConversationRepository(room.database, File(root, "images")), File(root, "images"))
-      val reopened = room.reopen()
-      val row = reopened.sync().loadConversation("host-1", "conversation-1")
-      assertEquals("Add a heartbeat", reopened.sync().loadTurns("host-1", "conversation-1").single().prompt)
-      assertEquals(0L, row!!.seq)
-      assertEquals("", row.streamId)
-      val resume = encodeSyncResume("resume-1", row.id, row.streamId, row.seq)
-      assertTrue(resume, resume.contains("\"stream_id\" : \"\""))
-      assertTrue(resume, resume.contains("\"cursor\" : 0"))
-      assertFalse(resume.contains("\"cursor\" : 1"))
-    } finally {
-      room.delete()
-      root.deleteRecursively()
-    }
-  }
 }
 
 private class RoomClock(var now: Long) : () -> Long {
@@ -348,7 +318,6 @@ private suspend fun commit(
   clock.now += SyncBatchWindowMs
   return applier.tick()
 }
-
 private fun turn(seq: Long, turnId: String): MonitorEvent.TurnOpen {
   return MonitorEvent.TurnOpen("c1", "stream-a", seq, turnId, 1, "build", "prompt", "")
 }

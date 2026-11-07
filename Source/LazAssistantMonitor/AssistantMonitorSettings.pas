@@ -383,12 +383,12 @@ End;
 
 Function MonitorCertificateFile: String;
 Begin
-  Result := WorkflowSettingsDirectory + 'assistant-monitor/host.crt';
+  Result := WorkflowSettingsDirectory + 'assistant-monitor' + PathDelim + 'host.crt';
 End;
 
 Function MonitorKeyFile: String;
 Begin
-  Result := WorkflowSettingsDirectory + 'assistant-monitor/host.key';
+  Result := WorkflowSettingsDirectory + 'assistant-monitor' + PathDelim + 'host.key';
 End;
 
 Function ResolveMonitorBind(Const Settings: TMonitorSettings; Out Address, ErrorText: String): Boolean;

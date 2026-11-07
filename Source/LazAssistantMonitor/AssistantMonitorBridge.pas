@@ -52,6 +52,7 @@ Function CaptureMonitorListenSnapshot(Out Settings: TMonitorSettings; Out ErrorT
 Implementation
 
 Uses
+  AssistantMonitorImages, AssistantMonitorState, AssistantMonitorCommands,
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorApproval, AssistantTools, AssistantConversation,
   ProjectAssistantForm;
@@ -611,14 +612,14 @@ Begin
   If Assigned(Session) Then
     Begin
       { Commit the live patch before the closed cursor is copied. }
-      Session.FlushLivePatch;
+      Session.DrainOutbound;
       HadEpoch := Session.CopyClosedMirror(Closed);
       { The previous dump must not fill the phone, or sit in front of this empty chat. }
       Session.DiscardUnsentBulk;
     End;
   If HadEpoch Then
     Begin
-      SendJson(EncodeMonitorConversationClosed(HostId, Closed.Epoch, Closed.Cursor, Closed.ConversationId, Closed.Title));
+      SendJson(EncodeStateConversationClosed(HostId, Closed.Epoch, Closed.Cursor, Closed.ConversationId, Closed.Title));
       If Assigned(ProjectAssistantConversation) Then
         ProjectAssistantConversation.SaveClosedLogPosition(Closed.ConversationId, Closed.Epoch, Closed.Cursor);
     End;
@@ -798,7 +799,6 @@ Begin
     Ids.Free;
   End;
 End;
-
 Procedure TAssistantMonitorBridge.PublishPermissions(Form: TProjectAssistantForm);
 Var
   Session: TMonitorSession;
@@ -1337,13 +1337,13 @@ Begin
           Begin
             If Assigned(Session) Then
               Session.NoteApprovalRequested(Job.Approval.ToolId, Job.Approval.DecisionsAccepted);
-            SendJson(EncodeMonitorApprovalRequested(HostId, Job.Approval));
+            SendJson(EncodeStateApprovalRequested(HostId, Job.Approval));
           End
         Else
           Begin
             If Assigned(Session) Then
               Session.NoteApprovalClosed(Job.Approval.ToolId);
-            SendJson(EncodeMonitorApprovalClosed(HostId, Job.Approval.ToolId, Job.Approval.Reason));
+            SendJson(EncodeStateApprovalClosed(HostId, Job.Approval.ToolId, Job.Approval.Reason));
           End;
       End;
   Else
@@ -1406,7 +1406,7 @@ End;
 Procedure TAssistantMonitorBridge.HandleApprovalClosed(Const ToolId, Reason: String);
 Begin
   Try
-    SendJson(EncodeMonitorApprovalClosed(HostId, ToolId, Reason));
+    SendJson(EncodeStateApprovalClosed(HostId, ToolId, Reason));
   Except
     On E: Exception Do
       ReportPluginException('AssistantMonitorBridge.ApprovalClosed', E);
@@ -1434,13 +1434,13 @@ Begin
   Case Kind Of
     Ord(mmkSend):
       Begin
-        If Not DecodeMonitorText(PayloadJson, Text) Then
+        If Not DecodeCommandText(PayloadJson, Text) Then
           Text := '';
         Result := Form.RemoteSubmit(Text, ErrorText);
       End;
     Ord(mmkSteer):
       Begin
-        If Not DecodeMonitorText(PayloadJson, Text) Then
+        If Not DecodeCommandText(PayloadJson, Text) Then
           Text := '';
         Result := Form.RemoteSteer(Text, ErrorText);
       End;
@@ -1448,7 +1448,7 @@ Begin
       Result := Form.RemoteStop(ErrorText);
     Ord(mmkSetMode):
       Begin
-        If Not DecodeMonitorSetMode(PayloadJson, ModeText) Then
+        If Not DecodeCommandSetMode(PayloadJson, ModeText) Then
           ModeText := '';
         Result := Form.RemoteSelectMode(ModeText, ErrorText);
       End;
@@ -1456,42 +1456,42 @@ Begin
       Result := Form.RemoteNewConversation(ErrorText);
     Ord(mmkSelectPlan):
       Begin
-        If Not DecodeMonitorPath(PayloadJson, Path) Then
+        If Not DecodeCommandPath(PayloadJson, Path) Then
           Path := '';
         Result := Form.RemoteSelectPlan(Path, ErrorText);
       End;
     Ord(mmkSelectTarget):
       Begin
         { An empty path is Current Project. A missing path is not that value. }
-        If Not DecodeMonitorPath(PayloadJson, Path) Then
+        If Not DecodeCommandPath(PayloadJson, Path) Then
           Exit;
         Result := Form.RemoteSelectTarget(Path, ErrorText);
       End;
     Ord(mmkSelectConversation):
       Begin
         { An empty id is the open conversation. A missing id is not that value. }
-        If Not DecodeMonitorSelectConversation(PayloadJson, ArchiveId) Then
+        If Not DecodeCommandSelectConversation(PayloadJson, ArchiveId) Then
           Exit;
         Result := Form.RemoteSelectConversation(ArchiveId, ErrorText);
       End;
     Ord(mmkSetModel):
       Begin
         { A missing model is not an empty id. }
-        If Not DecodeMonitorSetModel(PayloadJson, ArchiveId) Then
+        If Not DecodeCommandSetModel(PayloadJson, ArchiveId) Then
           Exit;
         Result := Form.RemoteSelectModel(ArchiveId, ErrorText);
       End;
     Ord(mmkSetReasoning):
       Begin
         { A missing level is not model default. An empty level is. }
-        If Not DecodeMonitorSetReasoning(PayloadJson, Level) Then
+        If Not DecodeCommandSetReasoning(PayloadJson, Level) Then
           Exit;
         Result := Form.RemoteSelectReasoning(Level, ErrorText);
       End;
     Ord(mmkSetPermissions):
       Begin
         { A missing approval is not ask. This is not an approval decision. }
-        If Not DecodeMonitorSetPermissions(PayloadJson, Approval) Then
+        If Not DecodeCommandSetPermissions(PayloadJson, Approval) Then
           Exit;
         Result := Form.RemoteSelectPermissions(Approval, ErrorText);
       End;
@@ -1499,7 +1499,7 @@ Begin
       Begin
         Plan.Title := '';
         Plan.HasTitle := False;
-        DecodeMonitorNewPlan(PayloadJson, Plan);
+        DecodeCommandNewPlan(PayloadJson, Plan);
         If Not Plan.HasTitle Then
           Plan.Title := '';
         Result := Form.RemoteNewPlan(Plan.Title, ErrorText);
@@ -1519,7 +1519,7 @@ Begin
       Begin
         Task.Id := '';
         Task.Note := '';
-        DecodeMonitorTaskCommand(PayloadJson, Task);
+        DecodeCommandTask(PayloadJson, Task);
         Result := Form.RemoteRunTask(Task.Id, Task.Note, ErrorText);
       End;
     Ord(mmkInsertTask):
@@ -1527,14 +1527,14 @@ Begin
         Task.Id := '';
         Task.Note := '';
         ApiText := '';
-        DecodeMonitorTaskCommand(PayloadJson, Task);
+        DecodeCommandTask(PayloadJson, Task);
         Result := Form.RemoteInsertTask(Task.Id, Task.Note, ApiText, ErrorText);
         If Result Then
           DoneText := ApiText;
       End;
     Ord(mmkRefresh):
       Begin
-        If Not DecodeMonitorText(PayloadJson, Text) Then
+        If Not DecodeCommandText(PayloadJson, Text) Then
           Text := '';
         If Text = 'plan_choices' Then
           Begin
@@ -1557,7 +1557,7 @@ Begin
     Ord(mmkTurn):
       Begin
         Index := 0;
-        If Not DecodeMonitorTurnRequest(PayloadJson, Index) Then
+        If Not DecodeCommandTurnRequest(PayloadJson, Index) Then
           Begin
             ErrorText := 'missing';
             Exit;
@@ -1582,7 +1582,7 @@ Begin
       Begin
         Image.TurnIndex := 0;
         Image.ImageId := '';
-        If Not DecodeMonitorImageGet(PayloadJson, Image) Then
+        If Not DecodeImageGet(PayloadJson, Image) Then
           Begin
             ErrorText := 'missing';
             Exit;
@@ -1592,11 +1592,11 @@ Begin
           Begin
             If ErrorText = '' Then
               ErrorText := 'missing';
-            SendJson(EncodeMonitorImageUnavailable(Id, Image.ImageId, 'missing'));
+            SendJson(EncodeImageUnavailable(Id, Image.ImageId, 'missing'));
             Result := True;
             ErrorText := '';
           End
-        Else If TryPackMonitorImage(Id, Image.ImageId, Mime, ImageWidth, ImageHeight, 1, Data, False, False,
+        Else If TryPackImage(Id, Image.ImageId, Mime, ImageWidth, ImageHeight, 1, Data, False, False,
           Messages, Unavailable) Then
           Begin
             LockBridge;
@@ -1612,7 +1612,7 @@ Begin
           Begin
             If Unavailable = '' Then
               Unavailable := 'missing';
-            SendJson(EncodeMonitorImageUnavailable(Id, Image.ImageId, Unavailable));
+            SendJson(EncodeImageUnavailable(Id, Image.ImageId, Unavailable));
           End;
       End;
   Else
@@ -1624,7 +1624,7 @@ Function LiveRefresh(Const PayloadJson: TMonitorPayload): Boolean;
 Var
   Text: String;
 Begin
-  Result := DecodeMonitorText(PayloadJson, Text) And (Text = 'live');
+  Result := DecodeCommandText(PayloadJson, Text) And (Text = 'live');
 End;
 
 Procedure TAssistantMonitorBridge.PushLiveState;

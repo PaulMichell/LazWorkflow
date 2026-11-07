@@ -85,17 +85,6 @@ class OfflineCacheUiTest {
     assertNull(cacheSaveTarget(oldRoot.copy(conversationId = "")))
   }
 
-  @Test
-  fun aFinishedPatchCommitsTheCursorAndAnOpenPartDoesNot() {
-    val before = MonitorUi(hostEpoch = "aa", hostCursor = 3)
-    val committed = before.copy(hostCursor = 4)
-    val partial = before.copy(patchOpenCursor = 4, patchPartCount = 2)
-    val catching = before.copy(hostEpoch = "bb", hostCursor = 1, catchingUp = true)
-    assertTrue(cursorCommitted(before, committed))
-    assertFalse(cursorCommitted(before, partial))
-    assertFalse(cursorCommitted(before, catching))
-    assertTrue(cursorCommitted(before, before.copy(hostEpoch = "bb", hostCursor = 0)))
-  }
 
   @Test
   fun aCachedReviewKeepsTheLiveBlobAndDoesNotEnableSend() {

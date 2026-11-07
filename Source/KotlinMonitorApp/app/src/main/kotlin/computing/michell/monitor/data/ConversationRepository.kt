@@ -96,20 +96,6 @@ class ConversationRepository(
     return documentFromRows(database.sync().loadTurns(host, id), database.sync().loadBlocks(host, id))
   }
 
-  /** One-time import. Later text reaches Room through the applier, not a document rewrite. */
-  suspend fun saveImported(row: LegacyReady, imageRoot: File) {
-    val stored = storedScreen(row.hostKey, row.conversationId, row.projectRoot, row.title, row.updatedMs, row.document, 0L, "")
-    val images = ArrayList<ImageRecord>()
-    for ((id, source) in row.images) {
-      if (!source.isFile) continue
-      val target = monitorImageFile(imageRoot, row.hostKey, row.conversationId, id) ?: continue
-      copyBytes(source.readBytes(), target)
-      images += ImageRecord(id, row.hostKey, row.conversationId, target.absolutePath, source.length(), "application/octet-stream", source.length())
-    }
-    commit(row.hostKey, stored, images)
-    retain()
-  }
-
   suspend fun retain() {
     val settings = limits()
     val conversations = database.conversations().listAll()

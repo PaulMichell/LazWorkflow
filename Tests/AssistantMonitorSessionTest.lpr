@@ -14,7 +14,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
+  AssistantMonitorState, AssistantMonitorCommands, Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorOutbox,
   AssistantMonitorSession, AssistantMonitorApproval,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
@@ -222,7 +222,7 @@ Var
 Begin
   Check(Title + ' frame', DecodeLast(Message));
   Check(Title + ' type', Message.Kind = mmkRejected);
-  Check(Title + ' payload', DecodeMonitorRejected(Message.PayloadJson, Rejected));
+  Check(Title + ' payload', DecodeCommandRejected(Message.PayloadJson, Rejected));
   If Rejected.Reason <> Reason Then
     WriteLn('detail ', Title, ' reason=', Rejected.Reason);
   Check(Title + ' reason ' + Reason, Rejected.Reason = Reason);
@@ -260,20 +260,20 @@ Begin
   Check(Title + ' spare rejected', Not Session.AcceptHandshake(Spare));
   Check(Title + ' controller unchanged', Session.State = Before);
   Check(Title + ' spare envelope', TryDecodeMonitorEnvelope(Spare.Json, Message, ErrorText) And (Message.Kind = mmkRejected));
-  Check(Title + ' spare payload', DecodeMonitorRejected(Message.PayloadJson, Rejected));
+  Check(Title + ' spare payload', DecodeCommandRejected(Message.PayloadJson, Rejected));
   Check(Title + ' spare busy', Rejected.Reason = 'busy');
 End;
 
 Procedure DeliverHello(Const ClientId: String);
 Begin
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ClientId));
+  Carrier.DeliverJson(EncodeCommandHello('hello', 'Phone', '1', ClientId));
 End;
 
 Procedure DeliverPair(Const Code: String);
 Begin
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorPair('pair', Code, 'ab12cd34'));
+  Carrier.DeliverJson(EncodeCommandPair('pair', Code, 'ab12cd34'));
 End;
 
 Function WrongCode(Const Code: String): String;
@@ -304,7 +304,7 @@ Begin
   Check('pair code spent', Session.PairCode = '');
   Check('pair does not close', Not Session.CloseRequested);
   Check('pair_ok frame', DecodeLast(Message) And (Message.Kind = mmkPairOk));
-  Check('pair_ok payload', DecodeMonitorPairOk(Message.PayloadJson, PairOk));
+  Check('pair_ok payload', DecodeCommandPairOk(Message.PayloadJson, PairOk));
   SavedClientId := PairOk.ClientId;
   SavedToken := PairOk.SessionToken;
   Check('client id present', SavedClientId <> '');
@@ -321,7 +321,7 @@ Begin
     Exit;
   If Message.Kind <> mmkHelloOk Then
     Exit;
-  If Not DecodeMonitorHelloOk(Message.PayloadJson, HelloOk) Then
+  If Not DecodeCommandHelloOk(Message.PayloadJson, HelloOk) Then
     Exit;
   Result := HelloOk.Nonce;
 End;
@@ -341,7 +341,7 @@ Begin
   Check('loopback accepted', Session.AcceptHandshake(Spare, True));
   DeliverHello('');
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+  Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
   ExpectPairOk;
   Check('open pair stores client', LoadMonitorSettings(Settings, ErrorText) And (Length(Settings.Clients) = 1));
   Session.RevokeClient(SavedClientId);
@@ -367,7 +367,7 @@ End;
 Procedure TestCommandBeforeAuth;
 Begin
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorEmpty(mmkSend, 'send-early'));
+  Carrier.DeliverJson(EncodeCommandEmpty(mmkSend, 'send-early'));
   ExpectRejected('command before auth', 'auth', True);
   Check('command before auth is not live', Session.State <> mssLive);
 End;
@@ -451,7 +451,7 @@ Begin
   Nonce := NonceFromLast;
   Check('hello_ok nonce', Length(Nonce) = MonitorNonceBytes * 2);
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorAuth('auth-bad', SavedClientId, 'not-a-mac'));
+  Carrier.DeliverJson(EncodeCommandAuth('auth-bad', SavedClientId, 'not-a-mac'));
   ExpectRejected('hmac failure', 'auth', True);
   Check('hmac failure is not live', Session.State <> mssLive);
   NewSocket;
@@ -459,7 +459,7 @@ Begin
   Nonce := NonceFromLast;
   Check('second nonce', Length(Nonce) = MonitorNonceBytes * 2);
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorAuth('auth-ok', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Carrier.DeliverJson(EncodeCommandAuth('auth-ok', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
   Check('hmac success is live', Session.State = mssLive);
   Check('hmac success sends no extra frame', Carrier.SentCount = 0);
   Check('hmac success stays open', Not Session.CloseRequested);
@@ -480,7 +480,7 @@ Begin
   DeliverHello(SavedClientId);
   Nonce := NonceFromLast;
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorAuth('auth-run', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Carrier.DeliverJson(EncodeCommandAuth('auth-run', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
   Check('reconnect during a turn is busy', Session.State = mssBusy);
   Flags := Default(TMonitorHostFlags);
   Flags.CanSend := True;
@@ -504,7 +504,7 @@ Begin
     Session.SetHostFlags(Flags);
     Check('idle steer starts live', Session.State = mssLive);
     Carrier.ClearSent;
-    Check('idle steer encodes', TryEncodeMonitorSteer('steer-idle', 'hello from the phone', Json, ErrorJson));
+    Check('idle steer encodes', TryEncodeCommandSteer('steer-idle', 'hello from the phone', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('idle steer is submitted', Sink.Calls = 1);
     Check('idle steer becomes send', Sink.Kind = Ord(mmkSend));
@@ -515,7 +515,7 @@ Begin
     Flags.CanSend := False;
     Session.SetHostFlags(Flags);
     Sink.Calls := 0;
-    Check('running steer encodes', TryEncodeMonitorSteer('steer-run', 'nudge', Json, ErrorJson));
+    Check('running steer encodes', TryEncodeCommandSteer('steer-run', 'nudge', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('running steer stays steer', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSteer)));
     Flags := Default(TMonitorHostFlags);
@@ -523,7 +523,7 @@ Begin
     Check('finished turn is live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Check('blocked steer encodes', TryEncodeMonitorSteer('steer-block', 'later', Json, ErrorJson));
+    Check('blocked steer encodes', TryEncodeCommandSteer('steer-block', 'later', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('blocked steer is not queued', Sink.Calls = 0);
     Check('blocked steer error', DecodeLast(Message) And (Message.Kind = mmkError));
@@ -537,45 +537,11 @@ End;
 
 Function BulkFrame(Index: Integer): String;
 Begin
-  Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot","payload":{}}';
+  Result := '{"v":3,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot_page","payload":{}}';
 End;
 
 { A live part is a real envelope. The id carries the name, so a check can find the part in the sent frames. }
-Function LivePart(Const Name: String): String;
-Begin
-  Result := '{"v":2,"id":"' + Name + '","type":"patch","payload":{}}';
-End;
 
-Procedure TestOutboundLanes;
-Var
-  Index, Before: Integer;
-  Ping, Seen: String;
-  First, Second: TStringArray;
-Begin
-  Ping := EncodeMonitorTicks(mmkPing, 'lane-ping', 1);
-  Carrier.ClearSent;
-  For Index := 1 To 3 Do
-    Check('bulk lane accepts ' + IntToStr(Index), Session.TryQueueHostJson(BulkFrame(Index)));
-  SetLength(First, 2);
-  First[0] := LivePart('patch-part-1');
-  First[1] := LivePart('patch-part-2');
-  SetLength(Second, 1);
-  Second[0] := LivePart('patch-replaced');
-  Before := Session.FramesDropped;
-  Session.ReplaceLivePatch(8, First);
-  Session.ReplaceLivePatch(9, Second);
-  Check('a newer live set replaces the unsent parts', Session.FramesDropped = Before + 2);
-  Check('control ping is queued beside bulk and state', Session.TryQueueHostJson(Ping));
-  Session.DrainOutbound;
-  Check('drain sends ping, the replacement, and the bulk lane', Carrier.SentCount = 5);
-  Check('control ping is sent before the other lanes', Carrier.SentJson(0) = Ping);
-  Check('live replacement is sent and not appended', Carrier.SentJson(1) = LivePart('patch-replaced'));
-  Seen := '';
-  For Index := 0 To Carrier.SentCount - 1 Do
-    Seen := Seen + Carrier.SentJson(Index) + #10;
-  Check('dropped live parts are not sent', Pos('patch-part-1', Seen) = 0);
-  Check('bulk frames follow the live patch', Carrier.SentJson(2) = BulkFrame(1));
-End;
 
 Procedure TestPlanFrameBeforeBulk;
 Var
@@ -584,7 +550,7 @@ Var
   Row: TAssistantMonitorPlanRow;
   Rows: Array Of TAssistantMonitorPlanRow;
 Begin
-  Ping := EncodeMonitorTicks(mmkPing, 'plan-ping', 2);
+  Ping := EncodeCommandTicks(mmkPing, 'plan-ping', 2);
   Row.Index := 0;
   Row.Level := 3;
   Row.Title := 'Check the first show';
@@ -593,10 +559,10 @@ Begin
   Row.Actionable := True;
   SetLength(Rows, 1);
   Rows[0] := Row;
-  First := EncodeMonitorPlan('plan-old', 'Documents/Plan.md', 'Overview', False, Rows);
+  First := EncodeStatePlan('plan-old', 'Documents/Plan.md', 'Overview', False, Rows);
   Row.Status := 'in progress';
   Rows[0] := Row;
-  Second := EncodeMonitorPlan('plan-new', 'Documents/Plan.md', 'Overview', True, Rows);
+  Second := EncodeStatePlan('plan-new', 'Documents/Plan.md', 'Overview', True, Rows);
   Carrier.ClearSent;
   Before := Session.FramesDropped;
   Check('first plan is queued', Session.TryQueueHostJson(First));
@@ -619,30 +585,6 @@ Begin
   Check('the new status is in the sent plan', Pos('"in progress"', Carrier.SentJson(1)) > 0);
 End;
 
-Procedure TestLivePatchReplaces;
-Var
-  First, Second: TStringArray;
-  Before: Integer;
-Begin
-  SetLength(First, 2);
-  First[0] := LivePart('patch-part-1');
-  First[1] := LivePart('patch-part-2');
-  SetLength(Second, 1);
-  Second[0] := LivePart('patch-replaced');
-  Before := Session.FramesDropped;
-  Carrier.ClearSent;
-  Session.ReplaceLivePatch(4, First);
-  Session.ReplaceLivePatch(5, Second);
-  Check('replaced unsent parts are dropped', Session.FramesDropped = Before + 2);
-  Session.FlushLivePatch;
-  Check('live lane sends the replacement only', (Carrier.SentCount = 1) And
-    (Carrier.SentJson(0) = LivePart('patch-replaced')));
-  Session.ReplaceLivePatch(6, First);
-  SetLength(First, 0);
-  Session.ReplaceLivePatch(6, First);
-  Session.FlushLivePatch;
-  Check('empty replace does not append', Carrier.SentCount = 1);
-End;
 
 { Plan item 2.2. Text that is not JSON never reaches the outbox as raw bytes; it is counted as dropped.
   A fresh session, so a link the failure closes does not change the shared session the later tests use. }
@@ -656,18 +598,13 @@ Begin
   Fresh := TMonitorSession.Create;
   Try
     Before := Fresh.FramesDropped;
-    Check('invalid JSON is refused', Not Fresh.TryQueueHostJson('{"v":2,"id":"bad-1","type":"ping",'));
+    Check('invalid JSON is refused', Not Fresh.TryQueueHostJson('{"v":3,"id":"bad-1","type":"ping",'));
     Check('invalid JSON puts nothing in the outbox', Fresh.OutboundCount = 0);
     Check('invalid JSON is not taken by the link', Not Fresh.TakeOutboundFrame(Bytes));
     Check('invalid JSON is counted as dropped', Fresh.FramesDropped = Before + 1);
     Fresh.PublishState('status', '{"busy":');
     Check('a state value that is not JSON puts nothing in the outbox', Fresh.OutboundCount = 0);
     Check('a state value that is not JSON is counted as dropped', Fresh.FramesDropped = Before + 2);
-    SetLength(Parts, 1);
-    Parts[0] := 'patch-part-1';
-    Fresh.ReplaceLivePatch(1, Parts);
-    Check('a placeholder live part puts nothing in the outbox', Fresh.OutboundCount = 0);
-    Check('a placeholder live part is counted as dropped', Fresh.FramesDropped = Before + 3);
   Finally
     Fresh.Free;
   End;
@@ -698,244 +635,16 @@ End;
 {$ENDIF}
 
 { A catalogue 3 event large enough to fill the credit window, and too large for an outbox chunk. }
-Function CreditEvent(Seq: Integer; Const Pad: String): String;
-Begin
-  Result := '{"v":3,"id":"credit-' + IntToStr(Seq) + '","type":"event","payload":{"seq":' + IntToStr(Seq) +
-    ',"text":"' + Pad + '"}}';
-End;
 
 { Plan item 4.2. Frames held past the log budget queue one protocol bye and request close. Further held frames
   do not queue another bye. }
-Procedure TestCreditOverflowByeOnce;
-Var
-  Fresh: TMonitorSession;
-  Pad, Json: String;
-  Seq, Extra, Byes: Integer;
-  Unacked, Held: Int64;
-  Bytes: RawByteString;
-  Frame: TMonitorFrame;
-  Status: TMonitorFrameStatus;
-  Message: TMonitorMessage;
-  Bye: TMonitorBye;
-  ErrorText: String;
-Begin
-  Fresh := TMonitorSession.Create;
-  Try
-    { Larger than an outbox chunk, so the window frames are not queued. Only the bye should appear. }
-    Pad := StringOfChar('x', 200000);
-    Seq := 1;
-    Unacked := 0;
-    Json := CreditEvent(Seq, Pad);
-    While Unacked + Length(Json) <= MonitorCreditWindowBytes Do
-      Begin
-        Fresh.TryQueueHostJson(Json);
-        Unacked := Unacked + Length(Json);
-        Inc(Seq);
-        Json := CreditEvent(Seq, Pad);
-      End;
-    Held := 0;
-    While Held + Length(Json) <= MonitorLogBudgetBytes Do
-      Begin
-        Fresh.TryQueueHostJson(Json);
-        Held := Held + Length(Json);
-        Inc(Seq);
-        Json := CreditEvent(Seq, Pad);
-      End;
-    Check('held frames under the budget do not close the link', Not Fresh.CloseRequested);
-    Check('held frames under the budget queue no bye', Fresh.OutboundCount = 0);
-    Check('the frame past the held budget is accepted', Fresh.TryQueueHostJson(Json));
-    Check('credit overflow requests close', Fresh.CloseRequested);
-    Check('credit overflow queues one frame', Fresh.OutboundCount = 1);
-    For Extra := 1 To 3 Do
-      Begin
-        Inc(Seq);
-        Check('a later held frame adds no bye', Fresh.TryQueueHostJson(CreditEvent(Seq, Pad)) And (Fresh.OutboundCount = 1));
-      End;
-    Byes := 0;
-    While Fresh.TakeOutboundFrame(Bytes) Do
-      If TryDecodeMonitorFrame(Bytes, Frame, Status) And TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText) And
-        (Message.Kind = mmkBye) Then
-        Begin
-          Inc(Byes);
-          Check('the credit bye reason is protocol', DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'protocol'));
-        End;
-    Check('credit overflow queues exactly one bye', Byes = 1);
-  Finally
-    Fresh.Free;
-  End;
-End;
 
-Function PatchPayload(Const Epoch: String; Cursor: Int64; Const Body: String): String;
-Var
-  Patch: TMonitorPatch;
-  Block: TAssistantMonitorBlock;
-  Message: TMonitorMessage;
-  ErrorText: String;
-Begin
-  Result := '';
-  Patch := Default(TMonitorPatch);
-  Patch.Epoch := Epoch;
-  Patch.Cursor := Cursor;
-  Patch.TurnIndex := 1;
-  Patch.TurnId := 'turn-1';
-  Patch.Phase := 'idle';
-  Patch.CanSend := True;
-  Patch.Part := 1;
-  Patch.PartCount := 1;
-  Block := Default(TAssistantMonitorBlock);
-  Block.Kind := 'answer';
-  Block.BlockId := 'block-1';
-  Block.Body := Body;
-  SetLength(Patch.Blocks, 1);
-  Patch.Blocks[0] := Block;
-  If Not TryDecodeMonitorEnvelope(EncodeMonitorPatch('patch', Patch), Message, ErrorText) Then
-    Exit;
-  Result := Message.PayloadJson;
-End;
 
-Procedure HandPatch(Const Epoch, Body: String; Out Cursor: Int64);
-Var
-  Json: String;
-Begin
-  Cursor := 0;
-  Check('patch commit ' + Body, Session.CommitMirrorCursor(Body, Cursor));
-  Session.NoteMirrorHanded(Cursor);
-  Json := PatchPayload(Epoch, Cursor, Body);
-  Check('patch payload ' + Body, Json <> '');
-  Session.RememberHandedPatch(Cursor, Json);
-End;
 
 { A real patch payload with one answer block of BodyBytes copies of Fill. The log replays only what decodes as a patch. }
-Function LargePatchJson(Const Epoch: String; Cursor: Int64; Fill: Char; BodyBytes: Integer): String;
-Begin
-  Result := '{"epoch":"' + Epoch + '","cursor":' + IntToStr(Cursor) + ',"turn_index":1,"turn_id":"turn-1","part":1,' +
-    '"part_count":1,"busy":false,"sending":false,"plan_running":false,"phase":"idle","can_send":true,"can_steer":false,' +
-    '"can_stop":false,"elapsed_ms":0,"blocks":[{"kind":"answer","block_id":"block-1","title":"","tool_name":"",' +
-    '"tool_id":"","body":"' + StringOfChar(Fill, BodyBytes) + '","running":false,"ok":true,"duration_ms":0}]}';
-End;
 
-Procedure TestResumeRing;
-Var
-  Catchup: TMonitorCatchup;
-  Closed: TMonitorConversationClosed;
-  Cursor: Int64;
-  Index: Integer;
-  Big: String;
-Begin
-  Session.BeginMirrorEpoch('Ab12Cd34', 'current', '/work/LazWorkflow', 'Current');
-  { Since 6d0b0f2 'current' is not an identity. The unsaved chat has no conversation id. }
-  Check('closed copy before patches', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'ab12cd34') And
-    (Closed.Cursor = 0) And (Closed.ConversationId = '') And (Closed.Title = 'Current'));
-  HandPatch('ab12cd34', 'one', Cursor);
-  HandPatch('ab12cd34', 'two', Cursor);
-  HandPatch('ab12cd34', 'three', Cursor);
-  Check('ring replay from the middle', Session.TryResumeEvents('AB12CD34', 1, Catchup) And (Catchup.Mode = mcmEvents) And
-    (Catchup.Cursor = 3) And (Length(Catchup.Patches) = 2) And (Catchup.Patches[0].Cursor = 2) And
-    (Catchup.Patches[1].Cursor = 3) And (Catchup.Patches[0].Blocks[0].Body = 'two'));
-  Check('caught up resume is empty events', Session.TryResumeEvents('ab12cd34', 3, Catchup) And (Catchup.Mode = mcmEvents) And
-    (Length(Catchup.Patches) = 0) And (Catchup.Cursor = 3));
-  Check('empty epoch is not this generation', Not Session.TryResumeEvents('', 0, Catchup));
-  Check('other epoch is not events', Not Session.TryResumeEvents('eeff0011', 1, Catchup));
-  Check('unknown cursor is not events', Not Session.TryResumeEvents('ab12cd34', 9, Catchup));
-  Check('plan hole is not events', Session.CommitMirrorCursor('plan-row', Cursor) And (Cursor = 4));
-  Session.NoteMirrorHanded(4);
-  Check('cursor behind a plan hole snapshots', Not Session.TryResumeEvents('ab12cd34', 3, Catchup));
-  Check('cursor on the plan hole can replay later patches', Session.MirrorCursor = 4);
-  HandPatch('ab12cd34', 'after-plan', Cursor);
-  Check('resume after the hole is events', Session.TryResumeEvents('ab12cd34', 4, Catchup) And (Length(Catchup.Patches) = 1) And
-    (Catchup.Patches[0].Cursor = 5));
-  Session.BeginMirrorEpoch('eeff0011', 'conversation-20261019T120000000', '/work/LazWorkflow', 'Archived');
-  Check('new epoch drops the old ring', Not Session.TryResumeEvents('ab12cd34', 5, Catchup));
-  Check('new epoch cursor is zero', Session.MirrorCursor = 0);
-  Check('closed identity is the new epoch', Session.CopyClosedMirror(Closed) And (Closed.Epoch = 'eeff0011') And
-    (Closed.ConversationId = 'conversation-20261019T120000000') And (Closed.Title = 'Archived') And (Closed.Cursor = 0));
-  HandPatch('eeff0011', 'kept', Cursor);
-  Big := LargePatchJson('eeff0011', 2, 'z', MonitorRingJsonCap + 1);
-  Check('oversized commit', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
-  Session.NoteMirrorHanded(2);
-  Session.RememberHandedPatch(2, Big);
-  Check('a patch under the log budget stays events', Session.TryResumeEvents('eeff0011', 1, Catchup) And
-    (Length(Catchup.Patches) = 1) And (Catchup.Patches[0].Cursor = 2));
-  Session.BeginMirrorEpoch('11223344', 'current', '/work/LazWorkflow', 'Cap');
-  For Index := 1 To MonitorRingCapacity + 1 Do
-    HandPatch('11223344', 'n' + IntToStr(Index), Cursor);
-  Check('log budget keeps the small patches', Session.TryResumeEvents('11223344', 0, Catchup) And
-    (Catchup.Mode = mcmEvents) And (Length(Catchup.Patches) = MonitorRingCapacity + 1) And
-    (Catchup.Patches[0].Cursor = 1) And (Catchup.Patches[High(Catchup.Patches)].Cursor = MonitorRingCapacity + 1));
-  Session.BeginMirrorEpoch('55667788', 'current', '/work/LazWorkflow', 'Bytes');
-  HandPatch('55667788', 'small', Cursor);
-  Big := LargePatchJson('55667788', 2, 'q', 1200000);
-  Check('large patch is under the ring cap', (Length(Big) > 1000000) And (Length(Big) < MonitorRingJsonCap));
-  Check('large commit', Session.CommitMirrorCursor('large-a', Cursor) And (Cursor = 2));
-  Session.NoteMirrorHanded(2);
-  Session.RememberHandedPatch(2, Big);
-  Big := LargePatchJson('55667788', 3, 'r', 1200000);
-  Check('second large commit', Session.CommitMirrorCursor('large-b', Cursor) And (Cursor = 3));
-  Session.NoteMirrorHanded(3);
-  Session.RememberHandedPatch(3, Big);
-  Check('log budget keeps both large patches', Session.TryResumeEvents('55667788', 1, Catchup) And
-    (Length(Catchup.Patches) = 2) And (Catchup.Patches[1].Cursor = 3) And
-    (Length(Catchup.Patches[1].Blocks[0].Body) = 1200000));
-  Check('snapshot cursor follows the committed tip', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 4));
-  Session.NoteMirrorHanded(4);
-  Check('snapshot cursor is committed', Session.MirrorCursor = 4);
-  Check('resume behind the snapshot is not events', Not Session.TryResumeEvents('55667788', 3, Catchup));
-End;
 
-Procedure TestResumeHostRules;
-Var
-  Catchup: TMonitorCatchup;
-  Snapshot: TMonitorSnapshot;
-  Cursor: Int64;
-  Json: String;
-  Message: TMonitorMessage;
-  Decoded: TMonitorCatchup;
-  ErrorText: String;
-Begin
-  Session.BeginMirrorEpoch('ab12cd34', 'current', '/work/LazWorkflow', 'Current');
-  HandPatch('ab12cd34', 'kept', Cursor);
-  Check('resume of a cursor still in the ring returns events', Session.TryResumeEvents('ab12cd34', 0, Catchup) And
-    (Catchup.Mode = mcmEvents) And (Length(Catchup.Patches) = 1) And (Catchup.Cursor = 1));
-  Check('resume of a cursor still in the ring does not call the form snapshot fill',
-    Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
-  Check('oversized handed patch', Session.CommitMirrorCursor('too-big', Cursor) And (Cursor = 2));
-  Session.NoteMirrorHanded(2);
-  Session.RememberHandedPatch(2, LargePatchJson('ab12cd34', 2, 'z', MonitorRingJsonCap + 1));
-  Check('a patch under the log budget does not need a form snapshot',
-    Not ResumeNeedsFormSnapshot(Session, 'ab12cd34', 0));
-  Check('a hole still needs one form snapshot', Session.CommitMirrorCursor('hole', Cursor) And (Cursor = 3));
-  Session.NoteMirrorHanded(3);
-  Check('resume behind the hole is not events', Not Session.TryResumeEvents('ab12cd34', 2, Catchup));
-  Check('resume behind the hole needs one form snapshot', ResumeNeedsFormSnapshot(Session, 'ab12cd34', 2));
-  Check('resume snapshot cursor', Session.CommitSnapshotCursor('picture', Cursor) And (Cursor = 4));
-  Snapshot := Default(TMonitorSnapshot);
-  Snapshot.PlanTitle := 'Monitor plan';
-  Json := EncodeResumeSnapshot('resume-snap', Cursor, 'ab12cd34', 'current', '/work/LazWorkflow', 'Current', Snapshot);
-  Check('resume of a discarded cursor returns one snapshot', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And
-    (Message.Kind = mmkCatchup) And DecodeMonitorCatchup(Message.PayloadJson, Decoded) And (Decoded.Mode = mcmSnapshot) And
-    Decoded.HasSnapshot);
-  Check('resume of a discarded cursor returns the snapshot cursor', Decoded.Cursor = Cursor);
-End;
 
-Procedure TestMirrorCursor;
-Var
-  Cursor: Int64;
-Begin
-  Session.BeginMirrorEpoch('ab12cd34', 'current', '/work/LazWorkflow', 'Current');
-  Check('epoch stored', Session.MirrorEpoch = 'ab12cd34');
-  Check('cursor starts at zero', Session.MirrorCursor = 0);
-  Check('first commit', Session.CommitMirrorCursor('patch-a', Cursor) And (Cursor = 1));
-  Check('unsent replace keeps cursor', Session.CommitMirrorCursor('patch-b', Cursor) And (Cursor = 1));
-  Check('unsent is not handed', Session.MirrorCursor = 0);
-  Session.NoteMirrorHanded(1);
-  Check('handed cursor', Session.MirrorCursor = 1);
-  Check('resend keeps cursor', Session.CommitMirrorCursor('patch-b', Cursor) And (Cursor = 1));
-  Check('different bytes take the next cursor', Session.CommitMirrorCursor('patch-c', Cursor) And (Cursor = 2));
-  Session.NoteMirrorHanded(2);
-  Session.BeginMirrorEpoch('eeff0011', 'conversation-20261019T120000000', '/work/LazWorkflow', 'Archived');
-  Check('new epoch resets cursor', (Session.MirrorEpoch = 'eeff0011') And (Session.MirrorCursor = 0));
-  Check('new epoch does not reuse the old cursor', Session.CommitMirrorCursor('patch-c', Cursor) And (Cursor = 1));
-End;
 
 Procedure TestOldCatalogueRejects;
 Begin
@@ -964,13 +673,13 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Check('lifecycle send encodes', TryEncodeMonitorSend('send-live', 'hello', Json, ErrorJson));
+    Check('lifecycle send encodes', TryEncodeCommandSend('send-live', 'hello', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('send stays live until the form reports sending', Session.State = mssLive);
     Check('send is answered queued once', QueuedOnce('send-live'));
     Check('send reached the bridge hook once', Sink.Calls = 1);
     Carrier.ClearSent;
-    Check('pending steer encodes', TryEncodeMonitorSteer('steer-pending', 'not yet', Json, ErrorJson));
+    Check('pending steer encodes', TryEncodeCommandSteer('steer-pending', 'not yet', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('steer during the pending gap is not a second prompt', Sink.Calls = 1);
     Check('steer during the pending gap is refused', DecodeLast(Message) And (Message.Kind = mmkError) And
@@ -985,7 +694,7 @@ Begin
     Check('finished send returns to live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Check('repeat send encodes', TryEncodeMonitorSend('send-live', 'again', Json, ErrorJson));
+    Check('repeat send encodes', TryEncodeCommandSend('send-live', 'again', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('repeated id does not reach the hook again', Sink.Calls = 0);
     Check('repeated id is command_state', DecodeLast(Message) And (Message.Kind = mmkCommandState) And
@@ -993,13 +702,13 @@ Begin
     Carrier.ClearSent;
     Flags.Sending := True;
     Session.SetHostFlags(Flags);
-    Check('blocked send encodes', TryEncodeMonitorSend('send-blocked', 'no', Json, ErrorJson));
+    Check('blocked send encodes', TryEncodeCommandSend('send-blocked', 'no', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('blocked send does not reach the hook', Sink.Calls = 0);
     Check('blocked send is an error', DecodeLast(Message) And (Message.Kind = mmkError) And
       DecodeMonitorError(Message.PayloadJson, ErrorBody) And (ErrorBody.Reason = 'host_busy'));
     Carrier.ClearSent;
-    Carrier.DeliverJson('{"v":2,"id":"resume-states","type":"resume","payload":{"epoch":"","cursor":0,"commands":["send-blocked"]}}');
+    Carrier.DeliverJson('{"v":3,"id":"resume-states","type":"resume","payload":{"epoch":"","cursor":0,"commands":["send-blocked"]}}');
     Message.Kind := mmkUnknown;
     Message.PayloadJson := '';
     For Index := 0 To Carrier.SentCount - 1 Do
@@ -1028,7 +737,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Check('later send encodes', TryEncodeMonitorSend('send-wait', 'still here', Json, ErrorJson));
+    Check('later send encodes', TryEncodeCommandSend('send-wait', 'still here', Json, ErrorJson));
     Carrier.DeliverJson(Json);
     Check('an accepted send is not host_busy', QueuedOnce('send-wait'));
     Check('an accepted send reaches the hook once', Sink.Calls = 1);
@@ -1062,14 +771,14 @@ Begin
     Check('select_target starts live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target', ''));
+    Carrier.DeliverJson(EncodeCommandPath(mmkSelectTarget, 'select-target', ''));
     Check('empty path select_target is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectTarget)));
     Check('empty path select_target is answered queued once', QueuedOnce('select-target'));
     Flags.Sending := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target-busy', '/work/Other'));
+    Carrier.DeliverJson(EncodeCommandPath(mmkSelectTarget, 'select-target-busy', '/work/Other'));
     Check('sending select_target is not queued', Sink.Calls = 0);
     Check('sending select_target error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('sending select_target sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1079,7 +788,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorPath(mmkSelectTarget, 'select-target-plan', '/work/Other'));
+    Carrier.DeliverJson(EncodeCommandPath(mmkSelectTarget, 'select-target-plan', '/work/Other'));
     Check('plan-running select_target is not queued', Sink.Calls = 0);
     Check('plan-running select_target is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
       (Message.Reason = 'host_busy'));
@@ -1109,14 +818,14 @@ Begin
     Check('select_conversation starts live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation', ''));
+    Carrier.DeliverJson(EncodeCommandSelectConversation('select-conversation', ''));
     Check('empty id select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
     Check('empty id select_conversation is answered queued once', QueuedOnce('select-conversation'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation-plan', '20261019T120000000'));
+    Carrier.DeliverJson(EncodeCommandSelectConversation('select-conversation-plan', '20261019T120000000'));
     Check('plan-running select_conversation is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSelectConversation)));
     Check('plan-running select_conversation is answered queued once', QueuedOnce('select-conversation-plan'));
     Flags.PlanAgentRunning := False;
@@ -1124,7 +833,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSelectConversation('select-conversation-busy', '20261019T120000000'));
+    Carrier.DeliverJson(EncodeCommandSelectConversation('select-conversation-busy', '20261019T120000000'));
     Check('sending select_conversation is not queued', Sink.Calls = 0);
     Check('sending select_conversation error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('sending select_conversation sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1155,14 +864,14 @@ Begin
     Check('set_model starts live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetModel('set-model', 'grok-4'));
+    Carrier.DeliverJson(EncodeCommandSetModel('set-model', 'grok-4'));
     Check('set_model is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetModel)));
     Check('set_model is answered queued once', QueuedOnce('set-model'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetModel('set-model-plan', 'grok-4'));
+    Carrier.DeliverJson(EncodeCommandSetModel('set-model-plan', 'grok-4'));
     Check('plan-running set_model is not queued', Sink.Calls = 0);
     Check('plan-running set_model is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('plan-running set_model sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1172,7 +881,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetModel('set-model-busy', 'grok-4'));
+    Carrier.DeliverJson(EncodeCommandSetModel('set-model-busy', 'grok-4'));
     Check('sending set_model is not queued', Sink.Calls = 0);
     Check('sending set_model error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('sending set_model sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1203,14 +912,14 @@ Begin
     Check('set_reasoning starts live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning', ''));
+    Carrier.DeliverJson(EncodeCommandSetReasoning('set-reasoning', ''));
     Check('empty set_reasoning is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetReasoning)));
     Check('empty set_reasoning is answered queued once', QueuedOnce('set-reasoning'));
     Flags.PlanAgentRunning := True;
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning-plan', 'high'));
+    Carrier.DeliverJson(EncodeCommandSetReasoning('set-reasoning-plan', 'high'));
     Check('plan-running set_reasoning is not queued', Sink.Calls = 0);
     Check('plan-running set_reasoning is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
       (Message.Reason = 'host_busy'));
@@ -1221,7 +930,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetReasoning('set-reasoning-busy', 'high'));
+    Carrier.DeliverJson(EncodeCommandSetReasoning('set-reasoning-busy', 'high'));
     Check('sending set_reasoning is not queued', Sink.Calls = 0);
     Check('sending set_reasoning error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('sending set_reasoning sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1252,7 +961,7 @@ Begin
     Check('set_permissions starts live', Session.State = mssLive);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions', 'ask'));
+    Carrier.DeliverJson(EncodeCommandSetPermissions('set-permissions', 'ask'));
     Check('set_permissions is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSetPermissions)));
     Check('set_permissions is not an approval decision', Sink.Kind <> Ord(mmkApprovalDecision));
     Check('set_permissions is answered queued once', QueuedOnce('set-permissions'));
@@ -1260,7 +969,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions-plan', 'auto'));
+    Carrier.DeliverJson(EncodeCommandSetPermissions('set-permissions-plan', 'auto'));
     Check('plan-running set_permissions is not queued', Sink.Calls = 0);
     Check('plan-running set_permissions is host_busy', DecodeLast(Message) And (Message.Kind = mmkError) And
       (Message.Reason = 'host_busy'));
@@ -1271,7 +980,7 @@ Begin
     Session.SetHostFlags(Flags);
     Carrier.ClearSent;
     Sink.Calls := 0;
-    Carrier.DeliverJson(EncodeMonitorSetPermissions('set-permissions-busy', 'always'));
+    Carrier.DeliverJson(EncodeCommandSetPermissions('set-permissions-busy', 'always'));
     Check('sending set_permissions is not queued', Sink.Calls = 0);
     Check('sending set_permissions error', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'host_busy'));
     Check('sending set_permissions sentence', DecodeMonitorError(Message.PayloadJson, ErrorBody) And
@@ -1290,7 +999,7 @@ Var
   Message: TMonitorMessage;
 Begin
   Carrier.ClearSent;
-  Carrier.DeliverJson('{"v":2,"id":"u1","type":"not_a_type","payload":{}}');
+  Carrier.DeliverJson('{"v":3,"id":"u1","type":"not_a_type","payload":{}}');
   Check('unknown type stays live', Session.State = mssLive);
   Check('unknown type does not close', Not Session.CloseRequested);
   Check('unknown type error frame', DecodeLast(Message) And (Message.Kind = mmkError) And (Message.Reason = 'unknown_type'));
@@ -1303,10 +1012,10 @@ Var
 Begin
   ExpectBusySpare('live');
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'ping-live', 42));
+  Carrier.DeliverJson(EncodeCommandTicks(mmkPing, 'ping-live', 42));
   Check('controller still live', Session.State = mssLive);
   Check('controller still answers ping', DecodeLast(Message) And (Message.Kind = mmkPong) And
-    DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 42));
+    DecodeCommandTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 42));
 End;
 
 Procedure TestDecisionIgnoredWhenDisabled;
@@ -1318,7 +1027,7 @@ Begin
     ArmAssistantApprovalWait(Event);
     Session.SetRemoteApproval(False);
     Carrier.ClearSent;
-    Carrier.DeliverJson(EncodeMonitorApprovalDecision('decide-off', 'tool-off', True));
+    Carrier.DeliverJson(EncodeStateApprovalDecision('decide-off', 'tool-off', True));
     Check('disabled decision stays live', Session.State = mssLive);
     Check('disabled decision sends nothing', Carrier.SentCount = 0);
     Check('disabled decision ignored', Not Session.ApplyApprovalDecision('tool-off', True));
@@ -1346,7 +1055,7 @@ Begin
     Session.SetHostFlags(Flags);
     Check('resume setup is busy', Session.State = mssBusy);
     Carrier.ClearSent;
-    Carrier.DeliverJson(EncodeMonitorResume('resume-busy', '', 0));
+    Carrier.DeliverJson(EncodeCommandResume('resume-busy', '', 0));
     { Since eefac54 the session answers every resume from the mirror. The form never receives one. }
     Check('busy resume is answered by the session, not the form', Sink.Calls = 0);
     Check('busy resume is not host_busy', (Carrier.SentCount = 0) Or
@@ -1372,7 +1081,7 @@ Begin
   Carrier.ClearSent;
   Session.RevokeClient(SavedClientId);
   Check('revoke frame', DecodeLast(Message) And (Message.Kind = mmkBye));
-  Check('revoke payload', DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'revoked'));
+  Check('revoke payload', DecodeCommandBye(Message.PayloadJson, Bye) And (Bye.Reason = 'revoked'));
   Check('revoke closes', Session.CloseRequested);
   Check('revoke state', Session.State = mssRevoked);
   Check('revoke save', LoadMonitorSettings(Settings, ErrorText));
@@ -1418,14 +1127,14 @@ Begin
     Session.PublishDisplayApproval('tool-desk', 'write_file', 'Write the test.', 'Ask');
     Check('one display approval', CountSent('approval_requested') = 1);
     Check('display approval frame', DecodeLast(Message) And (Message.Kind = mmkApprovalRequested));
-    Check('display approval payload', DecodeMonitorApprovalRequested(Message.PayloadJson, Notice));
+    Check('display approval payload', DecodeStateApprovalRequested(Message.PayloadJson, Notice));
     Check('display approval is not accepted', (Notice.ToolId = 'tool-desk') And (Not Notice.DecisionsAccepted));
     Check('display decision ignored', Not Session.ApplyApprovalDecision('tool-desk', True));
     Check('display decision leaves none', ReadAssistantApprovalDecision = aadNone);
     Session.CloseDisplayApproval('tool-desk');
     Check('still one display approval', CountSent('approval_requested') = 1);
     Check('display close frame', DecodeLast(Message) And (Message.Kind = mmkApprovalClosed));
-    Check('display close desktop', DecodeMonitorApprovalClosed(Message.PayloadJson, Closed) And (Closed.Reason = 'desktop') And
+    Check('display close desktop', DecodeStateApprovalClosed(Message.PayloadJson, Closed) And (Closed.Reason = 'desktop') And
       (Closed.ToolId = 'tool-desk'));
     Check('closed id decision ignored', Not Session.ApplyApprovalDecision('tool-desk', True));
     Check('closed id leaves none', ReadAssistantApprovalDecision = aadNone);
@@ -1470,7 +1179,7 @@ Begin
   Session.NoteTime(Start);
   Carrier.ClearSent;
   { The pong to this ping is the last frame sent, and the ping is the last frame received. }
-  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'beat-start', 1));
+  Carrier.DeliverJson(EncodeCommandTicks(mmkPing, 'beat-start', 1));
   Carrier.ClearSent;
   Session.NoteTime(Start + MonitorHeartbeatMs - 1);
   Check('no ping before 10 s without sending', CountSent('ping') = 0);
@@ -1478,7 +1187,7 @@ Begin
   Check('a ping after 10 s without sending', CountSent('ping') = 1);
   Session.NoteTime(Start + MonitorHeartbeatMs + 5000);
   Check('the ping restarts the quiet clock', CountSent('ping') = 1);
-  Session.SendHostJson(EncodeMonitorTicks(mmkPong, 'beat-host-frame', 2));
+  Session.SendHostJson(EncodeCommandTicks(mmkPong, 'beat-host-frame', 2));
   Session.NoteTime(Start + 2 * MonitorHeartbeatMs);
   Check('any sent frame restarts the quiet clock', CountSent('ping') = 1);
   Session.NoteTime(Start + 2 * MonitorHeartbeatMs + 5000);
@@ -1486,7 +1195,7 @@ Begin
   Session.NoteTime(Start + MonitorDeadSessionMs - 1);
   Check('live just under 30 s without receiving', (Session.State = mssLive) And (Not Session.CloseRequested));
   Heard := Start + MonitorDeadSessionMs - 1;
-  Carrier.DeliverJson(EncodeMonitorTicks(mmkPing, 'beat-heard', 3));
+  Carrier.DeliverJson(EncodeCommandTicks(mmkPing, 'beat-heard', 3));
   Session.NoteTime(Start + MonitorDeadSessionMs);
   Check('a received frame restarts the dead-link clock', (Session.State = mssLive) And (Not Session.CloseRequested));
   Session.NoteTime(Heard + MonitorDeadSessionMs - 1);
@@ -1497,7 +1206,7 @@ Begin
   DeliverHello(SavedClientId);
   Nonce := NonceFromLast;
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorAuth('auth-beat', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Carrier.DeliverJson(EncodeCommandAuth('auth-beat', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
   Check('the phone reconnects after a dead link', Session.State = mssLive);
 End;
 
@@ -1578,17 +1287,11 @@ Begin
       TestRevokedNewSocket;
       TestDisplayApproval;
       TestBareSignalAndCancel;
-      TestMirrorCursor;
-      TestResumeRing;
-      TestResumeHostRules;
-      TestOutboundLanes;
       TestPlanFrameBeforeBulk;
-      TestLivePatchReplaces;
       TestEncodeFailureNotQueued;
       {$IFDEF MONITOR_COUNT_PARSES}
       TestStateFrameParsesOnce;
       {$ENDIF}
-      TestCreditOverflowByeOnce;
       TestOldCatalogueRejects;
       CheckOtherSections('at end');
     Except

@@ -75,77 +75,24 @@ End;
 Procedure TestFoldAndReplay;
 Var
   Log: TMonitorMirror;
-  Events: TMonitorMirrorEventArray;
-  Head: Int64;
   Turn: TAssistantMonitorTurn;
   Pages: TMonitorSnapshotPageArray;
-  Stored: Array Of TAssistantMonitorTurn;
-  Live: TAssistantMonitorTurn;
-  HasLive: Boolean;
-  Suffix, HeldJson: String;
+  Suffix: String;
   Offset: Integer;
-  HeldSeq: Int64;
-  Credit: TMonitorLogCredit;
-  Keep: TMonitorMirror;
 Begin
-  Log := TMonitorMirror.Create(64);
+  Log := TMonitorMirror.Create;
   Try
     Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
-    Log.RememberPatch(1, StringOfChar('a', 40));
-    Log.RememberPatch(2, StringOfChar('b', 40));
-    Check('an unacked patch is not dropped to make room', (Log.CopyEvents(Events) = 1) And (Events[0].Seq = 1) And
-      (Log.ByteCount = 45));
-    Check('an event that will not fit is noted as a drop', (Log.DroppedThrough = 2) And (Log.Head = 2));
-    Check('resume behind the drop is not a patch tail', Not Log.TryReplayPatches('ab12cd34', 0, 2, Events, Head));
-    Log.NoteAck('ab12cd34', 1);
-    Log.RememberPatch(3, StringOfChar('c', 40));
-    Check('an ack lets the older patch be folded', (Log.CopyEvents(Events) = 1) And (Events[0].Seq = 3));
-    Check('resume after the drop is the kept patch', Log.TryReplayPatches('ab12cd34', 2, 3, Events, Head) And
-      (Length(Events) = 1) And (Events[0].Seq = 3));
     Check('a new stream is not a conversation yet', Not Log.HasConversation);
     Log.ObserveTurn(SampleTurn('turn-a', StringOfChar('x', MonitorInlineBodyBytes + 1), 0));
     Check('an observed turn is the open conversation', Log.HasConversation);
-    Check('folded events still materialise the turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a') And
-      (Length(Turn.Blocks[0].Body) = MonitorInlineBodyBytes + 1) And (Turn.Images[0].Id = 'turn-a-image'));
-    Check('snapshot pages start with the turn list', Log.BuildSnapshotPages('ab12cd34', Log.Head, Pages) And
-      (Length(Pages) >= 2) And (Pos('"turns":', Pages[0].Json) > 0) And (Pages[1].Page = 1));
-    Check('a large body is marked deferred, not cut', Pos('"deferred":true', Pages[1].Json) > 0);
-    Log.BeginStream('eeff0011', 'conversation-b', '/work/Two', 'Two');
-    Log.RememberPatch(1, 'second');
-    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
-    Check('the first conversation still has its turn', Log.FetchTurn(0, Turn) And (Turn.Id = 'turn-a'));
-    Check('the second conversation is not this stream', Not Log.TryReplayPatches('eeff0011', 0, 1, Events, Head));
-    Log.CopyTurns(Stored, Live, HasLive);
-    Check('copy does not need a form', Length(Stored) = 1);
-    Check('a grown body is an append at the UTF-8 length', MonitorAppendSuffix('Größe → ', 'Größe → 10 s.', Suffix, Offset) And
+    Check('model keeps full bodies', Log.FetchTurn(0, Turn) And (Length(Turn.Blocks[0].Body) = MonitorInlineBodyBytes + 1));
+    Check('snapshot pages contain the turn list', Log.BuildSnapshotPages('ab12cd34', Log.Head, Pages) And
+      (Length(Pages) >= 2) And (Pos('"turns":', Pages[0].Json) > 0));
+    Check('a large body is deferred', Pos('"deferred":true', Pages[1].Json) > 0);
+    Check('UTF-8 append offset is in bytes', MonitorAppendSuffix('Größe → ', 'Größe → 10 s.', Suffix, Offset) And
       (Offset = 12) And (Suffix = '10 s.'));
     Check('a changed prefix is not an append', Not MonitorAppendSuffix('old text', 'new text', Suffix, Offset));
-    Credit := TMonitorLogCredit.Create;
-    Try
-      Credit.NoteSent(1, 400000);
-      Check('credit accepts a frame inside the window', Credit.CanSend(100000));
-      Credit.NoteSent(2, 200000);
-      Check('credit window holds the next frame', Not Credit.CanSend(1));
-      Credit.Hold(3, 'held');
-      Credit.NoteAck(2);
-      Check('an ack releases the unacked bytes', Credit.UnackedBytes = 0);
-      Check('the held frame can leave after the ack', Credit.TakeHeld(HeldSeq, HeldJson) And (HeldSeq = 3) And (HeldJson = 'held'));
-    Finally
-      Credit.Free;
-    End;
-    Keep := TMonitorMirror.Create(20);
-    Try
-      Keep.BeginStream('ab12cd34', 'conversation-a', '/work', 'One');
-      Keep.RememberPatch(1, 'aaaa');
-      Check('the first event is stored', Keep.ByteCount = 9);
-      Keep.RememberPatch(2, 'bbbbbbbb');
-      Check('an unacked event is not folded away', Keep.ByteCount = 9);
-      Keep.NoteAck('ab12cd34', 1);
-      Keep.RememberPatch(3, 'cccccccc');
-      Check('an acknowledged event can be folded', (Keep.AckedSeq = 1) And (Keep.ByteCount = 13));
-    Finally
-      Keep.Free;
-    End;
   Finally
     Log.Free;
   End;
@@ -617,7 +564,7 @@ Begin
   Outbox := TMonitorOutbox.Create;
   Try
     Log.BeginStream('ab12cd34', 'timing', '/work', 'Timing');
-    For Index := 1 To EventCount Do Log.RememberPatch(Index, '{}');
+    For Index := 1 To EventCount Do Log.SetTitle('Title ' + IntToStr(Index));
     Started := GetTickCount64;
     Queued := 0;
     Taken := 0;
@@ -627,11 +574,12 @@ Begin
         MonitorSyncFill(Log, Outbox, 'timing', 'ab12cd34', Previous, Queued, CloseLink);
         If CloseLink Or (Queued = Previous) Then Break;
         While Outbox.Take(Frame, Lane) Do Inc(Taken);
+        Outbox.Acknowledge(Queued);
       End;
     Check('20,000 events fill in credit-sized batches', (Queued = EventCount) And (Taken = EventCount) And Not CloseLink);
     Check('indexed tail can replay', MonitorSyncCanReplay(Log, 0));
-    Check('20,000 patches replay in sequence', Log.TryReplayPatches('ab12cd34', 0, EventCount, Events, Head) And
-      (Length(Events) = EventCount) And (Events[0].Seq = 1) And (Events[EventCount - 1].Seq = EventCount));
+    Check('20,000 events remain available', (Log.CopyEvents(Events) = EventCount) And
+      (Events[0].Seq = 1) And (Events[High(Events)].Seq = EventCount));
     Elapsed := GetTickCount64 - Started;
     WriteLn('20,000-event fill and replay: ', Elapsed, ' ms (bound ', TimeLimitMs, ' ms)');
     Check('fill and replay stay under timing bound', Elapsed < TimeLimitMs);
@@ -639,15 +587,15 @@ Begin
     Check('ack removes running log bytes', Outbox.LogPayloadBytes = 0);
     { Exercise retired storage, compaction and copies, then a gap followed by a valid suffix. }
     Log.NoteAck('ab12cd34', EventCount);
-    Log.SetLogBudget(140000);
-    For Index := EventCount + 1 To EventCount * 2 Do Log.RememberPatch(Index, '{}');
+    Log.SetLogBudget(800000);
+    For Index := EventCount + 1 To EventCount * 2 Do Log.SetTitle('Title ' + IntToStr(Index));
     Log.CopyEvents(Events);
     Check('retired head is excluded from copies', (Events[0].Seq > 1) And (Events[High(Events)].Seq = EventCount * 2));
     Check('indexed lookup survives drops and compaction', Log.TryEvent(EventCount * 2, Event) And (Event.Seq = EventCount * 2));
     Log.SetLogBudget(1);
-    Log.RememberPatch(EventCount * 2 + 1, '{}');
+    Log.SetTitle('Gap');
     Log.SetLogBudget(1000000);
-    Log.RememberPatch(EventCount * 2 + 2, '{}');
+    Log.SetTitle('After gap');
     Check('a gap prevents replay across it', Not MonitorSyncCanReplay(Log, EventCount * 2));
     Check('suffix after a gap remains replayable', MonitorSyncCanReplay(Log, EventCount * 2 + 1) And
       Log.TryEvent(EventCount * 2 + 2, Event));

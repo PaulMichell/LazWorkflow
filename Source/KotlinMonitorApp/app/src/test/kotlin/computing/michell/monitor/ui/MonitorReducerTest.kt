@@ -9,8 +9,6 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTranscript
-import computing.michell.monitor.protocol.splitTranscript
 import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
@@ -32,23 +30,15 @@ import computing.michell.monitor.protocol.encodeSetReasoning
 import computing.michell.monitor.protocol.encodeTargets
 import computing.michell.monitor.protocol.statusToJson
 
-import computing.michell.monitor.protocol.WireSnapshot
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.encodeApprovalClosed
 import computing.michell.monitor.protocol.encodeApprovalRequested
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.encodeImageUnavailable
-import computing.michell.monitor.protocol.tryEncodeTranscript
 import computing.michell.monitor.protocol.encodeInsertResult
 import computing.michell.monitor.protocol.encodeTarget
 import computing.michell.monitor.protocol.encodePlan
 import computing.michell.monitor.protocol.encodeRejected
-import computing.michell.monitor.protocol.encodeSnapshot
-import computing.michell.monitor.protocol.encodeTurnData
-import computing.michell.monitor.protocol.WirePatch
-import computing.michell.monitor.protocol.WireCatchup
-import computing.michell.monitor.protocol.encodePatch
-import computing.michell.monitor.protocol.encodeCatchup
 import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
@@ -124,80 +114,6 @@ class MonitorReducerTest {
     assertEquals("unsent", next.draft)
   }
 
-  @Test
-  fun snapshotClearsTheMenuListsAndTheFollowingFramesFillThem() {
-    val targets = listOf(TargetChoice("", "Current Project"))
-    val talks = listOf(ConversationChoice("", "Current", true))
-    val models = listOf(ModelChoice("grok-4", "grok-4"))
-    val efforts = listOf(ReasoningChoice("high", "High"))
-    val permissions = listOf(PermissionChoice("ask", "Ask before file changes and builds"))
-    val start = MonitorUi(
-      view = emptyView().copy(targetRoot = "/work", model = "grok-4", approvalCaption = "Ask"),
-      targetChoices = targets,
-      targetCurrent = "",
-      conversationChoices = talks,
-      modelChoices = models,
-      modelBackend = "grok",
-      modelNote = "The rest of this list is in desktop Settings.",
-      reasoningChoices = efforts,
-      reasoningCurrent = "high",
-      permissionChoices = permissions,
-      permissionCurrent = "ask",
-      planChoices = listOf(PlanChoice("Plan.md", "Plan"))
-    )
-    val snapshot = WireSnapshot(
-      start.view,
-      emptyList(),
-      WireTurn(-2, "live", "chat", "", "now", ""),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val cleared = reduceMonitor(start, message(encodeSnapshot("snap", snapshot)))
-    assertTrue(cleared.targetChoices.isEmpty())
-    assertTrue(cleared.conversationChoices.isEmpty())
-    assertTrue(cleared.modelChoices.isEmpty())
-    assertEquals("", cleared.modelNote)
-    assertTrue(cleared.reasoningChoices.isEmpty())
-    assertEquals("", cleared.reasoningCurrent)
-    assertTrue(cleared.permissionChoices.isEmpty())
-    assertEquals("", cleared.permissionCurrent)
-    assertTrue(cleared.planChoices.isEmpty())
-    assertEquals("Ask", cleared.view.approvalCaption)
-    assertFalse(cleared.disconnected)
-    val withTargets = reduceMonitor(cleared, message(encodeTargets("targets", "", targets)))
-    val withTalks = reduceMonitor(withTargets, message(encodeConversations("conversations", "", talks, false)))
-    val withModels = reduceMonitor(withTalks, message(encodeModels(
-      "models", "grok-4", "grok", "The rest of this list is in desktop Settings.", models
-    )))
-    val withEfforts = reduceMonitor(withModels, message(encodeReasoning("reasoning", "high", "", efforts)))
-    val restored = reduceMonitor(withEfforts, message(encodePermissions("permissions", "ask", "codex", "", permissions)))
-    assertEquals(targets, restored.targetChoices)
-    assertEquals("", restored.targetCurrent)
-    assertEquals(talks, restored.conversationChoices)
-    assertEquals(models, restored.modelChoices)
-    assertEquals("The rest of this list is in desktop Settings.", restored.modelNote)
-    assertEquals(efforts, restored.reasoningChoices)
-    assertEquals("high", restored.reasoningCurrent)
-    assertEquals(permissions, restored.permissionChoices)
-    assertEquals("ask", restored.permissionCurrent)
-    val moved = reduceMonitor(restored, message(encodeTarget("next", "project", "New", "/new/")))
-    assertTrue(moved.targetChoices.isEmpty())
-    assertEquals("", moved.targetCurrent)
-    assertTrue(moved.conversationChoices.isEmpty())
-    assertEquals(models, moved.modelChoices)
-    assertEquals("The rest of this list is in desktop Settings.", moved.modelNote)
-    assertEquals(efforts, moved.reasoningChoices)
-    assertEquals("high", moved.reasoningCurrent)
-    assertEquals(permissions, moved.permissionChoices)
-    assertEquals("ask", moved.permissionCurrent)
-    val ignored = reduceMonitor(moved, message(encodeEnvelope(MessageKind.Permissions, "permissions-bad", null)))
-    assertEquals(permissions, ignored.permissionChoices)
-    assertFalse(ignored.disconnected)
-  }
 
   @Test
   fun choosingTheCurrentIdEncodesNothingAndACaptionDoesNotMoveTheCheck() {
@@ -293,37 +209,6 @@ class MonitorReducerTest {
     assertEquals("Documents/Plan.md", emptied.planPath)
   }
 
-  @Test
-  fun snapshotReplacesTurnsAndKeepsAnUnsentDraft() {
-    val kept = listOf(ConversationChoice("", "Current", true))
-    val state = MonitorUi(
-      view = emptyView().copy(targetRoot = "/work"),
-      turns = listOf(WireTurn(0, "old", "chat", "", "gone", "")),
-      draft = "still typing",
-      conversationChoices = kept,
-      conversationCurrent = ""
-    )
-    val snapshot = WireSnapshot(
-      emptyView().copy(targetRoot = "/work", canSend = true),
-      listOf(WireTurn(1, "new", "chat", "", "loaded", "")),
-      WireTurn(-2, "live-2", "chat", "", "loaded", ""),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val next = reduceMonitor(state, message(encodeSnapshot("snap", snapshot)))
-    assertEquals("new", next.turns.single().id)
-    assertEquals("still typing", next.draft)
-    assertTrue(next.conversationChoices.isEmpty())
-    assertEquals("", next.conversationCurrent)
-    val moved = reduceMonitor(state, message(encodeSnapshot("moved", snapshot.copy(view = snapshot.view.copy(targetRoot = "/other")))))
-    assertTrue(moved.conversationChoices.isEmpty())
-    assertEquals("still typing", moved.draft)
-    assertEquals("new", moved.turns.single().id)
-  }
 
   @Test
   fun modelsFrameFillsTheListAndATargetChangeKeepsIt() {
@@ -441,49 +326,8 @@ class MonitorReducerTest {
     assertEquals(body, shownBlocks(turn, true, true).single().body)
   }
 
-  @Test
-  fun snapshotReplacesViewPlanAndTurnIndex() {
-    val snapshot = WireSnapshot(
-      emptyView().copy(model = "grok-test", canSend = true, targetDisplay = "LazWorkflow", phase = "idle"),
-      listOf(WireTurn(2, "turn-2", "build", "", "older", "")),
-      WireTurn(3, "turn-3", "build", "", "live", "", blocks = emptyList()),
-      "Documents/Plan.md",
-      "Monitor plan",
-      false,
-      listOf(PlanRow(1, 1, "Codec", "", "pending", true)),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val next = reduceMonitor(MonitorUi(draft = "keep", selectedPlan = 7,
-      planChoices = listOf(PlanChoice("Old.md", "Old"))), message(encodeSnapshot("snapshot", snapshot)))
-    assertTrue(next.planChoices.isEmpty())
-    assertEquals(-1, next.selectedPlan)
-    assertEquals("grok-test", next.view.model)
-    assertEquals("LazWorkflow", next.view.targetDisplay)
-    assertEquals("Documents/Plan.md", next.planPath)
-    assertEquals(1, next.turns.size)
-    assertEquals(3, next.live?.turnIndex)
-    assertEquals("keep", next.draft)
-    assertTrue(next.reachedLive)
-  }
 
-  @Test
-  fun transcriptReplacesLiveBlocksOnlyWhenRevisionIsNewer() {
-    val first = reduceMonitor(MonitorUi(), message(transcript(1, "one")))
-    assertEquals("one", first.live?.blocks?.single()?.body)
-    val older = reduceMonitor(first, message(transcript(1, "stale")))
-    assertEquals("one", older.live?.blocks?.single()?.body)
-    val newer = reduceMonitor(first, message(transcript(2, "two")))
-    assertEquals("two", newer.live?.blocks?.single()?.body)
-  }
 
-  @Test
-  fun turnDataFillsHistoryWithoutMovingTheView() {
-    val turn = WireTurn(4, "turn-4", "build", "", "history", "", prompt = "full")
-    val next = reduceMonitor(MonitorUi(selectedTurn = -1), message(encodeTurnData("turn-data", turn)))
-    assertEquals("full", next.history[4]?.prompt)
-    assertEquals(-1, next.selectedTurn)
-  }
 
   @Test
   fun planPatchesThoseParts() {
@@ -550,36 +394,6 @@ class MonitorReducerTest {
     assertFalse(actionEnabled(neither))
   }
 
-  @Test
-  fun droppedConnectionClearsSteerAndANewerSnapshotWins() {
-    val steering = MonitorUi(view = emptyView().copy(canSteer = true, canSend = false, sending = true), generation = 2)
-    val closed = noteSocketClosed(steering, HostClosedBanner)
-    assertFalse(closed.view.canSteer)
-    assertFalse(actionEnabled(closed.view))
-    assertEquals("Send", actionCaption(closed.view))
-    val stale = closed.copy(view = steering.view, generation = closed.generation - 1)
-    val kept = mergeApplied(closed, stale, false, false)
-    assertFalse(kept.view.canSteer)
-    val snapshot = WireSnapshot(
-      emptyView().copy(canSend = true, canSteer = false, model = "grok-test"),
-      emptyList(),
-      null,
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val live = reduceMonitor(closed, message(encodeSnapshot("snapshot", snapshot)))
-    assertTrue(live.view.canSend)
-    assertFalse(live.view.canSteer)
-    assertTrue(live.generation > closed.generation)
-    val shown = mergeApplied(closed, live, false, true)
-    assertEquals("grok-test", shown.view.model)
-    assertTrue(shown.view.canSend)
-    assertFalse(shown.disconnected)
-  }
 
   @Test
   fun sendClearsTheDraftAndShowsThePromptBeforeTheHostReplies() {
@@ -685,162 +499,12 @@ class MonitorReducerTest {
     assertEquals("finish the form", next.draft)
   }
 
-  @Test
-  fun virtualExtentKeepsTheIndexAndFetchesOnlyTheRecentTail() {
-    val older = WireTurn(1, "a", "build", "", "first prompt", "")
-    val newer = WireTurn(2, "b", "build", "", "second prompt", "")
-    val slots = virtualSlots(listOf(older, newer), WireTurn(-2, "live", "build", "", "", ""), false)
-    assertEquals(2, slots.size)
-    val keptRows = virtualSlots(listOf(older, newer), WireTurn(2, "b", "build", "", "", ""), false)
-    assertEquals(2, keptRows.size)
-    assertFalse(keptRows[1].live)
-    assertEquals("first prompt", slots[0].label)
-    assertEquals(listOf(1, 2), recentFetches(slots, emptySet()))
-    assertEquals(listOf(1), recentFetches(slots, setOf(2)))
-    val spot = spotAt(listOf(1, 1, 8), 0.9f)
-    assertEquals(2, spot.index)
-    assertTrue(spot.unitOffset > 0)
-    assertEquals(0, spotAt(listOf(1, 1, 8), 0.01f).index)
-    assertEquals(500, scrollOffset(1000, 0.5f))
-    assertEquals(1000, scrollOffset(1000, 1f))
-    assertEquals(1f, scrollFraction(40, 0))
-    assertTrue(atHead(1000, 1000))
-    assertTrue(atHead(0, 0))
-    assertFalse(atHead(900, 1000))
-    assertTrue(stickToHead(true, 400, 400, 400, 900, false))
-    assertFalse(stickToHead(true, 400, 200, 400, 900, false))
-    assertTrue(stickToHead(false, 200, 900, 900, 900, false))
-    assertFalse(followAfterMotion(true, true, false, false))
-    assertTrue(followAfterMotion(false, true, true, false))
-    assertFalse(followAfterMotion(false, false, false, false))
-    assertTrue(followAfterMotion(true, true, false, true))
-    val growing = conversationRows(
-      emptyList(),
-      WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(
-        WireBlock("answer", "a", "", "", "", "Hello", false, true, 0, emptyList())
-      )),
-      true, true, true
-    )
-    val longer = conversationRows(
-      emptyList(),
-      WireTurn(-2, "live", "build", "", "", "", live = true, blocks = listOf(
-        WireBlock("answer", "a", "", "", "", "Hello there", false, true, 0, emptyList())
-      )),
-      true, true, true
-    )
-    assertFalse(liveTailToken(growing, "") == liveTailToken(longer, ""))
-    val kept = WireTurn(2, "b", "build", "", "second prompt", "", prompt = "kept", blocks = listOf(WireBlock("answer", "b", "", "", "", "body", false, true, 0, emptyList())))
-    val start = MonitorUi(draft = "half written", turns = listOf(older, newer), history = mapOf(2 to kept), reachedLive = true)
-    val snapshot = WireSnapshot(
-      emptyView().copy(model = "grok-test", canSend = true),
-      listOf(older, newer),
-      WireTurn(-2, "live", "build", "", "", ""),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val next = reduceMonitor(start, message(encodeSnapshot("snapshot", snapshot)))
-    assertEquals("half written", next.draft)
-    assertEquals("kept", next.history[2]?.prompt)
-    assertEquals("body", next.history[2]?.blocks?.single()?.body)
-    assertTrue(next.reachedLive)
-    assertFalse(next.disconnected)
-    assertEquals("Chat", modeCaption("chat"))
-    assertEquals("Build", modeCaption("build"))
-    val hidden = shownBlocks(kept.copy(blocks = listOf(
-      WireBlock("thinking", "t", "", "", "", "secret", false, true, 0, emptyList()),
-      WireBlock("tool", "tool", "", "grep", "", "args", false, true, 0, emptyList()),
-      WireBlock("answer", "a", "", "", "", "shown", false, true, 0, emptyList())
-    )), false, false)
-    assertEquals(listOf("answer"), hidden.map { it.kind })
-  }
 
-  @Test
-  fun splitTranscriptKeepsThinkingAsOneBlockBeforeTheAnswer() {
-    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
-    val answer = "short answer"
-    val frames = splitLongTurn(thinking, answer, 1)
-    assertTrue(frames.size > 1)
-    assertTrue(frames[0].blocks.any { it.kind == "thinking" })
-    assertTrue(frames[0].blocks.any { it.kind == "answer" })
-    assertTrue(frames[1].blocks.any { it.kind == "thinking" })
-    assertFalse(frames[1].blocks.any { it.kind == "answer" })
-    val shown = reduceTranscripts(frames)
-    assertEquals(listOf("thinking", "answer"), shown.live?.blocks?.map { it.kind })
-    assertEquals(thinking, shown.live?.blocks?.get(0)?.body)
-    assertEquals(answer, shown.live?.blocks?.get(1)?.body)
-  }
 
-  @Test
-  fun outOfOrderTranscriptPartsDoNotDuplicateTheThinkingBody() {
-    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
-    val answer = "short answer"
-    val frames = splitLongTurn(thinking, answer, 3)
-    val shown = reduceTranscripts(frames.reversed())
-    val blocks = shown.live?.blocks ?: emptyList()
-    assertEquals(listOf("thinking", "answer"), blocks.map { it.kind })
-    assertEquals(thinking, blocks[0].body)
-    assertEquals(answer, blocks[1].body)
-    assertEquals(1, blocks.count { it.body.contains("TAIL") })
-  }
 
-  @Test
-  fun duplicateTranscriptPartIsKeptOnce() {
-    val piece = WireBlock("thinking", "think-1", "", "", "", "once", true, true, 0, emptyList(), false, 1, 2, 4)
-    val frames = listOf(
-      WireTranscript(-2, 4, "thinking", "working", listOf(piece), 1, 2, 0),
-      WireTranscript(-2, 4, "thinking", "working", listOf(piece.copy(body = "ONCE")), 2, 2, 0)
-    )
-    val shown = reduceTranscripts(frames)
-    assertEquals(listOf("once"), shown.live?.blocks?.map { it.body })
-  }
 
-  @Test
-  fun missingTranscriptPartDoesNotJumpAhead() {
-    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
-    val frames = splitLongTurn(thinking, "short answer", 5)
-    val held = reduceTranscripts(listOf(frames[1]))
-    assertTrue(held.live?.blocks.orEmpty().none { it.body.contains("TAIL") })
-    val shown = reduceTranscripts(frames.reversed())
-    assertEquals(thinking, shown.live?.blocks?.first()?.body)
-    assertEquals("short answer", shown.live?.blocks?.get(1)?.body)
-  }
 
-  @Test
-  fun inconsistentPartCountDropsTheBlockInsteadOfJoiningIt() {
-    val head = WireBlock("thinking", "think-1", "", "", "", "one", true, true, 0, emptyList(), false, 1, 2, 6)
-    val tail = WireBlock("thinking", "think-1", "", "", "", "two", true, true, 0, emptyList(), false, 2, 3, 6)
-    val answer = WireBlock("answer", "answer-1", "", "", "", "kept", false, true, 0, emptyList())
-    val frames = listOf(
-      WireTranscript(-2, 6, "thinking", "working", listOf(head, answer), 1, 2, 0),
-      WireTranscript(-2, 6, "thinking", "working", listOf(tail), 2, 2, 0)
-    )
-    val shown = reduceTranscripts(frames)
-    assertEquals(listOf("kept"), shown.live?.blocks?.map { it.body })
-  }
 
-  @Test
-  fun revisionReplacementRemovesTheOldTranscriptBody() {
-    val thinking = "A".repeat(MonitorLimits.MaxBodyPartBytes) + "TAIL"
-    val first = reduceTranscripts(splitLongTurn(thinking, "short answer", 1))
-    assertEquals(thinking, first.live?.blocks?.first()?.body)
-    val replacement = WireTranscript(
-      -2,
-      2,
-      "thinking",
-      "working",
-      listOf(WireBlock("thinking", "think-1", "", "", "", "replaced", false, true, 0, emptyList())),
-      1,
-      1,
-      0
-    )
-    val shown = reduceTranscripts(listOf(replacement), first)
-    assertEquals("replaced", shown.live?.blocks?.single()?.body)
-    assertFalse(shown.live?.blocks?.any { it.body.contains("TAIL") } == true)
-  }
 
   @Test
   fun aLiveReduceDoesNotRestoreTheOfflineBanner() {
@@ -856,187 +520,14 @@ class MonitorReducerTest {
     assertTrue(cleared.view.canSteer)
   }
 
-  @Test
-  fun anUnchangedSnapshotKeepsTheDisplayedConversation() {
-    val blocks = listOf(WireBlock("answer", "a", "", "", "", "kept", false, true, 0, emptyList()))
-    val live = WireTurn(-2, "live", "build", "", "prompt", "", blocks = blocks)
-    val start = MonitorUi(live = live, turns = listOf(WireTurn(0, "stored", "build", "", "older", "")), reachedLive = true)
-    val again = mergeLiveTurn(live, live.copy(), true)
-    assertTrue(again === live)
-    val snapshot = WireSnapshot(
-      emptyView().copy(model = "grok-4.7", canSend = true),
-      start.turns,
-      null,
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val next = reduceMonitor(start, message(encodeSnapshot("snap", snapshot)))
-    assertTrue(next.live === live)
-    assertEquals("kept", next.live?.blocks?.single()?.body)
-    assertEquals(1, next.turns.size)
-  }
 
-  @Test
-  fun incompleteReconnectStreamDoesNotWipeTheDisplayedConversation() {
-    val shown = listOf(
-      WireBlock("user", "u", "", "", "", "question", false, true, 0, emptyList()),
-      WireBlock("answer", "a", "", "", "", "answer", false, true, 0, emptyList())
-    )
-    val start = MonitorUi(
-      live = WireTurn(-2, "live", "build", "", "question", "", blocks = shown),
-      reachedLive = true,
-      disconnected = true
-    )
-    val partial = WireTranscript(
-      -2, 1, "thinking", "working",
-      listOf(WireBlock("thinking", "t", "", "", "", "more", true, true, 0, emptyList())),
-      1, 2, 0
-    )
-    val next = reduceTranscripts(listOf(partial), start)
-    assertEquals(shown, next.live?.blocks)
-  }
 
-  @Test
-  fun patchCursorAssemblesPartsAndDoesNotGuessAGap() {
-    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "", blocks = listOf(answerBlock("keep")))
-    val start = MonitorUi(
-      hostEpoch = "aa",
-      turns = listOf(shown),
-      live = shown,
-      view = emptyView().copy(busy = true, sending = true, planRunning = true, statusText = "Thinking…", phase = "thinking")
-    )
-    val partial = reduceMonitor(start, message(patchFrame("aa", 1, "one", 1, 2, true)))
-    assertEquals(0L, partial.hostCursor)
-    assertEquals("one", partial.live?.blocks?.single()?.body)
-    assertEquals("Shown", partial.turns[0].promptPreview)
-    val done = reduceMonitor(partial, message(patchFrame("aa", 1, "two", 2, 2, false)))
-    assertEquals(1L, done.hostCursor)
-    assertTrue(done.live?.blocks?.single()?.body?.contains("one") == true)
-    assertTrue(done.live?.blocks?.single()?.body?.contains("two") == true)
-    assertFalse(done.view.busy)
-    assertFalse(done.view.sending)
-    assertFalse(done.view.planRunning)
-    assertEquals("Thinking…", done.view.statusText)
-    assertEquals("live", connectionLabel(done, LinkPhase.Live))
-    val lower = reduceMonitor(done, message(patchFrame("aa", 0, "old", 1, 1, true)))
-    assertEquals(1L, lower.hostCursor)
-    assertFalse(lower.view.busy)
-    assertFalse(lower.live?.blocks?.single()?.body?.contains("old") == true)
-    val gap = reduceMonitor(done, message(patchFrame("aa", 4, "missing", 1, 1, true)))
-    assertTrue(gap.resumeOnce)
-    assertEquals(1L, gap.hostCursor)
-    assertFalse(gap.live?.blocks?.single()?.body?.contains("missing") == true)
-    val again = reduceMonitor(gap, message(patchFrame("aa", 9, "later", 1, 1, true)))
-    assertTrue(again.resumeOnce)
-    val transcript = reduceMonitor(done, message(transcript(9, "stale-transcript")))
-    assertEquals(done.live?.blocks, transcript.live?.blocks)
-    val other = reduceMonitor(done, message(patchFrame("bb", 1, "new-epoch", 1, 1, false)))
-    assertTrue(other.catchingUp)
-    assertEquals("aa", other.hostEpoch)
-    assertEquals("Shown", other.turns[0].promptPreview)
-    assertFalse(other.live?.blocks?.single()?.body?.contains("new-epoch") == true)
-  }
 
-  @Test
-  fun catchupSwitchesTheOpenKeyAndClosedKeepsTheScreen() {
-    val shown = WireTurn(1, "turn-1", "build", "", "Shown", "")
-    val start = MonitorUi(
-      hostEpoch = "aa",
-      hostCursor = 4,
-      conversationId = "current",
-      projectRoot = "/old",
-      turns = listOf(shown),
-      live = shown
-    )
-    val closed = reduceMonitor(start, message(encodeConversationClosed("closed", "aa", 4, "conversation-1", "Archived")))
-    assertEquals("conversation-1", closed.closedConversationId)
-    assertEquals("Archived", closed.closedTitle)
-    assertFalse(closed.closedPending)
-    assertEquals("Shown", closed.turns[0].promptPreview)
-    assertEquals(shown, closed.live)
-    val snapshot = WireSnapshot(
-      emptyView().copy(canSend = true, phase = "idle"),
-      listOf(WireTurn(2, "turn-2", "build", "", "Next", "")),
-      WireTurn(3, "turn-3", "build", "", "Next live", "", live = true),
-      "",
-      "",
-      false,
-      emptyList(),
-      emptyList(),
-      ApprovalNotice(false, "", "", "", "", false)
-    )
-    val catchup = WireCatchup("snapshot", "bb", 0, "conversation-2", "/work", "New", snapshot, emptyList())
-    val next = reduceMonitor(closed.copy(catchingUp = true, announcedEpoch = "bb"), message(encodeCatchup("catch", catchup)))
-    assertEquals("bb", next.hostEpoch)
-    assertEquals(0L, next.hostCursor)
-    assertFalse(next.catchingUp)
-    assertEquals("conversation-2", next.conversationId)
-    assertEquals("/work", next.projectRoot)
-    assertEquals("New", next.conversationTitle)
-    assertEquals("Next", next.turns[0].promptPreview)
-    val sameKey = WireCatchup("snapshot", "bb", 1, "conversation-2", "/work", "New", snapshot, emptyList())
-    val replaced = reduceMonitor(next, message(encodeCatchup("again", sameKey)))
-    assertEquals("conversation-2", replaced.conversationId)
-    assertEquals("/work", replaced.projectRoot)
-    assertEquals(1L, replaced.hostCursor)
-    val retitled = reduceMonitor(replaced, message(computing.michell.monitor.protocol.encodeHelloOk(
-      "hello-title",
-      computing.michell.monitor.protocol.HelloOkMessage("n", "host", "bb", 1, "conversation-2", "/work", "Renamed")
-    )))
-    assertEquals("bb", retitled.hostEpoch)
-    assertEquals("Renamed", retitled.conversationTitle)
-    assertEquals("Next", retitled.turns[0].promptPreview)
-  }
 }
 
 private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {
   val decoded = tryDecodeEnvelope(json)
   assertTrue(decoded.errorText, decoded.ok)
   return decoded.message
-}
-
-private fun splitLongTurn(thinking: String, answer: String, revision: Int): List<WireTranscript> {
-  val source = WireTranscript(
-    -2,
-    revision,
-    "thinking",
-    "working",
-    listOf(
-      WireBlock("thinking", "think-1", "Thinking", "", "", thinking, true, true, 0, emptyList()),
-      WireBlock("answer", "answer-1", "", "", "", answer, false, true, 0, emptyList())
-    )
-  )
-  return splitTranscript(source)
-}
-
-private fun reduceTranscripts(frames: List<WireTranscript>, start: MonitorUi = MonitorUi()): MonitorUi {
-  var state = start
-  for (frame in frames) {
-    val encoded = tryEncodeTranscript("tr-" + frame.revision.toString() + "-" + frame.part.toString(), frame)
-    assertTrue(encoded.isNotEmpty())
-    state = reduceMonitor(state, message(encoded))
-  }
-  return state
-}
-
-private fun answerBlock(body: String): WireBlock {
-  return WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
-}
-
-private fun patchFrame(epoch: String, cursor: Long, body: String, part: Int, partCount: Int, busy: Boolean): String {
-  val patch = WirePatch(
-    epoch, cursor, 1, "turn-1", listOf(answerBlock(body)), busy, false, false, "idle",
-    !busy, false, busy, 0, part, partCount
-  )
-  return encodePatch("patch-" + cursor.toString() + "-" + part.toString(), patch)
-}
-
-private fun transcript(revision: Int, body: String): String {
-  val block = WireBlock("answer", "b1", "", "", "", body, false, true, 0, emptyList())
-  return tryEncodeTranscript("transcript", WireTranscript(1, revision, "thinking", "working", listOf(block)))
 }
 

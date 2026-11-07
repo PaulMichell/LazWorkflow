@@ -15,7 +15,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
+  AssistantMonitorCommands, Classes, SysUtils, fpjson, jsonparser, AssistantMonitorLinkStubs, AssistantMonitorCodec, AssistantMonitorFrames,
   AssistantMonitorCarrier, AssistantMonitorSession, AssistantMonitorMirror, AssistantSessionObserve, AssistantMonitorSettings,
   WorkflowSettings;
 
@@ -326,9 +326,9 @@ Begin
   Session.NoteSocketClosed;
   Check('7.1 handshake accepted', Session.AcceptHandshake(Spare, True));
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
+  Carrier.DeliverJson(EncodeCommandHello('hello', 'Phone', '1', ''));
   Carrier.ClearSent;
-  Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
+  Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
   Check('7.1 paired', Session.State = mssLive);
 End;
 
@@ -338,9 +338,9 @@ Var
   Slice, Status: String;
 Begin
   Carrier.ClearSent;
-  Slice := '{"v":2,"id":"e-1","type":"event","payload":{"conversation_id":"c","stream_id":"aa","seq":1,' +
+  Slice := '{"v":3,"id":"e-1","type":"event","payload":{"conversation_id":"c","stream_id":"aa","seq":1,' +
     '"event":"block_append","data":{"block_id":"b-1","offset":0,"text":"x"}}}';
-  Status := '{"v":2,"id":"s-1","type":"status","payload":{"busy":false,"sending":false}}';
+  Status := '{"v":3,"id":"s-1","type":"status","payload":{"busy":false,"sending":false}}';
   Check('7.1 slice queued', Session.TryQueueHostJson(Slice));
   Check('7.1 status queued while slices are queued', Session.TryQueueHostJson(Status));
   Session.DrainOutbound;
@@ -429,12 +429,12 @@ Var
   WindowFull: Boolean;
 Begin
   Carrier.ClearSent;
-  Big := '{"v":2,"id":"e-big","type":"event","payload":{"seq":1,"event":"block_append","data":{"text":"' +
+  Big := '{"v":3,"id":"e-big","type":"event","payload":{"seq":1,"event":"block_append","data":{"text":"' +
     StringOfChar('q', 60000) + '"}}}';
   WindowFull := False;
   For I := 1 To 20 Do
     Begin
-      Big := '{"v":2,"id":"e-big-' + IntToStr(I) + '","type":"event","payload":{"seq":' + IntToStr(I) +
+      Big := '{"v":3,"id":"e-big-' + IntToStr(I) + '","type":"event","payload":{"seq":' + IntToStr(I) +
         ',"event":"block_append","data":{"text":"' + StringOfChar('q', 60000) + '"}}}';
       If Not Session.TryQueueHostJson(Big) Then
         WindowFull := True;
@@ -446,7 +446,7 @@ Begin
       Inc(EventsSent);
   Check('7.1 with the credit window full no further slice is taken', WindowFull Or (EventsSent * 60000 <= MonitorCreditWindowBytes));
   Carrier.ClearSent;
-  Ping := EncodeMonitorTicks(mmkPing, 'ping-credit', 77);
+  Ping := EncodeCommandTicks(mmkPing, 'ping-credit', 77);
   Carrier.DeliverJson(Ping);
   Session.DrainOutbound;
   Check('7.1 state and control still go when the window is full', SentHasType('pong'));
@@ -455,7 +455,7 @@ Begin
   DroppedBefore := Session.FramesDropped;
   Carrier.ClearSent;
   For I := 1 To 5 Do
-    Session.TryQueueHostJson('{"v":2,"id":"bulk-' + IntToStr(I) + '","type":"image_data","payload":{"image_id":"img-' +
+    Session.TryQueueHostJson('{"v":3,"id":"bulk-' + IntToStr(I) + '","type":"image_data","payload":{"image_id":"img-' +
       IntToStr(I) + '"}}');
   Carrier.DeliverJson('{"v":3,"id":"r-4","type":"resume","payload":{"conversation_id":"conversation-1",' +
     '"stream_id":"aa11bb22cc33dd44ee55ff6677889900","seq":1,"commands":[]}}');

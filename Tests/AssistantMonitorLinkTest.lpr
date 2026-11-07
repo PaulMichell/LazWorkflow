@@ -27,10 +27,10 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix, UnixType,
   {$ENDIF}
-  Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
+  AssistantMonitorState, AssistantMonitorCommands, Classes, SysUtils, fpjson, sockets, ssockets, openssl, fpopenssl, opensslsockets,
   AssistantMonitorLinkStubs, AssistantHttps, AssistantMonitorTls, AssistantMonitorLan, AssistantMonitorSession,
   AssistantMonitorOutbox, AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantSessionObserve,
-  AssistantMonitorSettings, WorkflowSettings, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorMirror, AssistantMonitorSync, WorkflowSettings, WorkflowLog;
 
 Const
   { Workload size for the harness, not a queue cap. }
@@ -278,62 +278,28 @@ End;
 
 Function ResumeAnswerFrames(Const RefId: String; Out Cursor: Int64): TStringArray;
 Var
-  Frames: TStringArray;
-  Count: Integer;
-  Snapshot: TMonitorSnapshot;
-  Payload: TJSONObject;
-  Rows: Array Of TAssistantMonitorPlanRow;
-  Ids, Captions: TStringList;
+  Mirror: TMonitorMirror;
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
   Epoch, ConversationId, ProjectRoot, Title: String;
-
-  Procedure Add(Const Json: String);
-  Begin
-    If Json = '' Then
-      Exit;
-    Frames[Count] := Json;
-    Inc(Count);
-  End;
-
+  Index: Integer;
 Begin
-  Frames := Nil;
-  SetLength(Frames, LinkResumeFrames);
-  Count := 0;
-  Rows := Nil;
   Session.CopyMirrorIdentity(Epoch, ConversationId, ProjectRoot, Title, Cursor);
-  Snapshot := Default(TMonitorSnapshot);
-  Snapshot.View.Available := True;
-  Snapshot.View.SignedIn := True;
-  Snapshot.View.CanSend := True;
-  Snapshot.View.CanChangeMode := True;
-  Snapshot.View.Mode := 'ask';
-  Snapshot.View.Model := 'link-test';
-  Snapshot.View.Backend := 'link-test';
-  If Not Session.CommitSnapshotCursor('link-test' + #1 + RefId, Cursor) Then
-    Cursor := 0;
-  Add(EncodeResumeSnapshot(RefId, Cursor, Epoch, ConversationId, ProjectRoot, Title, Snapshot));
-  Payload := MonitorStatusToJson(Snapshot.View);
+  Mirror := TMonitorMirror.Create;
   Try
-    Add(EncodeMonitorEnvelope(mmkStatus, Session.AllocateHostId, Payload));
+    Mirror.BeginStream(Epoch, ConversationId, ProjectRoot, Title);
+    Source := Default(TMonitorResumeSource);
+    Mirror.CaptureResume('', Source);
+    Status := Default(TMonitorSyncStatus);
+    Answer := MonitorSyncResumeAnswer(Source, ConversationId, '', RefId, 0, Status);
+    Cursor := Answer.Head;
+    SetLength(Result, Length(Answer.Frames));
+    For Index := 0 To High(Answer.Frames) Do
+      Result[Index] := Answer.Frames[Index].Json;
   Finally
-    Payload.Free;
+    Mirror.Free;
   End;
-  Add(EncodeMonitorPlan(Session.AllocateHostId, '', '', False, Rows));
-  Ids := TStringList.Create;
-  Captions := TStringList.Create;
-  Try
-    Ids.Add('link-test');
-    Captions.Add('Link test');
-    Add(EncodeMonitorTargets(Session.AllocateHostId, 'link-test', Ids, Captions));
-    Add(EncodeMonitorConversations(Session.AllocateHostId, 'link-test', Ids, Captions, False));
-    Add(EncodeMonitorModels(Session.AllocateHostId, 'link-test', 'link-test', '', Ids, Captions));
-    Add(EncodeMonitorReasoning(Session.AllocateHostId, 'link-test', '', Ids, Captions));
-    Add(EncodeMonitorPermissions(Session.AllocateHostId, 'link-test', 'link-test', '', Ids, Captions));
-  Finally
-    Captions.Free;
-    Ids.Free;
-  End;
-  SetLength(Frames, Count);
-  Result := Frames;
 End;
 
 Constructor TResumeAnswerer.Create;
@@ -391,8 +357,6 @@ Begin
   Built := Length(Frames);
   For I := 0 To High(Frames) Do
     Session.SendHostJson(Frames[I]);
-  If Cursor > 0 Then
-    Session.NoteMirrorHanded(Cursor);
   AnsweredMs := GetTickCount64;
 End;
 
@@ -551,7 +515,7 @@ End;
 
 Function BulkFrame(Index: Integer): String;
 Begin
-  Result := '{"v":2,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot_page","payload":{"page":' + IntToStr(Index) +
+  Result := '{"v":3,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot_page","payload":{"page":' + IntToStr(Index) +
     ',"title":"' + StringOfChar('b', LinkBulkTitleBytes) + '"}}';
 End;
 
@@ -645,10 +609,10 @@ Var
   ErrorText: String;
 Begin
   Result := False;
-  If Not Client.WriteJson(EncodeMonitorHello('hello1', 'LinkTest', '1', ''), After(3000)) Then
+  If Not Client.WriteJson(EncodeCommandHello('hello1', 'LinkTest', '1', ''), After(3000)) Then
     Exit;
   { No pairing code is armed, so the open-LAN pair is admitted. }
-  If Not Client.WriteJson(EncodeMonitorPair('pair1', '', ''), After(3000)) Then
+  If Not Client.WriteJson(EncodeCommandPair('pair1', '', ''), After(3000)) Then
     Exit;
   Repeat
     If Not Client.ReadMessage(After(LinkFrameWaitMs), Message, ErrorText) Then
@@ -710,7 +674,7 @@ Begin
   Queued := QueueBulk(LinkBulkFrames);
   Check('ping bulk frames queued', Queued = LinkBulkFrames);
   Sent := GetTickCount64;
-  Check('ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'ping1', PingTicks), After(3000)));
+  Check('ping write', Client.WriteJson(EncodeCommandTicks(mmkPing, 'ping1', PingTicks), After(3000)));
   GotPong := False;
   PongAt := 0;
   Before := 0;
@@ -728,7 +692,7 @@ Begin
           If Not GotPong Then
             Inc(Before);
         End
-      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Body) And (Body.Ticks = PingTicks) Then
+      Else If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Body) And (Body.Ticks = PingTicks) Then
         Begin
           GotPong := True;
           PongAt := GetTickCount64;
@@ -749,7 +713,7 @@ Var
   Received: Integer;
 Begin
   Sent := GetTickCount64;
-  Check('resume write', Client.WriteJson(EncodeMonitorResume('resume1', Session.MirrorEpoch, 0), After(3000)));
+  Check('resume write', Client.WriteJson(EncodeCommandResume('resume1', Session.MirrorEpoch, 0), After(3000)));
   CatchupAt := 0;
   LastAt := 0;
   Received := 0;
@@ -761,11 +725,11 @@ Begin
           Break;
         End;
       Case Message.Kind Of
-        mmkCatchup, mmkStatus, mmkPlan, mmkTargets, mmkConversations, mmkModels, mmkReasoning, mmkPermissions:
+        mmkSnapshotPage, mmkStatus, mmkPlan, mmkTargets, mmkConversations, mmkModels, mmkReasoning, mmkPermissions:
           Begin
             Inc(Received);
             LastAt := GetTickCount64;
-            If Message.Kind = mmkCatchup Then
+            If Message.Kind = mmkSnapshotPage Then
               CatchupAt := LastAt;
           End;
       End;
@@ -787,7 +751,7 @@ End;
 Function NextBulkFrame: String;
 Begin
   Inc(BulkSerial);
-  Result := '{"v":2,"id":"b' + IntToStr(BulkSerial) + '","type":"snapshot_page","payload":{"page":' + IntToStr(BulkSerial) + '}}';
+  Result := '{"v":3,"id":"b' + IntToStr(BulkSerial) + '","type":"snapshot_page","payload":{"page":' + IntToStr(BulkSerial) + '}}';
 End;
 
 Function QueueBulkLane(Count: Integer): Integer;
@@ -835,7 +799,7 @@ Begin
       Inc(Queued);
   Check('4.2 sixty-four bulk frames stay queued', Queued = 64);
   Sent := GetTickCount64;
-  Check('4.2 priority ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'priority-ping', 9), After(3000)));
+  Check('4.2 priority ping write', Client.WriteJson(EncodeCommandTicks(mmkPing, 'priority-ping', 9), After(3000)));
   Session.DrainOutbound;
   GotPong := False;
   Before := 0;
@@ -846,7 +810,7 @@ Begin
         Break;
       If Message.Kind = mmkSnapshotPage Then
         Inc(Before)
-      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) Then
+      Else If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Ticks) Then
         Begin
           GotPong := True;
           PongAt := GetTickCount64;
@@ -911,7 +875,7 @@ Begin
   Answerer.AnsweredMs := 0;
   Answerer.HeardMs := 0;
   Sent := GetTickCount64;
-  Check('4.2 timeout resume write', Client.WriteJson(EncodeMonitorResume('resume-timeout', '', 0), After(3000)));
+  Check('4.2 timeout resume write', Client.WriteJson(EncodeCommandResume('resume-timeout', '', 0), After(3000)));
   Deadline := GetTickCount64 + 200;
   Repeat
     CheckSynchronize(1);
@@ -1102,7 +1066,7 @@ Begin
   Queued := QueueFatFetches(Bytes);
   Check(LabelName + ' at least 2 MiB of fetches are queued', Bytes >= 2 * 1024 * 1024);
   Sent := GetTickCount64;
-  Check(LabelName + ' ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'slices-ping', 77), After(3000)));
+  Check(LabelName + ' ping write', Client.WriteJson(EncodeCommandTicks(mmkPing, 'slices-ping', 77), After(3000)));
   Session.DrainOutbound;
   GotPong := False;
   Before := 0;
@@ -1117,7 +1081,7 @@ Begin
           If Message.TypeName = 'event' Then
             AckSeq(Client, PayloadSeq(Message.PayloadJson));
         End
-      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 77) Then
+      Else If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 77) Then
         Begin
           GotPong := True;
           PongAt := GetTickCount64;
@@ -1181,7 +1145,7 @@ Begin
     End;
   Check('9.1 plan_data is the bulk traffic', SawPlan);
   Sent := GetTickCount64;
-  Check('9.1 plan ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'plan-ping', 88), After(3000)));
+  Check('9.1 plan ping write', Client.WriteJson(EncodeCommandTicks(mmkPing, 'plan-ping', 88), After(3000)));
   GotPong := False;
   Before := 0;
   PongAt := 0;
@@ -1191,7 +1155,7 @@ Begin
         Break;
       If Message.TypeName = 'plan_data' Then
         Inc(Before)
-      Else If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 88) Then
+      Else If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 88) Then
         Begin
           GotPong := True;
           PongAt := GetTickCount64;
@@ -1263,14 +1227,14 @@ Begin
   WriteLn('detail credit timing entered=', Entered, ' quiet_from=', QuietFrom, ' now=', GetTickCount64, ' others=', Others,
     ' quiet_others=', QuietOthers, ' other_type=', OtherType);
   Sent := GetTickCount64;
-  Check('9.1 credit ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'credit-ping', 66), After(3000)));
+  Check('9.1 credit ping write', Client.WriteJson(EncodeCommandTicks(mmkPing, 'credit-ping', 66), After(3000)));
   GotPong := False;
   PongAt := 0;
   While Not GotPong Do
     Begin
       If Not Client.ReadMessage(After(200), Message, ErrorText) Then
         Break;
-      If (Message.Kind = mmkPong) And DecodeMonitorTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 66) Then
+      If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Ticks) And (Ticks.Ticks = 66) Then
         Begin
           GotPong := True;
           PongAt := GetTickCount64;
@@ -1300,7 +1264,7 @@ Begin
   ObserveLive(LiveBody + 'tail-near-head');
   Sent := GetTickCount64;
   Check('9.1 tail resume write',
-    Client.WriteJson(EncodeMonitorResume('resume-tail', Session.MirrorEpoch, Head), After(3000)));
+    Client.WriteJson(EncodeCommandResume('resume-tail', Session.MirrorEpoch, Head), After(3000)));
   SawOk := False;
   SawBaseline := False;
   Answered := 0;
@@ -1357,7 +1321,7 @@ Begin
   Session.DiscardUnsentBulk;
   DrainClient(Client, 40);
   Sent := GetTickCount64;
-  Check('9.1 baseline resume write', Client.WriteJson(EncodeMonitorResume('resume-base', Session.MirrorEpoch, 0), After(3000)));
+  Check('9.1 baseline resume write', Client.WriteJson(EncodeCommandResume('resume-base', Session.MirrorEpoch, 0), After(3000)));
   Frames := 0;
   BeginAt := 0;
   PageAt := 0;
@@ -1400,7 +1364,6 @@ Begin
   WriteLn('metric resume_baseline frames=', Frames, ' expected=', LinkResumeFrames, ' begin_ms=', ClockDelta(BeginAt, Sent),
     ' page_ms=', ClockDelta(PageAt, Sent), ' end_ms=', ClockDelta(EndAt, Sent), ' clock=GetTickCount64');
 End;
-
 Procedure MeasureReplace(Client: TLoopClient);
 Var
   Second: TLoopClient;
@@ -1422,7 +1385,7 @@ Begin
           Break;
         If Message.Kind = mmkBye Then
           Begin
-            SawBye := DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'replaced');
+            SawBye := DecodeCommandBye(Message.PayloadJson, Bye) And (Bye.Reason = 'replaced');
             If Not SawBye Then
               WriteLn('detail bye reason=', Message.Reason, ' payload=', String(Message.PayloadJson));
           End
@@ -1469,7 +1432,7 @@ Begin
     TestPartialWrite(Client);
     DrainClient(Client, 40);
     ObserveLive('open-lane');
-    Check('9.1 log lane resume write', Client.WriteJson(EncodeMonitorResume('resume-open', Session.MirrorEpoch, 0), After(3000)));
+    Check('9.1 log lane resume write', Client.WriteJson(EncodeCommandResume('resume-open', Session.MirrorEpoch, 0), After(3000)));
     If Not ReadKind(Client, 'resume_ok', After(3000), Message) Then
       Check('9.1 the open resume is resume_ok', False)
     Else

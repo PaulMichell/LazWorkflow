@@ -2,8 +2,7 @@ package computing.michell.monitor.protocol
 
 /* Catalogue 3 sync frames the phone applies by cursor (c) 2026 Michell Computing.
 
-   The host already sends these at version 3. The catalogue 2 envelope check
-   stays in place for every other type. This file does not paint a screen. */
+   All monitor envelopes use catalogue 3. This file does not paint a screen. */
 
 const val FnvOffsetBasis = 14695981039346656037uL
 const val FnvPrime = 1099511628211uL
@@ -128,7 +127,7 @@ sealed class SyncFrame {
 fun decodeSyncEnvelope(json: String): SyncFrame? {
   val root = parseObject(json) ?: return null
   val version = root.readInt("v", true)
-  if (!version.ok || (version.value != 2 && version.value != 3)) return null
+  if (!version.ok || version.value != MonitorLimits.CatalogueVersion) return null
   val typeName = root.readString("type", true)
   val payload = root.field("payload") as? JsonValue.Obj
   if (!typeName.ok || payload == null) return null

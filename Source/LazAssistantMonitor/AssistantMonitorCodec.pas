@@ -1,21 +1,6 @@
 Unit AssistantMonitorCodec;
 
-{ Monitor catalogue version 2. Wire names are snake case. (c) 2026 Michell Computing.
-
-  Limits live here, not in a later form. Unknown types become error / unknown_type
-  and do not change session state. Observer records are mapped, not copied into a
-  second view model.
-
-  JSON is fpjson and jsonparser. Message ids use TaskIdIsSafe. Mode strings are
-  AssistantModeToStr. Image bytes use the frames unit's FCL base64 helpers.
-  Frame length stays in AssistantMonitorFrames (htonl / ntohl).
-
-  Size note: exceeds the 1000 line preference. What remains is the message types,
-  the envelope framing, and the stable public names. Commands are
-  AssistantMonitorCommands. State codecs are AssistantMonitorState. Image and bulk
-  packing are AssistantMonitorImages. Tested catalogue 2 content tables are
-  AssistantMonitorContent. The public names stay here so existing tests do not change.
-  Reviewed 2026-11-07: no socket, TLS, or form code in this unit. }
+{ Monitor catalogue 3 envelope, shared payload types and limits (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -28,7 +13,7 @@ Uses
   Classes, SysUtils, fpjson, AssistantConversation, AssistantSessionObserve;
 
 Const
-  MonitorCatalogueVersion = 2;
+  MonitorCatalogueVersion = 3;
   { One above GrokOAuthRedirectPort. The implementation checks that relationship. }
   MonitorListenPort = 56122;
   MonitorMaxMessageIdChars = 64;
@@ -61,11 +46,8 @@ Type
     mmkAuth,
     mmkRejected,
     mmkBye,
-    mmkSnapshot,
     mmkRefresh,
-    mmkTranscript,
     mmkTurn,
-    mmkTurnData,
     mmkMode,
     mmkSetMode,
     mmkSend,
@@ -95,8 +77,6 @@ Type
     mmkPing,
     mmkPong,
     mmkResume,
-    mmkPatch,
-    mmkCatchup,
     mmkConversationClosed,
     mmkTargets,
     mmkSelectTarget,
@@ -163,7 +143,7 @@ Type
     ConversationId: String;
     ProjectRoot: String;
     Title: String;
-    { Optional on catalogue 2. 32 lowercase hex. The phone's hostFingerprint. }
+    { Installation identity. 32 lowercase hex. The phone's hostFingerprint. }
     HostId: String;
   End;
 
@@ -358,52 +338,6 @@ Type
     Text: String;
   End;
 
-  { One committed live change. Part and PartCount are 1 until the body exceeds the frame cap. }
-  TMonitorPatch = Record
-    Epoch: String;
-    Cursor: Int64;
-    TurnIndex: Integer;
-    TurnId: String;
-    Blocks: Array Of TAssistantMonitorBlock;
-    { Parallel to Blocks. -1 means the body replaces. Zero or more means the body is a suffix at that UTF-8 offset. }
-    AppendOffsets: Array Of Integer;
-    Busy: Boolean;
-    Sending: Boolean;
-    PlanRunning: Boolean;
-    Phase: String;
-    CanSend: Boolean;
-    CanSteer: Boolean;
-    CanStop: Boolean;
-    ElapsedMs: Integer;
-    Part: Integer;
-    PartCount: Integer;
-    { Absent on a ring record written before the status bar travelled with the patch. }
-    HasView: Boolean;
-    Model: String;
-    SignedIn: Boolean;
-    StatusText: String;
-  End;
-  TMonitorPatchArray = Array Of TMonitorPatch;
-
-  TMonitorCatchupMode = (
-    mcmUnknown,
-    mcmSnapshot,
-    mcmEvents
-  );
-
-  { One resume result. Snapshot nests the existing snapshot object. Events lists patch payloads. }
-  TMonitorCatchup = Record
-    Mode: TMonitorCatchupMode;
-    Epoch: String;
-    Cursor: Int64;
-    ConversationId: String;
-    ProjectRoot: String;
-    Title: String;
-    Snapshot: TMonitorSnapshot;
-    HasSnapshot: Boolean;
-    Patches: TMonitorPatchArray;
-  End;
-
   TMonitorConversationClosed = Record
     Epoch: String;
     Cursor: Int64;
@@ -444,134 +378,123 @@ Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): Strin
 Function DecodeMonitorError(Const PayloadJson: TMonitorPayload; Out ErrorBody: TMonitorErrorBody): Boolean;
 
 { ClientId empty is the first hello. A non-empty id is the reconnect shape. }
-Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
-Function DecodeMonitorHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
-Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
-Function DecodeMonitorPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
-Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
-Function DecodeMonitorPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
-Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
-Function DecodeMonitorHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
+
+
+
+
+
+
+
+
 { 32 lowercase hex digits. Empty is not valid. }
 Function MonitorHostIdIsValid(Const HostId: String): Boolean;
-Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
-Function DecodeMonitorAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
-Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
-Function DecodeMonitorRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
-Function EncodeMonitorBye(Const Id, Reason: String): String;
-Function DecodeMonitorBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
 
-Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Function DecodeMonitorText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
-Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
-Function EncodeMonitorSetMode(Const Id, Mode: String): String;
-Function DecodeMonitorSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
-Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
-Function DecodeMonitorMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
-Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
-Function DecodeMonitorTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
-Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
-Function DecodeMonitorTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
-Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
-Function DecodeMonitorTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
-Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
-Function DecodeMonitorConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
-Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
-Function DecodeMonitorSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
-Function EncodeMonitorModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
-Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
-Function DecodeMonitorSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
-Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
-Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
-Function DecodeMonitorSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
-Function EncodeMonitorPermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorPermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
-Function EncodeMonitorSetPermissions(Const Id, Approval: String): String;
-Function DecodeMonitorSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
-Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
-Function DecodeMonitorPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
-Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
-Function DecodeMonitorNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
-Function EncodeMonitorWorkOnPlan(Const Id: String; Index: Integer): String;
-Function DecodeMonitorWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
-Function EncodeMonitorTaskCommand(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
-Function DecodeMonitorTaskCommand(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
-Function EncodeMonitorInsertResult(Const Id, Text: String): String;
-Function EncodeMonitorTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
-Function DecodeMonitorTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
 
-Function EncodeMonitorApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
-Function DecodeMonitorApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
-Function EncodeMonitorApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
-Function DecodeMonitorApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
-Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
-Function DecodeMonitorApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
 
-Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
-Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
-Function DecodeMonitorTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
-Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
-  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''; Complete: Boolean = False): String;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 { One plan frame when it fits. Otherwise chunk frames of the same item, for the plan lane. }
-Function PackMonitorPlanFrames(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
-  Out Frames: TStringArray): Boolean;
-Function DecodeMonitorPlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
-  Out Rows: TMonitorSnapshot): Boolean;
-Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
-Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
-Function DecodeMonitorSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
-Function DecodeMonitorTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
 
-Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
-Function DecodeMonitorResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
-Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String; Const DoneText: String = ''): String;
-Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
-Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
+
+
+
+
+
+
+
+
+
+
+
 { Same cursor on every part. Empty when a single block cannot be cut down to the cap. }
-Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
-Function DecodeMonitorPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
+
+
 { FirstPatch copies every current block. Later patches keep only a new block, or one whose
   body, title, running flag, or ok flag changed. Duration and elapsed time do not count. }
-Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
-  FirstPatch: Boolean): TAssistantMonitorBlockArray;
+
 { False when any part of that cursor is missing, duplicated, or a different epoch. }
-Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
-Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
-Function DecodeMonitorCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
+
+
+
 { One snapshot catchup. The cursor is the snapshot cursor, not the client's discarded cursor. }
-Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
-  Const Snapshot: TMonitorSnapshot): String;
-Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
-Function DecodeMonitorConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
+
+
+
 
 { True when the host must send image_unavailable and keep the socket open. }
-Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
-Function TryBuildMonitorImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
-  Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
-Function DecodeMonitorImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
-Function EncodeMonitorImageUnavailable(Const Id, ImageId, Reason: String): String;
-Function DecodeMonitorImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
-Function EncodeMonitorImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
-Function DecodeMonitorImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
+
+
+
+
+
+
+
 { Messages are image_data envelopes, or empty when UnavailableReason is set. Does not close a socket. }
-Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
-  Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
+
 { One image_data item, split into outbox chunk frames when it does not fit in 32 KiB. }
-Function TryPackMonitorImage(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer; Const Bytes: TBytes;
-  Missing, Refused: Boolean; Out Frames: TStringArray; Out UnavailableReason: String): Boolean;
+
 { Wraps PayloadJson as type ItemType. A frame over the outbox chunk size becomes chunk frames. }
-Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Frames: TStringArray): Boolean;
+
 
 Implementation
 
 Uses
-  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames, AssistantMonitorCommands, AssistantMonitorState,
-  AssistantMonitorContent, AssistantMonitorImages;
+  jsonparser, GrokOAuth, AssistantTasks, AssistantMonitorFrames;
 
 {$IF MonitorListenPort <> GrokOAuthRedirectPort + 1}
   {$ERROR Listen port must stay one above GrokOAuthRedirectPort}
@@ -642,11 +565,8 @@ Const
     'auth',
     'rejected',
     'bye',
-    'snapshot',
     'refresh',
-    'transcript',
     'turn',
-    'turn_data',
     'mode',
     'set_mode',
     'send',
@@ -676,8 +596,6 @@ Const
     'ping',
     'pong',
     'resume',
-    'patch',
-    'catchup',
     'conversation_closed',
     'targets',
     'select_target',
@@ -695,13 +613,12 @@ Const
     'command_states'
   );
   { Sorted once in source; binary lookup does not construct catalogue names. }
-  MonitorSortedKinds: Array[0..57] Of TMonitorMessageKind = (
+  MonitorSortedKinds: Array[0..52] Of TMonitorMessageKind = (
     mmkApprovalClosed,
     mmkApprovalDecision,
     mmkApprovalRequested,
     mmkAuth,
     mmkBye,
-    mmkCatchup,
     mmkChunk,
     mmkClosePlan,
     mmkCommandState,
@@ -722,7 +639,6 @@ Const
     mmkNewPlan,
     mmkPair,
     mmkPairOk,
-    mmkPatch,
     mmkPermissions,
     mmkPing,
     mmkPlan,
@@ -741,7 +657,6 @@ Const
     mmkSetModel,
     mmkSetPermissions,
     mmkSetReasoning,
-    mmkSnapshot,
     mmkSnapshotPage,
     mmkStatus,
     mmkSteer,
@@ -750,9 +665,7 @@ Const
     mmkTarget,
     mmkTargets,
     mmkTasks,
-    mmkTranscript,
     mmkTurn,
-    mmkTurnData,
     mmkWorkOnPlan
   );
 
@@ -1139,8 +1052,8 @@ Begin
         Exit;
       End;
     Root := TJSONObject(Data);
-    { Catalogue 2 stays. Catalogue 3 is the event resume. Catalogue 1 is rejected. }
-    If (Root.Get('v', 0) <> MonitorCatalogueVersion) And (Root.Get('v', 0) <> 3) Then
+    { Only the current catalogue is supported. }
+    If Root.Get('v', 0) <> MonitorCatalogueVersion Then
       Begin
         ErrorText := 'Unsupported catalogue version.';
         Exit;
@@ -1184,41 +1097,6 @@ Begin
   End;
 End;
 
-Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
-Begin
-  Result := EncodeCommandHello(Id, ClientName, ClientVersion, ClientId);
-End;
-
-Function DecodeMonitorHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
-Begin
-  Result := DecodeCommandHello(PayloadJson, Hello);
-End;
-
-Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
-Begin
-  Result := EncodeCommandPair(Id, Code, Fingerprint);
-End;
-
-Function DecodeMonitorPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
-Begin
-  Result := DecodeCommandPair(PayloadJson, Pair);
-End;
-
-Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
-Begin
-  Result := EncodeCommandPairOk(Id, ClientId, SessionToken);
-End;
-
-Function DecodeMonitorPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
-Begin
-  Result := DecodeCommandPairOk(PayloadJson, PairOk);
-End;
-
-Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
-Begin
-  Result := EncodeCommandHelloOk(Id, HelloOk);
-End;
-
 Function MonitorHostIdIsValid(Const HostId: String): Boolean;
 Var
   Index: Integer;
@@ -1233,458 +1111,6 @@ Begin
       If Not (((C >= '0') And (C <= '9')) Or ((C >= 'a') And (C <= 'f'))) Then
         Exit(False);
     End;
-End;
-
-Function DecodeMonitorHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
-Begin
-  Result := DecodeCommandHelloOk(PayloadJson, HelloOk);
-End;
-
-Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
-Begin
-  Result := EncodeCommandAuth(Id, ClientId, Hmac);
-End;
-
-Function DecodeMonitorAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
-Begin
-  Result := DecodeCommandAuth(PayloadJson, Auth);
-End;
-
-Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
-Begin
-  Result := EncodeCommandRejected(Id, Reason, HostVersion, ClientVersion);
-End;
-
-Function DecodeMonitorRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
-Begin
-  Result := DecodeCommandRejected(PayloadJson, Rejected);
-End;
-
-Function EncodeMonitorBye(Const Id, Reason: String): String;
-Begin
-  Result := EncodeCommandBye(Id, Reason);
-End;
-
-Function DecodeMonitorBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
-Begin
-  Result := DecodeCommandBye(PayloadJson, Bye);
-End;
-
-Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Begin
-  Result := TryEncodeCommandSend(Id, Text, Json, ErrorJson);
-End;
-
-Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Begin
-  Result := TryEncodeCommandSteer(Id, Text, Json, ErrorJson);
-End;
-
-Function DecodeMonitorText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
-Begin
-  Result := DecodeCommandText(PayloadJson, Text);
-End;
-
-Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
-Begin
-  Result := EncodeCommandEmpty(Kind, Id);
-End;
-
-Function EncodeMonitorSetMode(Const Id, Mode: String): String;
-Begin
-  Result := EncodeCommandSetMode(Id, Mode);
-End;
-
-Function DecodeMonitorSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
-Begin
-  Result := DecodeCommandSetMode(PayloadJson, Mode);
-End;
-
-Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
-Begin
-  Result := EncodeCommandMode(Id, Mode, Locked);
-End;
-
-Function DecodeMonitorMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
-Begin
-  Result := DecodeCommandMode(PayloadJson, ModeMessage);
-End;
-
-Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
-Begin
-  Result := EncodeCommandTurnRequest(Id, TurnIndex);
-End;
-
-Function DecodeMonitorTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
-Begin
-  Result := DecodeCommandTurnRequest(PayloadJson, TurnIndex);
-End;
-
-
-Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
-Begin
-  Result := EncodeStateTarget(Id, Kind, Display, Root);
-End;
-
-Function DecodeMonitorTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
-Begin
-  Result := DecodeStateTarget(PayloadJson, Target);
-End;
-
-Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
-Begin
-  Result := EncodeStateTargets(Id, Current, Paths, Captions);
-End;
-
-Function DecodeMonitorTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
-Begin
-  Result := DecodeStateTargets(PayloadJson, Targets);
-End;
-
-Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
-Begin
-  Result := EncodeStateConversations(Id, Current, Ids, Titles, Truncated);
-End;
-
-Function DecodeMonitorConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
-Begin
-  Result := DecodeStateConversations(PayloadJson, Conversations);
-End;
-
-Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
-Begin
-  Result := EncodeCommandSelectConversation(Id, ArchiveId);
-End;
-
-Function DecodeMonitorSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
-Begin
-  Result := DecodeCommandSelectConversation(PayloadJson, ArchiveId);
-End;
-
-Function EncodeMonitorModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Begin
-  Result := EncodeStateModels(Id, Current, Backend, Note, Ids, Captions);
-End;
-
-Function DecodeMonitorModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
-Begin
-  Result := DecodeStateModels(PayloadJson, Models);
-End;
-
-Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
-Begin
-  Result := EncodeCommandSetModel(Id, ModelId);
-End;
-
-Function DecodeMonitorSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
-Begin
-  Result := DecodeCommandSetModel(PayloadJson, ModelId);
-End;
-
-Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
-Begin
-  Result := EncodeStateReasoning(Id, Current, Note, Ids, Captions);
-End;
-
-Function DecodeMonitorReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
-Begin
-  Result := DecodeStateReasoning(PayloadJson, Reasoning);
-End;
-
-Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
-Begin
-  Result := EncodeCommandSetReasoning(Id, Level);
-End;
-
-Function DecodeMonitorSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
-Begin
-  Result := DecodeCommandSetReasoning(PayloadJson, Level);
-End;
-
-Function EncodeMonitorPermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Begin
-  Result := EncodeStatePermissions(Id, Current, Backend, Note, Ids, Captions);
-End;
-
-Function DecodeMonitorPermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
-Begin
-  Result := DecodeStatePermissions(PayloadJson, Permissions);
-End;
-
-Function EncodeMonitorSetPermissions(Const Id, Approval: String): String;
-Begin
-  Result := EncodeCommandSetPermissions(Id, Approval);
-End;
-
-Function DecodeMonitorSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
-Begin
-  Result := DecodeCommandSetPermissions(PayloadJson, Approval);
-End;
-
-Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
-Begin
-  Result := EncodeCommandPath(Kind, Id, Path);
-End;
-
-Function DecodeMonitorPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
-Begin
-  Result := DecodeCommandPath(PayloadJson, Path);
-End;
-
-Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
-Begin
-  Result := EncodeCommandNewPlan(Id, Title, HasTitle);
-End;
-
-Function DecodeMonitorNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
-Begin
-  Result := DecodeCommandNewPlan(PayloadJson, Plan);
-End;
-
-Function EncodeMonitorWorkOnPlan(Const Id: String; Index: Integer): String;
-Begin
-  Result := EncodeCommandWorkOnPlan(Id, Index);
-End;
-
-Function DecodeMonitorWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
-Begin
-  Result := DecodeCommandWorkOnPlan(PayloadJson, Index);
-End;
-
-Function EncodeMonitorTaskCommand(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
-Begin
-  Result := EncodeCommandTask(Kind, Id, TaskId, Note);
-End;
-
-Function DecodeMonitorTaskCommand(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
-Begin
-  Result := DecodeCommandTask(PayloadJson, Command);
-End;
-
-Function EncodeMonitorInsertResult(Const Id, Text: String): String;
-Begin
-  Result := EncodeCommandInsertResult(Id, Text);
-End;
-
-Function EncodeMonitorTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
-Begin
-  Result := EncodeCommandTicks(Kind, Id, Ticks);
-End;
-
-Function DecodeMonitorTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
-Begin
-  Result := DecodeCommandTicks(PayloadJson, Ticks);
-End;
-
-Function EncodeMonitorApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
-Begin
-  Result := EncodeStateApprovalRequested(Id, Notice);
-End;
-
-Function DecodeMonitorApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
-Begin
-  Result := DecodeStateApprovalRequested(PayloadJson, Notice);
-End;
-
-Function EncodeMonitorApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
-Begin
-  Result := EncodeStateApprovalDecision(Id, ToolId, Allow);
-End;
-
-Function DecodeMonitorApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
-Begin
-  Result := DecodeStateApprovalDecision(PayloadJson, Decision);
-End;
-
-Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
-Begin
-  Result := EncodeStateApprovalClosed(Id, ToolId, Reason);
-End;
-
-Function DecodeMonitorApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
-Begin
-  Result := DecodeStateApprovalClosed(PayloadJson, Closed);
-End;
-
-Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
-Begin
-  Result := StateStatusToJson(View);
-End;
-
-Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
-Begin
-  Result := TryStateStatusFromJson(Obj, View);
-End;
-
-Function DecodeMonitorTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
-Begin
-  Result := DecodeContentTurnData(PayloadJson, Turn);
-End;
-
-Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
-  Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''; Complete: Boolean = False): String;
-Begin
-  Result := EncodeStatePlan(Id, Path, Title, Running, Rows, Paths, Captions, Epoch, Cursor, Body, Complete);
-End;
-
-Function PackMonitorPlanFrames(Const Id, Path, Title: String; Running: Boolean;
-  Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
-  Out Frames: TStringArray): Boolean;
-Begin
-  Result := PackStatePlanFrames(Id, Path, Title, Running, Rows, Paths, Captions, Body, Complete, Frames);
-End;
-
-Function DecodeMonitorPlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
-  Out Rows: TMonitorSnapshot): Boolean;
-Begin
-  Result := DecodeStatePlan(PayloadJson, Path, Title, Running, Rows);
-End;
-
-Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
-Begin
-  Result := EncodeStateTasks(Id, Rows);
-End;
-
-Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
-Begin
-  Result := EncodeContentSnapshot(Id, Snapshot);
-End;
-
-Function DecodeMonitorSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
-Begin
-  Result := DecodeContentSnapshot(PayloadJson, Snapshot);
-End;
-
-Function DecodeMonitorTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
-Begin
-  Result := DecodeContentTranscript(PayloadJson, Transcript);
-End;
-
-Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
-Begin
-  Result := EncodeCommandResume(Id, Epoch, Cursor);
-End;
-
-Function DecodeMonitorResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
-Begin
-  Result := DecodeCommandResume(PayloadJson, ResumeMsg);
-End;
-
-Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String; Const DoneText: String = ''): String;
-Begin
-  Result := EncodeCommandStateFrame(Id, Ref, State, Reason, DoneText);
-End;
-
-Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
-Begin
-  Result := EncodeCommandStateFrames(Id, Replies);
-End;
-
-Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
-Begin
-  Result := EncodeContentPatch(Id, Patch);
-End;
-
-Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
-Begin
-  Result := PackContentPatch(Id, Patch);
-End;
-
-Function DecodeMonitorPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
-Begin
-  Result := DecodeContentPatch(PayloadJson, Patch);
-End;
-
-Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
-  FirstPatch: Boolean): TAssistantMonitorBlockArray;
-Begin
-  Result := SelectContentDirtyBlocks(Previous, Current, FirstPatch);
-End;
-
-Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
-Begin
-  Result := TryAssembleContentPatch(Messages, Patch);
-End;
-
-Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
-Begin
-  Result := EncodeContentCatchup(Id, Catchup);
-End;
-
-Function DecodeMonitorCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
-Begin
-  Result := DecodeContentCatchup(PayloadJson, Catchup);
-End;
-
-Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
-  Const Snapshot: TMonitorSnapshot): String;
-Begin
-  Result := EncodeContentResumeSnapshot(RefId, Cursor, Epoch, ConversationId, ProjectRoot, Title, Snapshot);
-End;
-
-Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
-Begin
-  Result := EncodeStateConversationClosed(Id, Epoch, Cursor, ConversationId, Title);
-End;
-
-Function DecodeMonitorConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
-Begin
-  Result := DecodeStateConversationClosed(PayloadJson, Closed);
-End;
-
-Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
-Begin
-  Result := ImageFetchBlocked(Missing, Refused, DecodedBytes, Reason);
-End;
-
-Function TryBuildMonitorImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
-  Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
-Begin
-  Result := TryBuildImageParts(ImageId, Mime, Width, Height, Revision, Bytes, Parts, Reason);
-End;
-
-Function DecodeMonitorImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
-Begin
-  Result := DecodeImageData(PayloadJson, Image, DecodedBytes);
-End;
-
-Function EncodeMonitorImageUnavailable(Const Id, ImageId, Reason: String): String;
-Begin
-  Result := EncodeImageUnavailable(Id, ImageId, Reason);
-End;
-
-Function DecodeMonitorImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
-Begin
-  Result := DecodeImageUnavailable(PayloadJson, Image);
-End;
-
-Function EncodeMonitorImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
-Begin
-  Result := EncodeImageGet(Id, TurnIndex, ImageId);
-End;
-
-Function DecodeMonitorImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
-Begin
-  Result := DecodeImageGet(PayloadJson, Image);
-End;
-
-Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
-  Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
-Begin
-  Result := TryEncodeImageData(Id, ImageId, Mime, Width, Height, Revision, Bytes, Missing, Refused, Messages,
-    UnavailableReason);
-End;
-
-Function TryPackMonitorImage(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer; Const Bytes: TBytes;
-  Missing, Refused: Boolean; Out Frames: TStringArray; Out UnavailableReason: String): Boolean;
-Begin
-  Result := TryPackImage(Id, ImageId, Mime, Width, Height, Revision, Bytes, Missing, Refused, Frames, UnavailableReason);
-End;
-
-Function PackMonitorBulkItem(Const ItemId, ItemType, PayloadJson: String; Out Frames: TStringArray): Boolean;
-Begin
-  Result := PackImageBulkItem(ItemId, ItemType, PayloadJson, Frames);
 End;
 
 End.

@@ -4,7 +4,7 @@ The phone client for the Lazarus monitor. The IDE host is `LazAssistantMonitor`.
 
 ## Protocol
 
-Catalogue 3 is `Documents/MonitorProtocolV3.md`. The golden messages are `Tests/Fixtures/Monitor/`. The phone still accepts the catalogue 2 frames the current host sends. A saved TLS pin is 64 hex characters. An empty pin means endpoint-only trust. A nonempty pin that is not 64 hex characters is refused. Connect does not clear a saved pin.
+Catalogue 3 is `Documents/MonitorProtocolV3.md`. The golden messages are `Tests/Fixtures/Monitor/`. Desktop and phone require catalogue 3; older experimental protocols and cache imports are unsupported. Rebuild both sides together. A saved TLS pin is 64 hex characters. An empty pin means endpoint-only trust. A nonempty pin that is not 64 hex characters is refused. Connect does not clear a saved pin.
 
 ## Pair a phone
 
