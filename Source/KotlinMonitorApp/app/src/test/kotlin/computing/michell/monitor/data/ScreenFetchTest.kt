@@ -11,6 +11,32 @@ import java.io.File
 
 class ScreenFetchTest {
   @Test
+  fun cachedRowsWaitForConnectionAndRetryAfterDisconnect() {
+    val fetch = ScreenFetch(initiallyConnected = false)
+    assertTrue(fetch.noteVisible(setOf(0, 1)).isEmpty())
+    assertTrue(fetch.replaceBoard("c1", emptyList(), null).isEmpty())
+    val connected = fetch.setConnected(true)
+    assertEquals(listOf(0, 1), connected.map { (it as FetchGrant.Turn).index })
+    assertTrue(fetch.setConnected(true).isEmpty())
+    assertTrue(fetch.setConnected(false).isEmpty())
+    assertTrue(fetch.noteVisible(setOf(0, 1)).isEmpty())
+    assertEquals(connected, fetch.setConnected(true))
+  }
+
+  @Test
+  fun deferredBlockAndPlanWaitForConnection() {
+    val fetch = ScreenFetch(initiallyConnected = false)
+    val live = turn(1, "t-live", deferred = true, running = true)
+    assertTrue(fetch.replaceBoard("c1", emptyList(), live).isEmpty())
+    assertTrue(fetch.notePlan("/work/Plan.md", "rev-2", false, "", 0L, true).isEmpty())
+    val connected = fetch.setConnected(true)
+    assertTrue(connected[0] is FetchGrant.Block)
+    assertTrue(connected[1] is FetchGrant.Plan)
+    fetch.setConnected(false)
+    assertEquals(connected, fetch.setConnected(true))
+  }
+
+  @Test
   fun anOpenBlockGoesBeforeHistoryAndTheCapHolds() {
     val fetch = ScreenFetch()
     val live = turn(1, "t-live", deferred = true, running = true)

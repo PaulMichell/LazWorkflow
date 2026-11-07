@@ -23,7 +23,19 @@ private data class OwedBlock(
   val open: Boolean
 )
 
-class ScreenFetch {
+class ScreenFetch(initiallyConnected: Boolean = true) {
+  private var connected = initiallyConnected
+
+  /** Disconnect releases socket-owned fetch slots; reconnect retries from the stored board. */
+  fun setConnected(value: Boolean): List<FetchGrant> {
+    connected = value
+    if (!value) {
+      inFlight.clear()
+      planFlying = false
+    }
+    return release()
+  }
+
   private val owed = LinkedHashMap<String, OwedBlock>()
   private val inFlight = LinkedHashSet<String>()
   private val knownTurns = HashSet<Int>()
@@ -112,6 +124,7 @@ class ScreenFetch {
   private fun planKey(): String = "plan:" + planPath
 
   private fun release(): List<FetchGrant> {
+    if (!connected) return emptyList()
     val grants = ArrayList<FetchGrant>()
     val open = owed.values.firstOrNull { row -> row.open && row.fetch.blockId !in inFlight }
     if (open != null && free() > 0) grants += take(open)

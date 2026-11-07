@@ -1097,7 +1097,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val commandLedger = RoomCommandLedger(conversations)
   val conversationCapText = MutableStateFlow(displayPrefs.getInt(ConversationCapKey, DefaultConversationCap).toString())
   val imageBudgetText = MutableStateFlow(displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB).toString())
-  private val session = LanSession(store, ledger = commandLedger)
+  private val session = LanSession(store, ledger = commandLedger,
+    diagnostic = { android.util.Log.d("MonitorLink", it) })
   private val lanWatch = WifiLanWatch(application, session::onWifiAvailable, session::onWifiLost)
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
@@ -1182,6 +1183,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
   private val engine: SpeechEngine = OnDeviceSpeechEngine(application, engineListener)
   private val finalWatch = DictationFinalWatch(viewModelScope, onExpired = ::abandonAwaitingFinal)
+
+  private val screenFetch = computing.michell.monitor.data.ScreenFetch(initiallyConnected = false)
 
   init {
     val record = store.load()
@@ -1805,7 +1808,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private var syncApplier: computing.michell.monitor.data.SyncApplier? = null
-  private val screenFetch = computing.michell.monitor.data.ScreenFetch()
   private val planFiles = computing.michell.monitor.data.PlanFiles(File(imageRoot, "plans"))
   private var shownPlanPath = ""
   private var shownPlanRevision = ""
@@ -2105,6 +2107,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
+    sendFetchGrants(screenFetch.setConnected(status.phase == computing.michell.monitor.connection.LinkPhase.Live))
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Live) followHostConversation(uiState.value.conversationId)

@@ -493,7 +493,8 @@ class LanSession(
   private val store: HostStore,
   private val connector: TlsConnector = SslSocketConnector(),
   private val clock: MonotonicClock = SystemMonotonicClock,
-  private val ledger: CommandLedger = NoCommandLedger
+  private val ledger: CommandLedger = NoCommandLedger,
+  private val diagnostic: (String) -> Unit = {}
 ) : SessionPort {
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
@@ -570,6 +571,9 @@ class LanSession(
           val wrote = if (socket == null) false else offerCommand(step.accepted.json, socket)
           catalogueFromWrite(step.accepted, wrote)
         }
+      }
+      if (result.outcome != CatalogueWrite.Written) {
+        diagnostic("outbound ${tryDecodeEnvelope(outboundJson).message.kind}: ${result.outcome}, epoch=${result.linkEpoch}")
       }
       commandResultsChannel.send(result)
     }
