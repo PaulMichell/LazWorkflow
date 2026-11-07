@@ -1170,12 +1170,9 @@ class LanSession(
       MessageKind.Rejected -> {
         pairCode = ""
         val reason = message.reason
-        val retryOpen = (reason == "auth" || reason == "revoked") && store.load().paired
-        if (reason == "busy" || retryOpen) {
-          if (retryOpen) {
-            val current = store.load()
-            store.save(current.copy(clientId = "", sessionToken = ""))
-          }
+        // Authentication failure must not silently discard a saved pairing and
+        // retry with an empty, single-use pairing code.
+        if (reason == "busy") {
           noteReadEnd(epoch, ReadEnd.Retry, owned)
           publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason)
         } else {

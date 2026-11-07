@@ -743,6 +743,29 @@ class LanSessionTest {
   }
 
   @Test
+  fun savedAuthenticationRejectionKeepsCredentialsAndDoesNotPairAgain() {
+    for (reason in listOf("auth", "revoked")) {
+      val store = pairedStore()
+      val original = store.load()
+      val link = ScriptedLink()
+      val opens = AtomicInteger()
+      val session = LanSession(store, TlsConnector { _, _, _ -> opens.incrementAndGet(); link })
+      try {
+        session.connect("10.0.0.8", 56122)
+        waitUntil { link.frames().isNotEmpty() }
+        link.push(frameOf(encodeRejected("host-rejected", reason, 1, 1)))
+        waitUntil(2_000) { link.closed && session.status.value.phase == LinkPhase.Paused }
+        assertEquals(original, store.load())
+        assertEquals(reason, session.status.value.lastError)
+        assertEquals(1, opens.get())
+        assertFalse(link.frames().any { envelope(it).kind == MessageKind.Pair })
+      } finally {
+        session.close()
+      }
+    }
+  }
+
+  @Test
   fun rejectedPeerEndsWithoutWaitingForEof() {
     val link = ScriptedLink()
     val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link })
