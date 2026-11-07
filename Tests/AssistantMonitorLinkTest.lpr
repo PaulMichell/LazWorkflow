@@ -1203,6 +1203,7 @@ Begin
   Else
     WriteLn('metric plan_ping plan_before_pong=', Before, ' pong_ms=', PongAt - Sent, ' clock=GetTickCount64');
   DrainClient(Client, 20);
+  WriteLn('detail plan_ping sent=', Sent, ' done=', GetTickCount64);
 End;
 
 Procedure MeasureCreditPing(Client: TLoopClient);
@@ -1210,15 +1211,20 @@ Var
   Message: TMonitorMessage;
   Ticks: TMonitorTicks;
   ErrorText: String;
-  Quiet, Sent, PongAt: QWord;
-  Events, QuietEvents: Integer;
+  Quiet, Sent, PongAt, Entered, QuietFrom: QWord;
+  Events, QuietEvents, Others, QuietOthers: Integer;
+  OtherType: String;
   GotPong: Boolean;
 Begin
+  Entered := GetTickCount64;
   LiveBody := LiveBody + StringOfChar('c', LinkCreditBodyBytes);
   ObserveLive(LiveBody);
   Events := 0;
   Quiet := 0;
   QuietEvents := 0;
+  Others := 0;
+  QuietOthers := 0;
+  OtherType := '';
   Sent := GetTickCount64 + 2500;
   While GetTickCount64 < Sent Do
     Begin
@@ -1232,16 +1238,29 @@ Begin
         Begin
           Inc(Events);
           Quiet := GetTickCount64;
+        End
+      Else
+        Begin
+          Inc(Others);
+          OtherType := Message.TypeName;
         End;
     End;
   { A second quiet read confirms the window stopped the tail. }
+  QuietFrom := GetTickCount64;
   While Client.ReadMessage(After(40), Message, ErrorText) Do
     If Message.TypeName = 'event' Then
-      Inc(QuietEvents);
+      Inc(QuietEvents)
+    Else
+      Begin
+        Inc(QuietOthers);
+        OtherType := Message.TypeName;
+      End;
   Check('9.1 an unacknowledged client stops inside the credit window', (Events > 0) And (Events < 400) And
     (QuietEvents = 0));
   WriteLn('detail credit before_ping state=', Ord(Session.State), ' events=', Events, ' dropped=', Session.FramesDropped,
     ' error=', Session.LastError, ' read=', ErrorText);
+  WriteLn('detail credit timing entered=', Entered, ' quiet_from=', QuietFrom, ' now=', GetTickCount64, ' others=', Others,
+    ' quiet_others=', QuietOthers, ' other_type=', OtherType);
   Sent := GetTickCount64;
   Check('9.1 credit ping write', Client.WriteJson(EncodeMonitorTicks(mmkPing, 'credit-ping', 66), After(3000)));
   GotPong := False;
