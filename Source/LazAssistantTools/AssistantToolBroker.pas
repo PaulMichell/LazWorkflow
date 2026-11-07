@@ -1326,7 +1326,7 @@ Begin
                       ErrorText := 'only must be a list of test program names.';
                       Exit;
                     End;
-                  NewText := Node.AsJSON;
+                  NewText := '{"only":' + Node.AsJSON + '}';
                 End;
               If Not FAdapter.TestCommand(ActualPath, NewText, Text, ErrorText) Then Exit;
               If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;

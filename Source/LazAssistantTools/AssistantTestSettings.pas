@@ -33,14 +33,22 @@ Type
     Function StorageFilename: String;
   End;
 
-{ Append --only pairs and a private --output-dir when OnlyJSON names tests. An empty list leaves CommandJSON unchanged.
-  Only the repository runner Tests/RunAssistantTests.pas accepts names, and each name must be an existing Tests/<name>.lpr. }
-Function ApplyTestOnly(Const CommandJSON, ProjectRoot, OnlyJSON: String; Out NewCommand, ErrorText: String): Boolean;
+{ Append runner options and a private --output-dir to a test command. OptionsJSON is an object with only (test program
+  names, each an existing Tests/<name>.lpr), memory_check ('none', 'heaptrc' or 'valgrind', which needs a non-empty
+  only) and defines (at most 8 names, each passed as --define). With no options CommandJSON comes back unchanged; any
+  option needs the repository runner Tests/RunAssistantTests.pas. The output directory names the build, the memory
+  check, the sorted defines and the tests, so a run never reuses units compiled with other flags. }
+Function ApplyTestOptions(Const CommandJSON, ProjectRoot, OptionsJSON: String; Out NewCommand, ErrorText: String): Boolean;
 
 Implementation
 
 Uses
   fpjson, jsonparser, LazFileUtils, AssistantProjectPaths;
+
+Const
+  MaxTestOnlyNames = 32;
+  { The runner's MaxDefines. }
+  MaxTestDefines = 8;
 
 Function ValidTestProgramName(Const Name: String): Boolean;
 Var
@@ -82,68 +90,172 @@ Begin
     End;
 End;
 
-Function ApplyTestOnly(Const CommandJSON, ProjectRoot, OnlyJSON: String; Out NewCommand, ErrorText: String): Boolean;
+{ The name rule and limit of the runner's --define. }
+Function ValidDefineName(Const Name: String): Boolean;
 Var
-  Data, OnlyData, Args: TJSONData;
-  Only: TJSONArray;
   I: Integer;
-  Name, TestFile, OutputDir, Token: String;
+Begin
+  Result := (Name <> '') And (Name[1] In ['A'..'Z', 'a'..'z', '_']);
+  If Not Result Then Exit;
+  For I := 2 To Length(Name) Do
+    If Not (Name[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then Exit(False);
+End;
+
+{ Read and check OptionsJSON. Only keeps the given order; Defines is sorted, and like the runner it drops repeats
+  without regard to case before counting them against the limit. }
+Function ReadTestOptions(Const OptionsJSON: String; Only, Defines: TStringList; Out MemoryCheck, ErrorText: String): Boolean;
+Var
+  Data, Node: TJSONData;
+  Options: TJSONObject;
+  I: Integer;
+  Name: String;
+Begin
+  Result := False;
+  MemoryCheck := 'none';
+  ErrorText := '';
+  If Trim(OptionsJSON) = '' Then Exit(True);
+  Try
+    Data := GetJSON(OptionsJSON);
+  Except
+    ErrorText := 'Test options must be a JSON object.';
+    Exit;
+  End;
+  Try
+    If Not (Data Is TJSONObject) Then
+      Begin
+        ErrorText := 'Test options must be a JSON object.';
+        Exit;
+      End;
+    Options := TJSONObject(Data);
+    For I := 0 To Options.Count - 1 Do
+      If (Options.Names[I] <> 'only') And (Options.Names[I] <> 'memory_check') And (Options.Names[I] <> 'defines') Then
+        Begin
+          ErrorText := 'Unknown test option: ' + Options.Names[I];
+          Exit;
+        End;
+    Node := Options.Find('only');
+    If Assigned(Node) Then
+      Begin
+        If Not (Node Is TJSONArray) Then
+          Begin
+            ErrorText := 'only must be a list of test program names.';
+            Exit;
+          End;
+        If Node.Count > MaxTestOnlyNames Then
+          Begin
+            ErrorText := 'only accepts at most ' + IntToStr(MaxTestOnlyNames) + ' test program names.';
+            Exit;
+          End;
+        For I := 0 To Node.Count - 1 Do
+          Begin
+            If Node.Items[I].JSONType <> jtString Then
+              Begin
+                ErrorText := 'Each only name must be a string.';
+                Exit;
+              End;
+            Name := Node.Items[I].AsString;
+            If Not ValidTestProgramName(Name) Then
+              Begin
+                ErrorText := 'Test name must match ^[A-Za-z][A-Za-z0-9]*$: ' + Name;
+                Exit;
+              End;
+            Only.Add(Name);
+          End;
+      End;
+    Node := Options.Find('memory_check');
+    If Assigned(Node) Then
+      Begin
+        If (Node.JSONType <> jtString) Or
+          Not ((Node.AsString = 'none') Or (Node.AsString = 'heaptrc') Or (Node.AsString = 'valgrind')) Then
+            Begin
+              ErrorText := 'memory_check must be "none", "heaptrc" or "valgrind".';
+              Exit;
+            End;
+        MemoryCheck := Node.AsString;
+      End;
+    Node := Options.Find('defines');
+    If Assigned(Node) Then
+      Begin
+        If Not (Node Is TJSONArray) Then
+          Begin
+            ErrorText := 'defines must be a list of define names.';
+            Exit;
+          End;
+        For I := 0 To Node.Count - 1 Do
+          Begin
+            If Node.Items[I].JSONType <> jtString Then
+              Begin
+                ErrorText := 'Each defines name must be a string.';
+                Exit;
+              End;
+            Name := Node.Items[I].AsString;
+            If Not ValidDefineName(Name) Then
+              Begin
+                ErrorText := 'Define name must match ^[A-Za-z_][A-Za-z0-9_]*$: ' + Name;
+                Exit;
+              End;
+            If Defines.IndexOf(Name) < 0 Then
+              Begin
+                If Defines.Count >= MaxTestDefines Then
+                  Begin
+                    ErrorText := 'defines accepts at most ' + IntToStr(MaxTestDefines) + ' names.';
+                    Exit;
+                  End;
+                Defines.Add(Name);
+              End;
+          End;
+      End;
+    Result := True;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function ApplyTestOptions(Const CommandJSON, ProjectRoot, OptionsJSON: String; Out NewCommand, ErrorText: String): Boolean;
+Var
+  Data, Args: TJSONData;
+  Only, Defines: TStringList;
+  I: Integer;
+  MemoryCheck, OptionName, TestFile, OutputDir, Token: String;
 Begin
   Result := False;
   NewCommand := '';
   ErrorText := '';
-  If (Trim(OnlyJSON) = '') Or (Trim(OnlyJSON) = '[]') Then
-    Begin
-      NewCommand := CommandJSON;
-      Exit(True);
-    End;
-  OnlyData := Nil;
   Data := Nil;
+  Only := TStringList.Create;
+  Defines := TStringList.Create;
   Try
-    Try
-      OnlyData := GetJSON(OnlyJSON);
-    Except
-      ErrorText := 'only must be a list of test program names.';
-      Exit;
-    End;
-    If Not (OnlyData Is TJSONArray) Then
-      Begin
-        ErrorText := 'only must be a list of test program names.';
-        Exit;
-      End;
-    Only := TJSONArray(OnlyData);
-    If Only.Count = 0 Then
+    Defines.Sorted := True;
+    Defines.CaseSensitive := False;
+    If Not ReadTestOptions(OptionsJSON, Only, Defines, MemoryCheck, ErrorText) Then Exit;
+    If (Only.Count = 0) And (MemoryCheck = 'none') And (Defines.Count = 0) Then
       Begin
         NewCommand := CommandJSON;
         Exit(True);
       End;
-    If Only.Count > 32 Then
+    If (MemoryCheck <> 'none') And (Only.Count = 0) Then
       Begin
-        ErrorText := 'only accepts at most 32 test program names.';
+        ErrorText := 'memory_check ' + MemoryCheck + ' needs at least one only name.';
         Exit;
       End;
+    { Name the option the caller gave in the errors below; only comes first because it is the usual one. }
+    If Only.Count > 0 Then
+      OptionName := 'only'
+    Else If MemoryCheck <> 'none' Then
+      OptionName := 'memory_check'
+    Else
+      OptionName := 'defines';
     If Trim(ProjectRoot) = '' Then
       Begin
-        ErrorText := 'The project root is required to select named tests.';
+        ErrorText := 'The project root is required to apply ' + OptionName + '.';
         Exit;
       End;
     For I := 0 To Only.Count - 1 Do
       Begin
-        If Only.Items[I].JSONType <> jtString Then
-          Begin
-            ErrorText := 'Each only name must be a string.';
-            Exit;
-          End;
-        Name := Only.Items[I].AsString;
-        If Not ValidTestProgramName(Name) Then
-          Begin
-            ErrorText := 'Test name must match ^[A-Za-z][A-Za-z0-9]*$: ' + Name;
-            Exit;
-          End;
-        TestFile := IncludeTrailingPathDelimiter(ProjectRoot) + 'Tests' + PathDelim + Name + '.lpr';
+        TestFile := IncludeTrailingPathDelimiter(ProjectRoot) + 'Tests' + PathDelim + Only[I] + '.lpr';
         If Not FileExistsUTF8(TestFile) Then
           Begin
-            ErrorText := 'Test program was not found: Tests/' + Name + '.lpr';
+            ErrorText := 'Test program was not found: Tests/' + Only[I] + '.lpr';
             Exit;
           End;
       End;
@@ -161,12 +273,18 @@ Begin
     Args := TJSONObject(Data).Find('arguments');
     If Not IsRepositoryRunner(TJSONObject(Data).Get('executable', ''), ProjectRoot, TJSONArray(Args)) Then
       Begin
-        ErrorText := 'only applies only when the configured command is Tests/RunAssistantTests.pas.';
+        ErrorText := OptionName + ' applies only when the configured command is Tests/RunAssistantTests.pas.';
         Exit;
       End;
+    { FPC does not recompile a unit when only the defines or debug flags change, so every distinct set of flags needs
+      its own output directory. }
     Token := SafeDirToken(TJSONObject(Data).Get('build_job_id', ''));
+    If MemoryCheck <> 'none' Then
+      Token := Token + '-' + MemoryCheck;
+    For I := 0 To Defines.Count - 1 Do
+      Token := Token + '-d' + Defines[I];
     For I := 0 To Only.Count - 1 Do
-      Token := Token + '-' + Only.Items[I].AsString;
+      Token := Token + '-' + Only[I];
     OutputDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + Token;
     If Not ForceDirectories(OutputDir) Then
       Begin
@@ -176,15 +294,23 @@ Begin
     For I := 0 To Only.Count - 1 Do
       Begin
         TJSONArray(Args).Add('--only');
-        TJSONArray(Args).Add(Only.Items[I].AsString);
+        TJSONArray(Args).Add(Only[I]);
       End;
+    For I := 0 To Defines.Count - 1 Do
+      Begin
+        TJSONArray(Args).Add('--define');
+        TJSONArray(Args).Add(Defines[I]);
+      End;
+    If MemoryCheck <> 'none' Then
+      TJSONArray(Args).Add('--' + MemoryCheck);
     TJSONArray(Args).Add('--output-dir');
     TJSONArray(Args).Add(ExcludeTrailingPathDelimiter(OutputDir));
     NewCommand := Data.AsJSON;
     Result := True;
   Finally
-    OnlyData.Free;
     Data.Free;
+    Only.Free;
+    Defines.Free;
   End;
 End;
 

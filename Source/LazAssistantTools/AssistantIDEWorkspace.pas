@@ -17,7 +17,7 @@ Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
   Private
     FBuild, FTests: IAssistantBuildJob;
-    FTestBuildId, FTestCommand, FTestExecutable, FTestOnly: String;
+    FTestBuildId, FTestCommand, FTestExecutable, FTestOptions: String;
     FBuildInputs, FBuildRoots: TBuildInputs;
     FDependencyEvidence: String;
     FDefineStep: Integer;
@@ -560,9 +560,9 @@ Begin
     Finally
       Data.Free;
     End;
-    { Not ApplyTestOnly(Command, ..., Command): the Out parameter is cleared on entry, and the Const one, which holds
+    { Not ApplyTestOptions(Command, ..., Command): the Out parameter is cleared on entry, and the Const one, which holds
       no reference of its own, would then read an empty or freed string. }
-    If Not ApplyTestOnly(BaseCommand, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
+    If Not ApplyTestOptions(BaseCommand, ProjectRootPath, OnlyJSON, Command, ErrorText) Then Exit;
     Result := True;
   Finally
     Settings.Free;
@@ -595,7 +595,7 @@ Begin
     FTests := Job;
     FTestBuildId := BuildId;
     FTestCommand := Command;
-    FTestOnly := OnlyJSON;
+    FTestOptions := OnlyJSON;
     FTestExecutable := Data.FindPath('executable').AsString;
     Value := FTests.Snapshot;
     ResultText := '{"started":true,"job_id":"' + JsonEscapeText(Value.JobId) + '","build_job_id":"' + JsonEscapeText(BuildId) + '"}';
@@ -667,8 +667,8 @@ Begin
         Try
           TJSONObject(Data).Add('executableFingerprint', Fingerprint);
           TJSONObject(Data).Add('build_job_id', FTestBuildId);
-          { FTestCommand carries the --only and --output-dir arguments, so apply the same selection before comparing. }
-          If Not ApplyTestOnly(Data.AsJSON, ProjectRootPath, FTestOnly, Current, Note) Or (Current <> FTestCommand) Then
+          { FTestCommand carries the option and --output-dir arguments, so apply the same options before comparing. }
+          If Not ApplyTestOptions(Data.AsJSON, ProjectRootPath, FTestOptions, Current, Note) Or (Current <> FTestCommand) Then
             Begin
               Stale := True;
               If StaleReason = '' Then StaleReason := 'The configured test command changed.';

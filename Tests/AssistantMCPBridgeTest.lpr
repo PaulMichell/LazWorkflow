@@ -171,7 +171,7 @@ End;
 
 Function TMemoryWorkspace.TestCommand(Const BuildId, OnlyJSON: String; Out Command, ErrorText: String): Boolean;
 Begin
-  Result := ApplyTestOnly(BaseCommand, ProjectRoot, OnlyJSON, Command, ErrorText);
+  Result := ApplyTestOptions(BaseCommand, ProjectRoot, OnlyJSON, Command, ErrorText);
 End;
 
 Function TMemoryWorkspace.StartTests(Const BuildId, ExpectedCommand, OnlyJSON: String; Out ResultText, ErrorText: String): Boolean;
