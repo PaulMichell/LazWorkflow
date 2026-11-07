@@ -668,14 +668,9 @@ Begin
   For Index := 0 To High(Source.Blocks) Do
     Begin
       Dest.Blocks[Index] := Source.Blocks[Index];
-      SetLength(Dest.Blocks[Index].Images, Length(Source.Blocks[Index].Images));
-      If Length(Source.Blocks[Index].Images) > 0 Then
-        Move(Source.Blocks[Index].Images[0], Dest.Blocks[Index].Images[0],
-          Length(Source.Blocks[Index].Images) * SizeOf(TAssistantMonitorImage));
+      Dest.Blocks[Index].Images := Copy(Source.Blocks[Index].Images);
     End;
-  SetLength(Dest.Images, Length(Source.Images));
-  If Length(Source.Images) > 0 Then
-    Move(Source.Images[0], Dest.Images[0], Length(Source.Images) * SizeOf(TAssistantMonitorImage));
+  Dest.Images := Copy(Source.Images);
 End;
 
 Function Utf8Step(Const Text: RawByteString; Index: Integer): Integer;
