@@ -43,13 +43,20 @@ Const
 
 Var
   Repo, LazarusRoot, OutputDir: String;
-  LibraryDirs, OnlyNames, Failures: TStringList;
+  LibraryDirs, OnlyNames, Defines, Failures: TStringList;
   Gui, PackageCheck, CompileOnly, Independent: Boolean;
+
+Const
+  MaxDefines = 8;
 
 Procedure FailUsage(Const Message: String);
 Begin
   WriteLn(StdErr, Message);
-  WriteLn(StdErr, 'instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout> [--only ProgramName]');
+  WriteLn(StdErr, 'instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout> [--only ProgramName]...');
+  WriteLn(StdErr, '  [--output-dir Dir] [--library-dir Dir]... [--define NAME]... [--gui] [--compile-only]');
+  WriteLn(StdErr, '  [--package-check] [--independent]');
+  WriteLn(StdErr, '--define NAME passes -dNAME to every fpc build and to the monitor package build;');
+  WriteLn(StdErr, '  NAME matches [A-Za-z_][A-Za-z0-9_]*, at most ' + IntToStr(MaxDefines) + ' names.');
   Halt(2);
 End;
 
@@ -386,6 +393,16 @@ Begin
     End;
 End;
 
+Function ValidDefineName(Const Name: String): Boolean;
+Var
+  I: Integer;
+Begin
+  Result := (Name <> '') And (Name[1] In ['A'..'Z', 'a'..'z', '_']);
+  For I := 2 To Length(Name) Do
+    If Not (Name[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then
+      Exit(False);
+End;
+
 Procedure ParseArguments;
 Var
   I: Integer;
@@ -433,6 +450,20 @@ Begin
             FailUsage('--only needs a program name.');
           OnlyNames.Add(ParamStr(I));
         End
+      Else If Arg = '--define' Then
+        Begin
+          Inc(I);
+          If I > ParamCount Then
+            FailUsage('--define needs a name.');
+          If Not ValidDefineName(ParamStr(I)) Then
+            FailUsage('Bad --define name: ''' + ParamStr(I) + '''');
+          If Defines.IndexOf(ParamStr(I)) < 0 Then
+            Begin
+              If Defines.Count >= MaxDefines Then
+                FailUsage('At most ' + IntToStr(MaxDefines) + ' --define names are allowed.');
+              Defines.Add(ParamStr(I));
+            End;
+        End
       Else
         FailUsage('Unknown argument: ' + Arg);
       Inc(I);
@@ -474,6 +505,23 @@ Begin
       Result.Delete(I);
 End;
 
+Procedure AddBuildFlags(Command: TStrings);
+Var
+  I: Integer;
+Begin
+  For I := 0 To Defines.Count - 1 Do
+    Command.Add('-d' + Defines[I]);
+End;
+
+Function BuildFlagsText: String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := 0 To Defines.Count - 1 Do
+    Result := Result + ' -d' + Defines[I];
+End;
+
 Function Restricted(Const LabelName: String; Const Sources: Array Of String; Const Target: String;
   Execute: Boolean; TimeoutSec: Integer; UnitDirs: TStrings): Boolean;
 Var
@@ -497,6 +545,7 @@ Begin
       Command.Add('-Fu' + RepoFile('Source/' + Sources[I]));
     For I := 0 To UnitDirs.Count - 1 Do
       Command.Add('-Fu' + UnitDirs[I]);
+    AddBuildFlags(Command);
     Command.Add(Target);
     Result := RunCommand(LabelName + '-build', Command, TimeoutSec);
   Finally
@@ -533,7 +582,7 @@ Begin
       [Lazbuild, '--pcp=' + ConfigDir, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--add-package-link',
       RepoFile('Packages/' + Links[I] + '.lpk')], 120) Then
       Exit;
-  Opt := '-FU' + ExcludeTrailingPathDelimiter(PackageOut) + ' -FE' + ExcludeTrailingPathDelimiter(PackageOut);
+  Opt := '-FU' + ExcludeTrailingPathDelimiter(PackageOut) + ' -FE' + ExcludeTrailingPathDelimiter(PackageOut) + BuildFlagsText;
   RunArgs('LazAssistantMonitor-lazbuild',
     [Lazbuild, '--pcp=' + ConfigDir, '--lazarusdir=' + LazarusRoot, '--ws=gtk3', '--build-all', '--opt=' + Opt,
     RepoFile('Packages/LazAssistantMonitor.lpk')], 600);
@@ -626,6 +675,7 @@ Begin
           Command.Add('-FU' + OutputDir);
           Command.Add('-FE' + OutputDir);
           AddUnitFlags(Command, UnitDirs);
+          AddBuildFlags(Command);
           Command.Add(RepoFile('Tests/' + Tests[I] + '.lpr'));
           If RunCommand(Tests[I] + '-build', Command, BuildTimeout) And Not CompileOnly Then
             RunArgs(Tests[I], [OutputBinary(OutputDir, Tests[I])], BuildTimeout);
@@ -639,6 +689,7 @@ Begin
       Command.Add('-FU' + OutputDir);
       Command.Add('-FE' + OutputDir);
       AddUnitFlags(Command, UnitDirs);
+      AddBuildFlags(Command);
       Command.Add(RepoFile('Packages/LazAssistantTools.pas'));
       RunCommand('assistant-package-build', Command, 90);
       RunMonitorPackage;
@@ -660,6 +711,7 @@ End;
 Begin
   LibraryDirs := TStringList.Create;
   OnlyNames := TStringList.Create;
+  Defines := TStringList.Create;
   Failures := TStringList.Create;
   Try
     Repo := RepositoryRoot;
@@ -667,10 +719,15 @@ Begin
       FailUsage('Could not find the repository root. Start in the project directory.');
     ParseArguments;
     OutputDir := NewOutputDirectory(OutputDir);
+    If Defines.Count = 0 Then
+      Say('Build flags: (none)')
+    Else
+      Say('Build flags:' + BuildFlagsText);
     If Not RunSuite Then
       Halt(1);
   Finally
     Failures.Free;
+    Defines.Free;
     OnlyNames.Free;
     LibraryDirs.Free;
   End;
