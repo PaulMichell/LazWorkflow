@@ -35,6 +35,11 @@ Const
 
 Procedure AttachAssistantMonitorBridge(Session: TMonitorSession);
 Procedure DetachAssistantMonitorBridge;
+{$IFDEF MONITOR_BRIDGE_TEST}
+Procedure TickMonitorBridgeForTest;
+Var
+  MonitorSnapshotFillCount: Integer;
+{$ENDIF}
 /// Stores aadAllow or aadDeny and signals. Does not run the tool. A second answer returns false.
 Function DecideAssistantMonitorApproval(Const ToolId: String; Allow: Boolean): Boolean;
 /// Main thread. Creates the bridge on first use, then registers the session listener and the remote approval waiter.
@@ -874,6 +879,9 @@ Var
   ErrorText: String;
   Index, Kept: Integer;
 Begin
+  {$IFDEF MONITOR_BRIDGE_TEST}
+  Inc(MonitorSnapshotFillCount);
+  {$ENDIF}
   Snapshot := Default(TMonitorSnapshot);
   If Not Assigned(Form) Then
     Exit;
@@ -1118,6 +1126,14 @@ Begin
     FCoalesceTimer.Enabled := False;
   Application.QueueAsyncCall(@QueuedPump, 0);
 End;
+
+{$IFDEF MONITOR_BRIDGE_TEST}
+Procedure TickMonitorBridgeForTest;
+Begin
+  If Assigned(Bridge) Then
+    Bridge.MirrorTimerTimer(Bridge.FMirrorTimer);
+End;
+{$ENDIF}
 
 Procedure TAssistantMonitorBridge.MirrorTimerTimer(Sender: TObject);
 Var

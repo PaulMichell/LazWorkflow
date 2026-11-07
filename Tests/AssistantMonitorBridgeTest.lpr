@@ -155,6 +155,21 @@ Begin
     CheckSynchronize;
     Session.DrainOutbound;
     CheckKeys(Carrier, ['status', 'session', 'mode', 'target', 'tasks', 'plan_choices', 'plan']);
+    {$IFDEF MONITOR_BRIDGE_TEST}
+    Form.BindToActiveProject;
+    CheckSynchronize;
+    Check('empty form is bound for screen delivery', Form.MonitorScreenReady);
+    TickMonitorBridgeForTest;
+    MonitorSnapshotFillCount := 0;
+    For Index := 1 To 5 Do
+      TickMonitorBridgeForTest;
+    Check('idle empty ticks skip snapshot and all turn fills', MonitorSnapshotFillCount = 0);
+    TouchAssistantMirror;
+    TickMonitorBridgeForTest;
+    Check('mirror change retries empty screen once', MonitorSnapshotFillCount = 1);
+    TickMonitorBridgeForTest;
+    Check('retried empty screen is cached again', MonitorSnapshotFillCount = 1);
+    {$ENDIF}
   Finally
     Session.SetOutboundWake(Nil);
     UnregisterAssistantMonitor;
