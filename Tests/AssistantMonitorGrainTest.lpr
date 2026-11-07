@@ -324,7 +324,7 @@ Var
   Spare: TMonitorFrame;
 Begin
   Session.NoteSocketClosed;
-  Check('7.1 handshake accepted', Session.AcceptHandshake(Spare));
+  Check('7.1 handshake accepted', Session.AcceptHandshake(Spare, True));
   Carrier.ClearSent;
   Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
   Carrier.ClearSent;

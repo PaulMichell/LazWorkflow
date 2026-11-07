@@ -448,10 +448,10 @@ Begin
   Result := False;
   If Not Session.StartListening('127.0.0.1', 56124, ErrorText) Then
     Exit;
-  If Not Session.AcceptHandshake(Spare) Then
+  If Not Session.AcceptHandshake(Spare, True) Then
     Exit;
   Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
-  { Open LAN with no armed code admits the pair. }
+  { Loopback with no armed code admits the pair. }
   Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
   Result := Session.State = mssLive;
 End;

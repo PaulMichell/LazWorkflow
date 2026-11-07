@@ -112,7 +112,7 @@ Begin
     Session.SetHostFingerprint('ab12cd34');
     Session.NoteTime(5000);
     Check('listen starts', Session.StartListening('127.0.0.1', 56124, ErrorText));
-    Check('handshake accepted', Session.AcceptHandshake(Spare));
+    Check('handshake accepted', Session.AcceptHandshake(Spare, True));
     Carrier.DeliverJson(EncodeMonitorHello('hello', 'Phone', '1', ''));
     Carrier.DeliverJson(EncodeMonitorPair('pair', '', ''));
     Check('memory session is live', Session.State = mssLive);
