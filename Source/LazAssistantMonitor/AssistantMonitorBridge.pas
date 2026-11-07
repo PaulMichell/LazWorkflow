@@ -56,6 +56,10 @@ Uses
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorApproval, AssistantTools, AssistantConversation,
   ProjectAssistantForm;
 
+Const
+  ResumeConversationWaitMs = 60000;
+  ResumeWindowWaitMs = 8000;
+
 Type
   TMonitorQueuedCommand = Class
     Kind: Integer;
@@ -466,9 +470,9 @@ Begin
   { The window is open and the conversation is still loading. An empty page here
     is what the phone saves as this chat with no turns. }
   If Assigned(Form) Then
-    Exit(Age < 60000);
+    Exit(Age < ResumeConversationWaitMs);
   { No window yet. Do not tell the phone it is missing for the first few seconds. }
-  Result := Age < 8000;
+  Result := Age < ResumeWindowWaitMs;
 End;
 
 Procedure TAssistantMonitorBridge.ApplyHostFlags(Const View: TAssistantMonitorView);
@@ -554,10 +558,21 @@ Begin
   ProjectAssistantConversation.NoteMonitorLogPosition(Epoch, Cursor);
 End;
 
+Function MirrorConversationMatches(Session: TMonitorSession; Const ConversationId: String; RequireEpoch: Boolean): Boolean;
+Var
+  Epoch, MirrorId, MirrorRoot, MirrorTitle: String;
+  Cursor: Int64;
+Begin
+  Result := False;
+  If (Not Assigned(Session)) Or (ConversationId = '') Or (ConversationId = 'current') Then
+    Exit;
+  Session.CopyMirrorIdentity(Epoch, MirrorId, MirrorRoot, MirrorTitle, Cursor);
+  Result := (MirrorId = ConversationId) And ((Not RequireEpoch) Or (Epoch <> ''));
+End;
+
 Function FormConversationMoved(Form: TProjectAssistantForm; Session: TMonitorSession): Boolean;
 Var
-  ConversationId, ProjectRoot, Title, Epoch, MirrorId, MirrorRoot, MirrorTitle: String;
-  Cursor: Int64;
+  ConversationId, ProjectRoot, Title: String;
 Begin
   Result := False;
   If (Not Assigned(Form)) Or (Not Assigned(Session)) Then
@@ -565,8 +580,7 @@ Begin
   Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If (ConversationId = '') Or (ConversationId = 'current') Then
     Exit;
-  Session.CopyMirrorIdentity(Epoch, MirrorId, MirrorRoot, MirrorTitle, Cursor);
-  Result := MirrorId <> ConversationId;
+  Result := Not MirrorConversationMatches(Session, ConversationId, False);
 End;
 
 Procedure TAssistantMonitorBridge.PublishEpoch;
@@ -574,8 +588,8 @@ Var
   Form: TProjectAssistantForm;
   Session: TMonitorSession;
   Closed: TMonitorConversationClosed;
-  ConversationId, ProjectRoot, Title, Epoch, MirrorEpoch, MirrorId, MirrorRoot, MirrorTitle: String;
-  SavedCursor, MirrorCursor: Int64;
+  ConversationId, ProjectRoot, Title, Epoch: String;
+  SavedCursor: Int64;
   HadEpoch: Boolean;
 Begin
   LockBridge;
@@ -591,12 +605,8 @@ Begin
   If Assigned(Form) Then
     Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   { New already opened this conversation. A second publish must not close it. }
-  If Assigned(Session) And (ConversationId <> '') And (ConversationId <> 'current') Then
-    Begin
-      Session.CopyMirrorIdentity(MirrorEpoch, MirrorId, MirrorRoot, MirrorTitle, MirrorCursor);
-      If (MirrorId = ConversationId) And (MirrorEpoch <> '') Then
-        Exit;
-    End;
+  If MirrorConversationMatches(Session, ConversationId, True) Then
+    Exit;
   HadEpoch := False;
   If Assigned(Session) Then
     Begin
@@ -1166,59 +1176,59 @@ Begin
     Exit;
   FPumping := True;
   Try
-  Form := OpenForm;
-  LockBridge;
-  Try
-    Session := FSession;
-  Finally
-    UnlockBridge;
-  End;
-  If (Not Assigned(Session)) Or (Not Assigned(Form)) Then
-    Exit;
-  Form.FillMonitorView(View);
-  ApplyHostFlags(View);
-  { New has already minted the next id. Do not observe its note onto the closed mirror. }
-  If FormConversationMoved(Form, Session) Then
-    PublishEpoch;
-  Turn := Default(TAssistantMonitorTurn);
-  SetLength(Sent, 0);
-  { The mirror holds the last observation. Unchanged bodies are not copied again. }
-  If Not Session.CopyLiveBlocks(Sent) Then
-    SetLength(Sent, 0);
-  If Not Form.FillMonitorLiveChanges(Sent, Turn, ErrorText) Then
+    Form := OpenForm;
+    LockBridge;
+    Try
+      Session := FSession;
+    Finally
+      UnlockBridge;
+    End;
+    If (Not Assigned(Session)) Or (Not Assigned(Form)) Then
+      Exit;
+    Form.FillMonitorView(View);
+    ApplyHostFlags(View);
+    { New has already minted the next id. Do not observe its note onto the closed mirror. }
+    If FormConversationMoved(Form, Session) Then
+      PublishEpoch;
     Turn := Default(TAssistantMonitorTurn);
-  If Turn.Id <> '' Then
-    Session.ObserveTurn(Turn);
-  If Session.MirrorEpoch = '' Then
-    PublishEpoch;
-  If Session.MirrorEpoch <> '' Then
-    FSentEpoch := Session.MirrorEpoch;
-  { Status is state. It does not allocate a content sequence. }
-  If FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
-    FSentCanStop, FSentPhase, FSentModel, FSentStatusText) Then
-    Begin
-      FSentFlagsValid := True;
-      FSentBusy := View.Busy;
-      FSentSending := View.Sending;
-      FSentPlanRunning := View.PlanRunning;
-      FSentPhase := View.Phase;
-      FSentCanSend := View.CanSend;
-      FSentCanSteer := View.CanSteer;
-      FSentCanStop := View.CanStop;
-      FSentModel := View.Model;
-      FSentStatusText := View.StatusText;
-      PushStatus(Form);
-    End;
-  Form.FillMonitorPlan(Rows);
-  Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
-  PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
-  If PlanStamp <> FPlanStamp Then
-    Begin
-      PublishPlanRows(Form);
-      FPlanStamp := PlanStamp;
-    End;
-  FPumpedMirror := Seen;
-  NoteOpenLogPosition;
+    SetLength(Sent, 0);
+    { The mirror holds the last observation. Unchanged bodies are not copied again. }
+    If Not Session.CopyLiveBlocks(Sent) Then
+      SetLength(Sent, 0);
+    If Not Form.FillMonitorLiveChanges(Sent, Turn, ErrorText) Then
+      Turn := Default(TAssistantMonitorTurn);
+    If Turn.Id <> '' Then
+      Session.ObserveTurn(Turn);
+    If Session.MirrorEpoch = '' Then
+      PublishEpoch;
+    If Session.MirrorEpoch <> '' Then
+      FSentEpoch := Session.MirrorEpoch;
+    { Status is state. It does not allocate a content sequence. }
+    If FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
+      FSentCanStop, FSentPhase, FSentModel, FSentStatusText) Then
+      Begin
+        FSentFlagsValid := True;
+        FSentBusy := View.Busy;
+        FSentSending := View.Sending;
+        FSentPlanRunning := View.PlanRunning;
+        FSentPhase := View.Phase;
+        FSentCanSend := View.CanSend;
+        FSentCanSteer := View.CanSteer;
+        FSentCanStop := View.CanStop;
+        FSentModel := View.Model;
+        FSentStatusText := View.StatusText;
+        PushStatus(Form);
+      End;
+    Form.FillMonitorPlan(Rows);
+    Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
+    PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
+    If PlanStamp <> FPlanStamp Then
+      Begin
+        PublishPlanRows(Form);
+        FPlanStamp := PlanStamp;
+      End;
+    FPumpedMirror := Seen;
+    NoteOpenLogPosition;
   Finally
     FPumping := False;
   End;

@@ -27,7 +27,7 @@ Implementation
 Uses
   Classes, Forms, LCLType, MenuIntf, IDECommands, WorkflowLog,
   AssistantMonitorForm, AssistantMonitorBridge, AssistantMonitorSettings, AssistantMonitorLan,
-  AssistantMonitorTls, AssistantMonitorApproval;
+  AssistantMonitorTls;
 
 Var
   LiveSession: TMonitorSession;
@@ -130,7 +130,6 @@ Begin
   End;
   If Not AssistantMonitorListenerRunning Then
     Exit;
-  AssistantMonitorBridge.RegisterAssistantMonitor;
   AttachAssistantMonitorBridge(LiveSession);
   If MonitorHostFingerprint(Fingerprint, ErrorText) Then
     LiveSession.SetHostFingerprint(Fingerprint);
@@ -138,7 +137,6 @@ Begin
     LiveSession.SetInstallationHostId(HostId)
   Else If ErrorText <> '' Then
     WorkflowLogger.Warning('AssistantMonitor', 'host id was not stored: ' + ErrorText);
-  ApplyMonitorRemoteApproval(Settings.RemoteApproval);
   ErrorText := '';
   Result := True;
   WorkflowLogger.Info('AssistantMonitor', 'listen start bind=' + Address + ' port=' + IntToStr(Settings.Port));
