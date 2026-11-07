@@ -5,7 +5,11 @@ Program RunAssistantTests;
 
   Invoke with InstantFPC. Python is not used:
     instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout>
-  Compiled test programs are written to a temporary directory, not beside these sources. }
+  Compiled test programs are written to a temporary directory, not beside these sources.
+
+  Size note (2026-11-07): over 1000 lines once the memory-check probes of plan item 2.4 (Documents/Plan-20261107-025146.md)
+  were added. Plan item 2.3 names Tests/RunAssistantTestsOptions.inc as the place to move the option handling when the
+  memory-check settings have settled. }
 
 {$IFDEF FPC}
   {$MODE OBJFPC}
@@ -40,9 +44,25 @@ Const
     'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest',
     'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest',
     'AssistantMonitorFormLoadTest');
+  { Planted-fault probes run only when named with --only. Each runs twice: with ProbeCleanArg it must pass, and with
+    no argument, under --heaptrc or --valgrind, the memory check must report the planted fault. }
+  ProbeTestNames: Array[0..1] Of String = ('MemoryCheckProbeLeak', 'MemoryCheckProbeUseAfterFree');
+  ProbeCleanArg = '--clean';
+  ProbeTimeoutSec = 15;
+  { How each probe's planted run must fail: the start of the heaptrc problem, or a line in the valgrind log. }
+  ProbeHeaptrcExpect: Array[0..1] Of String = ('heaptrc reported unfreed blocks', 'heaptrc reported a heap error');
+  ProbeValgrindExpect: Array[0..1, 0..1] Of String = (
+    ('definitely lost in loss record', 'definitely lost in loss record'), ('Invalid read', 'Invalid write'));
 
 Type
   TMemoryCheck = (mcNone, mcHeaptrc, mcValgrind);
+  { One child process run. Ran is False when it could not be started or raised an exception; Problem then says why.
+    Otherwise Problem holds what heaptrc or valgrind reported, if anything. }
+  TRunResult = Record
+    Ran, Passed, TimedOut: Boolean;
+    ExitCode: Integer;
+    Problem, OutputText, LogPath: String;
+  End;
 
 Var
   Repo, LazarusRoot, OutputDir, ValgrindExe: String;
@@ -83,6 +103,9 @@ Begin
     IntToStr(ValgrindSlowdown) + ', capped at ' + IntToStr(MaxRunTimeoutSec) + ' s.');
   WriteLn(StdErr, '--heaptrc and --valgrind cannot be combined, each needs at least one --only, and neither may be used');
   WriteLn(StdErr, '  with --independent, --package-check or --gui.');
+  WriteLn(StdErr, '--only ' + ProbeTestNames[0] + ' or --only ' + ProbeTestNames[1] + ' runs a planted-fault probe, which is not');
+  WriteLn(StdErr, '  in the default run. Its ' + ProbeCleanArg + ' run must pass; under --heaptrc or --valgrind its planted run must');
+  WriteLn(StdErr, '  be reported by the memory check. Without a memory check the planted run is skipped.');
   Halt(2);
 End;
 
@@ -183,29 +206,31 @@ Begin
     Result := 'heaptrc report missing: no "' + HeapReportMarker + '" line in the output';
 End;
 
-{ Environment entries, when given, are added to a copy of this process's environment. AppendLog names a file whose
-  text is added to the log after the run. CheckHeap applies CheckHeapReport to the output. }
-Function RunCommand(Const LabelName: String; Command: TStrings; TimeoutSec: Integer; Environment: TStrings = Nil;
-  Const AppendLog: String = ''; CheckHeap: Boolean = False): Boolean;
+{ Runs Command and writes its output to <LabelName>.log without reporting. Environment entries, when given, are added
+  to a copy of this process's environment. AppendLog names a file whose text is added to the log after the run.
+  CheckHeap applies CheckHeapReport to the output. }
+Procedure ExecuteCommand(Const LabelName: String; Command: TStrings; TimeoutSec: Integer; Environment: TStrings;
+  Const AppendLog: String; CheckHeap: Boolean; Out Run: TRunResult);
 Var
   Proc: TProcess;
   I, BytesRead: Integer;
-  Exe, LogPath, OutputText, Tail, Problem: String;
+  Exe: String;
   Mem: TMemoryStream;
   Buf: Array[0..8191] Of Byte;
   StartTick: QWord;
-  TimedOut: Boolean;
 Begin
-  Result := False;
-  OutputText := '';
-  TimedOut := False;
+  Run.Ran := False;
+  Run.Passed := False;
+  Run.TimedOut := False;
+  Run.ExitCode := -1;
+  Run.Problem := '';
+  Run.OutputText := '';
+  Run.LogPath := IncludeTrailingPathDelimiter(OutputDir) + LabelName + '.log';
   Exe := ResolveExecutable(Command[0]);
-  LogPath := IncludeTrailingPathDelimiter(OutputDir) + LabelName + '.log';
   If Exe = '' Then
     Begin
-      WriteTextFile(LogPath, 'Executable not found: ' + Command[0] + LineEnding);
-      Say('FAIL ' + LabelName + ': executable not found: ' + Command[0]);
-      Failures.Add(LabelName);
+      WriteTextFile(Run.LogPath, 'Executable not found: ' + Command[0] + LineEnding);
+      Run.Problem := 'executable not found: ' + Command[0];
       Exit;
     End;
   Proc := TProcess.Create(Nil);
@@ -225,12 +250,13 @@ Begin
       End;
     Try
       Proc.Execute;
+      Run.Ran := True;
       StartTick := GetTickCount64;
       While Proc.Running Or (Proc.Output.NumBytesAvailable > 0) Do
         Begin
           If GetTickCount64 - StartTick >= QWord(TimeoutSec) * 1000 Then
             Begin
-              TimedOut := True;
+              Run.TimedOut := True;
               Try
                 Proc.Terminate(1);
               Except
@@ -254,47 +280,74 @@ Begin
           Else
             Break;
         End;
-      SetLength(OutputText, Mem.Size);
+      SetLength(Run.OutputText, Mem.Size);
       If Mem.Size > 0 Then
-        Move(Mem.Memory^, OutputText[1], Mem.Size);
-      If TimedOut Then
-        OutputText := OutputText + LineEnding + 'Timed out.' + LineEnding;
+        Move(Mem.Memory^, Run.OutputText[1], Mem.Size);
+      If Run.TimedOut Then
+        Run.OutputText := Run.OutputText + LineEnding + 'Timed out.' + LineEnding;
       If AppendLog <> '' Then
-        OutputText := OutputText + LineEnding + '----- ' + AppendLog + ' -----' + LineEnding + ReadTextFile(AppendLog);
-      WriteTextFile(LogPath, OutputText);
-      Problem := '';
-      If CheckHeap And Not TimedOut Then
-        Problem := CheckHeapReport(OutputText);
-      If (AppendLog <> '') And Not TimedOut And (Proc.ExitStatus = ValgrindErrorExit) Then
-        Problem := 'valgrind reported errors (exit ' + IntToStr(ValgrindErrorExit) + ')';
-      If TimedOut Or (Proc.ExitStatus <> 0) Or (Problem <> '') Then
-        Begin
-          If Problem <> '' Then
-            Say('FAIL ' + LabelName + ': ' + Problem + '; see ' + LogPath)
-          Else
-            Say('FAIL ' + LabelName + ': see ' + LogPath);
-          Tail := OutputText;
-          If Length(Tail) > 4000 Then
-            Tail := Copy(Tail, Length(Tail) - 3999, 4000);
-          If Tail <> '' Then
-            Say(Tail);
-          Failures.Add(LabelName);
-          Exit;
-        End;
-      Say('PASS ' + LabelName);
-      Result := True;
+        Run.OutputText := Run.OutputText + LineEnding + '----- ' + AppendLog + ' -----' + LineEnding + ReadTextFile(AppendLog);
+      WriteTextFile(Run.LogPath, Run.OutputText);
+      Run.ExitCode := Proc.ExitStatus;
+      If CheckHeap And Not Run.TimedOut Then
+        Run.Problem := CheckHeapReport(Run.OutputText);
+      If (AppendLog <> '') And Not Run.TimedOut And (Run.ExitCode = ValgrindErrorExit) Then
+        Run.Problem := 'valgrind reported errors (exit ' + IntToStr(ValgrindErrorExit) + ')';
+      Run.Passed := Not Run.TimedOut And (Run.ExitCode = 0) And (Run.Problem = '');
     Except
       On E: Exception Do
         Begin
-          WriteTextFile(LogPath, E.Message + LineEnding);
-          Say('FAIL ' + LabelName + ': ' + E.Message);
-          Failures.Add(LabelName);
+          WriteTextFile(Run.LogPath, E.Message + LineEnding);
+          Run.Ran := False;
+          Run.Passed := False;
+          Run.Problem := E.Message;
         End;
     End;
   Finally
     Mem.Free;
     Proc.Free;
   End;
+End;
+
+Procedure SayTail(Const Text: String);
+Var
+  Tail: String;
+Begin
+  Tail := Text;
+  If Length(Tail) > 4000 Then
+    Tail := Copy(Tail, Length(Tail) - 3999, 4000);
+  If Tail <> '' Then
+    Say(Tail);
+End;
+
+{ Prints PASS or FAIL for Run, with the end of its output on failure, and counts a failure. }
+Function ReportRun(Const LabelName: String; Const Run: TRunResult): Boolean;
+Begin
+  Result := Run.Passed;
+  If Run.Passed Then
+    Begin
+      Say('PASS ' + LabelName);
+      Exit;
+    End;
+  Failures.Add(LabelName);
+  If Not Run.Ran Then
+    Say('FAIL ' + LabelName + ': ' + Run.Problem)
+  Else
+    Begin
+      If Run.Problem <> '' Then
+        Say('FAIL ' + LabelName + ': ' + Run.Problem + '; see ' + Run.LogPath)
+      Else
+        Say('FAIL ' + LabelName + ': see ' + Run.LogPath);
+      SayTail(Run.OutputText);
+    End;
+End;
+
+Function RunCommand(Const LabelName: String; Command: TStrings; TimeoutSec: Integer): Boolean;
+Var
+  Run: TRunResult;
+Begin
+  ExecuteCommand(LabelName, Command, TimeoutSec, Nil, '', False, Run);
+  Result := ReportRun(LabelName, Run);
 End;
 
 Function RunArgs(Const LabelName: String; Const Args: Array Of String; TimeoutSec: Integer): Boolean;
@@ -616,6 +669,9 @@ Begin
       Result.Add(GuiTestNames[I]);
   If OnlyNames.Count = 0 Then
     Exit;
+  { Probes are selectable by name only, never part of the default run. }
+  For I := 0 To High(ProbeTestNames) Do
+    Result.Add(ProbeTestNames[I]);
   Missing := '';
   For I := 0 To OnlyNames.Count - 1 Do
     If Result.IndexOf(OnlyNames[I]) < 0 Then
@@ -686,50 +742,137 @@ Begin
   End;
 End;
 
-Procedure RunTest(Const TestName: String; TimeoutSec: Integer);
+{ Runs the built program TestName as LabelName under the selected memory check, passing Arg when it is not empty. }
+Procedure ExecuteTest(Const TestName, LabelName, Arg: String; TimeoutSec: Integer; Out Run: TRunResult);
 Var
   Command, Environment: TStringList;
-  Binary, ValgrindLog: String;
+  ChildEnvironment: TStrings;
+  ValgrindLog: String;
 Begin
-  Binary := OutputBinary(OutputDir, TestName);
   Command := TStringList.Create;
   Environment := TStringList.Create;
   Try
-    Case MemoryCheck Of
-      mcHeaptrc:
-        Begin
-          Command.Add(Binary);
-          Environment.Add(HeaptrcEnvironment);
-          RunCommand(TestName, Command, TimeoutSec, Environment, '', True);
-        End;
-      mcValgrind:
-        Begin
-          ValgrindLog := IncludeTrailingPathDelimiter(OutputDir) + TestName + '.valgrind.log';
-          If FileExists(ValgrindLog) Then
-            DeleteFile(ValgrindLog);
-          Command.Add(ValgrindExe);
-          Command.Add('--error-exitcode=' + IntToStr(ValgrindErrorExit));
-          Command.Add('--leak-check=full');
-          Command.Add('--errors-for-leak-kinds=definite');
-          Command.Add('--track-origins=yes');
-          Command.Add('--log-file=' + ValgrindLog);
-          Command.Add(Binary);
-          If TimeoutSec > MaxRunTimeoutSec Div ValgrindSlowdown Then
-            TimeoutSec := MaxRunTimeoutSec
-          Else
-            TimeoutSec := TimeoutSec * ValgrindSlowdown;
-          RunCommand(TestName, Command, TimeoutSec, Nil, ValgrindLog);
-        End;
-    Else
+    ChildEnvironment := Nil;
+    ValgrindLog := '';
+    If MemoryCheck = mcHeaptrc Then
       Begin
-        Command.Add(Binary);
-        RunCommand(TestName, Command, TimeoutSec);
+        Environment.Add(HeaptrcEnvironment);
+        ChildEnvironment := Environment;
+      End
+    Else If MemoryCheck = mcValgrind Then
+      Begin
+        ValgrindLog := IncludeTrailingPathDelimiter(OutputDir) + LabelName + '.valgrind.log';
+        If FileExists(ValgrindLog) Then
+          DeleteFile(ValgrindLog);
+        Command.Add(ValgrindExe);
+        Command.Add('--error-exitcode=' + IntToStr(ValgrindErrorExit));
+        Command.Add('--leak-check=full');
+        Command.Add('--errors-for-leak-kinds=definite');
+        Command.Add('--track-origins=yes');
+        Command.Add('--log-file=' + ValgrindLog);
+        If TimeoutSec > MaxRunTimeoutSec Div ValgrindSlowdown Then
+          TimeoutSec := MaxRunTimeoutSec
+        Else
+          TimeoutSec := TimeoutSec * ValgrindSlowdown;
       End;
-    End;
+    Command.Add(OutputBinary(OutputDir, TestName));
+    If Arg <> '' Then
+      Command.Add(Arg);
+    ExecuteCommand(LabelName, Command, TimeoutSec, ChildEnvironment, ValgrindLog, MemoryCheck = mcHeaptrc, Run);
   Finally
     Environment.Free;
     Command.Free;
   End;
+End;
+
+Function ProbeIndex(Const TestName: String): Integer;
+Var
+  I: Integer;
+Begin
+  Result := -1;
+  For I := 0 To High(ProbeTestNames) Do
+    If ProbeTestNames[I] = TestName Then
+      Exit(I);
+End;
+
+{ Returns the report line that shows the memory check caught the planted fault of probe Index, or ''. A crash, a hang
+  or a non-zero exit without that report does not count: the point is to prove the memory check sees the fault. }
+Function PlantedFaultSeen(Index: Integer; Const Run: TRunResult): String;
+Var
+  Lines: TStringList;
+  I, J: Integer;
+Begin
+  Result := '';
+  If Run.Passed Or Not Run.Ran Then
+    Exit;
+  If MemoryCheck = mcHeaptrc Then
+    Begin
+      If Pos(ProbeHeaptrcExpect[Index], Run.Problem) = 1 Then
+        Result := Run.Problem;
+      Exit;
+    End;
+  Lines := TStringList.Create;
+  Try
+    Lines.Text := Run.OutputText;
+    For I := 0 To Lines.Count - 1 Do
+      For J := 0 To High(ProbeValgrindExpect[Index]) Do
+        If Pos(ProbeValgrindExpect[Index, J], Lines[I]) > 0 Then
+          Exit('memcheck reported: ' + Trim(Lines[I]));
+  Finally
+    Lines.Free;
+  End;
+End;
+
+{ The probe passes only when its clean run passes and, under a memory check, its planted run is caught. }
+Procedure RunProbe(Const TestName: String; Index: Integer);
+Var
+  Run: TRunResult;
+  Seen, Reason: String;
+Begin
+  ExecuteTest(TestName, TestName + '-clean', ProbeCleanArg, ProbeTimeoutSec, Run);
+  If Not ReportRun(TestName + '-clean', Run) Then
+    Begin
+      Say('FAIL ' + TestName + ': the ' + ProbeCleanArg + ' run must pass');
+      Exit;
+    End;
+  If MemoryCheck = mcNone Then
+    Begin
+      Say('SKIP ' + TestName + '-planted: the planted fault is only seen under --heaptrc or --valgrind');
+      Exit;
+    End;
+  ExecuteTest(TestName, TestName + '-planted', '', ProbeTimeoutSec, Run);
+  Seen := PlantedFaultSeen(Index, Run);
+  If Seen <> '' Then
+    Begin
+      Say('PASS ' + TestName + ': the planted run failed as expected; ' + Seen + '; see ' + Run.LogPath);
+      Exit;
+    End;
+  If Run.Passed Then
+    Reason := 'the planted run passed'
+  Else If Run.TimedOut Then
+    Reason := 'the planted run timed out before any report'
+  Else If Run.Problem <> '' Then
+    Reason := Run.Problem
+  Else
+    Reason := 'the planted run exited ' + IntToStr(Run.ExitCode) + ' without the expected report';
+  Say('FAIL ' + TestName + ': the planted fault was not caught (' + Reason + '); see ' + Run.LogPath);
+  SayTail(Run.OutputText);
+  Failures.Add(TestName);
+End;
+
+Procedure RunTest(Const TestName: String; TimeoutSec: Integer);
+Var
+  Run: TRunResult;
+  Index: Integer;
+Begin
+  Index := ProbeIndex(TestName);
+  If Index >= 0 Then
+    RunProbe(TestName, Index)
+  Else
+    Begin
+      ExecuteTest(TestName, TestName, '', TimeoutSec, Run);
+      ReportRun(TestName, Run);
+    End;
 End;
 
 Function Restricted(Const LabelName: String; Const Sources: Array Of String; Const Target: String;
