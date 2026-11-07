@@ -34,15 +34,15 @@ Function ContentTurnToJson(Const Turn: TAssistantMonitorTurn; IndexOnly: Boolean
 Function TryReadImages(Node: TJSONData; Var Turn: TAssistantMonitorTurn): Boolean;
 Function TryReadBlocks(Node: TJSONData; Var Turn: TAssistantMonitorTurn): Boolean;
 Function TryContentTurnFromJson(Obj: TJSONObject; IndexOnly: Boolean; Out Turn: TAssistantMonitorTurn): Boolean;
-Function DecodeContentTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Function DecodeContentTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
 Function StoredTurnIsLive(Const Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeContentSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
-Function DecodeContentSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
-Function DecodeContentTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+Function DecodeContentSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
+Function DecodeContentTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
 Procedure ClearPatch(Out Patch: TMonitorPatch);
 Function PatchPayload(Const Patch: TMonitorPatch): TJSONObject;
 Function EncodeContentPatch(Const Id: String; Const Patch: TMonitorPatch): String;
-Function DecodeContentPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+Function DecodeContentPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
 Function SelectContentDirtyBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
   FirstPatch: Boolean): TAssistantMonitorBlockArray;
 Function PackContentPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
@@ -50,7 +50,7 @@ Function TryAssembleContentPatch(Const Messages: TStringArray; Out Patch: TMonit
 Function EncodeContentCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
 Function EncodeContentResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
   Const Snapshot: TMonitorSnapshot): String;
-Function DecodeContentCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Function DecodeContentCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
 
 Implementation
 
@@ -343,7 +343,7 @@ Begin
     ReadMonitorBool(Obj, 'live', True, Turn.Live) And TryReadBlocks(Obj.Find('blocks'), Turn) And TryReadImages(Obj.Find('images'), Turn);
 End;
 
-Function DecodeContentTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Function DecodeContentTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -418,7 +418,7 @@ Begin
   End;
 End;
 
-Function DecodeContentSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
+Function DecodeContentSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
 Var
   Data: TJSONData;
   Obj, Child: TJSONObject;
@@ -517,7 +517,7 @@ Begin
   End;
 End;
 
-Function DecodeContentTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+Function DecodeContentTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -645,7 +645,7 @@ Begin
   Result := EncodeMonitorWith(mmkPatch, Id, PatchPayload(Patch));
 End;
 
-Function DecodeContentPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+Function DecodeContentPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -941,7 +941,9 @@ Begin
     Exit;
   SetLength(Slots, PartCount);
   SetLength(Have, PartCount);
-  For I := 0 To High(Messages) Do
+  Slots[Decoded.Part - 1] := Decoded;
+  Have[Decoded.Part - 1] := True;
+  For I := 1 To High(Messages) Do
     Begin
       If Not TryDecodeMonitorEnvelope(Messages[I], Message, ErrorText) Or (Message.Kind <> mmkPatch) Then
         Exit;
@@ -1003,7 +1005,8 @@ Begin
           Exit;
         If Not ParseMonitorObject(Message.PayloadJson, Data, SnapObj) Then
           Exit;
-        Payload.Add('snapshot', SnapObj);
+        { The decoded snapshot remains owned by Message; the new envelope owns its copy. }
+        Payload.Add('snapshot', SnapObj.Clone);
         Data := Nil;
       End
     Else
@@ -1038,7 +1041,7 @@ Begin
   Result := EncodeContentCatchup(RefId, Catchup);
 End;
 
-Function DecodeContentCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Function DecodeContentCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
 Var
   Data, SnapData: TJSONData;
   Obj, SnapObj: TJSONObject;
@@ -1075,7 +1078,7 @@ Begin
         Node := Obj.Find('snapshot');
         If Not (Node Is TJSONObject) Then
           Exit;
-        If Not DecodeContentSnapshot(TJSONObject(Node).AsJSON, Catchup.Snapshot) Then
+        If Not DecodeContentSnapshot(MonitorChildPayload(PayloadJson, TJSONObject(Node)), Catchup.Snapshot) Then
           Exit;
         Catchup.HasSnapshot := True;
         Result := True;
@@ -1091,7 +1094,7 @@ Begin
           Begin
             If Not (Arr[I] Is TJSONObject) Then
               Exit;
-            If Not DecodeContentPatch(TJSONObject(Arr[I]).AsJSON, Catchup.Patches[I]) Then
+            If Not DecodeContentPatch(MonitorChildPayload(PayloadJson, TJSONObject(Arr[I])), Catchup.Patches[I]) Then
               Exit;
           End;
         Result := True;

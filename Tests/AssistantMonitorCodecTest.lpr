@@ -550,6 +550,9 @@ Begin
   Notice.Reason := '';
   Snapshot.Approval := Notice;
   AddSample('resume', mmkResume, EncodeMonitorResume('resume', 'abc123', 4));
+  Patch := Default(TMonitorPatch);
+  { The golden fixture carries signed_in=true; initialise it explicitly for heap-check builds too. }
+  Patch.SignedIn := True;
   Patch.Epoch := 'abc123';
   Patch.Cursor := 4;
   Patch.TurnIndex := 3;
@@ -1525,6 +1528,73 @@ Begin
   Check('non-utf8 encode', (Not TryEncodeMonitorFrame('{"bad":"' + #$FF + '"}', Bytes, Status)) And (Status = mfsBadUtf8));
 End;
 
+Procedure TestInboundSingleParse;
+Var
+  Message, Copied: TMonitorMessage;
+  Saved: TMonitorPayload;
+  Frame: TMonitorFrame;
+  Bytes: RawByteString;
+  Status: TMonitorFrameStatus;
+  ErrorText, Text: String;
+  Data: TJSONData;
+  Obj, SavedObject: TJSONObject;
+  Kind: TMonitorMessageKind;
+Begin
+  For Kind := Succ(Low(TMonitorMessageKind)) To High(TMonitorMessageKind) Do
+    Check('kind lookup ' + MonitorMessageKindName(Kind), MonitorMessageKindFromName(MonitorMessageKindName(Kind)) = Kind);
+  Check('kind lookup empty', MonitorMessageKindFromName('') = mmkUnknown);
+  Check('kind lookup case sensitive', MonitorMessageKindFromName('Send') = mmkUnknown);
+  Check('kind lookup unknown', MonitorMessageKindFromName('send_more') = mmkUnknown);
+  Check('trusted inbound fixture', EncodeMonitorFrameBytes(
+    '{"v":2,"id":"once","type":"send","payload":{"text":"hello"}}', Bytes));
+  {$IFDEF MONITOR_COUNT_PARSES}
+  MonitorJsonParseCount := 0;
+  {$ENDIF}
+  Check('single parse frame', TryDecodeMonitorFrame(Bytes, Frame, Status) And (Status = mfsOk));
+  Check('single parse envelope', TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText));
+  Check('single parse text', DecodeMonitorText(Message.PayloadJson, Text) And (Text = 'hello'));
+  Check('single parse repeated typed decode', DecodeMonitorText(Message.PayloadJson, Text) And (Text = 'hello'));
+  Check('payload is borrowed', ParseMonitorObject(Message.PayloadJson, Data, Obj) And (Data = Nil));
+  SavedObject := Obj;
+  Copied := Message;
+  Saved := Message.PayloadJson;
+  Check('overwrite message envelope', TryDecodeMonitorEnvelope(
+    '{"v":2,"id":"next","type":"stop","payload":{}}', Message, ErrorText));
+  Check('copied message keeps payload', DecodeMonitorText(Copied.PayloadJson, Text) And (Text = 'hello'));
+  Copied.PayloadJson := '';
+  Check('deferred payload keeps object', ParseMonitorObject(Saved, Data, Obj) And (Obj = SavedObject) And (Data = Nil));
+  Check('deferred payload typed decode', DecodeMonitorText(Saved, Text) And (Text = 'hello'));
+  {$IFDEF MONITOR_COUNT_PARSES}
+  Check('one JSON parse per envelope including typed decodes', MonitorJsonParseCount = 2);
+  {$ENDIF}
+  Check('failure clears previous message', Not TryDecodeMonitorEnvelope('{', Message, ErrorText));
+  Check('failed envelope releases payload', Not Assigned(Message.PayloadJson.Parsed));
+End;
+
+Procedure TestBadJsonEnvelope;
+Const
+  Invalid: Array[0..3] Of String = ('{', '[]', 'null', '{"v":2,"id":"bad","type":"send","payload":[]}');
+Var
+  I: Integer;
+  Bytes, Pending: RawByteString;
+  Frame: TMonitorFrame;
+  Message: TMonitorMessage;
+  Status: TMonitorFrameStatus;
+  ErrorText: String;
+Begin
+  For I := Low(Invalid) To High(Invalid) Do
+    Begin
+      Bytes := Header(MonitorFrameVersion, Length(Invalid[I])) + Invalid[I];
+      Check('bad JSON passes byte frame ' + IntToStr(I), TryDecodeMonitorFrame(Bytes, Frame, Status) And (Status = mfsOk));
+      Check('bad JSON rejected by envelope ' + IntToStr(I), Not TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText));
+      Pending := Bytes;
+      Check('bad JSON consumed as frame ' + IntToStr(I), TryConsumeMonitorFrame(Pending, Frame, Status) And (Pending = ''));
+      Check('consumed bad JSON rejected by envelope ' + IntToStr(I), Not TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText));
+    End;
+  Check('bad JSON validating encoder status', (Not TryEncodeMonitorFrame('{', Bytes, Status)) And (Status = mfsBadJson));
+  Check('non-object validating encoder status', (Not TryEncodeMonitorFrame('[]', Bytes, Status)) And (Status = mfsBadJson));
+End;
+
 Procedure TestDumpIsNotAProductSwitch;
 Const
   Names: Array[0..4] Of String = (
@@ -1588,6 +1658,8 @@ Begin
   TestShortFrame;
   TestLengthCap;
   TestBadUtf8;
+  TestBadJsonEnvelope;
+  TestInboundSingleParse;
   TestDumpIsNotAProductSwitch;
   If FailCount = 0 Then
     Begin

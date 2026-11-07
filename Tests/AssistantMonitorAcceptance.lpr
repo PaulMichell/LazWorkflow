@@ -52,7 +52,7 @@ Type
     RemoteStopCalled: Boolean;
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Handle(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure Handle(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Function Sends: Integer;
     Function Stops: Integer;
     Function SendText: String;
@@ -151,7 +151,7 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TCommandSink.Handle(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TCommandSink.Handle(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   Text: String;
 Begin

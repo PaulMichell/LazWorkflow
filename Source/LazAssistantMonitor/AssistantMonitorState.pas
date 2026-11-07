@@ -14,27 +14,27 @@ Uses
   Classes, SysUtils, fpjson, AssistantMonitorCodec, AssistantSessionObserve;
 
 Function EncodeStateTarget(Const Id, Kind, Display, Root: String): String;
-Function DecodeStateTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function DecodeStateTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
 Function EncodeStateTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
-Function DecodeStateTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Function DecodeStateTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
 Function EncodeStateConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
-Function DecodeStateConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Function DecodeStateConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
 Function EncodeNamedChoices(Kind: TMonitorMessageKind; Const Id, Current, Note: String; Ids, Captions: TStrings;
   Const ExtraName, ExtraValue: String; HasExtra: Boolean): String;
-Function DecodeNamedChoices(Const PayloadJson: String; Out Current, Note: String; Out Ids, Captions: TStringList;
+Function DecodeNamedChoices(Const PayloadJson: TMonitorPayload; Out Current, Note: String; Out Ids, Captions: TStringList;
   Const ExtraName: String; WantExtra: Boolean; Out ExtraValue: String): Boolean;
 Function EncodeStateModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeStateModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Function DecodeStateModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
 Function EncodeStateReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
 Function EncodeStatePermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeStatePermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
-Function DecodeStateReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Function DecodeStatePermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Function DecodeStateReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Function EncodeStateApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
-Function DecodeStateApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Function DecodeStateApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
 Function EncodeStateApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
-Function DecodeStateApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Function DecodeStateApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
 Function EncodeStateApprovalClosed(Const Id, ToolId, Reason: String): String;
-Function DecodeStateApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+Function DecodeStateApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
 Procedure StateClearView(Out View: TAssistantMonitorView);
 Procedure AddStatusFields(Obj: TJSONObject; Const View: TAssistantMonitorView);
 Function StateReadStatusFields(Obj: TJSONObject; Var View: TAssistantMonitorView): Boolean;
@@ -55,14 +55,14 @@ Function EncodeStatePlan(Const Id, Path, Title: String; Running: Boolean;
 Function PackStatePlanFrames(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
   Out Frames: TStringArray): Boolean;
-Function DecodeStatePlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+Function DecodeStatePlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeStateTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
 Function StateApprovalToJson(Const Notice: TAssistantApprovalNotice): TJSONObject;
 Function TryStateApprovalFromJson(Obj: TJSONObject; Out Notice: TAssistantApprovalNotice): Boolean;
 Function EncodeStateConversationClosed(Const Id, Epoch: String; Cursor: Int64;
   Const ConversationId, Title: String): String;
-Function DecodeStateConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+Function DecodeStateConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
 
 Implementation
 
@@ -77,7 +77,7 @@ Begin
   Result := EncodeMonitorWith(mmkTarget, Id, Payload);
 End;
 
-Function DecodeStateTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function DecodeStateTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -119,7 +119,7 @@ Begin
   Result := EncodeMonitorWith(mmkTargets, Id, Payload);
 End;
 
-Function DecodeStateTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Function DecodeStateTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
 Var
   Data, Node, Item: TJSONData;
   Obj, Choice: TJSONObject;
@@ -182,7 +182,7 @@ Begin
   Result := EncodeMonitorWith(mmkConversations, Id, Payload);
 End;
 
-Function DecodeStateConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Function DecodeStateConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
 Var
   Data, Node, Item: TJSONData;
   Obj, Choice: TJSONObject;
@@ -252,7 +252,7 @@ Begin
   Result := EncodeMonitorWith(Kind, Id, Payload);
 End;
 
-Function DecodeNamedChoices(Const PayloadJson: String; Out Current, Note: String; Out Ids, Captions: TStringList;
+Function DecodeNamedChoices(Const PayloadJson: TMonitorPayload; Out Current, Note: String; Out Ids, Captions: TStringList;
   Const ExtraName: String; WantExtra: Boolean; Out ExtraValue: String): Boolean;
 Var
   Data, Node, Item: TJSONData;
@@ -309,7 +309,7 @@ Begin
   Result := EncodeNamedChoices(mmkModels, Id, Current, Note, Ids, Captions, 'backend', Backend, True);
 End;
 
-Function DecodeStateModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Function DecodeStateModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
 Var
   Ids, Captions: TStringList;
   Index: Integer;
@@ -345,7 +345,7 @@ Begin
   Result := EncodeNamedChoices(mmkPermissions, Id, Current, Note, Ids, Captions, 'backend', Backend, True);
 End;
 
-Function DecodeStatePermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Function DecodeStatePermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
 Var
   Ids, Captions: TStringList;
   Index: Integer;
@@ -372,7 +372,7 @@ Begin
   End;
 End;
 
-Function DecodeStateReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Function DecodeStateReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Var
   Ids, Captions: TStringList;
   Index: Integer;
@@ -411,7 +411,7 @@ Begin
   Result := EncodeMonitorWith(mmkApprovalRequested, Id, Payload);
 End;
 
-Function DecodeStateApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Function DecodeStateApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -444,7 +444,7 @@ Begin
   Result := EncodeMonitorWith(mmkApprovalDecision, Id, Payload);
 End;
 
-Function DecodeStateApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Function DecodeStateApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -474,7 +474,7 @@ Begin
   Result := EncodeMonitorWith(mmkApprovalClosed, Id, Payload);
 End;
 
-Function DecodeStateApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+Function DecodeStateApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -752,7 +752,7 @@ Begin
   Result := PackMonitorBulkItem(Id, 'plan', PayloadJson, Frames);
 End;
 
-Function DecodeStatePlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+Function DecodeStatePlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Var
   Data: TJSONData;
@@ -852,7 +852,7 @@ Begin
   Result := EncodeMonitorWith(mmkConversationClosed, Id, Payload);
 End;
 
-Function DecodeStateConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+Function DecodeStateConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;

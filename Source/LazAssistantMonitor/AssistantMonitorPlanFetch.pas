@@ -16,7 +16,7 @@ Unit AssistantMonitorPlanFetch;
 Interface
 
 Uses
-  Classes, SysUtils, SyncObjs;
+  Classes, SysUtils, SyncObjs, AssistantMonitorCodec;
 
 Type
   TMonitorPlanFetchReady = Procedure Of Object;
@@ -31,7 +31,7 @@ Type
     FGeneration: Integer;
     FHasJob: Boolean;
     FRequestId: String;
-    FPayload: String;
+    FPayload: TMonitorPayload;
     FRoot: String;
     FCachePath: String;
     FCacheRevision: String;
@@ -44,7 +44,7 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     { Stores the request. Does not read the file. }
-    Procedure BeginGet(Const RequestId, PayloadJson, ProjectRoot: String);
+    Procedure BeginGet(Const RequestId: String; Const PayloadJson: TMonitorPayload; Const ProjectRoot: String);
     { IDE timer published this full-file revision. Does not read the file. }
     Procedure NoteCachedRevision(Const Path, Revision: String);
     Procedure Cancel;
@@ -255,7 +255,8 @@ End;
 
 Procedure TPlanFetchWorker.Execute;
 Var
-  RequestId, Payload, Root: String;
+  RequestId, Root: String;
+  Payload: TMonitorPayload;
   Generation: Integer;
   Have: Boolean;
 
@@ -515,18 +516,12 @@ Var
     AskedRevision := '';
     AskedOffset := 0;
     RequestPath := '';
-    Try
-      Data := GetJSON(Payload);
-    Except
-      Data := Nil;
-    End;
-    If Not (Data Is TJSONObject) Then
+    If Not ParseMonitorObject(Payload, Data, Obj) Then
       Begin
         Data.Free;
         Fail('protocol', 'Plan fetch payload is not valid.');
         Exit;
       End;
-    Obj := TJSONObject(Data);
     Try
       If (Obj.Find('path') = Nil) Or (Obj.Find('path').JSONType <> jtString) Or (Obj.Find('offset') = Nil) Or
         (Obj.Find('offset').JSONType <> jtNumber) Or (Obj.Find('revision') = Nil) Or
@@ -699,6 +694,7 @@ Begin
           Begin
             RequestId := Owner.FRequestId;
             Payload := Owner.FPayload;
+            Owner.FPayload := '';
             Root := Owner.FRoot;
             Generation := Owner.FGeneration;
             Owner.FHasJob := False;
@@ -762,7 +758,7 @@ Begin
   FWorker := TPlanFetchWorker.Create(Self);
 End;
 
-Procedure TMonitorPlanFetch.BeginGet(Const RequestId, PayloadJson, ProjectRoot: String);
+Procedure TMonitorPlanFetch.BeginGet(Const RequestId: String; Const PayloadJson: TMonitorPayload; Const ProjectRoot: String);
 Begin
   EnsureWorker;
   Lock.Acquire;

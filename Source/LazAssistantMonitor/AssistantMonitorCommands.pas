@@ -17,52 +17,52 @@ Uses
   SysUtils, fpjson, AssistantMonitorCodec;
 
 Function EncodeCommandHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
-Function DecodeCommandHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Function DecodeCommandHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
 Function EncodeCommandPair(Const Id, Code, Fingerprint: String): String;
-Function DecodeCommandPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Function DecodeCommandPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
 Function EncodeCommandPairOk(Const Id, ClientId, SessionToken: String): String;
-Function DecodeCommandPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Function DecodeCommandPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
 Function EncodeCommandHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
-Function DecodeCommandHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Function DecodeCommandHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
 Function EncodeCommandAuth(Const Id, ClientId, Hmac: String): String;
-Function DecodeCommandAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Function DecodeCommandAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
 Function EncodeCommandRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
-Function DecodeCommandRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Function DecodeCommandRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Function EncodeCommandBye(Const Id, Reason: String): String;
-Function DecodeCommandBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+Function DecodeCommandBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
 Function TryEncodeCommandSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
 Function TryEncodeCommandSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Function DecodeCommandText(Const PayloadJson: String; Out Text: String): Boolean;
+Function DecodeCommandText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
 Function EncodeCommandEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
 Function EncodeCommandSetMode(Const Id, Mode: String): String;
-Function DecodeCommandSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Function DecodeCommandSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
 Function EncodeCommandMode(Const Id, Mode: String; Locked: Boolean): String;
-Function DecodeCommandMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Function DecodeCommandMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
 Function EncodeCommandTurnRequest(Const Id: String; TurnIndex: Integer): String;
-Function DecodeCommandTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Function DecodeCommandTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
 
 Function EncodeCommandSelectConversation(Const Id, ArchiveId: String): String;
-Function DecodeCommandSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function DecodeCommandSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
 Function EncodeCommandSetModel(Const Id, ModelId: String): String;
-Function DecodeCommandSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function DecodeCommandSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
 Function EncodeCommandSetReasoning(Const Id, Level: String): String;
-Function DecodeCommandSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function DecodeCommandSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
 Function EncodeCommandSetPermissions(Const Id, Approval: String): String;
-Function DecodeCommandSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Function DecodeCommandSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
 Function EncodeCommandPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
-Function DecodeCommandPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function DecodeCommandPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
 Function EncodeCommandNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
-Function DecodeCommandNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function DecodeCommandNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
 Function EncodeCommandWorkOnPlan(Const Id: String; Index: Integer): String;
-Function DecodeCommandWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function DecodeCommandWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
 Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
-Function DecodeCommandTask(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function DecodeCommandTask(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
 Function EncodeCommandInsertResult(Const Id, Text: String): String;
 Function EncodeCommandTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
-Function DecodeCommandTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Function DecodeCommandTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
 Function ReadCommandIds(Obj: TJSONObject; Out Ids: TStringArray): Boolean;
 Function EncodeCommandResume(Const Id, Epoch: String; Cursor: Int64): String;
-Function DecodeCommandResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function DecodeCommandResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
 Function EncodeCommandStateFrame(Const Id, Ref, State, Reason: String; Const DoneText: String): String;
 Function EncodeCommandStateFrames(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 
@@ -80,7 +80,7 @@ Begin
   Result := EncodeMonitorWith(mmkHello, Id, Payload);
 End;
 
-Function DecodeCommandHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Function DecodeCommandHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
 Var
   Data: TJSONData;
   Payload: TJSONObject;
@@ -113,7 +113,7 @@ Begin
   Result := EncodeMonitorWith(mmkPair, Id, Payload);
 End;
 
-Function DecodeCommandPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Function DecodeCommandPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -140,7 +140,7 @@ Begin
   Result := EncodeMonitorWith(mmkPairOk, Id, Payload);
 End;
 
-Function DecodeCommandPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Function DecodeCommandPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -175,7 +175,7 @@ Begin
   Result := EncodeMonitorWith(mmkHelloOk, Id, Payload);
 End;
 
-Function DecodeCommandHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Function DecodeCommandHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -218,7 +218,7 @@ Begin
   Result := EncodeMonitorWith(mmkAuth, Id, Payload);
 End;
 
-Function DecodeCommandAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Function DecodeCommandAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -249,7 +249,7 @@ Begin
   Result := EncodeMonitorWith(mmkRejected, Id, Payload);
 End;
 
-Function DecodeCommandRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Function DecodeCommandRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -275,7 +275,7 @@ Begin
   Result := EncodeMonitorOneString(mmkBye, Id, 'reason', Reason);
 End;
 
-Function DecodeCommandBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+Function DecodeCommandBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
 Begin
   Bye.Reason := '';
   Result := DecodeMonitorOneString(PayloadJson, 'reason', Bye.Reason);
@@ -305,7 +305,7 @@ Begin
   Result := TryEncodeCommandLimited(mmkSteer, Id, Text, Json, ErrorJson);
 End;
 
-Function DecodeCommandText(Const PayloadJson: String; Out Text: String): Boolean;
+Function DecodeCommandText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
 Begin
   Result := DecodeMonitorOneString(PayloadJson, 'text', Text) And (Length(Text) <= MonitorMaxSendChars);
 End;
@@ -323,7 +323,7 @@ Begin
   Result := EncodeMonitorOneString(mmkSetMode, Id, 'mode', Mode);
 End;
 
-Function DecodeCommandSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Function DecodeCommandSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
 Begin
   Result := DecodeMonitorOneString(PayloadJson, 'mode', Mode) And MonitorModeIsKnown(Mode);
 End;
@@ -338,7 +338,7 @@ Begin
   Result := EncodeMonitorWith(mmkMode, Id, Payload);
 End;
 
-Function DecodeCommandMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Function DecodeCommandMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -364,7 +364,7 @@ Begin
   Result := EncodeMonitorWith(mmkTurn, Id, Payload);
 End;
 
-Function DecodeCommandTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Function DecodeCommandTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -385,7 +385,7 @@ Begin
   Result := EncodeMonitorOneString(mmkSelectConversation, Id, 'id', ArchiveId);
 End;
 
-Function DecodeCommandSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function DecodeCommandSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
 Begin
   Result := DecodeMonitorOneString(PayloadJson, 'id', ArchiveId);
 End;
@@ -395,7 +395,7 @@ Begin
   Result := EncodeMonitorOneString(mmkSetModel, Id, 'model', ModelId);
 End;
 
-Function DecodeCommandSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function DecodeCommandSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
 Begin
   Result := DecodeMonitorOneString(PayloadJson, 'model', ModelId);
 End;
@@ -405,7 +405,7 @@ Begin
   Result := EncodeMonitorOneString(mmkSetReasoning, Id, 'level', Level);
 End;
 
-Function DecodeCommandSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function DecodeCommandSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
 Begin
   { Missing level is a decode failure. An empty level is model default, not that failure. }
   Result := DecodeMonitorOneString(PayloadJson, 'level', Level);
@@ -416,7 +416,7 @@ Begin
   Result := EncodeMonitorOneString(mmkSetPermissions, Id, 'approval', Approval);
 End;
 
-Function DecodeCommandSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Function DecodeCommandSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
 Begin
   { Missing approval is a decode failure. It is not ask. }
   Result := DecodeMonitorOneString(PayloadJson, 'approval', Approval);
@@ -430,7 +430,7 @@ Begin
   Result := EncodeMonitorOneString(Kind, Id, 'path', Path);
 End;
 
-Function DecodeCommandPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function DecodeCommandPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
 Begin
   Result := DecodeMonitorOneString(PayloadJson, 'path', Path);
 End;
@@ -445,7 +445,7 @@ Begin
   Result := EncodeMonitorWith(mmkNewPlan, Id, Payload);
 End;
 
-Function DecodeCommandNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function DecodeCommandNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -475,7 +475,7 @@ Begin
   Result := EncodeMonitorWith(mmkWorkOnPlan, Id, Payload);
 End;
 
-Function DecodeCommandWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function DecodeCommandWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -504,7 +504,7 @@ Begin
   Result := EncodeMonitorWith(Kind, Id, Payload);
 End;
 
-Function DecodeCommandTask(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function DecodeCommandTask(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -538,7 +538,7 @@ Begin
   Result := EncodeMonitorWith(Kind, Id, Payload);
 End;
 
-Function DecodeCommandTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Function DecodeCommandTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -590,7 +590,7 @@ Begin
   Result := EncodeMonitorWith(mmkResume, Id, Payload);
 End;
 
-Function DecodeCommandResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function DecodeCommandResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;

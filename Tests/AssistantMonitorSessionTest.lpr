@@ -34,11 +34,11 @@ Type
   TCommandSink = Class
     Kind: Integer;
     Calls: Integer;
-    Procedure Hear(CommandKind: Integer; Const CommandId, CommandPayload: String);
+    Procedure Hear(CommandKind: Integer; Const CommandId: String; Const CommandPayload: TMonitorPayload);
   End;
 
 {$PUSH}{$HINTS OFF}
-Procedure TCommandSink.Hear(CommandKind: Integer; Const CommandId, CommandPayload: String);
+Procedure TCommandSink.Hear(CommandKind: Integer; Const CommandId: String; Const CommandPayload: TMonitorPayload);
 Begin
   Inc(Calls);
   Kind := CommandKind;
@@ -954,7 +954,7 @@ Begin
         Break;
     Check('blocked command is answered with command_states', Message.Kind = mmkCommandStates);
     If Message.Kind = mmkCommandStates Then
-      Data := GetJSON(Message.PayloadJson)
+      Data := GetJSON(String(Message.PayloadJson))
     Else
       Data := Nil;
     Try

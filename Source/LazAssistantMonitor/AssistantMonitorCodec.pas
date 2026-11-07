@@ -15,7 +15,7 @@ Unit AssistantMonitorCodec;
   AssistantMonitorCommands. State codecs are AssistantMonitorState. Image and bulk
   packing are AssistantMonitorImages. Tested catalogue 2 content tables are
   AssistantMonitorContent. The public names stay here so existing tests do not change.
-  Reviewed 2026-11-03: no socket, TLS, or form code in this unit. }
+  Reviewed 2026-11-07: no socket, TLS, or form code in this unit. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -114,12 +114,24 @@ Type
     mmkCommandStates
   );
 
+  { A payload owns its parsed object through a shared reference. Copies, including
+    deferred commands, retain it; the last caller releases it automatically. }
+  IMonitorPayload = Interface
+    Function GetObject: TJSONObject;
+  End;
+
+  TMonitorPayload = Record
+    Source: String;
+    Parsed: IMonitorPayload;
+    ObjectValue: TJSONObject;
+  End;
+
   TMonitorMessage = Record
     Version: Integer;
     Id: String;
     Kind: TMonitorMessageKind;
     TypeName: String;
-    PayloadJson: String;
+    PayloadJson: TMonitorPayload;
     Reason: String;
     { False for unknown_type and for a send or steer the text limit rejects. }
     ChangesState: Boolean;
@@ -400,6 +412,11 @@ Type
   End;
 
 Function MonitorMessageKindName(Kind: TMonitorMessageKind): String;
+Operator := (Const Json: String): TMonitorPayload;
+Operator := (Const Payload: TMonitorPayload): String;
+{ Child borrows Obj; Parent retains the envelope owner. A raw parent's parse must outlive the child. }
+Function MonitorChildPayload(Const Parent: TMonitorPayload; Obj: TJSONObject): TMonitorPayload;
+
 Function MonitorMessageKindFromName(Const Name: String): TMonitorMessageKind;
 Function MonitorMessageIdIsSafe(Const Id: String): Boolean;
 Function MonitorRejectedReasonIsKnown(Const Reason: String): Boolean;
@@ -409,92 +426,93 @@ Function MonitorModeName(Mode: TAssistantMode): String;
 Function MonitorModeIsKnown(Const ModeText: String): Boolean;
 
 { Shared by the command and state units. Not a second catalogue. }
-Function ParseMonitorObject(Const Json: String; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
+{ Data owns a fresh parse, or is Nil when Obj is borrowed from Json. Always free Data, never Obj. }
+Function ParseMonitorObject(Const Json: TMonitorPayload; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
 Function ReadMonitorString(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: String): Boolean;
 Function ReadMonitorInt(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Integer): Boolean;
 Function ReadMonitorInt64(Obj: TJSONObject; Const Name: String; Out Value: Int64): Boolean;
 Function ReadMonitorBool(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: Boolean): Boolean;
 Function EncodeMonitorWith(Kind: TMonitorMessageKind; Const Id: String; Payload: TJSONObject): String;
 Function EncodeMonitorOneString(Kind: TMonitorMessageKind; Const Id, Field, Value: String): String;
-Function DecodeMonitorOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+Function DecodeMonitorOneString(Const PayloadJson: TMonitorPayload; Const Field: String; Out Value: String): Boolean;
 
 { Empty when the id is unsafe or the object would exceed the frame cap. }
 Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
 Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
 Function MonitorUnknownTypeError(Const RefId, TypeName: String): String;
 Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): String;
-Function DecodeMonitorError(Const PayloadJson: String; Out ErrorBody: TMonitorErrorBody): Boolean;
+Function DecodeMonitorError(Const PayloadJson: TMonitorPayload; Out ErrorBody: TMonitorErrorBody): Boolean;
 
 { ClientId empty is the first hello. A non-empty id is the reconnect shape. }
 Function EncodeMonitorHello(Const Id, ClientName, ClientVersion, ClientId: String): String;
-Function DecodeMonitorHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Function DecodeMonitorHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
 Function EncodeMonitorPair(Const Id, Code, Fingerprint: String): String;
-Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Function DecodeMonitorPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
 Function EncodeMonitorPairOk(Const Id, ClientId, SessionToken: String): String;
-Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Function DecodeMonitorPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
 Function EncodeMonitorHelloOk(Const Id: String; Const HelloOk: TMonitorHelloOk): String;
-Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Function DecodeMonitorHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
 { 32 lowercase hex digits. Empty is not valid. }
 Function MonitorHostIdIsValid(Const HostId: String): Boolean;
 Function EncodeMonitorAuth(Const Id, ClientId, Hmac: String): String;
-Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Function DecodeMonitorAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
 Function EncodeMonitorRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
-Function DecodeMonitorRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Function DecodeMonitorRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Function EncodeMonitorBye(Const Id, Reason: String): String;
-Function DecodeMonitorBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+Function DecodeMonitorBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
 
 Function TryEncodeMonitorSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
 Function TryEncodeMonitorSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
-Function DecodeMonitorText(Const PayloadJson: String; Out Text: String): Boolean;
+Function DecodeMonitorText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
 Function EncodeMonitorEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
 Function EncodeMonitorSetMode(Const Id, Mode: String): String;
-Function DecodeMonitorSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Function DecodeMonitorSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
 Function EncodeMonitorMode(Const Id, Mode: String; Locked: Boolean): String;
-Function DecodeMonitorMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Function DecodeMonitorMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
 Function EncodeMonitorTurnRequest(Const Id: String; TurnIndex: Integer): String;
-Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Function DecodeMonitorTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
 Function EncodeMonitorTarget(Const Id, Kind, Display, Root: String): String;
-Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function DecodeMonitorTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
 Function EncodeMonitorTargets(Const Id, Current: String; Paths, Captions: TStrings): String;
-Function DecodeMonitorTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Function DecodeMonitorTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
 Function EncodeMonitorConversations(Const Id, Current: String; Ids, Titles: TStrings; Truncated: Boolean): String;
-Function DecodeMonitorConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Function DecodeMonitorConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
 Function EncodeMonitorSelectConversation(Const Id, ArchiveId: String): String;
-Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function DecodeMonitorSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
 Function EncodeMonitorModels(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Function DecodeMonitorModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
 Function EncodeMonitorSetModel(Const Id, ModelId: String): String;
-Function DecodeMonitorSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function DecodeMonitorSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
 Function EncodeMonitorReasoning(Const Id, Current, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Function DecodeMonitorReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Function EncodeMonitorSetReasoning(Const Id, Level: String): String;
-Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function DecodeMonitorSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
 Function EncodeMonitorPermissions(Const Id, Current, Backend, Note: String; Ids, Captions: TStrings): String;
-Function DecodeMonitorPermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Function DecodeMonitorPermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
 Function EncodeMonitorSetPermissions(Const Id, Approval: String): String;
-Function DecodeMonitorSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Function DecodeMonitorSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
 Function EncodeMonitorPath(Kind: TMonitorMessageKind; Const Id, Path: String): String;
-Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function DecodeMonitorPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
 Function EncodeMonitorNewPlan(Const Id, Title: String; HasTitle: Boolean): String;
-Function DecodeMonitorNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function DecodeMonitorNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
 Function EncodeMonitorWorkOnPlan(Const Id: String; Index: Integer): String;
-Function DecodeMonitorWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function DecodeMonitorWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
 Function EncodeMonitorTaskCommand(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
-Function DecodeMonitorTaskCommand(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function DecodeMonitorTaskCommand(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
 Function EncodeMonitorInsertResult(Const Id, Text: String): String;
 Function EncodeMonitorTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
-Function DecodeMonitorTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Function DecodeMonitorTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
 
 Function EncodeMonitorApprovalRequested(Const Id: String; Const Notice: TAssistantApprovalNotice): String;
-Function DecodeMonitorApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Function DecodeMonitorApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
 Function EncodeMonitorApprovalDecision(Const Id, ToolId: String; Allow: Boolean): String;
-Function DecodeMonitorApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Function DecodeMonitorApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
 Function EncodeMonitorApprovalClosed(Const Id, ToolId, Reason: String): String;
-Function DecodeMonitorApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+Function DecodeMonitorApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
 
 Function MonitorStatusToJson(Const View: TAssistantMonitorView): TJSONObject;
 Function TryMonitorStatusFromJson(Obj: TJSONObject; Out View: TAssistantMonitorView): Boolean;
-Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Function DecodeMonitorTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
 Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths: TStrings = Nil; Captions: TStrings = Nil;
   Const Epoch: String = ''; Cursor: Int64 = 0; Const Body: String = ''; Complete: Boolean = False): String;
@@ -502,21 +520,21 @@ Function EncodeMonitorPlan(Const Id, Path, Title: String; Running: Boolean;
 Function PackMonitorPlanFrames(Const Id, Path, Title: String; Running: Boolean;
   Const Rows: Array Of TAssistantMonitorPlanRow; Paths, Captions: TStrings; Const Body: String; Complete: Boolean;
   Out Frames: TStringArray): Boolean;
-Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+Function DecodeMonitorPlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Function EncodeMonitorTasks(Const Id: String; Const Rows: Array Of TAssistantMonitorTaskRow): String;
 Function EncodeMonitorSnapshot(Const Id: String; Const Snapshot: TMonitorSnapshot): String;
-Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
-Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+Function DecodeMonitorSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
+Function DecodeMonitorTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
 
 Function EncodeMonitorResume(Const Id, Epoch: String; Cursor: Int64): String;
-Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function DecodeMonitorResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
 Function EncodeMonitorCommandState(Const Id, Ref, State, Reason: String; Const DoneText: String = ''): String;
 Function EncodeMonitorCommandStates(Const Id: String; Const Replies: Array Of TMonitorCommandStateReply): String;
 Function EncodeMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): String;
 { Same cursor on every part. Empty when a single block cannot be cut down to the cap. }
 Function PackMonitorPatch(Const Id: String; Const Patch: TMonitorPatch): TStringArray;
-Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+Function DecodeMonitorPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
 { FirstPatch copies every current block. Later patches keep only a new block, or one whose
   body, title, running flag, or ok flag changed. Duration and elapsed time do not count. }
 Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMonitorBlock;
@@ -524,22 +542,22 @@ Function SelectDirtyMonitorBlocks(Const Previous, Current: Array Of TAssistantMo
 { False when any part of that cursor is missing, duplicated, or a different epoch. }
 Function TryAssembleMonitorPatch(Const Messages: TStringArray; Out Patch: TMonitorPatch): Boolean;
 Function EncodeMonitorCatchup(Const Id: String; Const Catchup: TMonitorCatchup): String;
-Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Function DecodeMonitorCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
 { One snapshot catchup. The cursor is the snapshot cursor, not the client's discarded cursor. }
 Function EncodeResumeSnapshot(Const RefId: String; Cursor: Int64; Const Epoch, ConversationId, ProjectRoot, Title: String;
   Const Snapshot: TMonitorSnapshot): String;
 Function EncodeMonitorConversationClosed(Const Id, Epoch: String; Cursor: Int64; Const ConversationId, Title: String): String;
-Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+Function DecodeMonitorConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
 
 { True when the host must send image_unavailable and keep the socket open. }
 Function MonitorImageFetchBlocked(Missing, Refused: Boolean; DecodedBytes: Int64; Out Reason: String): Boolean;
 Function TryBuildMonitorImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
   Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
-Function DecodeMonitorImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Function DecodeMonitorImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
 Function EncodeMonitorImageUnavailable(Const Id, ImageId, Reason: String): String;
-Function DecodeMonitorImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Function DecodeMonitorImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
 Function EncodeMonitorImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
-Function DecodeMonitorImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+Function DecodeMonitorImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
 { Messages are image_data envelopes, or empty when UnavailableReason is set. Does not close a socket. }
 Function TryEncodeMonitorImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
   Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
@@ -565,80 +583,204 @@ Uses
   {$ERROR Image part base64 size drifted}
 {$ENDIF}
 
+Type
+  TMonitorPayloadOwner = Class(TInterfacedObject, IMonitorPayload)
+  Private
+    PayloadObject: TJSONObject;
+  Public
+    Constructor Create(OwnedObject: TJSONObject);
+    Destructor Destroy; Override;
+    Function GetObject: TJSONObject;
+  End;
+
+Constructor TMonitorPayloadOwner.Create(OwnedObject: TJSONObject);
+Begin
+  Inherited Create;
+  PayloadObject := OwnedObject;
+End;
+
+Destructor TMonitorPayloadOwner.Destroy;
+Begin
+  FreeAndNil(PayloadObject);
+  Inherited Destroy;
+End;
+
+Function TMonitorPayloadOwner.GetObject: TJSONObject;
+Begin
+  Result := PayloadObject;
+End;
+
+Operator:=(Const Json: String): TMonitorPayload;
+Begin
+  Result.Source := Json;
+  Result.Parsed := Nil;
+  Result.ObjectValue := Nil;
+End;
+
+Operator:=(Const Payload: TMonitorPayload): String;
+Begin
+  If Assigned(Payload.ObjectValue) Then
+    Result := Payload.ObjectValue.AsJSON
+  Else
+    Result := Payload.Source;
+End;
+
+Function MonitorChildPayload(Const Parent: TMonitorPayload; Obj: TJSONObject): TMonitorPayload;
+Begin
+  Result.Source := '';
+  Result.Parsed := Parent.Parsed;
+  Result.ObjectValue := Obj;
+End;
+
+Const
+  MonitorKindNames: Array[TMonitorMessageKind] Of String = (
+    '',
+    'hello',
+    'pair',
+    'pair_ok',
+    'hello_ok',
+    'auth',
+    'rejected',
+    'bye',
+    'snapshot',
+    'refresh',
+    'transcript',
+    'turn',
+    'turn_data',
+    'mode',
+    'set_mode',
+    'send',
+    'steer',
+    'stop',
+    'status',
+    'target',
+    'plan',
+    'select_plan',
+    'new_plan',
+    'close_plan',
+    'work_on_plan',
+    'run_plan',
+    'stop_plan',
+    'tasks',
+    'run_task',
+    'insert_task',
+    'insert_result',
+    'approval_requested',
+    'approval_decision',
+    'approval_closed',
+    'image_get',
+    'image_data',
+    'image_unavailable',
+    'new_conversation',
+    'error',
+    'ping',
+    'pong',
+    'resume',
+    'patch',
+    'catchup',
+    'conversation_closed',
+    'targets',
+    'select_target',
+    'conversations',
+    'select_conversation',
+    'models',
+    'set_model',
+    'reasoning',
+    'set_reasoning',
+    'permissions',
+    'set_permissions',
+    'snapshot_page',
+    'chunk',
+    'command_state',
+    'command_states'
+  );
+  { Sorted once in source; binary lookup does not construct catalogue names. }
+  MonitorSortedKinds: Array[0..57] Of TMonitorMessageKind = (
+    mmkApprovalClosed,
+    mmkApprovalDecision,
+    mmkApprovalRequested,
+    mmkAuth,
+    mmkBye,
+    mmkCatchup,
+    mmkChunk,
+    mmkClosePlan,
+    mmkCommandState,
+    mmkCommandStates,
+    mmkConversationClosed,
+    mmkConversations,
+    mmkError,
+    mmkHello,
+    mmkHelloOk,
+    mmkImageData,
+    mmkImageGet,
+    mmkImageUnavailable,
+    mmkInsertResult,
+    mmkInsertTask,
+    mmkMode,
+    mmkModels,
+    mmkNewConversation,
+    mmkNewPlan,
+    mmkPair,
+    mmkPairOk,
+    mmkPatch,
+    mmkPermissions,
+    mmkPing,
+    mmkPlan,
+    mmkPong,
+    mmkReasoning,
+    mmkRefresh,
+    mmkRejected,
+    mmkResume,
+    mmkRunPlan,
+    mmkRunTask,
+    mmkSelectConversation,
+    mmkSelectPlan,
+    mmkSelectTarget,
+    mmkSend,
+    mmkSetMode,
+    mmkSetModel,
+    mmkSetPermissions,
+    mmkSetReasoning,
+    mmkSnapshot,
+    mmkSnapshotPage,
+    mmkStatus,
+    mmkSteer,
+    mmkStop,
+    mmkStopPlan,
+    mmkTarget,
+    mmkTargets,
+    mmkTasks,
+    mmkTranscript,
+    mmkTurn,
+    mmkTurnData,
+    mmkWorkOnPlan
+  );
+
 Function MonitorMessageKindName(Kind: TMonitorMessageKind): String;
 Begin
-  Case Kind Of
-    mmkHello: Result := 'hello';
-    mmkPair: Result := 'pair';
-    mmkPairOk: Result := 'pair_ok';
-    mmkHelloOk: Result := 'hello_ok';
-    mmkAuth: Result := 'auth';
-    mmkRejected: Result := 'rejected';
-    mmkBye: Result := 'bye';
-    mmkSnapshot: Result := 'snapshot';
-    mmkRefresh: Result := 'refresh';
-    mmkTranscript: Result := 'transcript';
-    mmkTurn: Result := 'turn';
-    mmkTurnData: Result := 'turn_data';
-    mmkMode: Result := 'mode';
-    mmkSetMode: Result := 'set_mode';
-    mmkSend: Result := 'send';
-    mmkSteer: Result := 'steer';
-    mmkStop: Result := 'stop';
-    mmkStatus: Result := 'status';
-    mmkTarget: Result := 'target';
-    mmkPlan: Result := 'plan';
-    mmkSelectPlan: Result := 'select_plan';
-    mmkNewPlan: Result := 'new_plan';
-    mmkClosePlan: Result := 'close_plan';
-    mmkWorkOnPlan: Result := 'work_on_plan';
-    mmkRunPlan: Result := 'run_plan';
-    mmkStopPlan: Result := 'stop_plan';
-    mmkTasks: Result := 'tasks';
-    mmkRunTask: Result := 'run_task';
-    mmkInsertTask: Result := 'insert_task';
-    mmkInsertResult: Result := 'insert_result';
-    mmkApprovalRequested: Result := 'approval_requested';
-    mmkApprovalDecision: Result := 'approval_decision';
-    mmkApprovalClosed: Result := 'approval_closed';
-    mmkImageGet: Result := 'image_get';
-    mmkImageData: Result := 'image_data';
-    mmkImageUnavailable: Result := 'image_unavailable';
-    mmkNewConversation: Result := 'new_conversation';
-    mmkError: Result := 'error';
-    mmkPing: Result := 'ping';
-    mmkPong: Result := 'pong';
-    mmkResume: Result := 'resume';
-    mmkPatch: Result := 'patch';
-    mmkCatchup: Result := 'catchup';
-    mmkConversationClosed: Result := 'conversation_closed';
-    mmkTargets: Result := 'targets';
-    mmkSelectTarget: Result := 'select_target';
-    mmkConversations: Result := 'conversations';
-    mmkSelectConversation: Result := 'select_conversation';
-    mmkModels: Result := 'models';
-    mmkSetModel: Result := 'set_model';
-    mmkReasoning: Result := 'reasoning';
-    mmkSetReasoning: Result := 'set_reasoning';
-    mmkPermissions: Result := 'permissions';
-    mmkSetPermissions: Result := 'set_permissions';
-    mmkSnapshotPage: Result := 'snapshot_page';
-    mmkChunk: Result := 'chunk';
-    mmkCommandState: Result := 'command_state';
-    mmkCommandStates: Result := 'command_states';
-  Else
-    Result := '';
-  End;
+  Result := MonitorKindNames[Kind];
 End;
 
 Function MonitorMessageKindFromName(Const Name: String): TMonitorMessageKind;
 Var
+  First, Last, Middle, Comparison: Integer;
   Kind: TMonitorMessageKind;
 Begin
+  First := Low(MonitorSortedKinds);
+  Last := High(MonitorSortedKinds);
+  While First <= Last Do
+    Begin
+      Middle := First + (Last - First) Div 2;
+      Kind := MonitorSortedKinds[Middle];
+      Comparison := CompareStr(Name, MonitorKindNames[Kind]);
+      If Comparison = 0 Then
+        Exit(Kind);
+      If Comparison < 0 Then
+        Last := Middle - 1
+      Else
+        First := Middle + 1;
+    End;
   Result := mmkUnknown;
-  For Kind := Low(TMonitorMessageKind) To High(TMonitorMessageKind) Do
-    If (Kind <> mmkUnknown) And (MonitorMessageKindName(Kind) = Name) Then
-      Exit(Kind);
 End;
 
 Function MonitorMessageIdIsSafe(Const Id: String): Boolean;
@@ -692,6 +834,9 @@ Begin
   Data := Nil;
   Obj := Nil;
   Try
+    {$IFDEF MONITOR_COUNT_PARSES}
+    MonitorNoteJsonParse;
+    {$ENDIF}
     Data := GetJSON(Json);
   Except
     Exit;
@@ -832,14 +977,14 @@ Begin
   Result := EncodeWith(Kind, Id, Payload);
 End;
 
-Function DecodeOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+Function DecodeOneString(Const PayloadJson: TMonitorPayload; Const Field: String; Out Value: String): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
 Begin
   Result := False;
   Value := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
     Result := ReadString(Obj, Field, True, Value);
@@ -848,9 +993,17 @@ Begin
   End;
 End;
 
-Function ParseMonitorObject(Const Json: String; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
+{ Data owns a fresh parse, or is Nil when Obj is borrowed from Json. Always free Data, never Obj. }
+Function ParseMonitorObject(Const Json: TMonitorPayload; Out Data: TJSONData; Out Obj: TJSONObject): Boolean;
 Begin
-  Result := ParseObject(Json, Data, Obj);
+  Data := Nil;
+  Obj := Nil;
+  If Assigned(Json.ObjectValue) Then
+    Begin
+      Obj := Json.ObjectValue;
+      Exit(Assigned(Obj));
+    End;
+  Result := ParseObject(Json.Source, Data, Obj);
 End;
 
 Function ReadMonitorString(Obj: TJSONObject; Const Name: String; Required: Boolean; Out Value: String): Boolean;
@@ -883,7 +1036,7 @@ Begin
   Result := EncodeOneString(Kind, Id, Field, Value);
 End;
 
-Function DecodeMonitorOneString(Const PayloadJson, Field: String; Out Value: String): Boolean;
+Function DecodeMonitorOneString(Const PayloadJson: TMonitorPayload; Const Field: String; Out Value: String): Boolean;
 Begin
   Result := DecodeOneString(PayloadJson, Field, Value);
 End;
@@ -909,7 +1062,7 @@ Begin
   Result := EncodeMonitorError(RefId, MonitorUnknownTypeReason, 'Unknown message type ' + Shown + '.', RefId);
 End;
 
-Function DecodeMonitorError(Const PayloadJson: String; Out ErrorBody: TMonitorErrorBody): Boolean;
+Function DecodeMonitorError(Const PayloadJson: TMonitorPayload; Out ErrorBody: TMonitorErrorBody): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -918,7 +1071,7 @@ Begin
   ErrorBody.Reason := '';
   ErrorBody.MessageText := '';
   ErrorBody.RefId := '';
-  If Not ParseObject(PayloadJson, Data, Obj) Then
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
     Exit;
   Try
     Result := ReadString(Obj, 'reason', True, ErrorBody.Reason) And
@@ -928,29 +1081,21 @@ Begin
   End;
 End;
 
-Procedure ApplyTextLimit(Var Message: TMonitorMessage);
+Procedure ApplyTextLimit(Var Message: TMonitorMessage; Obj: TJSONObject);
 Var
-  Data: TJSONData;
-  Obj: TJSONObject;
   Text: String;
 Begin
   If (Message.Kind <> mmkSend) And (Message.Kind <> mmkSteer) Then
     Exit;
-  If Not ParseObject(Message.PayloadJson, Data, Obj) Then
+  If Not ReadString(Obj, 'text', False, Text) Then
     Exit;
-  Try
-    If Not ReadString(Obj, 'text', False, Text) Then
-      Exit;
-    If Length(Text) <= MonitorMaxSendChars Then
-      Exit;
-    Message.Kind := mmkError;
-    Message.TypeName := 'error';
-    Message.Reason := MonitorPayloadTooLargeReason;
-    Message.ChangesState := False;
-    Message.WireJson := EncodeMonitorError(Message.Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Message.Id);
-  Finally
-    Data.Free;
-  End;
+  If Length(Text) <= MonitorMaxSendChars Then
+    Exit;
+  Message.Kind := mmkError;
+  Message.TypeName := 'error';
+  Message.Reason := MonitorPayloadTooLargeReason;
+  Message.ChangesState := False;
+  Message.WireJson := EncodeMonitorError(Message.Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Message.Id);
 End;
 
 Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
@@ -969,6 +1114,11 @@ Begin
   Message.Reason := '';
   Message.ChangesState := False;
   Message.WireJson := '';
+  If Length(Json) > MonitorMaxPayloadBytes Then
+    Begin
+      ErrorText := 'Monitor message exceeds the frame cap.';
+      Exit;
+    End;
   Data := Nil;
   Try
     Try
@@ -1011,7 +1161,8 @@ Begin
     Message.Version := MonitorCatalogueVersion;
     Message.Id := Id;
     Message.TypeName := TypeName;
-    Message.PayloadJson := Payload.AsJSON;
+    Message.PayloadJson.Parsed := TMonitorPayloadOwner.Create(TJSONObject(Root.Extract('payload')));
+    Message.PayloadJson.ObjectValue := Payload;
     Message.Kind := MonitorMessageKindFromName(TypeName);
     If Message.Kind = mmkUnknown Then
       Begin
@@ -1025,7 +1176,7 @@ Begin
         Message.Reason := Payload.Get('reason', '');
         Message.ChangesState := True;
         Message.WireJson := Json;
-        ApplyTextLimit(Message);
+        ApplyTextLimit(Message, Payload);
       End;
     Result := True;
   Finally
@@ -1038,7 +1189,7 @@ Begin
   Result := EncodeCommandHello(Id, ClientName, ClientVersion, ClientId);
 End;
 
-Function DecodeMonitorHello(Const PayloadJson: String; Out Hello: TMonitorHello): Boolean;
+Function DecodeMonitorHello(Const PayloadJson: TMonitorPayload; Out Hello: TMonitorHello): Boolean;
 Begin
   Result := DecodeCommandHello(PayloadJson, Hello);
 End;
@@ -1048,7 +1199,7 @@ Begin
   Result := EncodeCommandPair(Id, Code, Fingerprint);
 End;
 
-Function DecodeMonitorPair(Const PayloadJson: String; Out Pair: TMonitorPair): Boolean;
+Function DecodeMonitorPair(Const PayloadJson: TMonitorPayload; Out Pair: TMonitorPair): Boolean;
 Begin
   Result := DecodeCommandPair(PayloadJson, Pair);
 End;
@@ -1058,7 +1209,7 @@ Begin
   Result := EncodeCommandPairOk(Id, ClientId, SessionToken);
 End;
 
-Function DecodeMonitorPairOk(Const PayloadJson: String; Out PairOk: TMonitorPairOk): Boolean;
+Function DecodeMonitorPairOk(Const PayloadJson: TMonitorPayload; Out PairOk: TMonitorPairOk): Boolean;
 Begin
   Result := DecodeCommandPairOk(PayloadJson, PairOk);
 End;
@@ -1084,7 +1235,7 @@ Begin
     End;
 End;
 
-Function DecodeMonitorHelloOk(Const PayloadJson: String; Out HelloOk: TMonitorHelloOk): Boolean;
+Function DecodeMonitorHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: TMonitorHelloOk): Boolean;
 Begin
   Result := DecodeCommandHelloOk(PayloadJson, HelloOk);
 End;
@@ -1094,7 +1245,7 @@ Begin
   Result := EncodeCommandAuth(Id, ClientId, Hmac);
 End;
 
-Function DecodeMonitorAuth(Const PayloadJson: String; Out Auth: TMonitorAuth): Boolean;
+Function DecodeMonitorAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
 Begin
   Result := DecodeCommandAuth(PayloadJson, Auth);
 End;
@@ -1104,7 +1255,7 @@ Begin
   Result := EncodeCommandRejected(Id, Reason, HostVersion, ClientVersion);
 End;
 
-Function DecodeMonitorRejected(Const PayloadJson: String; Out Rejected: TMonitorRejected): Boolean;
+Function DecodeMonitorRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Begin
   Result := DecodeCommandRejected(PayloadJson, Rejected);
 End;
@@ -1114,7 +1265,7 @@ Begin
   Result := EncodeCommandBye(Id, Reason);
 End;
 
-Function DecodeMonitorBye(Const PayloadJson: String; Out Bye: TMonitorBye): Boolean;
+Function DecodeMonitorBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
 Begin
   Result := DecodeCommandBye(PayloadJson, Bye);
 End;
@@ -1129,7 +1280,7 @@ Begin
   Result := TryEncodeCommandSteer(Id, Text, Json, ErrorJson);
 End;
 
-Function DecodeMonitorText(Const PayloadJson: String; Out Text: String): Boolean;
+Function DecodeMonitorText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
 Begin
   Result := DecodeCommandText(PayloadJson, Text);
 End;
@@ -1144,7 +1295,7 @@ Begin
   Result := EncodeCommandSetMode(Id, Mode);
 End;
 
-Function DecodeMonitorSetMode(Const PayloadJson: String; Out Mode: String): Boolean;
+Function DecodeMonitorSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
 Begin
   Result := DecodeCommandSetMode(PayloadJson, Mode);
 End;
@@ -1154,7 +1305,7 @@ Begin
   Result := EncodeCommandMode(Id, Mode, Locked);
 End;
 
-Function DecodeMonitorMode(Const PayloadJson: String; Out ModeMessage: TMonitorModeMessage): Boolean;
+Function DecodeMonitorMode(Const PayloadJson: TMonitorPayload; Out ModeMessage: TMonitorModeMessage): Boolean;
 Begin
   Result := DecodeCommandMode(PayloadJson, ModeMessage);
 End;
@@ -1164,7 +1315,7 @@ Begin
   Result := EncodeCommandTurnRequest(Id, TurnIndex);
 End;
 
-Function DecodeMonitorTurnRequest(Const PayloadJson: String; Out TurnIndex: Integer): Boolean;
+Function DecodeMonitorTurnRequest(Const PayloadJson: TMonitorPayload; Out TurnIndex: Integer): Boolean;
 Begin
   Result := DecodeCommandTurnRequest(PayloadJson, TurnIndex);
 End;
@@ -1175,7 +1326,7 @@ Begin
   Result := EncodeStateTarget(Id, Kind, Display, Root);
 End;
 
-Function DecodeMonitorTarget(Const PayloadJson: String; Out Target: TMonitorTargetMessage): Boolean;
+Function DecodeMonitorTarget(Const PayloadJson: TMonitorPayload; Out Target: TMonitorTargetMessage): Boolean;
 Begin
   Result := DecodeStateTarget(PayloadJson, Target);
 End;
@@ -1185,7 +1336,7 @@ Begin
   Result := EncodeStateTargets(Id, Current, Paths, Captions);
 End;
 
-Function DecodeMonitorTargets(Const PayloadJson: String; Out Targets: TMonitorTargetsMessage): Boolean;
+Function DecodeMonitorTargets(Const PayloadJson: TMonitorPayload; Out Targets: TMonitorTargetsMessage): Boolean;
 Begin
   Result := DecodeStateTargets(PayloadJson, Targets);
 End;
@@ -1195,7 +1346,7 @@ Begin
   Result := EncodeStateConversations(Id, Current, Ids, Titles, Truncated);
 End;
 
-Function DecodeMonitorConversations(Const PayloadJson: String; Out Conversations: TMonitorConversationsMessage): Boolean;
+Function DecodeMonitorConversations(Const PayloadJson: TMonitorPayload; Out Conversations: TMonitorConversationsMessage): Boolean;
 Begin
   Result := DecodeStateConversations(PayloadJson, Conversations);
 End;
@@ -1205,7 +1356,7 @@ Begin
   Result := EncodeCommandSelectConversation(Id, ArchiveId);
 End;
 
-Function DecodeMonitorSelectConversation(Const PayloadJson: String; Out ArchiveId: String): Boolean;
+Function DecodeMonitorSelectConversation(Const PayloadJson: TMonitorPayload; Out ArchiveId: String): Boolean;
 Begin
   Result := DecodeCommandSelectConversation(PayloadJson, ArchiveId);
 End;
@@ -1215,7 +1366,7 @@ Begin
   Result := EncodeStateModels(Id, Current, Backend, Note, Ids, Captions);
 End;
 
-Function DecodeMonitorModels(Const PayloadJson: String; Out Models: TMonitorModelsMessage): Boolean;
+Function DecodeMonitorModels(Const PayloadJson: TMonitorPayload; Out Models: TMonitorModelsMessage): Boolean;
 Begin
   Result := DecodeStateModels(PayloadJson, Models);
 End;
@@ -1225,7 +1376,7 @@ Begin
   Result := EncodeCommandSetModel(Id, ModelId);
 End;
 
-Function DecodeMonitorSetModel(Const PayloadJson: String; Out ModelId: String): Boolean;
+Function DecodeMonitorSetModel(Const PayloadJson: TMonitorPayload; Out ModelId: String): Boolean;
 Begin
   Result := DecodeCommandSetModel(PayloadJson, ModelId);
 End;
@@ -1235,7 +1386,7 @@ Begin
   Result := EncodeStateReasoning(Id, Current, Note, Ids, Captions);
 End;
 
-Function DecodeMonitorReasoning(Const PayloadJson: String; Out Reasoning: TMonitorReasoningMessage): Boolean;
+Function DecodeMonitorReasoning(Const PayloadJson: TMonitorPayload; Out Reasoning: TMonitorReasoningMessage): Boolean;
 Begin
   Result := DecodeStateReasoning(PayloadJson, Reasoning);
 End;
@@ -1245,7 +1396,7 @@ Begin
   Result := EncodeCommandSetReasoning(Id, Level);
 End;
 
-Function DecodeMonitorSetReasoning(Const PayloadJson: String; Out Level: String): Boolean;
+Function DecodeMonitorSetReasoning(Const PayloadJson: TMonitorPayload; Out Level: String): Boolean;
 Begin
   Result := DecodeCommandSetReasoning(PayloadJson, Level);
 End;
@@ -1255,7 +1406,7 @@ Begin
   Result := EncodeStatePermissions(Id, Current, Backend, Note, Ids, Captions);
 End;
 
-Function DecodeMonitorPermissions(Const PayloadJson: String; Out Permissions: TMonitorPermissionsMessage): Boolean;
+Function DecodeMonitorPermissions(Const PayloadJson: TMonitorPayload; Out Permissions: TMonitorPermissionsMessage): Boolean;
 Begin
   Result := DecodeStatePermissions(PayloadJson, Permissions);
 End;
@@ -1265,7 +1416,7 @@ Begin
   Result := EncodeCommandSetPermissions(Id, Approval);
 End;
 
-Function DecodeMonitorSetPermissions(Const PayloadJson: String; Out Approval: String): Boolean;
+Function DecodeMonitorSetPermissions(Const PayloadJson: TMonitorPayload; Out Approval: String): Boolean;
 Begin
   Result := DecodeCommandSetPermissions(PayloadJson, Approval);
 End;
@@ -1275,7 +1426,7 @@ Begin
   Result := EncodeCommandPath(Kind, Id, Path);
 End;
 
-Function DecodeMonitorPath(Const PayloadJson: String; Out Path: String): Boolean;
+Function DecodeMonitorPath(Const PayloadJson: TMonitorPayload; Out Path: String): Boolean;
 Begin
   Result := DecodeCommandPath(PayloadJson, Path);
 End;
@@ -1285,7 +1436,7 @@ Begin
   Result := EncodeCommandNewPlan(Id, Title, HasTitle);
 End;
 
-Function DecodeMonitorNewPlan(Const PayloadJson: String; Out Plan: TMonitorPathMessage): Boolean;
+Function DecodeMonitorNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
 Begin
   Result := DecodeCommandNewPlan(PayloadJson, Plan);
 End;
@@ -1295,7 +1446,7 @@ Begin
   Result := EncodeCommandWorkOnPlan(Id, Index);
 End;
 
-Function DecodeMonitorWorkOnPlan(Const PayloadJson: String; Out Index: Integer): Boolean;
+Function DecodeMonitorWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
 Begin
   Result := DecodeCommandWorkOnPlan(PayloadJson, Index);
 End;
@@ -1305,7 +1456,7 @@ Begin
   Result := EncodeCommandTask(Kind, Id, TaskId, Note);
 End;
 
-Function DecodeMonitorTaskCommand(Const PayloadJson: String; Out Command: TMonitorTaskCommand): Boolean;
+Function DecodeMonitorTaskCommand(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
 Begin
   Result := DecodeCommandTask(PayloadJson, Command);
 End;
@@ -1320,7 +1471,7 @@ Begin
   Result := EncodeCommandTicks(Kind, Id, Ticks);
 End;
 
-Function DecodeMonitorTicks(Const PayloadJson: String; Out Ticks: TMonitorTicks): Boolean;
+Function DecodeMonitorTicks(Const PayloadJson: TMonitorPayload; Out Ticks: TMonitorTicks): Boolean;
 Begin
   Result := DecodeCommandTicks(PayloadJson, Ticks);
 End;
@@ -1330,7 +1481,7 @@ Begin
   Result := EncodeStateApprovalRequested(Id, Notice);
 End;
 
-Function DecodeMonitorApprovalRequested(Const PayloadJson: String; Out Notice: TAssistantApprovalNotice): Boolean;
+Function DecodeMonitorApprovalRequested(Const PayloadJson: TMonitorPayload; Out Notice: TAssistantApprovalNotice): Boolean;
 Begin
   Result := DecodeStateApprovalRequested(PayloadJson, Notice);
 End;
@@ -1340,7 +1491,7 @@ Begin
   Result := EncodeStateApprovalDecision(Id, ToolId, Allow);
 End;
 
-Function DecodeMonitorApprovalDecision(Const PayloadJson: String; Out Decision: TMonitorApprovalDecision): Boolean;
+Function DecodeMonitorApprovalDecision(Const PayloadJson: TMonitorPayload; Out Decision: TMonitorApprovalDecision): Boolean;
 Begin
   Result := DecodeStateApprovalDecision(PayloadJson, Decision);
 End;
@@ -1350,7 +1501,7 @@ Begin
   Result := EncodeStateApprovalClosed(Id, ToolId, Reason);
 End;
 
-Function DecodeMonitorApprovalClosed(Const PayloadJson: String; Out Closed: TMonitorApprovalClosed): Boolean;
+Function DecodeMonitorApprovalClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorApprovalClosed): Boolean;
 Begin
   Result := DecodeStateApprovalClosed(PayloadJson, Closed);
 End;
@@ -1365,7 +1516,7 @@ Begin
   Result := TryStateStatusFromJson(Obj, View);
 End;
 
-Function DecodeMonitorTurnData(Const PayloadJson: String; Out Turn: TAssistantMonitorTurn): Boolean;
+Function DecodeMonitorTurnData(Const PayloadJson: TMonitorPayload; Out Turn: TAssistantMonitorTurn): Boolean;
 Begin
   Result := DecodeContentTurnData(PayloadJson, Turn);
 End;
@@ -1384,7 +1535,7 @@ Begin
   Result := PackStatePlanFrames(Id, Path, Title, Running, Rows, Paths, Captions, Body, Complete, Frames);
 End;
 
-Function DecodeMonitorPlan(Const PayloadJson: String; Out Path, Title: String; Out Running: Boolean;
+Function DecodeMonitorPlan(Const PayloadJson: TMonitorPayload; Out Path, Title: String; Out Running: Boolean;
   Out Rows: TMonitorSnapshot): Boolean;
 Begin
   Result := DecodeStatePlan(PayloadJson, Path, Title, Running, Rows);
@@ -1400,12 +1551,12 @@ Begin
   Result := EncodeContentSnapshot(Id, Snapshot);
 End;
 
-Function DecodeMonitorSnapshot(Const PayloadJson: String; Out Snapshot: TMonitorSnapshot): Boolean;
+Function DecodeMonitorSnapshot(Const PayloadJson: TMonitorPayload; Out Snapshot: TMonitorSnapshot): Boolean;
 Begin
   Result := DecodeContentSnapshot(PayloadJson, Snapshot);
 End;
 
-Function DecodeMonitorTranscript(Const PayloadJson: String; Out Transcript: TMonitorTranscript): Boolean;
+Function DecodeMonitorTranscript(Const PayloadJson: TMonitorPayload; Out Transcript: TMonitorTranscript): Boolean;
 Begin
   Result := DecodeContentTranscript(PayloadJson, Transcript);
 End;
@@ -1415,7 +1566,7 @@ Begin
   Result := EncodeCommandResume(Id, Epoch, Cursor);
 End;
 
-Function DecodeMonitorResume(Const PayloadJson: String; Out ResumeMsg: TMonitorResume): Boolean;
+Function DecodeMonitorResume(Const PayloadJson: TMonitorPayload; Out ResumeMsg: TMonitorResume): Boolean;
 Begin
   Result := DecodeCommandResume(PayloadJson, ResumeMsg);
 End;
@@ -1440,7 +1591,7 @@ Begin
   Result := PackContentPatch(Id, Patch);
 End;
 
-Function DecodeMonitorPatch(Const PayloadJson: String; Out Patch: TMonitorPatch): Boolean;
+Function DecodeMonitorPatch(Const PayloadJson: TMonitorPayload; Out Patch: TMonitorPatch): Boolean;
 Begin
   Result := DecodeContentPatch(PayloadJson, Patch);
 End;
@@ -1461,7 +1612,7 @@ Begin
   Result := EncodeContentCatchup(Id, Catchup);
 End;
 
-Function DecodeMonitorCatchup(Const PayloadJson: String; Out Catchup: TMonitorCatchup): Boolean;
+Function DecodeMonitorCatchup(Const PayloadJson: TMonitorPayload; Out Catchup: TMonitorCatchup): Boolean;
 Begin
   Result := DecodeContentCatchup(PayloadJson, Catchup);
 End;
@@ -1477,7 +1628,7 @@ Begin
   Result := EncodeStateConversationClosed(Id, Epoch, Cursor, ConversationId, Title);
 End;
 
-Function DecodeMonitorConversationClosed(Const PayloadJson: String; Out Closed: TMonitorConversationClosed): Boolean;
+Function DecodeMonitorConversationClosed(Const PayloadJson: TMonitorPayload; Out Closed: TMonitorConversationClosed): Boolean;
 Begin
   Result := DecodeStateConversationClosed(PayloadJson, Closed);
 End;
@@ -1493,7 +1644,7 @@ Begin
   Result := TryBuildImageParts(ImageId, Mime, Width, Height, Revision, Bytes, Parts, Reason);
 End;
 
-Function DecodeMonitorImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Function DecodeMonitorImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
 Begin
   Result := DecodeImageData(PayloadJson, Image, DecodedBytes);
 End;
@@ -1503,7 +1654,7 @@ Begin
   Result := EncodeImageUnavailable(Id, ImageId, Reason);
 End;
 
-Function DecodeMonitorImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Function DecodeMonitorImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
 Begin
   Result := DecodeImageUnavailable(PayloadJson, Image);
 End;
@@ -1513,7 +1664,7 @@ Begin
   Result := EncodeImageGet(Id, TurnIndex, ImageId);
 End;
 
-Function DecodeMonitorImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+Function DecodeMonitorImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
 Begin
   Result := DecodeImageGet(PayloadJson, Image);
 End;

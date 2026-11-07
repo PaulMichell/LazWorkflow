@@ -18,11 +18,11 @@ Function ExpectedBase64Chars(ByteCount: Integer): Integer;
 Function FramedBase64(Const Raw: RawByteString): String;
 Function TryBuildImageParts(Const ImageId, Mime: String; Width, Height, Revision: Integer;
   Const Bytes: TBytes; Out Parts: TJSONArray; Out Reason: String): Boolean;
-Function DecodeImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Function DecodeImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
 Function EncodeImageUnavailable(Const Id, ImageId, Reason: String): String;
-Function DecodeImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Function DecodeImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
 Function EncodeImageGet(Const Id: String; TurnIndex: Integer; Const ImageId: String): String;
-Function DecodeImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+Function DecodeImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
 Function TryEncodeImageData(Const Id, ImageId, Mime: String; Width, Height, Revision: Integer;
   Const Bytes: TBytes; Missing, Refused: Boolean; Out Messages: TStringArray; Out UnavailableReason: String): Boolean;
 Function EscapedByteLen(C: Char): Integer;
@@ -129,7 +129,7 @@ Begin
   Result := True;
 End;
 
-Function DecodeImageData(Const PayloadJson: String; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
+Function DecodeImageData(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageData; Out DecodedBytes: Integer): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -174,7 +174,7 @@ Begin
   Result := EncodeMonitorWith(mmkImageUnavailable, Id, Payload);
 End;
 
-Function DecodeImageUnavailable(Const PayloadJson: String; Out Image: TMonitorImageUnavailable): Boolean;
+Function DecodeImageUnavailable(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageUnavailable): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -202,7 +202,7 @@ Begin
   Result := EncodeMonitorWith(mmkImageGet, Id, Payload);
 End;
 
-Function DecodeImageGet(Const PayloadJson: String; Out Image: TMonitorImageGet): Boolean;
+Function DecodeImageGet(Const PayloadJson: TMonitorPayload; Out Image: TMonitorImageGet): Boolean;
 Var
   Data: TJSONData;
   Obj: TJSONObject;

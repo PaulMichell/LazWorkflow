@@ -84,7 +84,7 @@ Type
 
   { Listen-thread idle. Must return without waiting on the IDE thread. }
   TMonitorIdleHandler = Procedure Of Object;
-  TMonitorCommandHandler = Procedure(Kind: Integer; Const Id, PayloadJson: String) Of Object;
+  TMonitorCommandHandler = Procedure(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload) Of Object;
   { The bridge writes approval_closed. Nil leaves a rejected decision silent. }
   TMonitorApprovalCloseHandler = Procedure(Const ToolId, Reason: String) Of Object;
 
@@ -173,7 +173,7 @@ Type
     FPendingCommand: Boolean;
     FPendingCommandKind: Integer;
     FPendingCommandId: String;
-    FPendingCommandPayload: String;
+    FPendingCommandPayload: TMonitorPayload;
     FPendingApprovalClose: Boolean;
     FPendingApprovalCloseId: String;
     FPendingApprovalCloseReason: String;
@@ -210,18 +210,18 @@ Type
     Function KindAllowedBeforeAuth(Kind: Integer): Boolean;
     Function Connected: Boolean;
     Procedure HandleLocked(Const Frame: TMonitorFrame);
-    Procedure HandleHello(Const PayloadJson: String);
-    Procedure HandlePair(Const PayloadJson: String);
-    Procedure HandleAuth(Const PayloadJson: String);
-    Procedure HandlePing(Const PayloadJson: String);
+    Procedure HandleHello(Const PayloadJson: TMonitorPayload);
+    Procedure HandlePair(Const PayloadJson: TMonitorPayload);
+    Procedure HandleAuth(Const PayloadJson: TMonitorPayload);
+    Procedure HandlePing(Const PayloadJson: TMonitorPayload);
     Procedure HandleBye;
-    Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
-    Procedure HandleResume(Const Id, PayloadJson: String);
+    Procedure HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
+    Procedure HandleResume(Const Id: String; Const PayloadJson: TMonitorPayload);
     Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
     Procedure PublishCommandState(Const Id, State, Reason, DoneText: String);
 
-    Function ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
-    Procedure ServeBlockGet(Const Id, PayloadJson: String);
+    Function ServeTurnFromMirror(Const Id: String; Const PayloadJson: TMonitorPayload): Boolean;
+    Procedure ServeBlockGet(Const Id: String; Const PayloadJson: TMonitorPayload);
     Function LogFrameSeq(Const Json: String; Out Seq: Int64): Boolean;
     { One LAM1 frame for Json. False counts the frame in FFramesDropped and logs its type and status.
       Raw JSON is never returned in Bytes. The caller decides whether the failure closes the link. }
@@ -232,14 +232,14 @@ Type
     Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure QueueOverload(Const Json: String);
     Procedure CloseForQueueFailure(Const Json: String);
-    Procedure NoteLogAck(Const PayloadJson: String);
+    Procedure NoteLogAck(Const PayloadJson: TMonitorPayload);
     Procedure ReleaseHeldLog;
-    Procedure HandleApproval(Const PayloadJson: String);
+    Procedure HandleApproval(Const PayloadJson: TMonitorPayload);
     Function ClosedToolSeen(Const ToolId: String): Boolean;
     Procedure RememberClosedTool(Const ToolId: String);
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
-    Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure EnterBusy(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure AdoptRunningHost;
     Procedure QueueBulkFramesLocked(Const Frames: TStringArray);
     Procedure CheckTimeoutsLocked;
@@ -251,7 +251,7 @@ Type
     Function GetState: TMonitorSessionState;
     Function GetCloseRequested: Boolean;
     Function LinkPulls: Boolean;
-    Procedure QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure QueueCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure FillLogLane;
     { Pulls is the caller's one read of LinkPulls. }
     Procedure PullPlanSlice(Pulls: Boolean);
@@ -884,7 +884,7 @@ Begin
     End;
 End;
 
-Procedure TMonitorSession.NoteLogAck(Const PayloadJson: String);
+Procedure TMonitorSession.NoteLogAck(Const PayloadJson: TMonitorPayload);
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -892,17 +892,11 @@ Var
   Seq: Int64;
 Begin
   Data := Nil;
-  Try
-    Data := GetJSON(PayloadJson);
-  Except
-    Data := Nil;
-  End;
-  If Not (Data Is TJSONObject) Then
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
     Begin
       Data.Free;
       Exit;
     End;
-  Obj := TJSONObject(Data);
   Try
     StreamId := Obj.Get('stream_id', '');
     Seq := 0;
@@ -1446,7 +1440,7 @@ Begin
     (Kind = Ord(mmkPing)) Or (Kind = Ord(mmkBye));
 End;
 
-Procedure TMonitorSession.HandleHello(Const PayloadJson: String);
+Procedure TMonitorSession.HandleHello(Const PayloadJson: TMonitorPayload);
 Var
   Hello: TMonitorHello;
   HelloOk: TMonitorHelloOk;
@@ -1513,7 +1507,7 @@ Begin
   QueueControl(EncodeMonitorHelloOk(NewHostId, HelloOk));
 End;
 
-Procedure TMonitorSession.HandlePair(Const PayloadJson: String);
+Procedure TMonitorSession.HandlePair(Const PayloadJson: TMonitorPayload);
 Var
   Pair: TMonitorPair;
   IdBytes, TokenBytes: TBytes;
@@ -1597,7 +1591,7 @@ Begin
   LogLine(1, 'pair success client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
-Procedure TMonitorSession.HandleAuth(Const PayloadJson: String);
+Procedure TMonitorSession.HandleAuth(Const PayloadJson: TMonitorPayload);
 Var
   Auth: TMonitorAuth;
   Index: Integer;
@@ -1648,7 +1642,7 @@ Begin
   LogLine(1, 'auth success client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
-Procedure TMonitorSession.HandlePing(Const PayloadJson: String);
+Procedure TMonitorSession.HandlePing(Const PayloadJson: TMonitorPayload);
 Var
   Ticks: TMonitorTicks;
 Begin
@@ -1733,7 +1727,7 @@ Begin
     Result := (FState = mssBusy) And (Not FHostFlags.CanStop);
 End;
 
-Procedure TMonitorSession.EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TMonitorSession.EnterBusy(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Begin
   { The form, not this accept, is what makes the session busy. }
   If (Kind = Ord(mmkSend)) Or (Kind = Ord(mmkRunPlan)) Or (Kind = Ord(mmkRunTask)) Then
@@ -1763,7 +1757,7 @@ Begin
     (Kind = Ord(mmkSetPermissions)) Or (Kind = Ord(mmkNewPlan));
 End;
 
-Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   Blocked: Boolean;
   MessageText: String;
@@ -1845,7 +1839,7 @@ Begin
     QueueCommand(Kind, Id, PayloadJson);
 End;
 
-Procedure TMonitorSession.HandleResume(Const Id, PayloadJson: String);
+Procedure TMonitorSession.HandleResume(Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   ResumeMsg: TMonitorResume;
   Source: TMonitorResumeSource;
@@ -1988,7 +1982,7 @@ Begin
     Result := 'finished';
 End;
 
-Procedure TMonitorSession.HandleApproval(Const PayloadJson: String);
+Procedure TMonitorSession.HandleApproval(Const PayloadJson: TMonitorPayload);
 Var
   Decision: TMonitorApprovalDecision;
   Reason: String;
@@ -2075,7 +2069,7 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.QueueCommand(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TMonitorSession.QueueCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Begin
   FPendingCommand := True;
   FPendingCommandKind := Kind;
@@ -3003,7 +2997,7 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.ServeBlockGet(Const Id, PayloadJson: String);
+Procedure TMonitorSession.ServeBlockGet(Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   Data: TJSONData;
   Obj, Payload: TJSONObject;
@@ -3017,18 +3011,12 @@ Begin
   Offset := 0;
   AskedRevision := 0;
   HasRevision := False;
-  Try
-    Data := GetJSON(PayloadJson);
-  Except
-    Data := Nil;
-  End;
-  If Not (Data Is TJSONObject) Then
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
     Begin
       Data.Free;
       QueueControl(EncodeMonitorError(NewHostId, 'protocol', 'Block fetch payload is not valid.', Id));
       Exit;
     End;
-  Obj := TJSONObject(Data);
   Try
     BlockId := Obj.Get('block_id', '');
     If Assigned(Obj.Find('offset')) And (Obj.Find('offset').JSONType = jtNumber) Then
@@ -3085,7 +3073,7 @@ Begin
   Until Last;
 End;
 
-Function TMonitorSession.ServeTurnFromMirror(Const Id, PayloadJson: String): Boolean;
+Function TMonitorSession.ServeTurnFromMirror(Const Id: String; Const PayloadJson: TMonitorPayload): Boolean;
 Var
   TurnIndex: Integer;
   Turn: TAssistantMonitorTurn;
@@ -3291,7 +3279,8 @@ Procedure TMonitorSession.InboundFrame(Const Frame: TMonitorFrame);
 Var
   RunCommand, RunClose: Boolean;
   CommandKind: Integer;
-  CommandId, CommandPayload, CloseId, CloseReason: String;
+  CommandId, CloseId, CloseReason: String;
+  CommandPayload: TMonitorPayload;
   Handler: TMonitorCommandHandler;
   CloseHandler: TMonitorApprovalCloseHandler;
 Begin
@@ -3304,6 +3293,7 @@ Begin
     CommandKind := FPendingCommandKind;
     CommandId := FPendingCommandId;
     CommandPayload := FPendingCommandPayload;
+    FPendingCommandPayload := '';
     Handler := FOnCommand;
     FPendingCommand := False;
     RunClose := FPendingApprovalClose;

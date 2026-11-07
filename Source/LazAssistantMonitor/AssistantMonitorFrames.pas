@@ -43,6 +43,7 @@ Function TryEncodeMonitorFrame(Const Json: String; Out Bytes: RawByteString; Out
 { Header and payload bytes only. No UTF-8 scan and no JSON parse. False when Json is empty or over the cap.
   Callers that did not build the object themselves use TryEncodeMonitorFrame. }
 Function EncodeMonitorFrameBytes(Const Json: String; Out Bytes: RawByteString): Boolean;
+{ Inbound frames check byte length and UTF-8. The envelope decoder validates JSON and its object shape. }
 Function TryDecodeMonitorFrame(Const Bytes: RawByteString; Out Frame: TMonitorFrame; Out Status: TMonitorFrameStatus): Boolean;
 { Header only. mfsTooLarge means close the socket and do not read PayloadLen body bytes.
   The payload buffer is not allocated. }
@@ -57,7 +58,7 @@ Function DecodeMonitorImageBytes(Const Encoded: String): RawByteString;
 Function MonitorUtf8CutLength(Const Text: RawByteString; Limit: Integer): Integer;
 
 {$IFDEF MONITOR_COUNT_PARSES}
-{ Incremented once per GetJSON on the outbound queue path. Tests pass -dMONITOR_COUNT_PARSES. }
+{ Counts JSON gates in the frame encoder and shared codec. Tests pass -dMONITOR_COUNT_PARSES. }
 Var
   MonitorJsonParseCount: Integer;
 Procedure MonitorNoteJsonParse;
@@ -227,8 +228,7 @@ End;
 Function FinishPayload(Const Bytes: RawByteString; PayloadLen: Cardinal; Out Frame: TMonitorFrame;
   Out Status: TMonitorFrameStatus): Boolean;
 Var
-  Raw, Json: RawByteString;
-  Data: TJSONData;
+  Raw: RawByteString;
 Begin
   Result := False;
   Frame.Version := MonitorFrameVersion;
@@ -244,26 +244,11 @@ Begin
       Status := mfsBadUtf8;
       Exit;
     End;
-  { jsonparser accepts the bytes it is given. It is not a UTF-8 gate. }
-  Json := Raw;
-  SetCodePage(Json, CP_UTF8, False);
-  Data := Nil;
-  Try
-    Try
-      If Json = '' Then
-        Exit;
-      Data := GetJSON(Json);
-    Except
-      Exit;
-    End;
-    If Not (Data Is TJSONObject) Then
-      Exit;
-    Frame.Json := Json;
-    Status := mfsOk;
-    Result := True;
-  Finally
-    Data.Free;
-  End;
+  { The envelope decoder is the JSON gate. Mark the single payload copy as UTF-8. }
+  SetCodePage(Raw, CP_UTF8, False);
+  Frame.Json := Raw;
+  Status := mfsOk;
+  Result := True;
 End;
 
 Function PayloadIsJsonObject(Const Json: RawByteString): Boolean;

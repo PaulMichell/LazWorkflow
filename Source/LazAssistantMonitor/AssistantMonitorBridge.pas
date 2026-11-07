@@ -55,7 +55,7 @@ Type
   TMonitorQueuedCommand = Class
     Kind: Integer;
     ClientId: String;
-    Payload: String;
+    Payload: TMonitorPayload;
     Generation: Integer;
     Cancelled: Boolean;
     Claimed: Boolean;
@@ -110,7 +110,7 @@ Type
     Procedure SweepCommands;
     Procedure DropOutstanding;
     Procedure Hear(Kind: TAssistantSessionNoticeKind);
-    Procedure HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure HandleApprovalClosed(Const ToolId, Reason: String);
     Procedure DeliverNotice(Job: TMonitorNoticeJob);
     Procedure SendJson(Const Json: String);
@@ -147,7 +147,7 @@ Type
     Procedure PublishPlanRows(Form: TProjectAssistantForm);
     Procedure FinishStatusPush;
     Procedure RunCommand(Command: TMonitorQueuedCommand);
-    Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id, PayloadJson: String;
+    Function DispatchCommand(Form: TProjectAssistantForm; Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload;
       Out ErrorText, DoneText: String): Boolean;
   Public
     Constructor Create;
@@ -1268,7 +1268,7 @@ Begin
 End;
 
 Function TAssistantMonitorBridge.DispatchCommand(Form: TProjectAssistantForm; Kind: Integer;
-  Const Id, PayloadJson: String; Out ErrorText, DoneText: String): Boolean;
+  Const Id: String; Const PayloadJson: TMonitorPayload; Out ErrorText, DoneText: String): Boolean;
 Var
   Text, ModeText, Path, ArchiveId, ApiText, Level, Approval: String;
   Plan: TMonitorPathMessage;
@@ -1474,7 +1474,7 @@ Begin
   End;
 End;
 
-Function LiveRefresh(Const PayloadJson: String): Boolean;
+Function LiveRefresh(Const PayloadJson: TMonitorPayload): Boolean;
 Var
   Text: String;
 Begin
@@ -1564,7 +1564,7 @@ Begin
     End;
 End;
 
-Procedure TAssistantMonitorBridge.HandleCommand(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TAssistantMonitorBridge.HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   Command: TMonitorQueuedCommand;
 Begin

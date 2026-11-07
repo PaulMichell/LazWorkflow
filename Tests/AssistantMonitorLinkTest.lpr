@@ -65,7 +65,7 @@ Type
     Built: Integer;
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Hear(Kind: Integer; Const Id, PayloadJson: String);
+    Procedure Hear(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure Answer;
   End;
 
@@ -353,7 +353,7 @@ Begin
 End;
 
 {$PUSH}{$HINTS OFF}
-Procedure TResumeAnswerer.Hear(Kind: Integer; Const Id, PayloadJson: String);
+Procedure TResumeAnswerer.Hear(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Begin
   If Kind <> Ord(mmkResume) Then
     Exit;
@@ -1423,7 +1423,7 @@ Begin
           Begin
             SawBye := DecodeMonitorBye(Message.PayloadJson, Bye) And (Bye.Reason = 'replaced');
             If Not SawBye Then
-              WriteLn('detail bye reason=', Message.Reason, ' payload=', Message.PayloadJson);
+              WriteLn('detail bye reason=', Message.Reason, ' payload=', String(Message.PayloadJson));
           End
         Else If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
           SawBusy := True;
