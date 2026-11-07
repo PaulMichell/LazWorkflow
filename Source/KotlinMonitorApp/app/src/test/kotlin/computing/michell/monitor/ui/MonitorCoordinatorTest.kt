@@ -67,6 +67,23 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun replacedConnectionResultsDoNotReportSendFailureOrRestoreThePrompt() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "current prompt"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    val before = coordinator.state
+    for (result in listOf(
+      CatalogueResult("old-command", 0, computing.michell.monitor.connection.CatalogueWrite.Failed),
+      CatalogueResult("old-command", 1, computing.michell.monitor.connection.CatalogueWrite.Stale)
+    )) {
+      coordinator.onEvent(MonitorEvent.CommandResult(coordinator.state, result))
+      assertEquals(before.banner, coordinator.state.banner)
+      assertEquals(before.draft, coordinator.state.draft)
+      assertEquals(before.pendingPrompt, coordinator.state.pendingPrompt)
+    }
+  }
+
+  @Test
   fun aHostRejectionPutsThePromptBack() {
     val coordinator = open()
     coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep this"))
@@ -142,6 +159,26 @@ class MonitorCoordinatorTest {
     assertEquals("", asked.epoch)
     assertEquals(0L, asked.cursor)
     assertEquals(0L, coordinator.state.hostCursor)
+  }
+
+  @Test
+  fun reconnectFollowsTheDesktopConversationInsteadOfTheCachedCursor() {
+    val coordinator = open()
+    coordinator.restoreOffline(MonitorUi(
+      conversationId = "conversation-old", hostEpoch = "stream-old", hostCursor = 118,
+      turns = listOf(WireTurn(1, "turn-old", "build", "", "Old conversation", ""))
+    ))
+    coordinator.noteResumeCursor("conversation-old", "stream-old", 118)
+    val hello = HelloOkMessage("nonce", "ide", "stream-new", 200, "conversation-new", "/work", "Current", "")
+    val effects = coordinator.onEvent(MonitorEvent.Incoming(
+      coordinator.state, envelope(encodeHelloOk("hello", hello))
+    )).orEmpty()
+    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
+    val payload = tryDecodeEnvelope(sent.json).message.payloadJson
+    assertFalse(payload.contains("conversation-old"))
+    assertEquals("", decodeResume(payload)!!.epoch)
+    assertEquals(0L, decodeResume(payload)!!.cursor)
+    assertEquals("conversation-new", coordinator.state.conversationId)
   }
 
   @Test

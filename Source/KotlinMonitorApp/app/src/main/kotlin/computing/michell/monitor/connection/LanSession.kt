@@ -601,8 +601,12 @@ class LanSession(
     if (!decoded.ok || decoded.message.kind != MessageKind.Resume) return json
     val ids = ledger.openIds()
     if (ids.isEmpty()) return json
-    val resume = decodeResume(decoded.message.payloadJson) ?: return json
-    val next = encodeResume(decoded.message.id, resume.epoch, resume.cursor, ids)
+    if (decodeResume(decoded.message.payloadJson) == null) return json
+    val payload = computing.michell.monitor.protocol.jsonObject(decoded.message.payloadJson) ?: return json
+    val fields = payload.fields.filter { it.first != "commands" } + ("commands" to
+      computing.michell.monitor.protocol.JsonValue.Arr(ids.map { computing.michell.monitor.protocol.JsonValue.Str(it) }))
+    val next = computing.michell.monitor.protocol.encodeEnvelope(MessageKind.Resume, decoded.message.id,
+      computing.michell.monitor.protocol.JsonValue.Obj(fields))
     return if (next.isEmpty()) json else next
   }
 
@@ -1123,7 +1127,6 @@ class LanSession(
     if (!envelope.ok) return
     val message = chunks.accept(envelope.message) ?: return
     session.apply(message)
-    inbound.publish(message)
     when (message.kind) {
       MessageKind.PairOk -> {
         val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)
@@ -1183,6 +1186,8 @@ class LanSession(
       else -> publishCurrent(epoch, if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live ||
         session.phase == computing.michell.monitor.protocol.SessionPhase.Busy) LinkPhase.Live else LinkPhase.Connecting, "", "")
     }
+    // Queue authentication before exposing hello: its collector can immediately send resume.
+    inbound.publish(message)
   }
 
   private fun offerControl(json: String, owned: TlsLink, outbound: ConnectionWriter): Boolean {

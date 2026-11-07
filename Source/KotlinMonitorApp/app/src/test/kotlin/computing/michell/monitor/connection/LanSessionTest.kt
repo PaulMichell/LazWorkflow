@@ -308,6 +308,43 @@ class LanSessionTest {
   }
 
   @Test
+  fun helloCollectorResumesAfterAuthAndKeepsTheRequestedConversation() = runBlocking {
+    val store = pairedStore()
+    val ledger = MemoryCommandLedger()
+    ledger.remember(encodeEmpty(MessageKind.Stop, "stop-pending"))
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link }, ledger = ledger)
+    val collector = launch(Dispatchers.Unconfined) {
+      session.messages.collect { message ->
+        if (message.kind == MessageKind.HelloOk) {
+          session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume(
+            "resume-selected", "conversation-selected", "stream-selected", 42L
+          ))
+        }
+      }
+    }
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeHelloOk("host-hello", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { link.frames().any { envelope(it).kind == MessageKind.Resume } }
+      val sent = link.frames().map { envelope(it) }
+      assertTrue(sent.indexOfFirst { it.kind == MessageKind.Auth } in 0 until
+        sent.indexOfFirst { it.kind == MessageKind.Resume })
+      val payload = sent.single { it.kind == MessageKind.Resume }.payloadJson
+      assertTrue(payload.contains("conversation-selected"))
+      assertTrue(payload.contains("stream-selected"))
+      assertTrue(payload.contains("stop-pending"))
+      assertEquals(42L, computing.michell.monitor.protocol.decodeResume(payload)!!.cursor)
+    } finally {
+      collector.cancel()
+      session.close()
+    }
+  }
+
+  @Test
   fun unknownCommandIsResentAndAHeldPromptIsOffered() {
     val store = pairedStore()
     val pin = store.load().fingerprint

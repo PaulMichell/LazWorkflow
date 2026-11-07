@@ -553,11 +553,19 @@ class MonitorCoordinator(
     // desktop answers with every page and the phone dies under that dump.
     // The cached section stays until the desktop's current turn is ready to replace it.
     resetMatch()
+    val changedConversation = hello.conversationId.isNotEmpty() && hello.conversationId != local.conversationId
+    if (changedConversation) {
+      // Reconnect follows the desktop's open chat, rather than resuming the cached chat.
+      session.takeSyncResume()
+      resumeConversation = ""
+      resumeStream = ""
+      resumeSeq = 0L
+    }
     val board = content.current()
     val haveBody = board.turns.isNotEmpty() || board.live != null
     val announced = hello.epoch.ifEmpty { local.hostEpoch }
     val sameEpoch = announced.isEmpty() || announced == local.hostEpoch
-    val keepPlace = haveBody && sameEpoch && local.hostCursor > 0L
+    val keepPlace = !changedConversation && haveBody && sameEpoch && local.hostCursor > 0L
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
       // A saved epoch must not reject the chat the desktop is about to send.
@@ -602,7 +610,8 @@ class MonitorCoordinator(
     }
     val board = content.current()
     val haveBody = board.turns.isNotEmpty() || board.live != null
-    if (haveBody && local.conversationId.isNotEmpty() && (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
+    if (haveBody && board.conversationId == local.conversationId && local.conversationId.isNotEmpty() &&
+      (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
       return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), local.conversationId, local.hostEpoch, local.hostCursor))
     }
     return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
@@ -670,6 +679,8 @@ class MonitorCoordinator(
   }
 
   private fun commandResult(result: CatalogueResult): List<MonitorEffect> {
+    // A replaced connection cannot report a send failure against the current screen.
+    if (result.linkEpoch != session.linkEpoch || result.outcome == CatalogueWrite.Stale) return emptyList()
     if (held.any { command -> command.commandId == result.commandId }) return emptyList()
     if (result.outcome == CatalogueWrite.Written) {
       if (result.commandId == submittedId) {
