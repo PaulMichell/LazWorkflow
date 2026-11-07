@@ -14,6 +14,9 @@ Unit AssistantMonitorMirror;
   will not fit while older events are still unacknowledged is recorded the
   same way. Resume behind a dropped record needs a snapshot.
 
+  Parked conversations are capped at MonitorParkedConversations. A resume for
+  one that was dropped is not ready, and the phone takes a snapshot.
+
   ObserveTurn never writes into the turn it is given. Its arrays are shared
   with the caller's snapshot, which another thread may read (plan item 3.2 of
   Documents/Plan-20261105-130659.md). It bumps revisions on its own copy.
@@ -45,6 +48,8 @@ Const
   MonitorAckIntervalMs = 250;
   { One block_append slice. A larger new body is one deferred block_replace. }
   MonitorAppendSliceBytes = 4096;
+  { Conversations kept beside the open one. Older visits are dropped. }
+  MonitorParkedConversations = 4;
 
 { True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
 Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
@@ -444,7 +449,7 @@ End;
 
 Procedure TMonitorMirror.ParkCurrentLocked;
 Var
-  Index: Integer;
+  Index, Kept: Integer;
   Park: TMonitorMirrorPark;
 Begin
   If FConversationId = '' Then
@@ -470,19 +475,25 @@ Begin
   Park.PlanTitle := FPlanTitle;
   Park.PlanRunning := FPlanRunning;
   Park.PlanRows := Copy(FPlanRows);
-  Index := -1;
+  { A revisit becomes the newest, so it is not the one dropped when the ring is full. }
+  Kept := 0;
   For Index := 0 To High(FParked) Do
-    If FParked[Index].ConversationId = FConversationId Then
-      Break;
-  If (Length(FParked) = 0) Or (FParked[Index].ConversationId <> FConversationId) Then
-    Index := -1;
-  If Index >= 0 Then
-    FParked[Index] := Park
-  Else
+    If FParked[Index].ConversationId <> FConversationId Then
+      Begin
+        If Kept <> Index Then
+          FParked[Kept] := FParked[Index];
+        Inc(Kept);
+      End;
+  SetLength(FParked, Kept);
+  If Kept >= MonitorParkedConversations Then
     Begin
-      SetLength(FParked, Length(FParked) + 1);
-      FParked[High(FParked)] := Park;
+      For Index := 1 To Kept - 1 Do
+        FParked[Index - 1] := FParked[Index];
+      Dec(Kept);
+      SetLength(FParked, Kept);
     End;
+  SetLength(FParked, Kept + 1);
+  FParked[Kept] := Park;
 End;
 
 Function TMonitorMirror.UnparkLocked(Const ConversationId, StreamId: String): Boolean;

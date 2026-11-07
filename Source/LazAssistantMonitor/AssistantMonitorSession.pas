@@ -51,6 +51,8 @@ Const
   MonitorCommandWaitMs = 5000;
   { Kept so older tests compile. The log budget is MonitorLogBudgetBytes. }
   MonitorRingCapacity = 256;
+  { Closed approval ids remembered for this IDE session. Older ids are forgotten. }
+  MonitorClosedToolMemory = 64;
   MonitorRingJsonCap = 2 * 1024 * 1024;
   MonitorCrockfordAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
   MonitorServerName = 'LazAssistantMonitor';
@@ -133,7 +135,9 @@ Type
     FToolExecuted: Boolean;
     FPendingApprovalId: String;
     FDisplayApprovalId: String;
-    FClosedToolIds: Array Of String;
+    FClosedToolIds: Array[0..MonitorClosedToolMemory - 1] Of String;
+    FClosedToolHead: Integer;
+    FClosedToolUsed: Integer;
     FRevokedIds: Array Of String;
     FOutbox: TMonitorOutbox;
     { True when the attached carrier's link takes the outbox. DrainOutbound must not also send. }
@@ -226,6 +230,8 @@ Type
     Procedure NoteLogAck(Const PayloadJson: String);
     Procedure ReleaseHeldLog;
     Procedure HandleApproval(Const PayloadJson: String);
+    Function ClosedToolSeen(Const ToolId: String): Boolean;
+    Procedure RememberClosedTool(Const ToolId: String);
     Function ApprovalRejectReason(Const ToolId: String): String;
     Function CommandBlocked(Kind: Integer; Out MessageText: String): Boolean;
     Procedure EnterBusy(Kind: Integer; Const Id, PayloadJson: String);
@@ -603,7 +609,8 @@ Begin
   FPendingCommandPayload := '';
   FPendingApprovalId := '';
   FDisplayApprovalId := '';
-  SetLength(FClosedToolIds, 0);
+  FClosedToolHead := 0;
+  FClosedToolUsed := 0;
   SetLength(FRevokedIds, 0);
   FLinkPulls := False;
   FEpoch := '';
@@ -1804,16 +1811,48 @@ Begin
     QueueSend(CommandStatesFor(NewHostId, ResumeMsg.Commands));
 End;
 
-Function TMonitorSession.ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
+Function TMonitorSession.ClosedToolSeen(Const ToolId: String): Boolean;
 Var
-  I: Integer;
+  Index, Slot: Integer;
+Begin
+  Result := False;
+  If (ToolId = '') Or (FClosedToolUsed < 1) Then
+    Exit;
+  { Newest first. A resent decision is usually for a recent close. }
+  For Index := FClosedToolUsed - 1 DownTo 0 Do
+    Begin
+      Slot := (FClosedToolHead + Index) Mod MonitorClosedToolMemory;
+      If FClosedToolIds[Slot] = ToolId Then
+        Exit(True);
+    End;
+End;
+
+Procedure TMonitorSession.RememberClosedTool(Const ToolId: String);
+Var
+  Slot: Integer;
+Begin
+  If (ToolId = '') Or ClosedToolSeen(ToolId) Then
+    Exit;
+  If FClosedToolUsed < MonitorClosedToolMemory Then
+    Begin
+      Slot := (FClosedToolHead + FClosedToolUsed) Mod MonitorClosedToolMemory;
+      Inc(FClosedToolUsed);
+    End
+  Else
+    Begin
+      Slot := FClosedToolHead;
+      FClosedToolHead := (FClosedToolHead + 1) Mod MonitorClosedToolMemory;
+    End;
+  FClosedToolIds[Slot] := ToolId;
+End;
+
+Function TMonitorSession.ApplyApprovalDecision(Const ToolId: String; Allow: Boolean): Boolean;
 Begin
   Result := False;
   If (ToolId = '') Or (Not FRemoteApproval) Then
     Exit;
-  For I := 0 To High(FClosedToolIds) Do
-    If FClosedToolIds[I] = ToolId Then
-      Exit;
+  If ClosedToolSeen(ToolId) Then
+    Exit;
   If ToolId = FDisplayApprovalId Then
     Exit;
   If ToolId <> FPendingApprovalId Then
@@ -1829,17 +1868,14 @@ Begin
 End;
 
 Function TMonitorSession.ApprovalRejectReason(Const ToolId: String): String;
-Var
-  I: Integer;
 Begin
   Result := '';
   If (ToolId = '') Or (Not FRemoteApproval) Then
     Exit;
   If ReadAssistantApprovalDecision = aadStopped Then
     Exit('stopped');
-  For I := 0 To High(FClosedToolIds) Do
-    If FClosedToolIds[I] = ToolId Then
-      Exit('finished');
+  If ClosedToolSeen(ToolId) Then
+    Exit('finished');
   If (ToolId = FDisplayApprovalId) Or (ToolId <> FPendingApprovalId) Then
     Result := 'finished';
 End;
@@ -2994,8 +3030,7 @@ Begin
   Try
     If ToolId = '' Then
       Exit;
-    SetLength(FClosedToolIds, Length(FClosedToolIds) + 1);
-    FClosedToolIds[High(FClosedToolIds)] := ToolId;
+    RememberClosedTool(ToolId);
     If FDisplayApprovalId = ToolId Then
       FDisplayApprovalId := '';
     If FPendingApprovalId = ToolId Then
@@ -3372,8 +3407,7 @@ Begin
   Try
     If ToolId = '' Then
       Exit;
-    SetLength(FClosedToolIds, Length(FClosedToolIds) + 1);
-    FClosedToolIds[High(FClosedToolIds)] := ToolId;
+    RememberClosedTool(ToolId);
     If FPendingApprovalId = ToolId Then
       FPendingApprovalId := '';
     If FDisplayApprovalId = ToolId Then

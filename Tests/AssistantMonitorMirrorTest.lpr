@@ -4,6 +4,7 @@ Program AssistantMonitorMirrorTest;
   State chunks and prompt previews are cut between UTF-8 characters (plan item 2.3).
   Observing a turn leaves the caller's record untouched (plan item 3.2).
   An event that cannot be stored still advances the head and is noted as a drop (plan item 4.1).
+  Only the four newest parked conversations are kept (plan item 4.3).
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -490,10 +491,49 @@ Begin
   End;
 End;
 
+{ Plan item 4.3. Six parked conversations leave only the four newest. A resume of the oldest is not ready,
+  so the phone takes a snapshot instead of a log that no longer exists. }
+Procedure TestParkedConversationsAreBounded;
+Var
+  Log: TMonitorMirror;
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
+  Index: Integer;
+  Id: String;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    For Index := 1 To 6 Do
+      Begin
+        Id := 'conversation-' + IntToStr(Index);
+        Log.BeginStream('stream' + IntToStr(Index), Id, '/work', 'Title ' + IntToStr(Index));
+        Log.ObserveTurn(SampleTurn('turn-' + IntToStr(Index), 'body', Index));
+      End;
+    { The seventh stream parks the sixth. Six conversations have been parked. }
+    Log.BeginStream('stream7', 'conversation-7', '/work', 'Title 7');
+    For Index := 1 To 2 Do
+      Check('parked conversation ' + IntToStr(Index) + ' was dropped',
+        Not Log.CaptureResume('conversation-' + IntToStr(Index), Source));
+    For Index := 3 To 6 Do
+      Check('parked conversation ' + IntToStr(Index) + ' is kept',
+        Log.CaptureResume('conversation-' + IntToStr(Index), Source) And Source.Found And Source.Observed);
+    Check('the open conversation is not one of the parked four', Log.CaptureResume('conversation-7', Source) And Source.Found);
+    Status := Default(TMonitorSyncStatus);
+    Log.CaptureResume('conversation-1', Source);
+    Answer := MonitorSyncResumeAnswer(Source, 'conversation-1', 'stream1', 'resume-old', 0, Status);
+    Check('resuming the oldest parked conversation is not ready', Answer.NotReady);
+    Check('resuming the oldest parked conversation is not a replay', Not Answer.Replay);
+  Finally
+    Log.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestFoldAndReplay;
   TestUnstoredEventRecordsDrop;
+  TestParkedConversationsAreBounded;
   TestBodyEscape;
   TestLargeAppend;
   TestLiveBlocks;
