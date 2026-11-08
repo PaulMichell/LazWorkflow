@@ -421,7 +421,7 @@ class MonitorCoordinator(
       pendingKind = if (steer) "steer" else "user",
       pendingCommandId = commandId,
       pendingEpoch = local.pendingEpoch + 1,
-      promptBaseline = promptBaselineOf(content.current().live),
+      promptBaseline = promptBaselineOf(content.current().live, content.current().turns),
       view = local.view.copy(
         sending = true,
         busy = true,

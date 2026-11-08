@@ -257,7 +257,7 @@ private fun ConversationPane(
         )
       }
     }
-    if (ui.pendingPrompt.isNotEmpty()) {
+    if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)) {
       item(key = "pending") {
         val pending = WireBlock(
           ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()

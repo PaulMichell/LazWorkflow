@@ -601,7 +601,7 @@ fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, com
     pendingKind = if (steer) "steer" else "user",
     pendingCommandId = commandId,
     pendingEpoch = state.pendingEpoch + 1,
-    promptBaseline = promptBaselineOf(state.live),
+    promptBaseline = promptBaselineOf(state.live, state.turns),
     activityStartedMs = if (state.activityStartedMs > 0L) state.activityStartedMs else nowMs,
     banner = "",
     view = state.view.copy(

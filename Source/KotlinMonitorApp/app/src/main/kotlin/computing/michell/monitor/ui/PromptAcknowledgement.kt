@@ -1,15 +1,16 @@
 package computing.michell.monitor.ui
 
-/* Acknowledge a prompt only from a live block after this submission (c) 2026 Michell Computing. */
+/* Acknowledge a prompt from desktop content after this submission (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 
-/** User and steer blocks already on the live turn when this submission epoch started. */
-fun promptBaselineOf(turn: WireTurn?): Set<String> {
-  if (turn == null) return emptySet()
-  return displayBlocks(turn).mapNotNull { block ->
-    if (block.kind == "user" || block.kind == "steer") promptBlockKey(turn.id, block) else null
+/** Include history so an older identical prompt cannot acknowledge a new submission. */
+fun promptBaselineOf(turn: WireTurn?, turns: List<WireTurn> = emptyList()): Set<String> {
+  return (turns + listOfNotNull(turn)).flatMap { row ->
+    displayBlocks(row).mapNotNull { block ->
+      if (block.kind == "user" || block.kind == "steer") promptBlockKey(row.id, block) else null
+    }
   }.toSet()
 }
 
@@ -28,14 +29,15 @@ fun hostHasLaterUserBlock(state: MonitorUi): Boolean {
   }
 }
 
-/** Exact trimmed equality on a live user or steer block that arrived after the submission epoch. */
+/** A snapshot may already have moved the acknowledged prompt into a completed turn. */
 fun promptShown(state: MonitorUi, text: String): Boolean {
   val wanted = text.trim()
   if (wanted.isEmpty()) return true
-  val live = state.live ?: return false
-  return displayBlocks(live).any { block ->
-    (block.kind == "user" || block.kind == "steer") &&
-      block.body.trim() == wanted &&
-      promptBlockKey(live.id, block) !in state.promptBaseline
+  return (state.turns + listOfNotNull(state.live)).any { turn ->
+    displayBlocks(turn).any { block ->
+      (block.kind == "user" || block.kind == "steer") &&
+        block.body.trim() == wanted &&
+        promptBlockKey(turn.id, block) !in state.promptBaseline
+    }
   }
 }
