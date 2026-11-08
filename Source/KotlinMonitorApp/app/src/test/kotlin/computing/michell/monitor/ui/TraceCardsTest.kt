@@ -48,5 +48,9 @@ class TraceCardsTest {
     assertFalse(blockShown(running, false, true))
     val idle = WireBlock("thinking", "think-1", "", "", "", "   ", false, true, 0, emptyList())
     assertFalse(blockShown(idle, true, true))
+    assertFalse(blockShown(idle.copy(title = "Thinking"), true, true))
+    assertFalse(blockShown(idle.copy(title = "Thinking… 0:04"), true, true))
+    assertTrue(blockShown(idle.copy(title = "Thinking", deferred = true), true, true))
+    assertTrue(blockShown(idle.copy(body = "Actual thought"), true, true))
   }
 }

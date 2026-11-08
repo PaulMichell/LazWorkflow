@@ -94,7 +94,7 @@ fun turnsFromDesktopOutline(existing: List<WireTurn>, live: WireTurn?, outline: 
 fun blockShown(block: WireBlock, showThinking: Boolean, showTools: Boolean): Boolean {
   return when (displayKind(block)) {
     // A running thought has a title before the first token. Hiding it left the turn looking empty.
-    "thinking" -> showThinking && (block.body.isNotBlank() || block.running || block.title.isNotBlank())
+    "thinking" -> showThinking && (block.body.isNotBlank() || block.running || block.deferred)
     "tool", "subagent" -> showTools
     else -> block.body.isNotEmpty() || block.title.isNotEmpty() || block.images.isNotEmpty()
   }
