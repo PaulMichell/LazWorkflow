@@ -72,6 +72,49 @@ Begin
   Result.Images[0].Mime := 'image/png';
 End;
 
+Procedure TestEventFields;
+Var
+  Log: TMonitorMirror;
+  Turn: TAssistantMonitorTurn;
+  Events: TMonitorMirrorEventArray;
+  Entry: TMonitorMirrorEvent;
+  Data: TJSONData;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('stream', 'chat', '/work', 'Chat');
+    Turn := SampleTurn('turn', 'answer', 0);
+    Turn.Prompt := 'A "quoted" prompt';
+    Turn.DurationMs := 42;
+    Turn.Blocks[0].DurationMs := 17;
+    Turn.Images[0].Width := 640;
+    Turn.Images[0].Height := 480;
+    Log.ObserveTurn(Turn);
+    Log.CopyEvents(Events);
+    Check('the turn emits all six lifecycle events', Length(Events) = 6);
+    For Entry In Events Do
+      Begin
+        Data := GetJSON(String(Entry.Data));
+        Try
+          Case Entry.Kind Of
+            'turn_open': Check('turn open carries the prompt', TJSONObject(Data).Get('prompt', '') = Turn.Prompt);
+            'block_close': Check('block close carries duration', TJSONObject(Data).Get('duration_ms', -1) = 17);
+            'image_added': Check('image added carries dimensions', (TJSONObject(Data).Get('width', -1) = 640) And
+              (TJSONObject(Data).Get('height', -1) = 480));
+            'turn_close': Check('turn close carries duration and error text', (TJSONObject(Data).Get('duration_ms', -1) = 42) And
+              Assigned(TJSONObject(Data).Find('error_text')));
+          Else
+            { Other event payloads are covered by the grain tests. }
+          End;
+        Finally
+          Data.Free;
+        End;
+      End;
+  Finally
+    Log.Free;
+  End;
+End;
+
 Procedure TestFoldAndReplay;
 Var
   Log: TMonitorMirror;
@@ -608,6 +651,7 @@ End;
 Begin
   FailCount := 0;
   TestIndexedTailTiming;
+  TestEventFields;
   TestFoldAndReplay;
   TestUnstoredEventRecordsDrop;
   TestParkedConversationsAreBounded;

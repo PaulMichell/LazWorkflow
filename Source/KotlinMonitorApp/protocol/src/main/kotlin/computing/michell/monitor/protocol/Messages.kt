@@ -2147,7 +2147,7 @@ fun decodeMonitorEvent(payloadJson: String): MonitorEvent? {
     "block_close" -> {
       val blockId = data.readString("block_id", true)
       val state = data.readString("state", true)
-      val duration = data.readInt("duration_ms", true)
+      val duration = data.readInt("duration_ms", false)
       if (!blockId.ok || !state.ok || !duration.ok) null
       else MonitorEvent.BlockClose(id, stream, number, blockId.value, state.value, duration.value)
     }

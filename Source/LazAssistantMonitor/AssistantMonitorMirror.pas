@@ -708,7 +708,8 @@ Begin
     If Not Found Then
       Begin
         EventJson := '{"turn_id":"' + JsonEscapeText(Local.Id) + '","turn_index":' + IntToStr(Local.TurnIndex) +
-          ',"mode":"' + JsonEscapeText(Local.Mode) + '","created_at":"' + JsonEscapeText(Local.CreatedAt) + '"}';
+          ',"mode":"' + JsonEscapeText(Local.Mode) + '","prompt":"' + JsonEscapeText(Local.Prompt) +
+          '","created_at":"' + JsonEscapeText(Local.CreatedAt) + '"}';
         AppendLocked(FHead + 1, 'turn_open', EventJson);
       End;
     For BlockIndex := 0 To High(Local.Blocks) Do
@@ -744,7 +745,8 @@ Begin
           Begin
             If (Not Found) Or Stored.Blocks[BlockIndex].Running Then
               AppendLocked(FHead + 1, 'block_close', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
-                '","state":"' + BlockStateName(Local.Blocks[BlockIndex]) + '"}');
+                '","state":"' + BlockStateName(Local.Blocks[BlockIndex]) + '","duration_ms":' +
+                IntToStr(Local.Blocks[BlockIndex].DurationMs) + '}');
           End;
       End;
     For Index := 0 To High(Local.Images) Do
@@ -756,7 +758,8 @@ Begin
         If Not Found Then
           AppendLocked(FHead + 1, 'image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
             JsonEscapeText(Local.Id) + '","name":"' + JsonEscapeText(Local.Images[Index].Name) + '","mime":"' +
-            JsonEscapeText(Local.Images[Index].Mime) + '","bytes":0,"missing":' + MonitorBoolean(Local.Images[Index].Missing) + '}');
+            JsonEscapeText(Local.Images[Index].Mime) + '","width":' + IntToStr(Local.Images[Index].Width) +
+            ',"height":' + IntToStr(Local.Images[Index].Height) + ',"bytes":0,"missing":' + MonitorBoolean(Local.Images[Index].Missing) + '}');
       End;
     { Local is already unique, so it is stored without a second copy. }
     If Local.Live Then
@@ -778,7 +781,8 @@ Begin
           Begin
             SetLength(FTurns, Length(FTurns) + 1);
             FTurns[High(FTurns)] := Local;
-            AppendLocked(FHead + 1, 'turn_close', '{"turn_id":"' + JsonEscapeText(Local.Id) + '","outcome":"done"}');
+            AppendLocked(FHead + 1, 'turn_close', '{"turn_id":"' + JsonEscapeText(Local.Id) + '","outcome":"done","duration_ms":' +
+              IntToStr(Local.DurationMs) + ',"error_text":"' + JsonEscapeText(Local.ErrorText) + '"}');
           End;
       End;
   Finally

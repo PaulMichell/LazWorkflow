@@ -31,6 +31,7 @@ const val SyncApplyRetries = 3
 
 sealed class SyncEffect {
   data class Resume(val conversationId: String, val streamId: String, val seq: Long, val hold: Boolean = false) : SyncEffect()
+  data object FetchReady : SyncEffect()
   data object Reconnect : SyncEffect()
   data class FetchBlock(
     val conversationId: String,
@@ -425,14 +426,14 @@ class SyncApplier(
             fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId,
             fetch.blockId == plan.openBlockId
           )
-        } + SyncEffect.CacheReady
+        } + listOf(SyncEffect.FetchReady, SyncEffect.CacheReady)
       }
       is SyncFrame.BlockData -> applyBlockData(frame)
       is SyncFrame.PlanData -> listOf(SyncEffect.PlanPiece(
         frame.path, frame.revision, frame.offset, frame.text, frame.totalBytes, frame.last
       ))
       is SyncFrame.NotReady -> listOf(SyncEffect.Note("The desktop has not observed this conversation yet."), SyncEffect.CacheReady)
-      is SyncFrame.ResumeOk -> listOf(SyncEffect.CacheReady)
+      is SyncFrame.ResumeOk -> listOf(SyncEffect.FetchReady, SyncEffect.CacheReady)
       is SyncFrame.RevisionChanged -> {
         val fetch = try {
           store.noteRevisionChanged(hostId, frame.ref, nowMs())

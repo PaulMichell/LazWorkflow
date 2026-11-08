@@ -11,6 +11,15 @@ import org.junit.Test
 
 class SyncApplierTest {
   @Test
+  fun resumeCompletionReleasesBodyRequestsDiscardedByTheHost() = runBlocking {
+    val applier = SyncApplier("host-1", MemorySyncStore(), TestClock(0L))
+    assertEquals(
+      listOf(SyncEffect.FetchReady, SyncEffect.CacheReady),
+      applier.offerFrame(computing.michell.monitor.protocol.SyncFrame.ResumeOk("c1", "stream-a", 4L))
+    )
+  }
+
+  @Test
   fun aFullBatchCommitsOnceAndAShortBatchWaitsForTheWindow() = runBlocking {
     val store = MemorySyncStore()
     val clock = TestClock(1_000L)

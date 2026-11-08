@@ -180,7 +180,7 @@
     "block_append": {"required": {"block_id": "id", "offset": "integer", "text": "string"}, "optional": {}},
     "block_replace": {"required": {"block_id": "id"}, "optional": {"body": "string", "deferred": "boolean", "revision": "integer",
       "body_bytes": "integer"}},
-    "block_close": {"required": {"block_id": "id", "state": "enum:block_state", "duration_ms": "integer"}, "optional": {}},
+    "block_close": {"required": {"block_id": "id", "state": "enum:block_state"}, "optional": {"duration_ms": "integer"}},
     "image_added": {"required": {"turn_id": "id", "image_id": "id", "name": "string", "mime": "string", "width": "integer",
       "height": "integer", "bytes": "integer"}, "optional": {"block_id": "id"}},
     "turn_close": {"required": {"turn_id": "id", "outcome": "enum:turn_outcome", "duration_ms": "integer", "error_text": "string"},
