@@ -106,6 +106,9 @@ Const
     chunk envelope together stay under MonitorOutboxChunkBytes. }
   MonitorStateChunkRawBytes = 20000;
   MonitorStateChunkDataBytes = 28000;
+  { A body this size or smaller rides in the baseline outline. Thoughts, prompts, notes and most answers then
+    arrive with the outline; a larger body is fetched by block_get. Escaped, it still fits one outline page. }
+  MonitorOutlineBodyBytes = 2048;
 
 Function EventFrame(Const ConversationId, StreamId: String; Const Event: TMonitorMirrorEvent): String;
 Begin
@@ -196,6 +199,21 @@ Begin
   Result := MonitorBlockState(Block.Running, Block.Ok);
 End;
 
+{ One outline block. The title always rides; the phone has no other way to learn it. The body rides when it is at most
+  MonitorOutlineBodyBytes, so a restored conversation reads the same as the desktop before any block_get. }
+Function OutlineBlock(Const Block: TAssistantMonitorBlock): String;
+Var
+  Bytes: Integer;
+Begin
+  Bytes := Length(UTF8String(Block.Body));
+  Result := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","kind":"' + JsonEscapeText(Block.Kind) + '","title":"' +
+    JsonEscapeText(Block.Title) + '","state":"' + BlockState(Block) + '","revision":' + IntToStr(Block.Revision) +
+    ',"body_bytes":' + IntToStr(Bytes) + ',"hash":"' + Fnv1a64(UTF8String(Block.Body)) + '"';
+  If Bytes <= MonitorOutlineBodyBytes Then
+    Result := Result + ',"body":"' + JsonEscapeText(Block.Body) + '"';
+  Result := Result + '}';
+End;
+
 { At most MonitorPreviewBytes of the prompt, cut between UTF-8 characters. A cut inside a character would be
   replaced by JsonEscapeText, so the preview would no longer be a prefix of the prompt. }
 Function Preview(Const Text: String): String;
@@ -211,10 +229,7 @@ Begin
   Blocks := '';
   For Index := FirstBlock To FirstBlock + BlockCount - 1 Do
     Begin
-      One := '{"block_id":"' + JsonEscapeText(Turn.Blocks[Index].BlockId) + '","kind":"' +
-        JsonEscapeText(Turn.Blocks[Index].Kind) + '","state":"' + BlockState(Turn.Blocks[Index]) + '","revision":' +
-        IntToStr(Turn.Blocks[Index].Revision) + ',"body_bytes":' + IntToStr(Length(UTF8String(Turn.Blocks[Index].Body))) +
-        ',"hash":"' + Fnv1a64(UTF8String(Turn.Blocks[Index].Body)) + '"}';
+      One := OutlineBlock(Turn.Blocks[Index]);
       If Blocks <> '' Then
         Blocks := Blocks + ',';
       Blocks := Blocks + One;

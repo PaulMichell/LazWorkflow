@@ -597,6 +597,62 @@ Begin
   Check('the preview is at most 80 bytes', Length(Preview) <= 80);
 End;
 
+{ A phone that never saw a turn builds it from the outline. Each block names its title, and a small body rides with it,
+  so the restored turn reads as the desktop shows it. A large body is left to block_get. }
+Procedure TestOutlineCarriesTitleAndSmallBody;
+Var
+  Source: TMonitorResumeSource;
+  Status: TMonitorSyncStatus;
+  Answer: TMonitorSyncAnswer;
+  Index, PageIndex: Integer;
+  Root: TJSONData;
+  Payload, Small, Large: TJSONObject;
+  Blocks: TJSONArray;
+Begin
+  Source := Default(TMonitorResumeSource);
+  Source.Found := True;
+  Source.Observed := True;
+  Source.ConversationId := 'conversation-a';
+  Source.StreamId := 'ab12cd34';
+  SetLength(Source.Turns, 1);
+  Source.Turns[0] := SampleTurn('turn-0', 'Thought.', 0);
+  Source.Turns[0].Blocks[0].Kind := 'thinking';
+  Source.Turns[0].Blocks[0].Title := 'Thinking';
+  SetLength(Source.Turns[0].Blocks, 2);
+  Source.Turns[0].Blocks[1].Kind := 'tool';
+  Source.Turns[0].Blocks[1].BlockId := 'turn-0-tool';
+  Source.Turns[0].Blocks[1].Title := 'read_file "A.pas"';
+  Source.Turns[0].Blocks[1].Body := StringOfChar('x', 4096);
+  Source.Turns[0].Blocks[1].Ok := True;
+  Status := Default(TMonitorSyncStatus);
+  Answer := MonitorSyncResumeAnswer(Source, 'conversation-a', '', 'resume-1', 0, Status);
+  PageIndex := -1;
+  For Index := 0 To High(Answer.Frames) Do
+    If Answer.Frames[Index].Kind = mskBulk Then
+      PageIndex := Index;
+  Check('the outline answer has a page', PageIndex >= 0);
+  If PageIndex < 0 Then
+    Exit;
+  Payload := FramePayload(Answer.Frames[PageIndex].Json, Root);
+  Try
+    Blocks := Nil;
+    If Assigned(Payload) And (Payload.Find('turns') Is TJSONArray) And (TJSONArray(Payload.Find('turns')).Count = 1) Then
+      Blocks := TJSONArray(TJSONObject(TJSONArray(Payload.Find('turns')).Items[0]).Find('blocks'));
+    Check('the outline lists both blocks', Assigned(Blocks) And (Blocks.Count = 2));
+    If Not Assigned(Blocks) Or (Blocks.Count <> 2) Then
+      Exit;
+    Small := TJSONObject(Blocks.Items[0]);
+    Large := TJSONObject(Blocks.Items[1]);
+    Check('a small block names its title', Small.Get('title', '') = 'Thinking');
+    Check('a small body rides with the outline', Small.Get('body', '?') = 'Thought.');
+    Check('a large block names its title', Large.Get('title', '') = 'read_file "A.pas"');
+    Check('a large body is left to block_get', Large.Find('body') = Nil);
+    Check('a large block still states its size', Large.Get('body_bytes', 0) = 4096);
+  Finally
+    Root.Free;
+  End;
+End;
+
 Procedure TestLargeResumePages;
 Var
   Source: TMonitorResumeSource;
@@ -821,6 +877,7 @@ Begin
   TestUtf8CutHelper;
   TestStateChunksKeepCharacters;
   TestPreviewKeepsCharacters;
+  TestOutlineCarriesTitleAndSmallBody;
   TestLargeResumePages;
   If FailCount = 0 Then
     WriteLn('AssistantMonitorMirrorTest passed')
