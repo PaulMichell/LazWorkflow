@@ -1,0 +1,8 @@
+# Default ignored files
+/shelf/
+# Per-machine Android Studio state
+/caches/
+/deviceManager.xml
+/deploymentTargetSelector.xml
+/studiobot.xml
+/workspace.xml
