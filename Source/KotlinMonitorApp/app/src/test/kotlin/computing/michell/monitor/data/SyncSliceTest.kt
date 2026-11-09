@@ -156,6 +156,38 @@ class SyncSliceTest {
   }
 
   @Test
+  fun anOutlineBodyAndTitleFillABlockThePhoneNeverSaw() {
+    val plan = reconcileBaseline(
+      "host-1", 1L, null, emptyList(), emptyList(),
+      BaselineCommit("c1", "stream-a", 8L, "Title", "/work", listOf(OutlineTurn("t-1", 0, "prompt", listOf(
+        OutlineBlock("b-user", "user", "ok", 1L, 6, prefixHash("prompt"), "User", "prompt"),
+        OutlineBlock("b-tool", "tool", "ok", 1L, 9000, "0123456789abcdef", "read_file Source/Unit.pas"),
+        OutlineBlock("b-answer", "answer", "ok", 1L, 4, prefixHash("done"), "Assistant", "done")
+      ))), null)
+    )
+    val blocks = plan!!.upsertBlocks.associateBy { block -> block.blockId }
+    assertEquals("prompt", blocks.getValue("b-user").body)
+    assertEquals("done", blocks.getValue("b-answer").body)
+    assertEquals("read_file Source/Unit.pas", blocks.getValue("b-tool").title)
+    assertEquals(listOf(0, 1, 2), plan.upsertBlocks.map { block -> block.ordinal })
+    // Only the large tool result is still owed.
+    assertEquals("b-tool", plan.fetches.single().blockId)
+    assertTrue(plan.clearRepairIds.containsAll(listOf("b-user", "b-answer")))
+  }
+
+  @Test
+  fun anOutlineBodyThatFailsItsHashIsFetched() {
+    val plan = reconcileBaseline(
+      "host-1", 1L, null, emptyList(), emptyList(),
+      BaselineCommit("c1", "stream-a", 8L, "Title", "/work", listOf(OutlineTurn("t-1", 0, "prompt", listOf(
+        OutlineBlock("b-answer", "answer", "ok", 1L, 4, prefixHash("done"), "Assistant", "dome")
+      ))), null)
+    )
+    assertEquals("", plan!!.upsertBlocks.single().body)
+    assertEquals("b-answer", plan.fetches.single().blockId)
+  }
+
+  @Test
   fun stateDoesNotAdvanceTheContentSequence() {
     val ui = MonitorUi()
     val next = applyStateValue(ui, "status", """{"busy":true,"sending":true,"can_send":false}""")

@@ -56,7 +56,10 @@ data class OutlineBlock(
   val state: String,
   val revision: Long,
   val bodyBytes: Int,
-  val hash: String
+  val hash: String,
+  val title: String = "",
+  /** The whole body when the desktop sent it with the outline. Null means it must be fetched. */
+  val body: String? = null
 )
 
 data class OutlineTurn(
@@ -313,7 +316,9 @@ private fun outlineTurns(node: JsonValue?): List<OutlineTurn> {
           block.readString("state", false).value,
           block.readLong("revision", false).value,
           block.readInt("body_bytes", false).value,
-          block.readString("hash", false).value
+          block.readString("hash", false).value,
+          block.readString("title", false).value,
+          (block.field("body") as? JsonValue.Str)?.text
         )
       }
     }

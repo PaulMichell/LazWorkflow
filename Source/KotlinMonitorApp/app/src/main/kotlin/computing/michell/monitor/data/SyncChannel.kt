@@ -213,13 +213,16 @@ fun reconcileBaseline(
       val delivered = open != null && open.blockId == named.blockId && openBlockDelivered(open)
       val cachedHash = if (cached == null) "" else prefixHash(cached.body)
       val hashMatches = named.hash.isNotEmpty() && cached != null && cachedHash == named.hash
+      // A body sent with the outline is the desktop's text now. Without it the phone shows an empty item until a fetch.
+      val inline = named.body?.takeIf { text -> named.hash.isEmpty() || prefixHash(text) == named.hash }
       val body = when {
         delivered -> open?.body.orEmpty()
+        inline != null -> inline
         else -> cached?.body.orEmpty()
       }
       val isOpen = open != null && open.blockId == named.blockId
-      val missing = !delivered && !hashMatches
-      val requestOpen = isOpen && !delivered
+      val missing = !delivered && inline == null && !hashMatches
+      val requestOpen = isOpen && !delivered && inline == null
       upsertBlocks += BlockRecord(
         host,
         commit.conversationId,
@@ -227,7 +230,7 @@ fun reconcileBaseline(
         named.blockId,
         ordinal,
         named.kind.ifEmpty { cached?.kind ?: "answer" },
-        cached?.title ?: "",
+        named.title.ifEmpty { cached?.title ?: "" },
         body,
         named.state.ifEmpty { cached?.state ?: "ok" }
       )

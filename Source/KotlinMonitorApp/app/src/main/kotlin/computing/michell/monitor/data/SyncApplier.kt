@@ -173,9 +173,15 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
       val dao = database.sync()
       if (dao.findHost(hostId) == null) dao.insertHost(HostRecord(hostId, "", ""))
       val existing = dao.loadBlocks(hostId, conversationId).filter { block -> block.turn == turn.id }.associateBy { block -> block.blockId }
+      // A turn page carries the blocks, not the turn's prompt, mode or time. Keep what the outline or events stored.
+      val previous = dao.loadTurnsById(hostId, conversationId, listOf(turn.id)).firstOrNull()
       val row = TurnRecord(
-        hostId, conversationId, turn.id, turn.turnIndex, turn.mode, turn.prompt.ifEmpty { turn.promptPreview }, turn.createdAt,
-        if (turn.live) "running" else "ok", turn.durationMs, turn.errorText
+        hostId, conversationId, turn.id, turn.turnIndex, turn.mode.ifEmpty { previous?.mode.orEmpty() },
+        turn.prompt.ifEmpty { turn.promptPreview }.ifEmpty { previous?.prompt.orEmpty() },
+        turn.createdAt.ifEmpty { previous?.createdAt.orEmpty() },
+        if (turn.live) "running" else previous?.outcome?.takeIf { outcome -> outcome != "running" && outcome.isNotEmpty() } ?: "ok",
+        if (turn.durationMs > 0) turn.durationMs else previous?.durationMs ?: 0,
+        turn.errorText.ifEmpty { previous?.errorText.orEmpty() }
       )
       dao.saveTurns(listOf(row))
       val blocks = turn.blocks.mapIndexed { index, block ->
