@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -149,6 +150,12 @@ class MainActivity : ComponentActivity() {
       model.leaveForeground()
     }
     super.onStop()
+  }
+
+  /** Every finger-down is use. After a quiet spell it is what brings an offline link back. The touch still goes on. */
+  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+    if (event.actionMasked == MotionEvent.ACTION_DOWN) model.noteUserActivity()
+    return super.dispatchTouchEvent(event)
   }
 }
 

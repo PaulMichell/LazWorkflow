@@ -17,8 +17,11 @@ package computing.michell.monitor.connection
    The unsent prompt draft is kept across disconnect. A catalogue command
    is written only on the socket that accepted it. Wi-Fi becoming available
    reconnects at once and resets the backoff. On a LAN the wait is 1, 2, 4,
-   8 seconds, then capped at 10 seconds with equal jitter. The link is up
-   only in the foreground: background sends bye and waits to resume.
+   8 seconds with equal jitter, then 30 seconds while the app is in use. A
+   touch, a key or a return to the foreground is use, and a link that is
+   down tries at once on it. Two minutes without use is idle: the loop stops
+   trying until the next use. The link is up only in the foreground:
+   background sends bye and waits to resume.
    Connect still keeps a saved pin and does not clear it. */
 
 import computing.michell.monitor.protocol.ChunkAssembly
@@ -96,8 +99,15 @@ const val ConnectionRefusedBanner = "Connection refused."
 const val ReconnectingBanner = "Reconnecting"
 const val BackgroundBanner = "In the background"
 const val WaitingForWifiBanner = "Waiting for Wi-Fi"
+const val IdleOfflineBanner = "Offline until the screen is touched"
 const val ByeBackground = "background"
 const val LanBackoffCapMs = 10_000L
+/** The retry after the short ramp, while the app is in use. */
+const val LanSlowRetryMs = 30_000L
+/** Use ends this long after the last touch, key or return to the foreground. */
+const val LanActiveWindowMs = 120_000L
+/** A touch or key does not start an attempt this soon after the last one began. */
+const val ActivityRetryGapMs = 10_000L
 const val DeliveryFailedDetail = "Delivery failed."
 const val ClientName = "Phone"
 const val ClientVersion = "1"
@@ -129,7 +139,7 @@ fun jitteredLanDelayMs(baseMs: Long, roll: Int, capMs: Long = LanBackoffCapMs): 
   return half + (half * unit) / 999L
 }
 
-private val LanBackoffBases = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, LanBackoffCapMs)
+private val LanBackoffBases = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, LanSlowRetryMs)
 
 class ReconnectPolicy(private val roll: () -> Int = { ThreadLocalRandom.current().nextInt(1000) }) {
   private var index = 0
@@ -137,12 +147,14 @@ class ReconnectPolicy(private val roll: () -> Int = { ThreadLocalRandom.current(
   var paused: Boolean = false
     private set
 
+  /** The short ramp is jittered. The slow retry is a steady 30 seconds. */
   fun nextDelayMs(): Long {
     val base = synchronized(this) {
       val current = index
       if (index < LanBackoffBases.lastIndex) index += 1
       LanBackoffBases[current.coerceAtMost(LanBackoffBases.lastIndex)]
     }
+    if (base >= LanSlowRetryMs) return base
     return jitteredLanDelayMs(base, roll())
   }
 
@@ -487,6 +499,10 @@ interface SessionPort {
   fun takeSyncResume(): String? = null
   fun queueSyncResume(json: String) {}
   fun reconnect() {}
+  /** The link is down but will come back on its own or on use. A prompt may wait for it. */
+  val reconnectable: Boolean get() = false
+  /** A touch, a key or a send. A link that is down tries at once. */
+  fun noteActivity() {}
 }
 
 class LanSession(
@@ -542,6 +558,10 @@ class LanSession(
   private var replaceLink = false
   @Volatile
   private var leftForBackground = false
+  @Volatile
+  private var lastActivityMs = clockMs()
+  @Volatile
+  private var lastAttemptMs = clockMs() - ActivityRetryGapMs
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
   private val undeliveredState = MutableStateFlow("")
@@ -553,6 +573,10 @@ class LanSession(
     get() = epochCounter.get()
   val reconnectPaused: Boolean
     get() = policy.paused
+
+  /** A pin failure, a pause for the user, or no saved endpoint will not come back by itself. */
+  override val reconnectable: Boolean
+    get() = armed && !stopped && !terminal && !policy.paused && store.load().address.isNotEmpty()
 
   @Volatile
   override var promptDraft: String = ""
@@ -655,6 +679,7 @@ class LanSession(
     }
     store.save(next)
     pairCode = code
+    lastActivityMs = clockMs()
     armed = true
     terminal = false
     policy.resume()
@@ -681,7 +706,23 @@ class LanSession(
     }
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
+    // Coming forward is use. An idle loop that stopped trying starts again now.
+    noteActivity()
     return returning
+  }
+
+  /**
+   * A touch, a key or a send. Use keeps the 30 second retry going. A link that is down tries at once,
+   * unless an attempt began in the last ten seconds, so typing does not start one per key.
+   */
+  override fun noteActivity() {
+    val now = clockMs()
+    lastActivityMs = now
+    if (link != null || !mayReconnect()) return
+    if (now - lastAttemptMs < ActivityRetryGapMs) return
+    connectNow = true
+    wakes.trySend(Unit)
+    if (loop?.isActive != true) startLoop()
   }
 
   /**
@@ -739,6 +780,7 @@ class LanSession(
 
   /** User tapped Connect after a refused or disabled listener paused backoff. */
   fun resume() {
+    lastActivityMs = clockMs()
     policy.resume()
     resumes.trySend(Unit)
     if (loop?.isActive != true && !stopped) startLoop()
@@ -810,6 +852,13 @@ class LanSession(
         policy.resetBackoff()
       }
       if (waitBeforeConnect) {
+        if (appIdle()) {
+          // Nobody is using the app. Stop trying until a touch, a key, the foreground or Wi-Fi wakes the loop.
+          publishCurrent(epoch, LinkPhase.Disconnected, IdleOfflineBanner, statusState.value.lastError)
+          wakes.receive()
+          if (stopped || epochCounter.get() != epoch) return
+          continue
+        }
         val woke = waitBackoffOrWake(policy.nextDelayMs())
         if (stopped || epochCounter.get() != epoch) return
         if (woke) {
@@ -817,6 +866,7 @@ class LanSession(
           waitBeforeConnect = false
           continue
         }
+        if (appIdle()) continue
       }
       if (stopped || epochCounter.get() != epoch) return
       waitBeforeConnect = true
@@ -858,6 +908,8 @@ class LanSession(
     }
   }
 
+  private fun appIdle(): Boolean = clockMs() - lastActivityMs >= LanActiveWindowMs
+
   @OptIn(ExperimentalCoroutinesApi::class)
   private suspend fun waitBackoffOrWake(delayMs: Long): Boolean {
     if (delayMs <= 0L) return false
@@ -897,6 +949,7 @@ class LanSession(
       return AttemptResult.Pinned
     }
     if (epochCounter.get() != epoch) return AttemptResult.Superseded
+    lastAttemptMs = clockMs()
     publishCurrent(epoch, LinkPhase.Connecting, "", "")
     val opened = try {
       withContext(Dispatchers.IO) {

@@ -9,7 +9,8 @@ package computing.michell.monitor.ui
    preferences, bitmap decode, and effect execution.
    Offline copies are Room rows. The current plan is a host row, shown
    before the next plan frame. The retired file cache is imported once.
-   Reviewed 2026-10-30. */
+   Touch, typing and Send are reported to the session as use.
+   Reviewed 2026-11-09. */
 
 import android.Manifest
 import android.app.Application
@@ -66,6 +67,7 @@ import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.WaitingForWifiBanner
+import computing.michell.monitor.connection.IdleOfflineBanner
 import computing.michell.monitor.connection.WifiLanWatch
 import computing.michell.monitor.protocol.ApprovalNotice
 import computing.michell.monitor.protocol.ErrorBody
@@ -218,6 +220,8 @@ data class MonitorUi(
   val reviewingOffline: Boolean = false,
   val statusBusy: Boolean = false,
   val pairedElsewhere: Boolean = false,
+  /** The link is down but will come back. Send is held until it does. */
+  val sendWhileOffline: Boolean = false,
   val lastSyncMs: Long = 0,
   val syncHead: Long = 0,
   val desktopPoint: Int = 0,
@@ -284,7 +288,7 @@ const val StallGapMs = 5_000L
 fun linkBanner(banner: String): Boolean {
   return banner == ReconnectingBanner || banner == ConnectingBanner || banner == ConnectionRefusedBanner ||
     banner == HostClosedBanner || banner == OfflineBanner || banner == OfflineReviewBanner || banner == NoAddressBanner ||
-    banner == BackgroundBanner || banner == WaitingForWifiBanner
+    banner == BackgroundBanner || banner == WaitingForWifiBanner || banner == IdleOfflineBanner
 }
 
 /**
@@ -390,7 +394,8 @@ fun actionEnabled(view: WireView): Boolean {
 }
 
 /** A live idle link can send before the first status frame sets canSend. A running turn still cannot.
-    Syncing is not a disconnect: the buttons stay up, and the coordinator holds the command. */
+    Syncing is not a disconnect: the buttons stay up, and the coordinator holds the command. Callers pass
+    syncing for a link that is down but coming back too, so a prompt can wait for it. */
 fun sendActionEnabled(
   view: WireView,
   disconnected: Boolean,
@@ -535,6 +540,13 @@ const val PhaseStreaming = "Streaming…"
 const val PhaseRunning = "Running…"
 const val PhaseSteering = "Steering…"
 const val PhaseConnecting = "Connecting…"
+const val WaitingForDesktop = "Waiting for the desktop"
+
+/** The right of the status bar while the link is down. A prompt on screen is still busy; the left says Offline. */
+fun heldPromptActivity(pending: Boolean, phase: LinkPhase): String {
+  if (!pending) return ""
+  return if (phase == LinkPhase.Connecting) PhaseConnecting else WaitingForDesktop
+}
 
 fun progressPhase(name: String): String {
   return when (name) {
@@ -1342,6 +1354,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun changePrompt(text: String, selectionStart: Int, selectionEnd: Int) {
+    // Typing is use. A link that is down starts coming back before the prompt is finished.
+    session.noteActivity()
     if (dictationState.value.phase != DictationPhase.Idle) {
       editPrompt(text, selectionStart, selectionEnd)
       return
@@ -1607,11 +1621,24 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   fun sendOrSteer() {
     if (dictationState.value.sendMustWait) return
     session.clearUndelivered()
-    val effects = coordinator.onEvent(MonitorEvent.Submit(uiState.value)) ?: return
-    applyUiEffects(effects)
+    val effects = coordinator.onEvent(MonitorEvent.Submit(uiState.value))
+    // A held prompt goes when the link is back. Ask for it now.
+    session.noteActivity()
+    applyUiEffects(effects ?: return)
+  }
+
+  /** A finger on the screen. After a quiet spell this is what brings an offline link back. */
+  fun noteUserActivity() {
+    session.noteActivity()
   }
 
   fun stop() {
+    // A prompt still on the phone has nothing running on the desktop to stop. Take it back instead.
+    val returned = coordinator.cancelHeld()
+    if (returned != null) {
+      applyUiEffects(returned)
+      return
+    }
     session.sendCatalogue(encodeEmpty(MessageKind.Stop, session.nextCommandId()))
   }
 

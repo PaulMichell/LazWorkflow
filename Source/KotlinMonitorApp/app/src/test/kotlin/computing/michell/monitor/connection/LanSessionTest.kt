@@ -50,14 +50,14 @@ import org.junit.Test
 
 class LanSessionTest {
   @Test
-  fun lanBackoffIsCappedAtTenSecondsWithJitter() {
+  fun lanBackoffRampsWithJitterThenRetriesEveryThirtySeconds() {
     val full = ReconnectPolicy { 999 }
     assertEquals(1_000L, full.nextDelayMs())
     assertEquals(2_000L, full.nextDelayMs())
     assertEquals(4_000L, full.nextDelayMs())
     assertEquals(8_000L, full.nextDelayMs())
-    assertEquals(LanBackoffCapMs, full.nextDelayMs())
-    assertEquals(LanBackoffCapMs, full.nextDelayMs())
+    assertEquals(LanSlowRetryMs, full.nextDelayMs())
+    assertEquals(LanSlowRetryMs, full.nextDelayMs())
     full.resume()
     assertEquals(1_000L, full.nextDelayMs())
     val half = ReconnectPolicy { 0 }
@@ -65,8 +65,9 @@ class LanSessionTest {
     assertEquals(1_000L, half.nextDelayMs())
     assertEquals(2_000L, half.nextDelayMs())
     assertEquals(4_000L, half.nextDelayMs())
-    assertEquals(5_000L, half.nextDelayMs())
-    assertEquals(5_000L, half.nextDelayMs())
+    // The slow retry is not jittered.
+    assertEquals(30_000L, half.nextDelayMs())
+    assertEquals(30_000L, half.nextDelayMs())
     for (roll in -3..1004) {
       val delay = jitteredLanDelayMs(30_000L, roll)
       assertTrue(delay in 5_000L..LanBackoffCapMs)
@@ -200,6 +201,54 @@ class LanSessionTest {
       waitUntil { opens.get() >= 1 }
       assertTrue(System.currentTimeMillis() - started < 400)
       assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun idleStopsRetryingAndATouchTriesAtOnce() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      throw ConnectException("Connection refused")
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      // Two minutes with no touch, key or return to the foreground.
+      clock.advanceMs(LanActiveWindowMs)
+      waitUntil { session.status.value.banner == IdleOfflineBanner }
+      // The ramp would have tried again within a second. Idle does not.
+      Thread.sleep(1_500)
+      assertEquals(1, opens.get())
+      assertTrue(session.reconnectable)
+      val started = System.currentTimeMillis()
+      session.noteActivity()
+      waitUntil { opens.get() >= 2 }
+      assertTrue(System.currentTimeMillis() - started < 400)
+      // Typing straight after does not start one attempt per key. The ramp's next try is at least 500 ms away.
+      session.noteActivity()
+      session.noteActivity()
+      Thread.sleep(200)
+      assertEquals(2, opens.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aPausedOrUnarmedSessionIsNotReconnectable() {
+    val store = pairedStore()
+    val session = LanSession(store, TlsConnector { _, _, _ -> throw ConnectException("Connection refused") })
+    try {
+      assertFalse(session.reconnectable)
+      session.connect("10.0.0.8", 56122)
+      assertTrue(session.reconnectable)
+      session.disconnect()
+      assertFalse(session.reconnectable)
     } finally {
       session.close()
     }

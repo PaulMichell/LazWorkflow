@@ -57,6 +57,15 @@ class PromptStatusTest {
   }
 
   @Test
+  fun aPromptWaitingForTheLinkStillShowsBusy() {
+    assertEquals("", heldPromptActivity(false, LinkPhase.Disconnected))
+    assertEquals(PhaseConnecting, heldPromptActivity(true, LinkPhase.Connecting))
+    assertEquals(WaitingForDesktop, heldPromptActivity(true, LinkPhase.Disconnected))
+    // A link that is coming back passes as syncing, so Send stays up while it is down.
+    assertTrue(sendActionEnabled(emptyView(), true, LinkPhase.Disconnected, false, true))
+  }
+
+  @Test
   fun creditPopupUsesTheDesktopCreditsBody() {
     assertEquals(CreditUsageUnknown, creditUsageBody("", ""))
     assertEquals(CreditUsageUnknown, creditUsageBody("   ", "\n"))

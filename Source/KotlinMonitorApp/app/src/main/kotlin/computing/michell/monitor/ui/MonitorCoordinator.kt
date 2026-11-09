@@ -2,7 +2,8 @@ package computing.michell.monitor.ui
 
 /* Local phone chrome. Conversation bodies come from the store, not a second
    transcript. Draft, scroll and open sheets stay here. A disconnect is shown
-   at once. A prompt is not matched against older blocks.
+   at once. A prompt is not matched against older blocks. A prompt sent while
+   the link is down but coming back is shown at once and held until it is up.
    (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.data.StoredPlan
@@ -52,6 +53,7 @@ interface DisplayPreferences {
 }
 
 const val CouldNotSendBanner = "Could not send."
+const val HeldPromptMovedBanner = "The desktop has another conversation open. Your prompt is back in the box."
 
 sealed class MonitorEvent {
   data class DraftEdited(val current: MonitorUi, val text: String) : MonitorEvent()
@@ -394,9 +396,9 @@ class MonitorCoordinator(
     return listOf(MonitorEffect.RememberDraft(text))
   }
 
-  /** Same rule as the enabled Send button. Syncing does not count as disconnected. */
+  /** Same rule as the enabled Send button. Syncing, or a link that is coming back, does not count as disconnected. */
   private fun maySubmit(): Boolean {
-    return sendActionEnabled(local.view, local.disconnected, linkPhase, local.planRunning, syncingAccept())
+    return sendActionEnabled(local.view, local.disconnected, linkPhase, local.planRunning, syncingAccept() || offlineHold())
   }
 
   private fun submit(): List<MonitorEffect>? {
@@ -433,7 +435,7 @@ class MonitorCoordinator(
       )
     )
     noteRunClock()
-    if (syncingGap()) {
+    if (syncingGap() || offlineGap()) {
       held += HeldCommand(commandId, encoded.json, text, false)
       return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation)
     }
@@ -464,7 +466,7 @@ class MonitorCoordinator(
     val effects = mutableListOf<MonitorEffect>()
     when (message.kind) {
       MessageKind.HelloOk -> {
-        noteHello(message)
+        effects += noteHello(message)
         effects += resumeNow()
       }
       MessageKind.SnapshotPage, MessageKind.BlockData -> {
@@ -541,13 +543,17 @@ class MonitorCoordinator(
     return null
   }
 
-  private fun noteHello(message: MonitorMessage) {
-    val hello = (message.inbound as? InboundPayload.HelloOk)?.value ?: decodeHelloOk(message.payloadJson) ?: return
+  private fun noteHello(message: MonitorMessage): List<MonitorEffect> {
+    val hello = (message.inbound as? InboundPayload.HelloOk)?.value ?: decodeHelloOk(message.payloadJson) ?: return emptyList()
     if (hello.hostId.isNotEmpty()) contentHost = hello.hostId
     if (awaitingConversation) {
       local = local.copy(projectRoot = hello.projectRoot.ifEmpty { local.projectRoot })
-      return
+      return emptyList()
     }
+    // A prompt held while offline was written for the chat on screen. It must not go to another one.
+    val moved = hello.conversationId.isNotEmpty() && local.conversationId.isNotEmpty() &&
+      hello.conversationId != local.conversationId
+    val returned = if (moved) returnHeld(HeldPromptMovedBanner) else emptyList()
     // Keep the cached screen until the host pages arrive. Clearing here is the blank open.
     // A hello cursor is the desktop head. Copying it before resume asks for nothing, or the
     // desktop answers with every page and the phone dies under that dump.
@@ -575,6 +581,7 @@ class MonitorCoordinator(
       conversationTitle = hello.title.ifEmpty { local.conversationTitle },
       catchingUp = true
     )
+    return returned
   }
 
   /** Writes the open screen under its id, then the caller drops it. */
@@ -643,6 +650,7 @@ class MonitorCoordinator(
         disconnected = true,
         catchingUp = false,
         statusBusy = false,
+        sendWhileOffline = false,
         banner = PairedElsewhereLabel,
         view = clearRemoteActions(local.view)
       )
@@ -652,24 +660,32 @@ class MonitorCoordinator(
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
       closedAwaitId = ""
+      // A paused, pinned or forgotten link will not come back by itself. A prompt waiting for it goes back in the box.
+      val comesBack = status.phase != LinkPhase.Paused && session.reconnectable
+      val returned = if (comesBack) emptyList() else returnHeld("")
       local = local.copy(
         pairedElsewhere = false,
         disconnected = true,
         catchingUp = false,
         statusBusy = false,
+        sendWhileOffline = comesBack,
         approvalOpen = false,
         approval = null,
         banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
         view = viewAfterDrop(clearRemoteActions(local.view))
       )
       noteRunClock()
-      return emptyList()
+      return returned
+    }
+    if (status.phase == LinkPhase.Connecting) {
+      local = local.copy(sendWhileOffline = !local.pairedElsewhere && session.reconnectable)
     }
     if (status.phase == LinkPhase.Live || status.phase == LinkPhase.Idle) {
       local = local.copy(
         pairedElsewhere = false,
         disconnected = false,
         reachedLive = true,
+        sendWhileOffline = false,
         banner = if (linkBanner(local.banner)) "" else local.banner
       )
     }
@@ -741,6 +757,11 @@ class MonitorCoordinator(
   /** The chip says Syncing and the socket cannot take a command yet. */
   private fun syncingGap(): Boolean = syncingAccept() && !commandsReady()
 
+  /** The link is down but coming back. A prompt is shown now and sent when it is up. */
+  private fun offlineHold(): Boolean = local.sendWhileOffline && !local.pairedElsewhere
+
+  private fun offlineGap(): Boolean = offlineHold() && !commandsReady()
+
   /** The status clock is this start plus local time. A later zero sample must not put it back to 0:00. */
   private fun noteRunClock() {
     val board = content.current()
@@ -768,10 +789,39 @@ class MonitorCoordinator(
     return held.lastOrNull { command -> command.prompt.isNotEmpty() }?.prompt.orEmpty()
   }
 
-  /** A dropped link must not look idle while a prompt is waiting to go out. */
+  /** A dropped link must not look idle while a prompt is waiting to go out. Stop takes that prompt back. */
   private fun viewAfterDrop(cleared: WireView): WireView {
     if (held.none { command -> command.prompt.isNotEmpty() }) return cleared
-    return cleared.copy(sending = true, busy = true, canSend = false, canSteer = false, canStop = false)
+    return cleared.copy(sending = true, busy = true, canSend = false, canSteer = false, canStop = true)
+  }
+
+  /** Stop before the link came back. The prompt never left the phone, so it goes back in the box. */
+  fun cancelHeld(): List<MonitorEffect>? = synchronized(gate) {
+    if (unsentPrompt().isEmpty()) return null
+    returnHeld("")
+  }
+
+  /**
+   * Puts a prompt that never left the phone back in the box, ahead of anything typed since,
+   * and drops its pending bubble. Nothing is returned when no prompt is held.
+   */
+  private fun returnHeld(banner: String): List<MonitorEffect> {
+    val prompt = unsentPrompt()
+    if (prompt.isEmpty()) return emptyList()
+    held.clear()
+    submittedText = ""
+    submittedId = ""
+    val draft = if (local.draft.isEmpty()) prompt else prompt + "\n" + local.draft
+    local = local.copy(
+      draft = draft,
+      pendingPrompt = "",
+      pendingKind = "",
+      pendingCommandId = "",
+      banner = banner.ifEmpty { local.banner },
+      view = clearRemoteActions(local.view)
+    )
+    noteRunClock()
+    return listOf(MonitorEffect.RememberDraft(draft))
   }
 
   private fun abandonHeld(restore: Boolean): List<MonitorEffect> {

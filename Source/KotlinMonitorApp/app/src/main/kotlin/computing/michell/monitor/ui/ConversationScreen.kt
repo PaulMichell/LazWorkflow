@@ -1,7 +1,8 @@
 package computing.michell.monitor.ui
 
 /* Conversation transcript. The extent is virtual; recent bodies fill first.
-   Styles follow the desktop bubbles. Finger scrolling has no thumb.
+   Styles follow the desktop bubbles. Finger scrolling has no thumb. Send
+   jumps to the head and shows the prompt before the desktop has it.
    (c) 2026 Michell Computing. */
 
 import android.Manifest
@@ -159,9 +160,11 @@ fun ConversationScreen(
           if (promptValue.text != ui.draft) onPrompt(promptValue.text, promptValue.selection.start, promptValue.selection.end)
           onSend()
         },
-        enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning, syncing) && !dictation.sendMustWait
+        enabled = sendActionEnabled(ui.view, ui.disconnected, phase, ui.planRunning, syncing || ui.sendWhileOffline) &&
+          !dictation.sendMustWait
       ) { Text(actionCaption(ui.view)) }
-      Button(onClick = onStop, enabled = ui.view.canStop && !ui.disconnected) { Text("Stop") }
+      // Offline, Stop is offered only for a prompt that has not left the phone; it takes that prompt back.
+      Button(onClick = onStop, enabled = ui.view.canStop && (!ui.disconnected || ui.sendWhileOffline)) { Text("Stop") }
       Button(onClick = onNew, enabled = newConversationEnabled(ui.view, ui.disconnected, phase, ui.planRunning, syncing)) { Text("New") }
     }
   }
@@ -198,8 +201,20 @@ private fun ConversationPane(
   val programmatic = remember { mutableStateOf(false) }
   val need = rememberUpdatedState(onNeed)
   val reportVisible = rememberUpdatedState(onVisibleTurns)
+  // The pending bubble is drawn after the rows, so the head is one past them while it shows.
+  val pendingShown = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
+  val headIndex = if (pendingShown) rows.size else rows.lastIndex
   LaunchedEffect(ui.pendingEpoch) {
-    if (ui.pendingEpoch > 0) followHead = true
+    if (ui.pendingEpoch <= 0) return@LaunchedEffect
+    // The user's own prompt brings the reader to the head at once, wherever they had scrolled.
+    followHead = true
+    if (headIndex < 0) return@LaunchedEffect
+    programmatic.value = true
+    try {
+      listState.scrollToTail(headIndex)
+    } finally {
+      programmatic.value = false
+    }
   }
   LaunchedEffect(listState) {
     snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
@@ -209,21 +224,21 @@ private fun ConversationPane(
   }
   val tail = liveTailToken(rows, ui.pendingPrompt)
   LaunchedEffect(ui.desktopPoint) {
-    if (ui.desktopPoint <= 0 || rows.isEmpty()) return@LaunchedEffect
+    if (ui.desktopPoint <= 0 || headIndex < 0) return@LaunchedEffect
     followHead = true
     programmatic.value = true
     try {
-      listState.scrollToTail(rows.lastIndex)
+      listState.scrollToTail(headIndex)
     } finally {
       programmatic.value = false
     }
   }
   LaunchedEffect(tail, followHead) {
-    if (!followHead || rows.isEmpty()) return@LaunchedEffect
+    if (!followHead || headIndex < 0) return@LaunchedEffect
     programmatic.value = true
     try {
       // Pin the end of the growing block using its measured height.
-      listState.scrollToTail(rows.lastIndex)
+      listState.scrollToTail(headIndex)
     } finally {
       programmatic.value = false
     }
@@ -257,7 +272,7 @@ private fun ConversationPane(
         )
       }
     }
-    if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)) {
+    if (pendingShown) {
       item(key = "pending") {
         val pending = WireBlock(
           ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()
@@ -406,7 +421,8 @@ fun ActivityStatus(
   val activity = activityCaption(
     ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
   )
-  val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else ""
+  // A prompt waiting for the link is still busy. The left already says Offline.
+  val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else heldPromptActivity(pending, phase)
   val statusStyle = MaterialTheme.typography.bodySmall
   val chip = connectionChip(
     phase,

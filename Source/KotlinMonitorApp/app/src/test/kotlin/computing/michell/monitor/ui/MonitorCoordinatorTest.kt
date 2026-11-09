@@ -608,6 +608,95 @@ class MonitorCoordinatorTest {
     assertEquals(1, coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>().size)
   }
 
+  @Test
+  fun aPromptSentOfflineShowsAtOnceAndGoesWhenTheLinkIsBack() {
+    val coordinator = holdingOffline("while offline")
+    assertEquals("while offline", coordinator.state.pendingPrompt)
+    assertEquals("", coordinator.state.draft)
+    assertTrue(coordinator.state.view.busy)
+    assertTrue(coordinator.state.view.canStop)
+    // Still connecting: nothing goes yet.
+    val connecting = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Connecting, "", ""))).orEmpty()
+    assertTrue(connecting.filterIsInstance<MonitorEffect.Send>().isEmpty())
+    assertTrue(coordinator.state.sendWhileOffline)
+    hello(coordinator, "conversation-1")
+    val live = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", ""))).orEmpty()
+    val sent = live.filterIsInstance<MonitorEffect.Send>().single()
+    assertTrue(sent.json.contains("while offline"))
+    assertFalse(coordinator.state.sendWhileOffline)
+    assertEquals("while offline", coordinator.state.pendingPrompt)
+  }
+
+  @Test
+  fun aHeldPromptComesBackWhenTheDesktopOpenedAnotherConversation() {
+    val coordinator = holdingOffline("meant for the first chat")
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "typed since"))
+    val returned = hello(coordinator, "conversation-2")
+    assertEquals("meant for the first chat\ntyped since", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertEquals(HeldPromptMovedBanner, coordinator.state.banner)
+    assertEquals("meant for the first chat\ntyped since", returned.filterIsInstance<MonitorEffect.RememberDraft>().single().text)
+    val live = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", ""))).orEmpty()
+    assertTrue(live.none { effect -> effect is MonitorEffect.Send && effect.json.contains("meant for the first chat") })
+  }
+
+  @Test
+  fun stopTakesBackAPromptThatHasNotLeftThePhone() {
+    val coordinator = holdingOffline("never mind")
+    val returned = coordinator.cancelHeld().orEmpty()
+    assertEquals("never mind", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertFalse(coordinator.state.view.busy)
+    assertEquals("never mind", returned.filterIsInstance<MonitorEffect.RememberDraft>().single().text)
+    assertNull(coordinator.cancelHeld())
+    hello(coordinator, "conversation-1")
+    val live = coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", ""))).orEmpty()
+    assertTrue(live.filterIsInstance<MonitorEffect.Send>().none { effect -> effect.json.contains("never mind") })
+  }
+
+  @Test
+  fun aPausedLinkPutsAHeldPromptBackInTheBox() {
+    val coordinator = holdingOffline("waiting")
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Paused, "Host closed", "disabled")))
+    assertEquals("waiting", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+    assertFalse(coordinator.state.sendWhileOffline)
+  }
+
+  @Test
+  fun aLinkThatWillNotComeBackKeepsSendOff() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    showAnswer(coordinator, "conversation-1", "epoch", "earlier answer")
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    assertFalse(coordinator.state.sendWhileOffline)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "stays here"))
+    assertNull(coordinator.onEvent(MonitorEvent.Submit(coordinator.state)))
+    assertEquals("stays here", coordinator.state.draft)
+    assertEquals("", coordinator.state.pendingPrompt)
+  }
+
+  /** A live chat, then a dropped link that will come back, then a prompt sent into that gap. */
+  private fun holdingOffline(text: String): MonitorCoordinator {
+    val session = FakeSession()
+    session.canReconnect = true
+    val coordinator = open(session)
+    showAnswer(coordinator, "conversation-1", "epoch", "earlier answer")
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    assertTrue(coordinator.state.sendWhileOffline)
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, text))
+    val effects = coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    assertTrue(effects != null)
+    assertTrue(effects.orEmpty().filterIsInstance<MonitorEffect.Send>().isEmpty())
+    return coordinator
+  }
+
+  private fun hello(coordinator: MonitorCoordinator, conversationId: String): List<MonitorEffect> {
+    return coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "epoch", 4, conversationId, "/work", "Old", "")
+    )))).orEmpty()
+  }
+
   private fun open(session: FakeSession = FakeSession()): MonitorCoordinator {
     return MonitorCoordinator(session, FixedClock(1_000L), FixedDisplay(true, true))
   }
@@ -641,6 +730,8 @@ private class FixedDisplay(private val thinking: Boolean, private val tools: Boo
 private class FakeSession : SessionPort {
   private var draft = ""
   private var ids = 1
+  var canReconnect = false
+  override val reconnectable: Boolean get() = canReconnect
   override val promptDraft: String get() = draft
   override val hostAddress: String = ""
   override val hostPort: Int = 0
