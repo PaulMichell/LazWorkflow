@@ -217,6 +217,12 @@ abstract class SyncDao {
 
   @Query("DELETE FROM block WHERE host = :host AND conversation = :conversation AND blockId = :blockId")
   abstract suspend fun deleteBlock(host: String, conversation: String, blockId: String)
+
+  @Query("SELECT turnId FROM turn WHERE host = :host AND conversationId = :conversationId AND ordinal = :ordinal AND turnId <> :turnId")
+  abstract suspend fun loadOtherTurnIdsAt(host: String, conversationId: String, ordinal: Int, turnId: String): List<String>
+
+  @Query("SELECT blockId FROM block WHERE host = :host AND conversation = :conversation AND turn = :turn")
+  abstract suspend fun loadBlockIdsOfTurn(host: String, conversation: String, turn: String): List<String>
 }
 
 @Dao
@@ -264,6 +270,22 @@ internal suspend fun SyncDao.saveTurns(rows: List<TurnRecord>) {
       row.host, row.conversationId, row.turnId, row.ordinal, row.mode, row.prompt, row.createdAt, row.outcome, row.durationMs, row.errorText
     )
     if (changed == 0) insertTurns(listOf(row))
+  }
+}
+
+/**
+ * The desktop keeps one turn per index. A turn retired at the next index, and then the turn the desktop
+ * stored there, both reach the phone. The later claim wins, so the screen shows what the desktop shows.
+ */
+internal suspend fun SyncDao.supersedeTurnsAt(host: String, conversationId: String, turnId: String, ordinal: Int) {
+  if (ordinal < 0) return
+  for (other in loadOtherTurnIdsAt(host, conversationId, ordinal, turnId)) {
+    for (blockId in loadBlockIdsOfTurn(host, conversationId, other)) {
+      deleteHeldBlock(host, conversationId, blockId)
+      deleteRepair(host, conversationId, blockId)
+      deleteBlock(host, conversationId, blockId)
+    }
+    deleteTurn(host, conversationId, other)
   }
 }
 

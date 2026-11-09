@@ -115,6 +115,7 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
           dao.saveConversation(commit.conversation)
           if (commit.turns.isNotEmpty()) dao.saveTurns(commit.turns)
           if (commit.blocks.isNotEmpty()) dao.saveBlocks(commit.blocks)
+          for (claim in commit.claims) dao.supersedeTurnsAt(hostId, id, claim.turnId, claim.ordinal)
           if (commit.images.isNotEmpty()) dao.upsertImages(commit.images)
           if (commit.repairs.isNotEmpty()) dao.upsertRepairs(commit.repairs.map { it.toRecord() })
           for (blockId in commit.clearRepairIds) dao.deleteRepair(hostId, id, blockId)
@@ -187,6 +188,8 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
         )
       }
       if (blocks.isNotEmpty()) dao.saveBlocks(blocks)
+      // A page names the desktop's turn at this index. Live pages sit below zero and claim nothing.
+      dao.supersedeTurnsAt(hostId, conversationId, turn.id, turn.turnIndex)
     }
   }
 

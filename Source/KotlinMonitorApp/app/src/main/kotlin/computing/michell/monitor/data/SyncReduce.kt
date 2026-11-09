@@ -30,6 +30,12 @@ data class AppliedCursor(
   val seq: Long
 )
 
+/** The desktop's turn at this index. Any other turn stored at the index is superseded. */
+data class TurnClaim(
+  val turnId: String,
+  val ordinal: Int
+)
+
 data class SyncCommit(
   val conversation: ConversationRecord,
   val turns: List<TurnRecord>,
@@ -38,7 +44,8 @@ data class SyncCommit(
   val repairs: List<BlockRepair> = emptyList(),
   val clearRepairIds: List<String> = emptyList(),
   val held: List<HeldAppend> = emptyList(),
-  val dropHeldBlocks: List<String> = emptyList()
+  val dropHeldBlocks: List<String> = emptyList(),
+  val claims: List<TurnClaim> = emptyList()
 )
 
 data class SyncReduce(
@@ -116,6 +123,8 @@ fun reduceSync(
   val touchedImages = HashSet<String>()
   var gap: SyncGap? = null
   var applied = false
+  // The last turn opened at each stored index. A retired turn and the next stored turn can share one.
+  val claimed = LinkedHashMap<Int, String>()
   for (event in events.sortedBy { it.seq }) {
     if (event.conversationId != conversationId) continue
     if (streamId.isNotEmpty() && event.streamId != streamId) {
@@ -134,6 +143,7 @@ fun reduceSync(
       host, conversationId, event, turnMap, blockMap, imageMap, repairMap, fetches, heldRows,
       clearRepairs, dropHeld, touchedTurns, touchedBlocks, touchedImages
     )
+    if (event is MonitorEvent.TurnOpen && event.turnIndex >= 0) claimed[event.turnIndex] = event.turnId
     seq = event.seq
     applied = true
   }
@@ -147,7 +157,9 @@ fun reduceSync(
     repairMap.values.toList(),
     clearRepairs,
     heldRows,
-    dropHeld
+    dropHeld,
+    // A turn that moved on later in the batch no longer holds the index it opened at.
+    claimed.filter { (ordinal, turnId) -> turnMap[turnId]?.ordinal == ordinal }.map { (ordinal, turnId) -> TurnClaim(turnId, ordinal) }
   )
   return SyncReduce(commit, gap, fetches, AppliedCursor(conversationId, streamId, seq))
 }

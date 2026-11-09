@@ -112,6 +112,42 @@ class SyncApplierTest {
     assertEquals(1L, store.seq("c1"))
   }
 
+  @Test
+  fun aStoredTurnReplacesTheRetiredTurnFiledAtItsIndex() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 0L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    // A plan run's note turn goes live, then is retired at the next index when the prompt starts.
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 1L, "notes", -1, "Build", "", ""))
+    applier.offer(MonitorEvent.BlockOpen("c1", "stream-a", 2L, "notes", "n1", 0, "note", ""))
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 3L, "notes", 0, "Build", "", ""))
+    clock.now = 50L
+    applier.tick()
+    assertEquals(listOf("notes"), store.turns.map { it.turnId })
+    // The prompt's turn is stored at the same index, then the report after it.
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 4L, "work", -1, "Build", "Work on 6.8", ""))
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 5L, "work", 0, "Build", "Work on 6.8", ""))
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 6L, "report", 1, "Build", "", ""))
+    clock.now = 100L
+    applier.tick()
+    assertEquals(listOf("work", "report"), store.turns.sortedBy { it.ordinal }.map { it.turnId })
+    assertTrue(store.blocks.none { it.turn == "notes" })
+  }
+
+  @Test
+  fun theLastTurnOpenedAtAnIndexInOneBatchKeepsIt() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 0L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 1L, "notes", 0, "Build", "", ""))
+    applier.offer(MonitorEvent.TurnOpen("c1", "stream-a", 2L, "work", 0, "Build", "Work on 6.8", ""))
+    clock.now = 50L
+    applier.tick()
+    assertEquals(listOf("work"), store.turns.map { it.turnId })
+  }
+
   private fun turn(seq: Long): MonitorEvent.TurnOpen {
     return MonitorEvent.TurnOpen("c1", "stream-a", seq, "t$seq", seq.toInt(), "Build", "Add $seq", "2026-10-29T09:20:00Z")
   }
@@ -165,6 +201,12 @@ private class MemorySyncStore : SyncStore {
         for (block in commit.blocks) {
           blocks.removeAll { it.conversation == id && it.blockId == block.blockId }
           blocks += block
+        }
+        for (claim in commit.claims) {
+          val gone = turns.filter { it.conversationId == id && it.ordinal == claim.ordinal && it.turnId != claim.turnId }
+            .map { it.turnId }.toSet()
+          turns.removeAll { it.conversationId == id && it.turnId in gone }
+          blocks.removeAll { it.conversation == id && it.turn in gone }
         }
         for (image in commit.images) {
           images.removeAll { it.conversation == id && it.id == image.id }
