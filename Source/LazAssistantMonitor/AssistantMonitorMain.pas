@@ -89,6 +89,7 @@ Begin
   If Not EnsureMonitorHostCertificate(ErrorText) Then
     Exit;
   Session := TMonitorSession.Create;
+  Session.PairCodeRequired := Settings.RequirePairCode;
   Carrier := TMonitorLanCarrier.Create(Address, Settings.Port, MonitorCertificateFile, MonitorKeyFile);
   Try
     Try

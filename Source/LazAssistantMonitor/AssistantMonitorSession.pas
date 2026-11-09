@@ -4,8 +4,9 @@ Unit AssistantMonitorSession;
   This unit does not use TInetServer. An in-memory carrier delivers frames
   through SetFrameHandler. No relay class is compiled. (c) 2026 Michell Computing.
 
-  Only loopback admits pair when no code is armed. RequestPairCode still checks the
-  code and fingerprint. Random, hex, and base64url are fphashutils. HMAC is
+  Only loopback admits pair when no code is armed, unless PairCodeRequired is off. Then
+  any peer may pair without a code, though a code it does send is still checked and a
+  fingerprint it reports must match. RequestPairCode still checks the code and fingerprint. Random, hex, and base64url are fphashutils. HMAC is
   fpsha256.TSHA256.HMAC. JSON stays in the codec. The pair code, session token,
   and HMAC are never logged.
 
@@ -102,6 +103,8 @@ Type
     FCodeExpired: Boolean;
     { True only after RequestPairCode, until that code succeeds. Only loopback admits a pair while this is false. }
     FPairGate: Boolean;
+    { The Require Pairing Code setting. True unless the user turned it off. }
+    FPairCodeRequired: Boolean;
     FNonce: TBytes;
     FNonceHex: String;
     FNonceUntil: QWord;
@@ -224,6 +227,8 @@ Type
     Procedure InboundFrame(Const Frame: TMonitorFrame);
     Function GetLastError: String;
     Function GetRemoteApproval: Boolean;
+    Function GetPairCodeRequired: Boolean;
+    Procedure SetPairCodeRequired(Required: Boolean);
     Function GetBoundAddress: String;
     Function GetConnectedClientName: String;
     { Locked reads for the link and IDE threads. The session lock is recursive, so a holder may call them. }
@@ -342,6 +347,8 @@ Type
     Property BoundPort: Integer Read FPort;
     Property ConnectedClientName: String Read GetConnectedClientName;
     Property RemoteApproval: Boolean Read GetRemoteApproval;
+    /// False admits a pair without a code from any peer. Takes effect on the next pair frame.
+    Property PairCodeRequired: Boolean Read GetPairCodeRequired Write SetPairCodeRequired;
     Function SecondsSinceFrame: Integer;
     /// True after auth. A hello that has not been proved cannot take the open screen.
     Function ClientAuthenticated: Boolean;
@@ -568,6 +575,7 @@ Begin
   FPairFailures := 0;
   FCodeExpired := False;
   FPairGate := False;
+  FPairCodeRequired := True;
   SetLength(FNonce, 0);
   FNonceHex := '';
   FNonceUntil := 0;
@@ -1325,6 +1333,7 @@ Var
   IdBytes, TokenBytes: TBytes;
   ErrorText, SavedError: String;
   Index: Integer;
+  CodeArmed: Boolean;
 Begin
   If (FState <> mssAccepted) Or (Not FExpectPair) Then
     Begin
@@ -1336,7 +1345,20 @@ Begin
       RejectLocked('protocol', True);
       Exit;
     End;
-  If Not PairCodeActive Then
+  CodeArmed := PairCodeActive;
+  If (Not FPairCodeRequired) And ((Not CodeArmed) Or (Trim(Pair.Code) = '')) Then
+    Begin
+      { Require Pairing Code is off. No code is needed, but a phone that reports a certificate other than this host's
+        is talking to something in between, so it is still refused. }
+      FCodeExpired := False;
+      If (Pair.Fingerprint <> '') And (FHostFingerprint <> '') And
+        (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
+        Begin
+          RejectLocked('fingerprint', True);
+          Exit;
+        End;
+    End
+  Else If Not CodeArmed Then
     Begin
       If FCodeExpired Then
         Begin
@@ -2202,6 +2224,28 @@ End;
 Procedure TMonitorSession.SetRemoteApproval(Enabled: Boolean);
 Begin
   ApplyMonitorRemoteApproval(Enabled);
+End;
+
+Function TMonitorSession.GetPairCodeRequired: Boolean;
+Begin
+  LockSession;
+  Try
+    Result := FPairCodeRequired;
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.SetPairCodeRequired(Required: Boolean);
+Begin
+  LockSession;
+  Try
+    If FPairCodeRequired <> Required Then
+      LogLine(1, 'pair code required=' + BoolToStr(Required, True));
+    FPairCodeRequired := Required;
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Procedure TMonitorSession.RevokeClient(Const ClientId: String);

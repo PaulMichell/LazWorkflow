@@ -4,6 +4,8 @@ Unit AssistantMonitorForm;
 
   Static layout. The listener outlives the dialog. The phone connects to the
   shown endpoint. Pairing codes are single-use and expire after two minutes.
+  Require pairing code, on by default, can be turned off so any phone that reaches
+  the endpoint pairs without one. The change reaches a running listener at once.
   LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
   the layouts below are read through explicit libc and iphlpapi externals.
 
@@ -35,6 +37,7 @@ Type
     PortEdit: TSpinEdit;
     BindAllCheck: TCheckBox;
     RemoteApprovalCheck: TCheckBox;
+    RequirePairCodeCheck: TCheckBox;
     ButtonStrip: TPanel;
     EnableButton: TButton;
     DisableButton: TButton;
@@ -56,6 +59,7 @@ Type
     Procedure RevokeActionExecute(Sender: TObject);
     Procedure RevokeAllActionExecute(Sender: TObject);
     Procedure RemoteApprovalCheckClick(Sender: TObject);
+    Procedure RequirePairCodeCheckClick(Sender: TObject);
     Procedure StatusTimerTimer(Sender: TObject);
     Procedure ClientListClick(Sender: TObject);
     Procedure BindAllCheckClick(Sender: TObject);
@@ -400,6 +404,7 @@ Begin
     PortEdit.Value := Settings.Port;
     BindAllCheck.Checked := Settings.BindAll;
     RemoteApprovalCheck.Checked := Settings.RemoteApproval;
+    RequirePairCodeCheck.Checked := Settings.RequirePairCode;
     If Settings.BindAddress <> '' Then
       AddressEdit.Text := Settings.BindAddress
     Else
@@ -427,9 +432,12 @@ Begin
   Settings.BindAddress := Trim(AddressEdit.Text);
   Settings.BindAll := BindAllCheck.Checked;
   Settings.RemoteApproval := RemoteApprovalCheck.Checked;
+  Settings.RequirePairCode := RequirePairCodeCheck.Checked;
   If Not SaveMonitorSettings(Settings, ErrorText) Then
     StatusMemo.Text := ErrorText;
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
+  If Assigned(MonitorLiveSession) Then
+    MonitorLiveSession.PairCodeRequired := Settings.RequirePairCode;
 End;
 
 Procedure TAssistantMonitorForm.ShowBindFailure(Const Address: String; Port: Integer; Const ErrorText: String);
@@ -504,7 +512,9 @@ Begin
     PairCodeEdit.Text := MonitorLiveSession.PairCode
   Else
     PairCodeEdit.Text := '';
-  If PairCodeEdit.Text = '' Then
+  If (PairCodeEdit.Text = '') And Not RequirePairCodeCheck.Checked Then
+    PairCodeEdit.Text := 'No pairing code is required. Any phone that reaches this endpoint can pair.'
+  Else If PairCodeEdit.Text = '' Then
     PairCodeEdit.Text := 'Generate a pairing code, then enter it on the phone. Codes expire after two minutes.';
   RevokeAction.Enabled := SelectedClientId <> '';
   RevokeAllAction.Enabled := ClientIds.Count > 0;
@@ -519,7 +529,8 @@ Begin
       'Seconds since frame ' + IntToStr(MonitorLiveSession.SecondsSinceFrame) + LineEnding +
       'Frames sent ' + IntToStr(MonitorLiveSession.FramesSent) +
       '  dropped ' + IntToStr(MonitorLiveSession.FramesDropped) + LineEnding +
-      'Remote approval ' + BoolToStr(MonitorLiveSession.RemoteApproval, True)
+      'Remote approval ' + BoolToStr(MonitorLiveSession.RemoteApproval, True) + LineEnding +
+      'Pairing code required ' + BoolToStr(MonitorLiveSession.PairCodeRequired, True)
   Else
     Status := 'Listener stopped';
   If Assigned(MonitorLiveSession) And (MonitorLiveSession.LastError <> '') Then
@@ -625,6 +636,15 @@ Begin
 End;
 
 Procedure TAssistantMonitorForm.RemoteApprovalCheckClick(Sender: TObject);
+Begin
+  { LoadFields setting Checked fires this. The loaded value is not a user change. }
+  If FieldsLoading Then
+    Exit;
+  SaveFields(ListenerRunning);
+  RefreshState;
+End;
+
+Procedure TAssistantMonitorForm.RequirePairCodeCheckClick(Sender: TObject);
 Begin
   { LoadFields setting Checked fires this. The loaded value is not a user change. }
   If FieldsLoading Then

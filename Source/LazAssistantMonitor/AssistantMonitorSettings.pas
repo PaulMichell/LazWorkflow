@@ -36,6 +36,8 @@ Type
     BindAddress: String;
     BindAll: Boolean;
     RemoteApproval: Boolean;
+    { False lets any peer that reaches the listener pair without a code. A missing key loads as True. }
+    RequirePairCode: Boolean;
     { 32 lowercase hex. Stable across certificate renewal. Empty until ensured. }
     HostId: String;
     Clients: TMonitorClientArray;
@@ -135,6 +137,7 @@ Begin
   Result.BindAddress := '';
   Result.BindAll := False;
   Result.RemoteApproval := False;
+  Result.RequirePairCode := True;
   Result.HostId := '';
   SetLength(Result.Clients, 0);
 End;
@@ -242,6 +245,12 @@ Begin
         Exit;
       End;
     Settings.RemoteApproval := Section.Get('remote_approval', False);
+    If Assigned(Section.Find('require_pair_code')) And (Section.Find('require_pair_code').JSONType <> jtBoolean) Then
+      Begin
+        ErrorText := 'Monitor require pair code must be a boolean.';
+        Exit;
+      End;
+    Settings.RequirePairCode := Section.Get('require_pair_code', True);
     If Assigned(Section.Find('host_id')) And (Section.Find('host_id').JSONType <> jtString) Then
       Begin
         ErrorText := 'Monitor host id must be a string.';
@@ -329,6 +338,7 @@ Begin
     Section.Add('bind_address', Settings.BindAddress);
     Section.Add('bind_all', Settings.BindAll);
     Section.Add('remote_approval', Settings.RemoteApproval);
+    Section.Add('require_pair_code', Settings.RequirePairCode);
     KeptHostId := Settings.HostId;
     If Not MonitorHostIdIsValid(KeptHostId) Then
       KeptHostId := StoredHostId;

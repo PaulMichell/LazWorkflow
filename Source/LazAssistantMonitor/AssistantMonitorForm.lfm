@@ -74,6 +74,20 @@ object AssistantMonitorForm: TAssistantMonitorForm
       TabOrder = 3
       OnClick = RemoteApprovalCheckClick
     end
+    object RequirePairCodeCheck: TCheckBox
+      Left = 360
+      Height = 22
+      Hint = 'When off, any phone that reaches the endpoint can pair without a code.'
+      Top = 45
+      Width = 160
+      Caption = 'Require pairing code'
+      Checked = True
+      ParentShowHint = False
+      ShowHint = True
+      State = cbChecked
+      TabOrder = 4
+      OnClick = RequirePairCodeCheckClick
+    end
   end
   object ButtonStrip: TPanel
     Left = 0

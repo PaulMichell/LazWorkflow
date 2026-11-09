@@ -106,6 +106,11 @@ Begin
   Check('missing monitor section loads', LoadMonitorSettings(Settings, ErrorText));
   Check('missing monitor section is default', (Not Settings.Enabled) And (Settings.Port = MonitorListenPort) And
     (Length(Settings.Clients) = 0) And (ErrorText = ''));
+  Check('missing monitor section requires a pair code', Settings.RequirePairCode);
+  Settings := DefaultMonitorSettings;
+  Settings.RequirePairCode := False;
+  Check('save pair code off', SaveMonitorSettings(Settings, ErrorText));
+  Check('load pair code off', LoadMonitorSettings(Settings, ErrorText) And (Not Settings.RequirePairCode));
   Settings := DefaultMonitorSettings;
   Settings.Enabled := False;
   Settings.Port := 56123;
@@ -116,6 +121,7 @@ Begin
   Check('load monitor section', LoadMonitorSettings(Settings, ErrorText));
   Check('loaded port', Settings.Port = 56123);
   Check('loaded bind', Settings.BindAddress = '10.1.2.3');
+  Check('loaded pair code required', Settings.RequirePairCode);
   Check('loaded clients empty', Length(Settings.Clients) = 0);
   CheckOtherSections('after monitor save');
 End;
@@ -348,6 +354,45 @@ Begin
   Session.NoteSocketClosed;
   Check('open pair revoked', LoadMonitorSettings(Settings, ErrorText) And (Length(Settings.Clients) = 0));
   Check('open pair returns to listening', Session.State = mssListening);
+End;
+
+Procedure TestPairCodeOptional;
+Var
+  Code: String;
+Begin
+  Check('session requires a pair code by default', Session.PairCodeRequired);
+  Session.PairCodeRequired := False;
+  Try
+    NewSocket;
+    DeliverHello('');
+    DeliverPair('');
+    ExpectPairOk;
+    Session.RevokeClient(SavedClientId);
+    Session.NoteSocketClosed;
+    Check('codeless LAN pair returns to listening', Session.State = mssListening);
+    NewSocket;
+    DeliverHello('');
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandPair('pair', '', 'ffff0000'));
+    ExpectRejected('codeless pair with another fingerprint', 'fingerprint', True);
+    Session.RequestPairCode;
+    Code := Session.PairCode;
+    NewSocket;
+    DeliverHello('');
+    DeliverPair(WrongCode(Code));
+    ExpectRejected('typed wrong code still checked', 'pair_code', False);
+    DeliverPair('');
+    ExpectPairOk;
+    Session.RevokeClient(SavedClientId);
+    Session.NoteSocketClosed;
+  Finally
+    Session.PairCodeRequired := True;
+  End;
+  NewSocket;
+  DeliverHello('');
+  DeliverPair('');
+  ExpectRejected('LAN without code once required again', 'pair_code', True);
+  Session.NoteSocketClosed;
 End;
 
 Procedure TestCodeAbsentUntilRequested;
@@ -1263,6 +1308,7 @@ Begin
         WriteLn(ErrorText);
       Check('listen state', Session.State = mssListening);
       TestLoopbackPairingPolicy;
+      TestPairCodeOptional;
       TestCodeAbsentUntilRequested;
       TestSecondControllerWhileAccepted;
       TestCommandBeforeAuth;
