@@ -6,6 +6,7 @@ Program AssistantMonitorMirrorTest;
   An event that cannot be stored still advances the head and is noted as a drop (plan item 4.1).
   Only the four newest parked conversations are kept (plan item 4.3).
   A turn keeps one id from the first token to its stored row, and is not sent twice (plan item 8.1).
+  A stored turn replaces a retired turn filed at the same index.
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -434,6 +435,38 @@ Begin
   End;
 End;
 
+{ A plan run's note turn is retired at the next index when the prompt starts, and the desktop then stores the prompt's
+  turn at that same index. The stored turn takes the index, so an outline does not carry two turns for it. }
+Procedure TestStoredTurnReplacesRetiredTurn;
+Var
+  Log: TMonitorMirror;
+  Turn, Live: TAssistantMonitorTurn;
+  Stored: TMonitorMirrorTurnArray;
+  HasLive: Boolean;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Turn := LiveTurn('notes', 'New conversation started in Build.', False);
+    Turn.Blocks[0].Kind := 'note';
+    Log.ObserveTurn(Turn);
+    Log.ObserveTurn(LiveTurn('work', 'answer', True));
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('a note turn is retired at the first index', HasLive And (Length(Stored) = 1) And (Stored[0].Id = 'notes') And
+      (Stored[0].TurnIndex = 0));
+    Turn := LiveTurn('work', 'answer', False);
+    Turn.Live := False;
+    Turn.TurnIndex := 0;
+    Log.ObserveTurn(Turn);
+    Log.ObserveTurn(SampleTurn('report', 'Plan run ended', 1));
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('the stored turn replaces the retired turn at its index', (Not HasLive) And (Length(Stored) = 2) And
+      (Stored[0].Id = 'work') And (Stored[0].TurnIndex = 0) And (Stored[1].Id = 'report') And (Stored[1].TurnIndex = 1));
+  Finally
+    Log.Free;
+  End;
+End;
+
 { The payload object of an encoded frame, or Nil. The caller frees Root. }
 Function FramePayload(Const Json: String; Out Root: TJSONData): TJSONObject;
 Begin
@@ -784,6 +817,7 @@ Begin
   TestLiveBlocks;
   TestObserveLeavesCallerAlone;
   TestTurnLifecycle;
+  TestStoredTurnReplacesRetiredTurn;
   TestUtf8CutHelper;
   TestStateChunksKeepCharacters;
   TestPreviewKeepsCharacters;

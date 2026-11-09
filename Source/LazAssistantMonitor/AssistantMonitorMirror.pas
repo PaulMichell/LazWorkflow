@@ -24,7 +24,8 @@ Unit AssistantMonitorMirror;
   new index, and turn_close follows. No body is sent again. An idle desktop
   reports the stored turn it shows as live; that is the stored turn, not a
   second copy. A turn in flight that ends without a stored row is closed and
-  kept at the next index, so the phone does not keep a running turn.
+  kept at the next index, so the phone does not keep a running turn. The
+  desktop stores its next turn at that index, and the stored turn replaces it.
 
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
@@ -708,7 +709,7 @@ End;
 
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
-  Index, BlockIndex, Match: Integer;
+  Index, BlockIndex, Match, Kept: Integer;
   Stored, Local: TAssistantMonitorTurn;
   Found, IdleCopy: Boolean;
   EventJson: String;
@@ -929,6 +930,20 @@ Begin
             SetLength(FTurns, Length(FTurns) + 1);
             FTurns[High(FTurns)] := Local;
             AppendLocked(FHead + 1, 'turn_close', TurnCloseJson(Local, TurnOutcomeName(Local)));
+          End;
+        { A retired turn was filed at the next index, and the desktop stores its next turn there too. The stored
+          turn wins, so a later snapshot outline leaves the retired one out and the phone drops it. }
+        If Local.TurnIndex >= 0 Then
+          Begin
+            Kept := 0;
+            For Index := 0 To High(FTurns) Do
+              If (FTurns[Index].TurnIndex <> Local.TurnIndex) Or (FTurns[Index].Id = Local.Id) Then
+                Begin
+                  If Kept <> Index Then
+                    FTurns[Kept] := FTurns[Index];
+                  Inc(Kept);
+                End;
+            SetLength(FTurns, Kept);
           End;
       End;
   Finally
