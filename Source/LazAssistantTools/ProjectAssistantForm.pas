@@ -511,6 +511,7 @@ Type
     Procedure SetOpenBusy(IsBusy: Boolean);
     Procedure AppendMessage(Const Role, Content: String);
     Procedure BeginAssistantReply;
+    Procedure RevealSubmittedPrompt;
     Procedure ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
     Procedure EnsureFinalAssistantSummary;
     Procedure FinishAssistantReply(Const ErrorText: String);
@@ -5172,6 +5173,7 @@ Begin
   FCodexContextUsage := EmptyCodexContextUsage;
   SetSending(True);
   BeginAssistantReply;
+  RevealSubmittedPrompt;
   Try
     ToolsJson := BuildAssistantToolsJsonForMode(ActiveMode);
     Instructions := CodexDeveloperInstructions(ActiveMode);
@@ -5397,6 +5399,8 @@ Begin
         FTraceView.Sync(FTrace, True);
       WorkflowLogger.Info('ProjectAssistant', FTrace[FTrace.Count - 1].Body);
     End;
+  { The Lazarus tools and the Claude Code process start on this thread. The prompt is on screen first. }
+  RevealSubmittedPrompt;
   Result := LaunchStoredClaudeRun;
   If (Not Result) And FSending And (Not FTransportWait) Then
     FinishAssistantReply('The run could not be restarted.');
@@ -7770,6 +7774,19 @@ Begin
   AssistantSessionObserve.AssistantSessionObserve(asnSnapshot);
 End;
 
+Procedure TProjectAssistantForm.RevealSubmittedPrompt;
+Begin
+  { A new prompt, typed here or sent from the phone, brings the reader to the head wherever they had scrolled. It is
+    painted now, with the busy footer, because starting the backend can hold this thread before the next paint. }
+  If Assigned(FTraceView) Then
+    Begin
+      FTraceView.ScrollToEnd;
+      FTraceView.Surface.Update;
+    End;
+  If Assigned(StatusFooter) Then
+    StatusFooter.Update;
+End;
+
 Procedure TProjectAssistantForm.ApplyAssistantSnapshots(Const ContentSnapshot, ThinkingSnapshot: String);
 Begin
   { Ignore late Queue packets after the turn has finished (prevents a second Begin/Finish cycle). }
@@ -8426,6 +8443,7 @@ Begin
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
       SetSending(True);
       BeginAssistantReply;
+      RevealSubmittedPrompt;
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
       If AssistantClient.StartStream(@StreamToken) Then
@@ -9539,6 +9557,7 @@ Begin
   AssistantClient.ToolsEnabled := False;
   SetSending(True);
   BeginAssistantReply;
+  RevealSubmittedPrompt;
   If Not AssistantClient.StartStream(@StreamToken) Then
     Begin
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
