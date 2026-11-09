@@ -416,6 +416,9 @@ class LanSessionTest {
       link.push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
         "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
       ))))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+      // The coordinator sends the one resume after hello. The session adds the open commands to it.
+      session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume("resume-1", "conversation-1", "stream-1", 0L))
       waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
       val resume = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }
       assertTrue(resume.payloadJson.contains("send-1"))

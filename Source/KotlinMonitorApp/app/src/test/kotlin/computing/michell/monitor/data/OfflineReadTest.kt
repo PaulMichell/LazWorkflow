@@ -95,7 +95,8 @@ class OfflineReadTest {
         turn(1, "t-keep"),
         block(2, "t-keep", "b-keep"),
         append(3, "b-keep", 0, "same"),
-        turn(4, "t-gone"),
+        // The desktop keeps one turn per index, and a later turn at the same index supersedes the first.
+        turn(4, "t-gone", 2),
         block(5, "t-gone", "b-stale"),
         append(6, "b-stale", 0, "old"),
         block(7, "t-keep", "b-open", 1),
@@ -318,8 +319,8 @@ private suspend fun commit(
   clock.now += SyncBatchWindowMs
   return applier.tick()
 }
-private fun turn(seq: Long, turnId: String): MonitorEvent.TurnOpen {
-  return MonitorEvent.TurnOpen("c1", "stream-a", seq, turnId, 1, "build", "prompt", "")
+private fun turn(seq: Long, turnId: String, turnIndex: Int = 1): MonitorEvent.TurnOpen {
+  return MonitorEvent.TurnOpen("c1", "stream-a", seq, turnId, turnIndex, "build", "prompt", "")
 }
 
 private fun block(seq: Long, turnId: String, blockId: String, ordinal: Int = 0): MonitorEvent.BlockOpen {

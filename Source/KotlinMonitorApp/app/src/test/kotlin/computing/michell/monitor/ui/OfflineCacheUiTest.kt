@@ -107,7 +107,7 @@ class OfflineCacheUiTest {
     assertEquals("/work/LazWorkflow", reviewed.projectRoot)
     assertFalse(reviewed.view.canSend)
     assertTrue(reviewed.disconnected)
-    assertEquals(OfflineBanner, reviewed.banner)
+    assertEquals(OfflineReviewBanner, reviewed.banner)
   }
 
   @Test
