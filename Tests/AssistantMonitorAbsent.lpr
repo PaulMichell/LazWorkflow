@@ -77,6 +77,19 @@ Begin
     'LazAssistantTools' + PathDelim + 'ProjectAssistantForm.pas');
 End;
 
+Function CountText(Const Needle, Text: String): Integer;
+Var
+  At: Integer;
+Begin
+  Result := 0;
+  At := Pos(Needle, Text);
+  While At > 0 Do
+    Begin
+      Inc(Result);
+      At := Pos(Needle, Text, At + Length(Needle));
+    End;
+End;
+
 Function ReadText(Const Path: String): String;
 Var
   Lines: TStringList;
@@ -241,7 +254,10 @@ Begin
     Exit;
   FormText := ReadText(FormPath);
   Check('broker approval stays nil', Pos('OnApproval := Nil', FormText) > 0);
-  Check('broker approval is not assigned a handler', Pos('OnApproval := @', FormText) = 0);
+  { A Claude turn asks through the IDE's own dialog (ApproveClaudeTool). No other handler, such as a remote
+    waiter, may be wired to the broker from the form. }
+  Check('broker approval is only the IDE dialog', CountText('OnApproval := @', FormText) =
+    CountText('OnApproval := @ApproveClaudeTool;', FormText));
 End;
 
 Begin
