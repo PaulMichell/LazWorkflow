@@ -17,6 +17,15 @@ Unit AssistantMonitorMirror;
   with the caller's snapshot, which another thread may read (plan item 3.2 of
   Documents/Plan-20261105-130659.md). It bumps revisions on its own copy.
 
+  One turn has one id from turn_open to turn_close. The live turn is only the
+  turn in flight, at a negative turn index. The form gives it the id it will be
+  stored under. When the desktop records it, the next observation has the same
+  id at a real index: the turn moves to the stored list, turn_open carries the
+  new index, and turn_close follows. No body is sent again. An idle desktop
+  reports the stored turn it shows as live; that is the stored turn, not a
+  second copy. A turn in flight that ends without a stored row is closed and
+  kept at the next index, so the phone does not keep a running turn.
+
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
   gone. Catalogue 3 events are the only retained protocol records.
@@ -46,6 +55,8 @@ Const
   MonitorAppendSliceBytes = 4096;
   { Conversations kept beside the open one. Older visits are dropped. }
   MonitorParkedConversations = 4;
+  { The form's live turn id while nothing is in flight. With no blocks it shows nothing. }
+  MonitorIdleTurnId = 'live';
 
 { True when Current is Previous plus a suffix. Offset is the UTF-8 byte length of Previous. }
 Function MonitorAppendSuffix(Const Previous, Current: String; Out Suffix: String; Out Offset: Integer): Boolean;
@@ -133,6 +144,9 @@ Type
     Function IndexOfSeqLocked(Seq: Int64): Integer;
     Procedure CopyTurn(Const Source: TAssistantMonitorTurn; Var Dest: TAssistantMonitorTurn);
     Function FindTurnLocked(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
+    Function StoredIndexLocked(Const TurnId: String): Integer;
+    { Closes the turn in flight and keeps it as a stored turn. Running blocks close as failed. }
+    Procedure RetireLiveLocked;
   Public
     Constructor Create; Overload;
     Constructor Create(BudgetBytes: Int64); Overload;
@@ -231,6 +245,36 @@ Begin
   Result := '{"turn_index":' + IntToStr(Turn.TurnIndex) + ',"turn_id":"' + JsonEscapeText(Turn.Id) + '","mode":"' +
     JsonEscapeText(Turn.Mode) + '","prompt_preview":"' + JsonEscapeText(Turn.PromptPreview) + '","created_at":"' +
     JsonEscapeText(Turn.CreatedAt) + '","duration_ms":' + IntToStr(Turn.DurationMs) + ',"blocks":[' + Blocks + ']}';
+End;
+
+Function TurnOpenJson(Const Turn: TAssistantMonitorTurn): String;
+Begin
+  Result := '{"turn_id":"' + JsonEscapeText(Turn.Id) + '","turn_index":' + IntToStr(Turn.TurnIndex) + ',"mode":"' +
+    JsonEscapeText(Turn.Mode) + '","prompt":"' + JsonEscapeText(Turn.Prompt) + '","created_at":"' +
+    JsonEscapeText(Turn.CreatedAt) + '"}';
+End;
+
+Function TurnCloseJson(Const Turn: TAssistantMonitorTurn; Const Outcome: String): String;
+Begin
+  Result := '{"turn_id":"' + JsonEscapeText(Turn.Id) + '","outcome":"' + Outcome + '","duration_ms":' +
+    IntToStr(Turn.DurationMs) + ',"error_text":"' + JsonEscapeText(Turn.ErrorText) + '"}';
+End;
+
+{ A stopped turn is stored with the error text cancelled. }
+Function TurnOutcomeName(Const Turn: TAssistantMonitorTurn): String;
+Begin
+  If Turn.ErrorText = '' Then
+    Result := 'done'
+  Else If SameText(Turn.ErrorText, 'cancelled') Then
+    Result := 'stopped'
+  Else
+    Result := 'failed';
+End;
+
+Function BlockCloseJson(Const Block: TAssistantMonitorBlock): String;
+Begin
+  Result := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","state":"' + MonitorBlockState(Block.Running, Block.Ok) +
+    '","duration_ms":' + IntToStr(Block.DurationMs) + '}';
 End;
 
 Function BlockFitsInline(Const Block: TAssistantMonitorBlock): Boolean;
@@ -605,12 +649,84 @@ Begin
     Result := 6;
 End;
 
+Function TMonitorMirror.StoredIndexLocked(Const TurnId: String): Integer;
+Var
+  Index: Integer;
+Begin
+  Result := -1;
+  If TurnId = '' Then
+    Exit;
+  For Index := High(FTurns) DownTo 0 Do
+    If FTurns[Index].Id = TurnId Then
+      Exit(Index);
+End;
+
+Procedure TMonitorMirror.RetireLiveLocked;
+Var
+  Index, Next: Integer;
+  Retired: TAssistantMonitorTurn;
+  Outcome: String;
+Begin
+  If Not FHasLive Then
+    Exit;
+  Retired := Default(TAssistantMonitorTurn);
+  CopyTurn(FLive, Retired);
+  FHasLive := False;
+  FLive := Default(TAssistantMonitorTurn);
+  { The idle id is reused by every turn the form has not named, so it is never kept as a stored turn. }
+  If (Retired.Id = '') Or (Retired.Id = MonitorIdleTurnId) Then
+    Exit;
+  Outcome := TurnOutcomeName(Retired);
+  For Index := 0 To High(Retired.Blocks) Do
+    If Retired.Blocks[Index].Running Then
+      Begin
+        Retired.Blocks[Index].Running := False;
+        Retired.Blocks[Index].Ok := False;
+        AppendLocked(FHead + 1, 'block_close', BlockCloseJson(Retired.Blocks[Index]));
+        Outcome := 'stopped';
+      End;
+  { A negative index would put the turn above the whole transcript on the phone. }
+  If Retired.TurnIndex < 0 Then
+    Begin
+      Next := 0;
+      For Index := 0 To High(FTurns) Do
+        If FTurns[Index].TurnIndex >= Next Then
+          Next := FTurns[Index].TurnIndex + 1;
+      Retired.TurnIndex := Next;
+      AppendLocked(FHead + 1, 'turn_open', TurnOpenJson(Retired));
+    End;
+  Retired.Live := False;
+  Index := StoredIndexLocked(Retired.Id);
+  If Index < 0 Then
+    Begin
+      Index := Length(FTurns);
+      SetLength(FTurns, Index + 1);
+    End;
+  FTurns[Index] := Retired;
+  AppendLocked(FHead + 1, 'turn_close', TurnCloseJson(Retired, Outcome));
+End;
+
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
-  Index, BlockIndex: Integer;
+  Index, BlockIndex, Match: Integer;
   Stored, Local: TAssistantMonitorTurn;
-  Found: Boolean;
+  Found, IdleCopy: Boolean;
   EventJson: String;
+
+  { The stored block with this id. Hint is checked first, because blocks rarely move. }
+  Function StoredBlock(Const BlockId: String; Hint: Integer): Integer;
+  Var
+    Probe: Integer;
+  Begin
+    If (Hint <= High(Stored.Blocks)) And (Stored.Blocks[Hint].BlockId = BlockId) Then
+      Exit(Hint);
+    Result := -1;
+    If BlockId = '' Then
+      Exit;
+    For Probe := 0 To High(Stored.Blocks) Do
+      If Stored.Blocks[Probe].BlockId = BlockId Then
+        Exit(Probe);
+  End;
 
   Function SliceFits(Const BlockId: String; Offset: Integer; Const Slice: RawByteString): Boolean;
   Var
@@ -690,38 +806,68 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Found := False;
+    IdleCopy := False;
     Stored := Default(TAssistantMonitorTurn);
     If Local.Live Then
       Begin
-        Found := FHasLive And (FLive.Id = Local.Id);
-        If Found Then
-          CopyTurn(FLive, Stored);
-      End
-    Else
-      For Index := 0 To High(FTurns) Do
-        If FTurns[Index].Id = Local.Id Then
+        { The idle placeholder has nothing to show. A turn still in flight ended without a stored row. }
+        If (Local.Id = MonitorIdleTurnId) And (Length(Local.Blocks) = 0) Then
           Begin
-            Found := True;
-            CopyTurn(FTurns[Index], Stored);
-            Break;
+            RetireLiveLocked;
+            Exit;
           End;
-    If Not Found Then
-      Begin
-        EventJson := '{"turn_id":"' + JsonEscapeText(Local.Id) + '","turn_index":' + IntToStr(Local.TurnIndex) +
-          ',"mode":"' + JsonEscapeText(Local.Mode) + '","prompt":"' + JsonEscapeText(Local.Prompt) +
-          '","created_at":"' + JsonEscapeText(Local.CreatedAt) + '"}';
-        AppendLocked(FHead + 1, 'turn_open', EventJson);
+        Index := StoredIndexLocked(Local.Id);
+        If Index >= 0 Then
+          Begin
+            { Already stored. An idle desktop shows it, or a plan run adds notes to its trace. }
+            Local.Live := False;
+            If Local.TurnIndex < 0 Then
+              Local.TurnIndex := FTurns[Index].TurnIndex;
+            IdleCopy := True;
+          End
+        Else If (Local.TurnIndex >= 0) And FHasLive And (FLive.Id = Local.Id) And (FLive.TurnIndex < 0) Then
+          Local.Live := False;
       End;
+    If (Not Local.Live) And FHasLive And (FLive.Id = Local.Id) Then
+      Begin
+        { The turn in flight was recorded. It keeps its id and its blocks, so only the changes go out. }
+        CopyTurn(FLive, Stored);
+        Found := True;
+        FHasLive := False;
+        FLive := Default(TAssistantMonitorTurn);
+      End
+    Else If FHasLive And (FLive.Id <> Local.Id) And (Local.Live Or IdleCopy) Then
+      { Another turn is in flight, or the desktop is idle. The old one ended without a stored row. }
+      RetireLiveLocked;
+    If Not Found Then
+      If Local.Live Then
+        Begin
+          Found := FHasLive And (FLive.Id = Local.Id);
+          If Found Then
+            CopyTurn(FLive, Stored);
+        End
+      Else
+        For Index := 0 To High(FTurns) Do
+          If FTurns[Index].Id = Local.Id Then
+            Begin
+              Found := True;
+              CopyTurn(FTurns[Index], Stored);
+              Break;
+            End;
+    { A recorded turn moves from the live index to its stored index. The phone orders turns by that index. }
+    If (Not Found) Or (Stored.TurnIndex <> Local.TurnIndex) Then
+      AppendLocked(FHead + 1, 'turn_open', TurnOpenJson(Local));
     For BlockIndex := 0 To High(Local.Blocks) Do
       Begin
-        Found := False;
-        If BlockIndex <= High(Stored.Blocks) Then
-          Found := Stored.Blocks[BlockIndex].BlockId = Local.Blocks[BlockIndex].BlockId;
+        Match := StoredBlock(Local.Blocks[BlockIndex].BlockId, BlockIndex);
+        Found := Match >= 0;
+        { A block that moved keeps its body on the phone. block_open only gives it the new ordinal. }
+        If (Not Found) Or (Match <> BlockIndex) Then
+          AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
+            '","turn_id":"' + JsonEscapeText(Local.Id) + '","kind":"' + JsonEscapeText(Local.Blocks[BlockIndex].Kind) +
+            '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscapeText(Local.Blocks[BlockIndex].Title) + '"}');
         If Not Found Then
           Begin
-            AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
-              '","turn_id":"' + JsonEscapeText(Local.Id) + '","kind":"' + JsonEscapeText(Local.Blocks[BlockIndex].Kind) +
-              '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscapeText(Local.Blocks[BlockIndex].Title) + '"}');
             EventJson := Local.Blocks[BlockIndex].Body;
             If EventJson <> '' Then
               Begin
@@ -731,22 +877,23 @@ Begin
                   EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0);
               End;
           End
-        Else If Stored.Blocks[BlockIndex].Body <> Local.Blocks[BlockIndex].Body Then
+        Else If Stored.Blocks[Match].Body <> Local.Blocks[BlockIndex].Body Then
           Begin
-            Local.Blocks[BlockIndex].Revision := Stored.Blocks[BlockIndex].Revision + 1;
-            If Stored.Blocks[BlockIndex].Body = '' Then
+            Local.Blocks[BlockIndex].Revision := Stored.Blocks[Match].Revision + 1;
+            If Stored.Blocks[Match].Body = '' Then
               EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(Local.Blocks[BlockIndex].Body), 0)
-            Else If MonitorAppendSuffix(Stored.Blocks[BlockIndex].Body, Local.Blocks[BlockIndex].Body, EventJson, Index) Then
+            Else If MonitorAppendSuffix(Stored.Blocks[Match].Body, Local.Blocks[BlockIndex].Body, EventJson, Index) Then
               EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index)
             Else
               EmitReplace(Local.Blocks[BlockIndex]);
-          End;
+          End
+        Else If Stored.Blocks[Match].Revision > Local.Blocks[BlockIndex].Revision Then
+          { An unchanged body keeps the revision the phone was given, so a block fetch does not see it go back. }
+          Local.Blocks[BlockIndex].Revision := Stored.Blocks[Match].Revision;
         If Not Local.Blocks[BlockIndex].Running Then
           Begin
-            If (Not Found) Or Stored.Blocks[BlockIndex].Running Then
-              AppendLocked(FHead + 1, 'block_close', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
-                '","state":"' + BlockStateName(Local.Blocks[BlockIndex]) + '","duration_ms":' +
-                IntToStr(Local.Blocks[BlockIndex].DurationMs) + '}');
+            If (Not Found) Or Stored.Blocks[Match].Running Then
+              AppendLocked(FHead + 1, 'block_close', BlockCloseJson(Local.Blocks[BlockIndex]));
           End;
       End;
     For Index := 0 To High(Local.Images) Do
@@ -781,8 +928,7 @@ Begin
           Begin
             SetLength(FTurns, Length(FTurns) + 1);
             FTurns[High(FTurns)] := Local;
-            AppendLocked(FHead + 1, 'turn_close', '{"turn_id":"' + JsonEscapeText(Local.Id) + '","outcome":"done","duration_ms":' +
-              IntToStr(Local.DurationMs) + ',"error_text":"' + JsonEscapeText(Local.ErrorText) + '"}');
+            AppendLocked(FHead + 1, 'turn_close', TurnCloseJson(Local, TurnOutcomeName(Local)));
           End;
       End;
   Finally

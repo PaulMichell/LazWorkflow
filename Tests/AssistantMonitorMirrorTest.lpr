@@ -5,6 +5,7 @@ Program AssistantMonitorMirrorTest;
   Observing a turn leaves the caller's record untouched (plan item 3.2).
   An event that cannot be stored still advances the head and is noted as a drop (plan item 4.1).
   Only the four newest parked conversations are kept (plan item 4.3).
+  A turn keeps one id from the first token to its stored row, and is not sent twice (plan item 8.1).
   (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
@@ -308,6 +309,129 @@ Begin
         Log.Free;
       End;
     End;
+End;
+
+{ Event kinds after the first Skip events, joined with commas. }
+Function KindsAfter(Log: TMonitorMirror; Skip: Integer): String;
+Var
+  Events: TMonitorMirrorEventArray;
+  Index: Integer;
+Begin
+  Result := '';
+  Log.CopyEvents(Events);
+  For Index := Skip To High(Events) Do
+    Begin
+      If Result <> '' Then
+        Result := Result + ',';
+      Result := Result + Events[Index].Kind;
+    End;
+End;
+
+Function EventCount(Log: TMonitorMirror): Integer;
+Var
+  Events: TMonitorMirrorEventArray;
+Begin
+  Result := Log.CopyEvents(Events);
+End;
+
+{ The data of the last event, parsed. The caller frees it. }
+Function LastEventData(Log: TMonitorMirror): TJSONObject;
+Var
+  Events: TMonitorMirrorEventArray;
+Begin
+  Result := Nil;
+  If Log.CopyEvents(Events) = 0 Then
+    Exit;
+  Result := TJSONObject(GetJSON(String(Events[High(Events)].Data)));
+End;
+
+Function LiveTurn(Const TurnId, Body: String; Running: Boolean): TAssistantMonitorTurn;
+Begin
+  Result := SampleTurn(TurnId, Body, -2);
+  SetLength(Result.Images, 0);
+  Result.Live := True;
+  Result.Blocks[0].Running := Running;
+  Result.Blocks[0].Ok := Not Running;
+End;
+
+{ One turn keeps one id from turn_open to turn_close. A recorded turn is not sent a second time, an idle desktop's
+  copy of a stored turn is not a second turn, and a turn that ends without a stored row is closed below the others.
+  The phone orders turns by index, so a turn left at the live index -2 sat above the whole transcript. }
+Procedure TestTurnLifecycle;
+Var
+  Log: TMonitorMirror;
+  Turn, Live: TAssistantMonitorTurn;
+  Stored: TMonitorMirrorTurnArray;
+  HasLive: Boolean;
+  Before: Integer;
+  Data: TJSONObject;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Turn := SampleTurn('turn-0', 'first', 0);
+    SetLength(Turn.Images, 0);
+    Log.ObserveTurn(Turn);
+    Log.ObserveTurn(LiveTurn('turn-1', 'hel', True));
+    Log.ObserveTurn(LiveTurn('turn-1', 'hello', True));
+    Before := EventCount(Log);
+    { The desktop recorded the turn. Idle, it reports that stored turn, at its real index, as live. }
+    Turn := LiveTurn('turn-1', 'hello', False);
+    Turn.TurnIndex := 1;
+    Log.ObserveTurn(Turn);
+    Check('a recorded turn is reindexed and closed without resending its body',
+      KindsAfter(Log, Before) = 'turn_open,block_close,turn_close');
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('a recorded turn leaves no live turn', Not HasLive);
+    Check('a recorded turn is stored once', (Length(Stored) = 2) And (Stored[1].Id = 'turn-1') And
+      (Stored[1].TurnIndex = 1));
+    Before := EventCount(Log);
+    Log.ObserveTurn(Turn);
+    Turn.Live := False;
+    Log.ObserveTurn(Turn);
+    Check('the idle copy and the stored row add nothing', EventCount(Log) = Before);
+    { A plan run keeps adding notes to the recorded turn's trace, still at the live index. }
+    Turn := LiveTurn('turn-1', 'hello', False);
+    SetLength(Turn.Blocks, 2);
+    Turn.Blocks[1].BlockId := 'turn-1-note';
+    Turn.Blocks[1].Kind := 'note';
+    Turn.Blocks[1].Body := 'note';
+    Turn.Blocks[1].Ok := True;
+    Before := EventCount(Log);
+    Log.ObserveTurn(Turn);
+    Check('a note on a stored turn is added to that turn', KindsAfter(Log, Before) = 'block_open,block_append,block_close');
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('a note keeps the stored index and adds no live turn', (Not HasLive) And (Length(Stored) = 2) And
+      (Stored[1].TurnIndex = 1));
+    { A turn in flight that ends without a stored row. }
+    Log.ObserveTurn(LiveTurn('turn-2', 'partial', True));
+    Before := EventCount(Log);
+    Turn := Default(TAssistantMonitorTurn);
+    Turn.Id := MonitorIdleTurnId;
+    Turn.TurnIndex := -2;
+    Turn.Live := True;
+    Log.ObserveTurn(Turn);
+    Check('an abandoned turn is closed below the others', KindsAfter(Log, Before) = 'block_close,turn_open,turn_close');
+    Data := LastEventData(Log);
+    Try
+      Check('an abandoned running turn is stopped', Assigned(Data) And (Data.Get('outcome', '') = 'stopped'));
+    Finally
+      Data.Free;
+    End;
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('an abandoned turn takes the next index', (Not HasLive) And (Length(Stored) = 3) And (Stored[2].Id = 'turn-2') And
+      (Stored[2].TurnIndex = 2));
+    { A second turn starts while the first is still the live one. }
+    Log.ObserveTurn(LiveTurn('turn-3', 'one', False));
+    Before := EventCount(Log);
+    Log.ObserveTurn(LiveTurn('turn-4', 'two', True));
+    Check('a new turn in flight closes the previous one first',
+      Copy(KindsAfter(Log, Before), 1, Length('turn_open,turn_close,turn_open')) = 'turn_open,turn_close,turn_open');
+    Log.CopyTurns(Stored, Live, HasLive);
+    Check('only the new turn is live', HasLive And (Live.Id = 'turn-4') And (Length(Stored) = 4) And (Stored[3].Id = 'turn-3'));
+  Finally
+    Log.Free;
+  End;
 End;
 
 { The payload object of an encoded frame, or Nil. The caller frees Root. }
@@ -659,6 +783,7 @@ Begin
   TestLargeAppend;
   TestLiveBlocks;
   TestObserveLeavesCallerAlone;
+  TestTurnLifecycle;
   TestUtf8CutHelper;
   TestStateChunksKeepCharacters;
   TestPreviewKeepsCharacters;

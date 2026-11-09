@@ -295,6 +295,10 @@ Type
     FSending: Boolean;
     FStreamingActive: Boolean; { True while assistant reply is streaming. }
     FTurnRecorded: Boolean; { True after this in-flight turn is written to conversation.jsonl. }
+    { Id the in-flight turn is stored under, so the phone sees one turn from first token to stored row. }
+    LiveTurnId: String;
+    { Id of the last row RecordCurrentTurn wrote. A new turn never reuses it. }
+    StoredTurnId: String;
     FUserCancelled: Boolean;
     FAssistantContent: String; { Content shown in the chat pane (may be a past turn). }
     FAssistantThinking: String;
@@ -409,6 +413,10 @@ Type
     Procedure ShowConversationTurn(TurnIndex: Integer; Navigate: Boolean = True);
     Procedure ShowLastConversationTurn;
     Procedure RecordCurrentTurn(Const ErrorText: String);
+    { The stored id of the turn in flight. Made on first use; a turn that starts after a recorded one gets a new id. }
+    Function InFlightTurnId: String;
+    { InFlightTurnId while a turn is sending or the live trace has blocks; otherwise the idle id 'live'. }
+    Function MonitorLiveTurnId: String;
     Function CurrentStreamDurationMs: Integer;
     Procedure FinishLiveTrace(Const SystemNote: String; DurationMs: Integer);
     Function CurrentModeFromUi: TAssistantMode;
@@ -1894,6 +1902,7 @@ Begin
   FStreamingActive := False;
   FViewingLive := True;
   FSelectedTurnIndex := -1;
+  LiveTurnId := '';
   ResetTraceCards;
   If Assigned(FTrace) Then
     FTrace.Clear;
@@ -4492,7 +4501,8 @@ Begin
     (Trim(Turn.AttachmentsJson) = '') Then
     Exit;
   DurationMs := CurrentStreamDurationMs;
-  Turn.Id := NewConversationTurnId;
+  { The phone already holds this turn under the id the monitor sent while it streamed. }
+  Turn.Id := InFlightTurnId;
   Turn.Mode := AssistantModeToStr(ActiveMode);
   If FLiveUser <> '' Then
     Turn.Prompt := FLiveUser
@@ -4554,12 +4564,29 @@ Begin
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
     Begin
       FTurnRecorded := True;
+      StoredTurnId := Turn.Id;
       If (Not FUseClaude) And Assigned(AssistantClient) Then
         AssistantClient.NoteMessagesStored;
       RefreshHistoryCombo;
     End
   Else
     WorkflowLogger.Warning('ProjectAssistant', 'Conversation append failed: ' + ProjectAssistantConversation.LastError);
+End;
+
+Function TProjectAssistantForm.InFlightTurnId: String;
+Begin
+  { Every path that starts a turn clears FTurnRecorded. A plan run keeps the recorded id for its notes until then. }
+  If (LiveTurnId = '') Or ((LiveTurnId = StoredTurnId) And (Not FTurnRecorded)) Then
+    LiveTurnId := NewConversationTurnId;
+  Result := LiveTurnId;
+End;
+
+Function TProjectAssistantForm.MonitorLiveTurnId: String;
+Begin
+  If FSending Or (Assigned(FTrace) And (FTrace.Count > 0)) Then
+    Result := InFlightTurnId
+  Else
+    Result := 'live';
 End;
 
 Function TProjectAssistantForm.CurrentStreamDurationMs: Integer;
@@ -7716,6 +7743,7 @@ Begin
   FLiveThinking := '';
   FUserCancelled := False;
   FTurnRecorded := False;
+  LiveTurnId := '';
   FStreamingActive := True;
   FViewingLive := True;
   FSelectedTurnIndex := LiveConversationMarker;
@@ -10890,7 +10918,7 @@ Begin
               End;
           End;
         Turn.Live := True;
-        Turn.Id := 'live';
+        Turn.Id := MonitorLiveTurnId;
         Turn.Mode := AssistantModeToStr(ActiveMode);
         Turn.Prompt := FLiveUser;
         If Turn.Prompt = '' Then
@@ -11010,7 +11038,7 @@ Begin
     End;
   Turn.TurnIndex := LiveConversationMarker;
   Turn.Live := True;
-  Turn.Id := 'live';
+  Turn.Id := MonitorLiveTurnId;
   Turn.Mode := AssistantModeToStr(ActiveMode);
   Turn.Prompt := FLiveUser;
   If Turn.Prompt = '' Then
