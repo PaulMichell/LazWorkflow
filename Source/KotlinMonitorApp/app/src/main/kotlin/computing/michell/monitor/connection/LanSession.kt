@@ -1011,6 +1011,7 @@ class LanSession(
       val framing = actor.launch {
         for (frame in syncFrames) {
           while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+          diagnostic("sync frame ${frame::class.simpleName}")
           applier?.offerFrame(frame)
         }
       }

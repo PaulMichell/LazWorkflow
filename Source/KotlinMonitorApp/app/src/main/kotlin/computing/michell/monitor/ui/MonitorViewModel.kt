@@ -1200,6 +1200,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         try {
           applyIncoming(message)
         } catch (error: Exception) {
+          android.util.Log.e("MonitorFetch", "incoming ${message.kind} failed", error)
           // A bad frame must not kill the process. The next resume can ask again.
         }
       }
@@ -1844,6 +1845,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun sendBlockGet(effect: computing.michell.monitor.data.SyncEffect.FetchBlock) {
+    android.util.Log.d("MonitorFetch", "request block=${effect.blockId} offset=${effect.offset}")
     val id = effect.requestId.ifEmpty { session.nextCommandId() }
     session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncBlockGet(
       id, effect.conversationId, effect.blockId, effect.offset, effect.prefixHash
