@@ -886,7 +886,7 @@ Procedure TAssistantMonitorBridge.FillSnapshot(Form: TProjectAssistantForm; Out 
 Var
   Turn: TAssistantMonitorTurn;
   ErrorText: String;
-  Index, Kept: Integer;
+  Index, Kept, First: Integer;
 Begin
   {$IFDEF MONITOR_BRIDGE_TEST}
   Inc(MonitorSnapshotFillCount);
@@ -904,7 +904,13 @@ Begin
   Snapshot.PlanRunning := Snapshot.View.PlanRunning;
   Snapshot.Approval := CurrentAssistantApproval;
   Kept := 0;
-  For Index := 0 To MonitorSnapshotTurnCap - 1 Do
+  { The newest turns. The phone deletes a turn the outline leaves out, so the oldest thirty would lose the rest. }
+  First := 0;
+  If Assigned(ProjectAssistantConversation) Then
+    First := ProjectAssistantConversation.TurnCount - MonitorSnapshotTurnCap;
+  If First < 0 Then
+    First := 0;
+  For Index := First To First + MonitorSnapshotTurnCap - 1 Do
     Begin
       If Not Form.FillMonitorTurn(Index, Turn, ErrorText) Then
         Break;
