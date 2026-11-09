@@ -38,6 +38,8 @@ Type
     Function ListHasSelection(List: TListBox): Boolean;
     Function CollectSelected(List: TListBox; Paths: TStringList): TStringList;
     Function CollectActiveSelected: TStringList;
+    { First selected path on the side currently shown in the preview. }
+    Function PreviewPath: String;
     Procedure ClearForNoRepo;
     Procedure ApplyFromStatus(Const Entries: TGitStatusEntryArray; Tracked: TStrings);
     Procedure RefreshSelectedDiff;
@@ -128,6 +130,30 @@ Begin
       Result.Free;
       Result := CollectSelected(StagedList, FStagedPaths);
     End;
+End;
+
+Function TManageChangesPane.PreviewPath: String;
+Var
+  List: TListBox;
+  Paths: TStringList;
+  I: Integer;
+Begin
+  Result := '';
+  If FLastFromStaged Then
+    Begin
+      List := StagedList;
+      Paths := FStagedPaths;
+    End
+  Else
+    Begin
+      List := ChangesList;
+      Paths := FChangesPaths;
+    End;
+  If (List = Nil) Or (Paths = Nil) Then
+    Exit;
+  For I := 0 To List.Count - 1 Do
+    If List.Selected[I] And (I < Paths.Count) Then
+      Exit(Paths[I]);
 End;
 
 Procedure TManageChangesPane.ClearForNoRepo;

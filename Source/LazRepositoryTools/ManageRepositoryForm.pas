@@ -15,7 +15,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, SpellMemo, WorkflowEvents, StatusFooterFrame,
+  ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, SrcEditorIntf, SpellMemo, WorkflowEvents, StatusFooterFrame,
   GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryChanges,
   ManageRepositoryFiles;
 
@@ -43,6 +43,7 @@ Type
     StageAllAction: TAction;
     StageAction: TAction;
     StageSelectionAction: TAction;
+    OpenAction: TAction;
     RevertAction: TAction;
     DeleteAction: TAction;
     IgnoreAction: TAction;
@@ -111,6 +112,7 @@ Type
     StageAllButton: TButton;
     StageButton: TButton;
     StageSelectionButton: TButton;
+    OpenButton: TButton;
     RevertButton: TButton;
     DeleteButton: TButton;
     IgnoreButton: TButton;
@@ -152,6 +154,7 @@ Type
     Procedure StageAllActionExecute(Sender: TObject);
     Procedure StageActionExecute(Sender: TObject);
     Procedure StageSelectionActionExecute(Sender: TObject);
+    Procedure OpenActionExecute(Sender: TObject);
     Procedure RevertActionExecute(Sender: TObject);
     Procedure DeleteActionExecute(Sender: TObject);
     Procedure IgnoreActionExecute(Sender: TObject);
@@ -172,6 +175,7 @@ Type
     Procedure StageAllActionUpdate(Sender: TObject);
     Procedure StageActionUpdate(Sender: TObject);
     Procedure StageSelectionActionUpdate(Sender: TObject);
+    Procedure OpenActionUpdate(Sender: TObject);
     Procedure PathActionUpdate(Sender: TObject);
     Procedure IgnoredFilesActionUpdate(Sender: TObject);
     Procedure SuggestMessageActionUpdate(Sender: TObject);
@@ -230,6 +234,9 @@ Type
     FLastIndexAge: LongInt;
     FLastProbeAt: TDateTime;
     FProbeIntervalSec: Integer;
+    OpenScrollPath: String;
+    OpenScrollTop: Integer;
+    OpenScrollLeft: Integer;
     Procedure DetailTimerTimer(Sender: TObject);
     Procedure AutoRefreshTimerTimer(Sender: TObject);
     Function GitDirStampChanged: Boolean;
@@ -278,6 +285,8 @@ Type
     Procedure HeadChanged(Const RepoPath: String; Const NewHeadSha: String);
     Procedure RemoteUpdated(Const RepoPath: String; Const RemoteName: String);
     Function FilePreviewEditor: TSynEdit;
+    Procedure ApplyOpenedEditorScroll(Editor: TSourceEditorInterface; TopLine, LeftChar: Integer);
+    Procedure ApplyOpenScrollAsync(Data: PtrInt);
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -298,7 +307,7 @@ Implementation
 
 Uses
   WorkflowLog, GitConfig, GitRemotesForm, GitSettingsForm, GitIgnoreForm, GitPathUtils,
-  CommitInfoForm, DateUtils, Math, LazFileUtils, SpellCheckerConfig, SynEditTypes;
+  CommitInfoForm, DateUtils, Math, Types, LazFileUtils, LazIDEIntf, SpellCheckerConfig, SynEditTypes;
 
 Procedure RefreshOpenManageRepositoryForms;
 Var
@@ -2048,6 +2057,130 @@ Begin
   Else
     CurrentAction.Caption := 'Stage Selection';
   CurrentAction.Enabled := CanMutate And Assigned(ChangesDiffView) And ChangesDiffView.HasActiveSelection;
+End;
+
+Function IsPascalSourcePath(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  { Same set the IDE treats as Pascal source, plus include files. }
+  Result := (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.p') Or (Ext = '.inc') Or
+    (Ext = '.lpr') Or (Ext = '.dpr') Or (Ext = '.dpk');
+End;
+
+Procedure TManageRepositoryForm.ApplyOpenedEditorScroll(Editor: TSourceEditorInterface; TopLine, LeftChar: Integer);
+Var
+  SynEditControl: TCustomSynEdit;
+  LineCount: Integer;
+Begin
+  If Not Assigned(Editor) Then
+    Exit;
+  If TopLine < 1 Then
+    TopLine := 1;
+  If LeftChar < 1 Then
+    LeftChar := 1;
+  LineCount := Editor.LineCount;
+  If (LineCount > 0) And (TopLine > LineCount) Then
+    TopLine := LineCount;
+  { Caret sits on the top-left cell so a later ensure-visible does not pull the viewport away. }
+  If Editor.EditorControl Is TCustomSynEdit Then
+    Begin
+      SynEditControl := TCustomSynEdit(Editor.EditorControl);
+      SynEditControl.CaretXY := Point(LeftChar, TopLine);
+      SynEditControl.LeftChar := LeftChar;
+      SynEditControl.TopLine := TopLine;
+    End
+  Else
+    Begin
+      Editor.CursorTextXY := Point(LeftChar, TopLine);
+      Editor.TopLine := TopLine;
+    End;
+End;
+
+Procedure TManageRepositoryForm.ApplyOpenScrollAsync(Data: PtrInt);
+Var
+  Editor: TSourceEditorInterface;
+Begin
+  If (csDestroying In ComponentState) Or Not Assigned(SourceEditorManagerIntf) Then
+    Exit;
+  Editor := SourceEditorManagerIntf.ActiveEditor;
+  If Not Assigned(Editor) Or
+    (CompareFilenames(ExpandFileName(Editor.FileName), ExpandFileName(OpenScrollPath)) <> 0) Then
+    Exit;
+  ApplyOpenedEditorScroll(Editor, OpenScrollTop, OpenScrollLeft);
+End;
+
+Procedure TManageRepositoryForm.OpenActionUpdate(Sender: TObject);
+Var
+  CurrentAction: TAction;
+Begin
+  CurrentAction := Sender As TAction;
+  CurrentAction.Enabled := Assigned(FChanges) And IsPascalSourcePath(FChanges.PreviewPath);
+End;
+
+Procedure TManageRepositoryForm.OpenActionExecute(Sender: TObject);
+Var
+  RelativePath, FullPath, SavedRepo, ErrorText: String;
+  TopLine, LeftChar: Integer;
+  CursorPos: TPoint;
+  Editor: TSourceEditorInterface;
+Begin
+  If Not Assigned(FChanges) Then
+    Exit;
+  RelativePath := FChanges.PreviewPath;
+  If Not IsPascalSourcePath(RelativePath) Then
+    Exit;
+  If (FRepoPath = '') Or Not Assigned(GitClient) Then
+    Begin
+      MessageDlg('No repository is bound to this window.', mtInformation, [mbOK], 0);
+      Exit;
+    End;
+  If Not Assigned(LazarusIDE) Or Not Assigned(SourceEditorManagerIntf) Then
+    Begin
+      MessageDlg('The IDE source editor is not available.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  SavedRepo := GitClient.RepoPath;
+  GitClient.RepoPath := FRepoPath;
+  Try
+    FullPath := GitClient.WorkingTreeFullPath(RelativePath);
+    ErrorText := GitClient.LastError;
+  Finally
+    GitClient.RepoPath := SavedRepo;
+  End;
+  If FullPath = '' Then
+    Begin
+      If ErrorText = '' Then
+        ErrorText := 'Path is not in the repository.';
+      MessageDlg('Could not open ' + RelativePath + '.' + LineEnding + ErrorText, mtError, [mbOK], 0);
+      Exit;
+    End;
+  TopLine := 1;
+  LeftChar := 1;
+  If Assigned(ChangesDiffView) Then
+    ChangesDiffView.TryPreviewSourceScroll(TopLine, LeftChar);
+  CursorPos.X := LeftChar;
+  CursorPos.Y := TopLine;
+  If LazarusIDE.DoOpenFileAndJumpToPos(FullPath, CursorPos, TopLine, -1, -1,
+    [ofOnlyIfExists, ofRegularFile, ofDoNotLoadResource]) <> mrOk Then
+    Begin
+      MessageDlg('Could not open ' + FullPath + ' in the source editor.', mtError, [mbOK], 0);
+      Exit;
+    End;
+  Editor := SourceEditorManagerIntf.ActiveEditor;
+  If Not Assigned(Editor) Or
+    (CompareFilenames(ExpandFileName(Editor.FileName), ExpandFileName(FullPath)) <> 0) Then
+    Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(FullPath);
+  If Assigned(Editor) Then
+    SourceEditorManagerIntf.ActiveEditor := Editor;
+  SourceEditorManagerIntf.ShowActiveWindowOnTop(True);
+  If Assigned(Editor) Then
+    ApplyOpenedEditorScroll(Editor, TopLine, LeftChar);
+  OpenScrollPath := FullPath;
+  OpenScrollTop := TopLine;
+  OpenScrollLeft := LeftChar;
+  Application.QueueAsyncCall(@ApplyOpenScrollAsync, 0);
 End;
 
 Procedure TManageRepositoryForm.PathActionUpdate(Sender: TObject);

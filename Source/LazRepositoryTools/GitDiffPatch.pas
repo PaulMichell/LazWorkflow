@@ -19,9 +19,14 @@ Type
     OldStart, NewStart, OldCount, NewCount: Integer;
   End;
   TGitDiffLines = Array Of TGitDiffLine;
+  TGitNewFileLines = Array Of Integer;
   TGitLineNumberList = specialize TFPGList<Integer>;
 
 Function ParseGitDiff(Lines: TStrings): TGitDiffLines;
+{ New-file line for each unified-diff line. Context and added lines use their
+  new-file number. A removed line uses the new-file line it sits in front of.
+  Headers and "\ No newline" are 0. }
+Function GitDiffNewFileLines(Lines: TStrings): TGitNewFileLines;
 Function LineIsDiffAdded(Const Line: String): Boolean;
 Function LineIsDiffRemoved(Const Line: String): Boolean;
 Function LineIsDiffContext(Const Line: String): Boolean;
@@ -146,6 +151,62 @@ Begin
             End;
         End
       Else If LineIsDiffFileMeta(S) Then Result[I].Kind := dlMeta;
+    End;
+End;
+
+Function GitDiffNewFileLines(Lines: TStrings): TGitNewFileLines;
+Var
+  Parsed: TGitDiffLines;
+  I, NewLine, Anchor: Integer;
+Begin
+  Result := Nil;
+  If Lines = Nil Then
+    Exit;
+  SetLength(Result, Lines.Count);
+  Parsed := ParseGitDiff(Lines);
+  NewLine := 0;
+  Anchor := 0;
+  For I := 0 To Lines.Count - 1 Do
+    Begin
+      Result[I] := 0;
+      If I > High(Parsed) Then
+        Continue;
+      Case Parsed[I].Kind Of
+        dlHunk:
+          Begin
+            Anchor := Parsed[I].NewStart;
+            If Anchor < 0 Then
+              Anchor := 0;
+            { A zero-count hunk has no new lines; removed lines use the anchor. }
+            If Parsed[I].NewCount > 0 Then
+              NewLine := Anchor
+            Else
+              NewLine := 0;
+          End;
+        dlAdded, dlContext:
+          Begin
+            If NewLine < 1 Then
+              Begin
+                If Anchor > 0 Then
+                  NewLine := Anchor
+                Else
+                  NewLine := 1;
+              End;
+            Result[I] := NewLine;
+            Inc(NewLine);
+          End;
+        dlRemoved:
+          Begin
+            If NewLine > 0 Then
+              Result[I] := NewLine
+            Else If Anchor > 0 Then
+              Result[I] := Anchor
+            Else
+              Result[I] := 1;
+          End;
+      Else
+        Result[I] := 0;
+      End;
     End;
 End;
 

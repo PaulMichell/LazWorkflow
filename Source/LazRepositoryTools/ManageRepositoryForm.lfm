@@ -715,37 +715,47 @@ object ManageRepositoryForm: TManageRepositoryForm
             Action = StageSelectionAction
             TabOrder = 2
           end
-          object RevertButton: TButton
+          object OpenButton: TButton
             Left = 294
             Height = 28
             Top = 4
             Width = 84
-            Action = RevertAction
+            Action = OpenAction
+            ParentShowHint = False
+            ShowHint = True
             TabOrder = 3
           end
-          object DeleteButton: TButton
+          object RevertButton: TButton
             Left = 382
             Height = 28
             Top = 4
             Width = 84
-            Action = DeleteAction
+            Action = RevertAction
             TabOrder = 4
           end
-          object IgnoreButton: TButton
+          object DeleteButton: TButton
             Left = 470
             Height = 28
             Top = 4
             Width = 84
-            Action = IgnoreAction
+            Action = DeleteAction
             TabOrder = 5
           end
-          object IgnoredFilesButton: TButton
+          object IgnoreButton: TButton
             Left = 558
+            Height = 28
+            Top = 4
+            Width = 84
+            Action = IgnoreAction
+            TabOrder = 6
+          end
+          object IgnoredFilesButton: TButton
+            Left = 646
             Height = 28
             Top = 4
             Width = 106
             Action = IgnoredFilesAction
-            TabOrder = 6
+            TabOrder = 7
           end
         end
         inline ChangesDiffView: TGitDiffView
@@ -818,6 +828,13 @@ object ManageRepositoryForm: TManageRepositoryForm
       Enabled = False
       OnExecute = StageSelectionActionExecute
       OnUpdate = StageSelectionActionUpdate
+    end
+    object OpenAction: TAction
+      Caption = 'Open'
+      Enabled = False
+      Hint = 'Open the selected Pascal file in the source editor at the preview scroll position'
+      OnExecute = OpenActionExecute
+      OnUpdate = OpenActionUpdate
     end
     object RevertAction: TAction
       Caption = 'Revert'

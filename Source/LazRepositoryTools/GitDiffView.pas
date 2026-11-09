@@ -103,6 +103,7 @@ Type
     LineDragSnapshot: TGitLineNumberList; { selection at mouse-down for Ctrl+drag }
     FUseDisplayMap: Boolean; { Changes tab: editor lines omit file meta / @@ headers }
     FDisplayToFull: Array Of Integer; { display 0-based -> full 1-based line in FDiffText }
+    FDisplaySourceLine: Array Of Integer; { display 0-based -> 1-based new-file line; 0 if unknown }
     HunkStartLines: TGitLineNumberList; { 1-based display lines: first change line of each visual hunk }
     Procedure ApplyIDEEditorAppearance;
     Procedure ApplyCompactEditorFont;
@@ -192,6 +193,8 @@ Type
     Procedure DoScrollToFirstChangeAsync(Data: PtrInt);
     Function IsDiffChangeLine(LineNo: Integer): Boolean;
     Function IsAlive: Boolean;
+    Function SourceLineForDisplay(DisplayLine: Integer): Integer;
+    Function SourceColumnForDisplay(DisplayLine, PreviewColumn: Integer): Integer;
   Public
     Constructor Create(TheOwner: TComponent); Override;
     Destructor Destroy; Override;
@@ -215,6 +218,9 @@ Type
     Function StageSelection: Boolean;
     Function UnstageSelection: Boolean;
     Function HasActiveSelection: Boolean;
+    { Map the visible preview onto the new/working file. False when the preview is not text.
+      TopLine and LeftChar are 1-based source coordinates matching the preview viewport. }
+    Function TryPreviewSourceScroll(Out TopLine, LeftChar: Integer): Boolean;
     { Reassert right overview gutter size/visibility (e.g. after notebook page show). }
     Procedure RefreshOverviewGutter;
     Property Mode: TGitDiffViewMode Read FMode;
@@ -273,6 +279,7 @@ Begin
   FLineDragWasSelected := False;
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
+  SetLength(FDisplaySourceLine, 0);
   HunkStartLines := TGitLineNumberList.Create;
   PreviewPicture := TPicture.Create;
   { Owner must be Nil. Create(Self) puts the highlighter in the frame's
@@ -852,6 +859,7 @@ Begin
     TGitDiffOverviewProvider(DiffOverviewProvider).SetLines(FDisplayedLines);
   FUseDisplayMap := False;
   SetLength(FDisplayToFull, 0);
+  SetLength(FDisplaySourceLine, 0);
   If Assigned(HunkStartLines) Then
     HunkStartLines.Clear;
 End;
@@ -899,6 +907,7 @@ Var
   I, FullLineNo: Integer;
   Line: String;
   Parsed: TGitDiffLines;
+  NewLines: TGitNewFileLines;
 Begin
   ClearDisplayMap;
   If Not Assigned(DiffEditor) Then
@@ -916,7 +925,9 @@ Begin
   Try
     Full.Text := DiffText;
     Parsed := ParseGitDiff(Full);
+    NewLines := GitDiffNewFileLines(Full);
     SetLength(FDisplayToFull, Full.Count);
+    SetLength(FDisplaySourceLine, Full.Count);
     SetLength(FDisplayedLines, Full.Count);
     For I := 0 To Full.Count - 1 Do
       Begin
@@ -928,8 +939,13 @@ Begin
         Display.Add(Line);
         FDisplayedLines[Display.Count - 1] := Parsed[I];
         FDisplayToFull[Display.Count - 1] := FullLineNo;
+        If I < Length(NewLines) Then
+          FDisplaySourceLine[Display.Count - 1] := NewLines[I]
+        Else
+          FDisplaySourceLine[Display.Count - 1] := 0;
       End;
     SetLength(FDisplayToFull, Display.Count);
+    SetLength(FDisplaySourceLine, Display.Count);
     SetLength(FDisplayedLines, Display.Count);
     FUseDisplayMap := True;
     DiffEditor.Lines.Assign(Display);
@@ -938,6 +954,64 @@ Begin
     Display.Free;
     Full.Free;
   End;
+End;
+
+Function TGitDiffView.SourceLineForDisplay(DisplayLine: Integer): Integer;
+Begin
+  Result := 1;
+  If DisplayLine < 1 Then
+    Exit;
+  { Plain working-tree text: the preview line is the source line. }
+  If Not FUseDisplayMap Then
+    Exit(DisplayLine);
+  If DisplayLine > Length(FDisplaySourceLine) Then
+    DisplayLine := Length(FDisplaySourceLine);
+  If DisplayLine < 1 Then
+    Exit;
+  Result := FDisplaySourceLine[DisplayLine - 1];
+  If Result < 1 Then
+    Result := 1;
+End;
+
+Function TGitDiffView.SourceColumnForDisplay(DisplayLine, PreviewColumn: Integer): Integer;
+Var
+  Line: String;
+Begin
+  Result := PreviewColumn;
+  If Result < 1 Then
+    Result := 1;
+  { Embedded diff lines keep a one-character +/- /context prefix the source editor does not. }
+  If Not FUseDisplayMap Or Not Assigned(DiffEditor) Then
+    Exit;
+  If (DisplayLine < 1) Or (DisplayLine > DiffEditor.Lines.Count) Then
+    Exit;
+  Line := DiffEditor.Lines[DisplayLine - 1];
+  If (Length(Line) > 0) And (Line[1] In [' ', '+', '-']) And (Result > 1) Then
+    Dec(Result);
+End;
+
+Function TGitDiffView.TryPreviewSourceScroll(Out TopLine, LeftChar: Integer): Boolean;
+Var
+  DisplayTop, DisplayLeft: Integer;
+Begin
+  Result := False;
+  TopLine := 1;
+  LeftChar := 1;
+  If Not Assigned(DiffEditor) Or Not DiffEditor.Visible Then
+    Exit;
+  DisplayTop := DiffEditor.TopLine;
+  If DisplayTop < 1 Then
+    DisplayTop := 1;
+  DisplayLeft := DiffEditor.LeftChar;
+  If DisplayLeft < 1 Then
+    DisplayLeft := 1;
+  TopLine := SourceLineForDisplay(DisplayTop);
+  LeftChar := SourceColumnForDisplay(DisplayTop, DisplayLeft);
+  If TopLine < 1 Then
+    TopLine := 1;
+  If LeftChar < 1 Then
+    LeftChar := 1;
+  Result := True;
 End;
 
 Function TGitDiffView.FullLineIsSelected(FullLineNo: Integer): Boolean;
