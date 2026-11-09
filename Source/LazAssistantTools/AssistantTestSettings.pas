@@ -72,6 +72,23 @@ Begin
     Result := 'run';
 End;
 
+{ One path component holds 255 bytes. A token for many --only names is cut and given an FNV-1a hash of the whole,
+  so it stays one name per selection. }
+Function ShortDirToken(Const Token: String): String;
+Const
+  KeptChars = 80;
+Var
+  Hash: LongWord;
+  I: Integer;
+Begin
+  If Length(Token) <= 2 * KeptChars Then
+    Exit(Token);
+  Hash := 2166136261;
+  For I := 1 To Length(Token) Do
+    Hash := LongWord((Hash Xor Ord(Token[I])) * QWord(16777619));
+  Result := Copy(Token, 1, KeptChars) + '-' + IntToHex(Hash, 8);
+End;
+
 Function IsRepositoryRunner(Const Executable, ProjectRoot: String; Arguments: TJSONArray): Boolean;
 Var
   I: Integer;
@@ -285,7 +302,7 @@ Begin
       Token := Token + '-d' + Defines[I];
     For I := 0 To Only.Count - 1 Do
       Token := Token + '-' + Only[I];
-    OutputDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + Token;
+    OutputDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + ShortDirToken(Token);
     If Not ForceDirectories(OutputDir) Then
       Begin
         ErrorText := 'Could not create a temporary test output directory.';
