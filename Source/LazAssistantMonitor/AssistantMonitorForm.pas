@@ -100,8 +100,15 @@ Const
 
 Type
   PMonitorSocketIn = ^TMonitorSocketIn;
+  { Darwin and the BSDs put a one-byte sa_len before a one-byte sa_family. A Word family never matches, so the
+    endpoint list stays empty. Linux and Windows keep the two-byte family. }
   TMonitorSocketIn = Packed Record
+    {$IF DEFINED(DARWIN) OR DEFINED(BSD)}
+    Len: Byte;
+    Family: Byte;
+    {$ELSE}
     Family: Word;
+    {$ENDIF}
     Port: Word;
     Address: Array[0..3] Of Byte;
     Zero: Array[0..7] Of Byte;
