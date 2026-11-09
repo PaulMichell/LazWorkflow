@@ -622,7 +622,7 @@ Begin
   Source.Turns[0].Blocks[1].Kind := 'tool';
   Source.Turns[0].Blocks[1].BlockId := 'turn-0-tool';
   Source.Turns[0].Blocks[1].Title := 'read_file "A.pas"';
-  Source.Turns[0].Blocks[1].Body := StringOfChar('x', 4096);
+  Source.Turns[0].Blocks[1].Body := StringOfChar('x', 20000);
   Source.Turns[0].Blocks[1].Ok := True;
   Status := Default(TMonitorSyncStatus);
   Answer := MonitorSyncResumeAnswer(Source, 'conversation-a', '', 'resume-1', 0, Status);
@@ -647,7 +647,7 @@ Begin
     Check('a small body rides with the outline', Small.Get('body', '?') = 'Thought.');
     Check('a large block names its title', Large.Get('title', '') = 'read_file "A.pas"');
     Check('a large body is left to block_get', Large.Find('body') = Nil);
-    Check('a large block still states its size', Large.Get('body_bytes', 0) = 4096);
+    Check('a large block still states its size', Large.Get('body_bytes', 0) = 20000);
   Finally
     Root.Free;
   End;

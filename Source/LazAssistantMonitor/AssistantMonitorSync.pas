@@ -106,9 +106,10 @@ Const
     chunk envelope together stay under MonitorOutboxChunkBytes. }
   MonitorStateChunkRawBytes = 20000;
   MonitorStateChunkDataBytes = 28000;
-  { A body this size or smaller rides in the baseline outline. Thoughts, prompts, notes and most answers then
-    arrive with the outline; a larger body is fetched by block_get. Escaped, it still fits one outline page. }
-  MonitorOutlineBodyBytes = 2048;
+  { A body whose escaped text is this size or smaller rides in the baseline outline. Thoughts, prompts, notes and
+    answers then arrive with the outline; a larger body, usually a tool result, is fetched by block_get. The limit
+    is on escaped bytes so that one block with its fields stays inside the 24 KiB outline page. }
+  MonitorOutlineBodyBytes = 16 * 1024;
 
 Function EventFrame(Const ConversationId, StreamId: String; Const Event: TMonitorMirrorEvent): String;
 Begin
@@ -199,18 +200,23 @@ Begin
   Result := MonitorBlockState(Block.Running, Block.Ok);
 End;
 
-{ One outline block. The title always rides; the phone has no other way to learn it. The body rides when it is at most
-  MonitorOutlineBodyBytes, so a restored conversation reads the same as the desktop before any block_get. }
+{ One outline block. The title always rides; the phone has no other way to learn it. The body rides when its escaped
+  text is at most MonitorOutlineBodyBytes, so a restored conversation reads the same as the desktop before any
+  block_get. }
 Function OutlineBlock(Const Block: TAssistantMonitorBlock): String;
 Var
-  Bytes: Integer;
+  Escaped: String;
 Begin
-  Bytes := Length(UTF8String(Block.Body));
   Result := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","kind":"' + JsonEscapeText(Block.Kind) + '","title":"' +
     JsonEscapeText(Block.Title) + '","state":"' + BlockState(Block) + '","revision":' + IntToStr(Block.Revision) +
-    ',"body_bytes":' + IntToStr(Bytes) + ',"hash":"' + Fnv1a64(UTF8String(Block.Body)) + '"';
-  If Bytes <= MonitorOutlineBodyBytes Then
-    Result := Result + ',"body":"' + JsonEscapeText(Block.Body) + '"';
+    ',"body_bytes":' + IntToStr(Length(UTF8String(Block.Body))) + ',"hash":"' + Fnv1a64(UTF8String(Block.Body)) + '"';
+  { A body far over the limit is not escaped only to be measured. Escaping never shortens text. }
+  If Length(Block.Body) <= MonitorOutlineBodyBytes Then
+    Begin
+      Escaped := JsonEscapeText(Block.Body);
+      If Length(Escaped) <= MonitorOutlineBodyBytes Then
+        Result := Result + ',"body":"' + Escaped + '"';
+    End;
   Result := Result + '}';
 End;
 
