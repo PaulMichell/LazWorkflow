@@ -278,6 +278,36 @@ class LanSessionTest {
   }
 
   @Test
+  fun screenOffDuringAPlanKeepsTheSocketAndOnStopStillSendsBye() {
+    assertTrue(holdLinkAcrossScreenOff(planRunning = true, turnRunning = false, taskResumed = false))
+    assertTrue(holdLinkAcrossScreenOff(planRunning = false, turnRunning = true, taskResumed = false))
+    assertTrue(holdLinkAcrossScreenOff(planRunning = false, turnRunning = false, taskResumed = true))
+    assertFalse(holdLinkAcrossScreenOff(planRunning = false, turnRunning = false, taskResumed = false))
+    val store = pairedStore()
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      val before = link.frames().size
+      session.leaveForeground(screenOff = true, holdLink = true)
+      Thread.sleep(300)
+      assertTrue(session.holdingAcrossSleep)
+      assertFalse(link.closed)
+      assertEquals(before, link.frames().size)
+      assertFalse(link.frames().any { frame -> envelope(frame).kind == MessageKind.Bye })
+      session.leaveForeground()
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Bye } }
+      val bye = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Bye }
+      assertEquals(ByeBackground, decodeBye(bye.payloadJson)!!.reason)
+      waitUntil { link.closed }
+      assertFalse(session.holdingAcrossSleep)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun backgroundSendsByeAndForegroundResumesWithoutClearingThePin() {
     val store = pairedStore()
     val pin = store.load().fingerprint

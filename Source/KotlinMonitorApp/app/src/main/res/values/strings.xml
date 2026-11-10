@@ -59,4 +59,6 @@
   <string name="monitor_select_plan">Select a plan</string>
   <string name="monitor_actionable_only">Actionable only</string>
   <string name="monitor_not_signed_in">Not signed in</string>
+  <string name="monitor_hold_title">Assistant Monitor</string>
+  <string name="monitor_hold_text">Keeping the desktop link up</string>
 </resources>

@@ -64,6 +64,8 @@ import computing.michell.monitor.dictation.DictationUnavailableMessage
 import computing.michell.monitor.dictation.reduceDictation
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
+import computing.michell.monitor.MonitorHoldService
+import computing.michell.monitor.connection.holdLinkAcrossScreenOff
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.WaitingForWifiBanner
@@ -1454,7 +1456,30 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.enterForeground()
   }
 
+  /** The backlight went off. A running plan, a running turn, or a still-resumed task keeps the socket. */
+  fun noteScreenOff(taskResumed: Boolean) {
+    val shown = uiState.value
+    val hold = holdLinkAcrossScreenOff(
+      shown.planRunning || shown.view.planRunning,
+      shown.view.sending || shown.view.busy,
+      taskResumed
+    )
+    if (!hold) return
+    session.leaveForeground(screenOff = true, holdLink = true)
+    MonitorHoldService.start(getApplication())
+  }
+
+  /** The backlight came back. The socket was not closed, so this is not a new link. */
+  fun noteScreenOn() {
+    session.clearScreenHold()
+    MonitorHoldService.stop(getApplication())
+    enterForeground()
+  }
+
+  /** The user left the app. A screen-off hold is not that. */
   fun leaveForeground() {
+    if (session.holdingAcrossSleep) return
+    MonitorHoldService.stop(getApplication())
     session.leaveForeground()
   }
 

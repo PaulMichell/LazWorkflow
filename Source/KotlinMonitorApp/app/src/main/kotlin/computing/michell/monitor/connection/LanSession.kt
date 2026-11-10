@@ -20,8 +20,9 @@ package computing.michell.monitor.connection
    8 seconds with equal jitter, then 30 seconds while the app is in use. A
    touch, a key or a return to the foreground is use, and a link that is
    down tries at once on it. Two minutes without use is idle: the loop stops
-   trying until the next use. The link is up only in the foreground:
-   background sends bye and waits to resume.
+   trying until the next use. Leaving the app sends bye and waits to resume.
+   The backlight going off does not, while a plan or turn is running or the
+   monitor task is still resumed. That hold does not open a second socket.
    Connect still keeps a saved pin and does not clear it. */
 
 import computing.michell.monitor.protocol.ChunkAssembly
@@ -101,6 +102,11 @@ const val BackgroundBanner = "In the background"
 const val WaitingForWifiBanner = "Waiting for Wi-Fi"
 const val IdleOfflineBanner = "Offline until the screen is touched"
 const val ByeBackground = "background"
+
+/** Screen-off keeps the socket when a plan or turn is running, or the task is still resumed. */
+fun holdLinkAcrossScreenOff(planRunning: Boolean, turnRunning: Boolean, taskResumed: Boolean): Boolean {
+  return planRunning || turnRunning || taskResumed
+}
 const val LanBackoffCapMs = 10_000L
 /** The retry after the short ramp, while the app is in use. */
 const val LanSlowRetryMs = 30_000L
@@ -728,8 +734,26 @@ class LanSession(
   fun requestLiveSync() {
   }
 
-  /** Activity is no longer visible. Send bye, then wait until it returns. */
-  fun leaveForeground() {
+  /** True after a screen-off hold. The onStop path must not undo that hold. */
+  @Volatile
+  var holdingAcrossSleep: Boolean = false
+    private set
+
+  /** The screen came back. The socket was never closed, so this is not a reconnect. */
+  fun clearScreenHold() {
+    holdingAcrossSleep = false
+  }
+
+  /**
+   * The user left the app. Send bye, then wait until it returns.
+   * A screen-off hold does not. The owned socket stays open and no bye is written.
+   */
+  fun leaveForeground(screenOff: Boolean = false, holdLink: Boolean = false) {
+    if (screenOff && holdLink) {
+      holdingAcrossSleep = true
+      return
+    }
+    holdingAcrossSleep = false
     if (!inForeground && leftForBackground) return
     inForeground = false
     leftForBackground = true

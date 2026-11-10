@@ -5,6 +5,7 @@ package computing.michell.monitor
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.lifecycle.Lifecycle
 import android.content.IntentFilter
 import android.os.Bundle
 import android.view.MotionEvent
@@ -105,9 +106,9 @@ class MainActivity : ComponentActivity() {
   private val screenWatch = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       when (intent?.action) {
-        Intent.ACTION_SCREEN_OFF -> model.leaveForeground()
-        // onStart can be later than the backlight. Resume the head and the plan now.
-        Intent.ACTION_SCREEN_ON -> model.enterForeground()
+        Intent.ACTION_SCREEN_OFF -> model.noteScreenOff(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        // onStart can be later than the backlight. The socket was kept, so this is not a new link.
+        Intent.ACTION_SCREEN_ON -> model.noteScreenOn()
       }
     }
   }
