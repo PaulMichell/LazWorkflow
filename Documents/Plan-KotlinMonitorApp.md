@@ -94,7 +94,7 @@ Acceptance: extend `ConnectionChipTest`. Disconnected plus the reconnecting bann
 Only symbols with no production caller, or stubs whose only result is empty. Do not delete a catalogue type an incoming frame can still carry. Do not delete `settleFinishedTurn` or `noteSocketClosed`; the coordinator still uses them.
 
 ### 2.1 Remove the catalogue-2 screen reducer
-Status: not started
+Status: complete
 
 `applyIncoming` never calls `reduceMonitor`. The live screen is `MonitorCoordinator.incoming` plus Room. `reduceMonitor`, `mergeApplied`, `applyLink` and `connectionLabel` remain in `MonitorViewModel.kt` and are called from `MonitorReducerTest` only. They still describe snapshot, status and plan frames the catalogue-3 host does not send as those types. Keeping them implies a second screen owner and hides the real resume path.
 
