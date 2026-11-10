@@ -19,13 +19,26 @@ Interface
 Uses
   Classes, SysUtils, AssistantSessionObserve, AssistantMonitorMirror, AssistantMonitorOutbox;
 
-{ Queues the next contiguous event after QueuedSeq while the unacknowledged
-  framed bytes stay inside the credit window. A gap stops the fill. CloseLink
-  is set when the log lane passes its budget. }
+{ Queues the contiguous events after QueuedSeq that fit in the credit window. The tail is copied under one
+  mirror lock and framed without locking per event. A gap stops the fill. CloseLink is set when the log lane
+  passes its budget. }
 { True when every event after Seq is still stored, or Seq is already the head. }
 Function MonitorSyncCanReplay(Mirror: TMonitorMirror; Seq: Int64): Boolean;
 Procedure MonitorSyncFill(Mirror: TMonitorMirror; Outbox: TMonitorOutbox; Const ConversationId, StreamId: String;
   PhoneAck: Int64; Var QueuedSeq: Int64; Out CloseLink: Boolean);
+
+Type
+  TMonitorSyncLogFrame = Record
+    Seq: Int64;
+    Bytes: RawByteString;
+  End;
+  TMonitorSyncLogFrameArray = Array Of TMonitorSyncLogFrame;
+
+{ Frames the private tail after QueuedSeq. One mirror lock covers the copy. Room is the credit still available,
+  in JSON bytes. A gap, an encode failure, or a frame that would pass Room stops the list. HeadSeen is the head
+  at the copy. The outbox is not touched. }
+Procedure MonitorSyncEncodeLog(Mirror: TMonitorMirror; Const ConversationId, StreamId: String; Room, QueuedSeq: Int64;
+  Out Frames: TMonitorSyncLogFrameArray; Out HeadSeen: Int64);
 
 Type
   TMonitorSyncFrameKind = (mskControl, mskBulk, mskBarrier);
@@ -112,9 +125,52 @@ Const
 
 Function EventFrame(Const ConversationId, StreamId: String; Const Event: TMonitorMirrorEvent): String;
 Begin
+  { LogEnvelopeBase repeats these literals with a one-digit sequence and empty kind and data. Keep them together. }
   Result := '{"v":3,"id":"e-' + IntToStr(Event.Seq) + '","type":"event","payload":{"conversation_id":"' +
     JsonEscapeText(ConversationId) + '","stream_id":"' + JsonEscapeText(StreamId) + '","seq":' + IntToStr(Event.Seq) +
     ',"event":"' + JsonEscapeText(Event.Kind) + '","data":' + String(Event.Data) + '}}';
+End;
+
+{ Lower bound of EventFrame for a one-digit sequence with empty kind and data. JsonEscapeText never shortens, so a
+  real frame is at least this long. A longer base would skip an event that still fits and stall the log lane. }
+Function LogEnvelopeBase(Const ConversationId, StreamId: String): Integer;
+Begin
+  Result := Length('{"v":3,"id":"e-0","type":"event","payload":{"conversation_id":"' + ConversationId +
+    '","stream_id":"' + StreamId + '","seq":0,"event":"","data":}}');
+End;
+
+Procedure MonitorSyncEncodeLog(Mirror: TMonitorMirror; Const ConversationId, StreamId: String; Room, QueuedSeq: Int64;
+  Out Frames: TMonitorSyncLogFrameArray; Out HeadSeen: Int64);
+Var
+  Events: TMonitorMirrorEventArray;
+  Index, Used: Integer;
+  Frame: String;
+  Encoded: RawByteString;
+Begin
+  SetLength(Frames, 0);
+  HeadSeen := 0;
+  If Not Assigned(Mirror) Then Exit;
+  If (StreamId = '') Or (Room <= 0) Then
+    Begin
+      Mirror.CopyLogTail(QueuedSeq, 0, 0, Events, HeadSeen);
+      Exit;
+    End;
+  Mirror.CopyLogTail(QueuedSeq, Room, LogEnvelopeBase(ConversationId, StreamId), Events, HeadSeen);
+  SetLength(Frames, Length(Events));
+  Used := 0;
+  For Index := 0 To High(Events) Do
+    Begin
+      Frame := EventFrame(ConversationId, StreamId, Events[Index]);
+      If Length(Frame) > Room Then Break;
+      { The link writes these bytes. A raw JSON object is not a LAM1 frame. The producer built the object,
+        so the header is written without another parse. }
+      If Not EncodeMonitorFrameBytes(Frame, Encoded) Then Break;
+      Frames[Used].Seq := Events[Index].Seq;
+      Frames[Used].Bytes := Encoded;
+      Inc(Used);
+      Dec(Room, Length(Frame));
+    End;
+  SetLength(Frames, Used);
 End;
 
 Function FindSeq(Const Events: TMonitorMirrorEventArray; Seq: Int64): Integer;
@@ -146,32 +202,24 @@ End;
 Procedure MonitorSyncFill(Mirror: TMonitorMirror; Outbox: TMonitorOutbox; Const ConversationId, StreamId: String;
   PhoneAck: Int64; Var QueuedSeq: Int64; Out CloseLink: Boolean);
 Var
-  Event: TMonitorMirrorEvent;
-  NextSeq, Unacked: Int64;
-  Frame: String;
-  Encoded: RawByteString;
+  Frames: TMonitorSyncLogFrameArray;
+  Index: Integer;
+  Room, Unacked: Int64;
+  HeadSeen: Int64;
 Begin
   CloseLink := False;
-  Encoded := '';
   If Not Assigned(Mirror) Or Not Assigned(Outbox) Or (StreamId = '') Then
     Exit;
   { The outbox owns queued frames through acknowledgement, including frames already sent. }
   Outbox.Acknowledge(PhoneAck);
   Unacked := Outbox.LogPayloadBytes;
-  While QueuedSeq < Mirror.Head Do
+  Room := MonitorCreditWindowBytes - Unacked;
+  If Room < 0 Then Room := 0;
+  MonitorSyncEncodeLog(Mirror, ConversationId, StreamId, Room, QueuedSeq, Frames, HeadSeen);
+  For Index := 0 To High(Frames) Do
     Begin
-      NextSeq := QueuedSeq + 1;
-      If Not Mirror.TryEvent(NextSeq, Event) Then Exit;
-      Frame := EventFrame(ConversationId, StreamId, Event);
-      If Unacked + Length(Frame) > MonitorCreditWindowBytes Then Exit;
-      { The link writes these bytes. A raw JSON object is not a LAM1 frame. The producer built the object,
-        so the header is written without another parse. }
-      If Not EncodeMonitorFrameBytes(Frame, Encoded) Then
-        Exit;
-      If Not Outbox.AppendLog(NextSeq, Encoded) Then
-        Exit;
-      Inc(Unacked, Length(Frame));
-      QueuedSeq := NextSeq;
+      If Not Outbox.AppendLog(Frames[Index].Seq, Frames[Index].Bytes) Then Exit;
+      QueuedSeq := Frames[Index].Seq;
       If Outbox.LogOverflowed Then
         Begin
           CloseLink := True;

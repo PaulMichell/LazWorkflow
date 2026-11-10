@@ -159,6 +159,11 @@ Type
     { Copy of the log. Tests read the grain without sending it. }
     Function CopyEvents(Out Events: TMonitorMirrorEventArray): Integer;
     Function TryEvent(Seq: Int64; Out Event: TMonitorMirrorEvent): Boolean;
+    { One lock. Copies events after AfterSeq, contiguous from the next sequence, while each event's lower-bound
+      framed size fits in Room. Stops at a gap, at the head, or before the event that would pass Room.
+      EnvelopeBase is the framed envelope of a one-digit sequence with empty kind and data, and must not exceed
+      that frame. HeadSeen is the head under this lock, including when the copy is empty. }
+    Function CopyLogTail(AfterSeq, Room: Int64; EnvelopeBase: Integer; Out Events: TMonitorMirrorEventArray; Out HeadSeen: Int64): Integer;
     Function CanReplay(Seq: Int64): Boolean;
     { Turn is read only. The stored copy carries the bumped block revisions. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
@@ -458,6 +463,50 @@ Begin
     Index := IndexOfSeqLocked(Seq);
     Result := Index >= 0;
     If Result Then Event := FEvents[Index];
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TMonitorMirror.CopyLogTail(AfterSeq, Room: Int64; EnvelopeBase: Integer; Out Events: TMonitorMirrorEventArray;
+  Out HeadSeen: Int64): Integer;
+Var
+  Index, Last, Count, Digits: Integer;
+  NextSeq, Probe, Running, Size: Int64;
+Begin
+  Result := 0;
+  HeadSeen := 0;
+  SetLength(Events, 0);
+  EnterCriticalSection(FLock);
+  Try
+    HeadSeen := FHead;
+    If (Room <= 0) Or (EnvelopeBase < 0) Or (AfterSeq >= FHead) Then Exit;
+    NextSeq := AfterSeq + 1;
+    Index := IndexOfSeqLocked(NextSeq);
+    If Index < 0 Then Exit;
+    Last := Index;
+    Running := 0;
+    While Index < Length(FEvents) Do
+      Begin
+        If FEvents[Index].Seq <> NextSeq Then Break;
+        Digits := 1;
+        Probe := FEvents[Index].Seq;
+        While Probe >= 10 Do
+          Begin
+            Probe := Probe Div 10;
+            Inc(Digits);
+          End;
+        { Two sequence fields share the extra digits. Kind and data are not escaped here, so this is a lower bound. }
+        Size := Int64(EnvelopeBase) + Length(FEvents[Index].Kind) + Length(FEvents[Index].Data) + 2 * (Digits - 1);
+        If Size > Room - Running Then Break;
+        Running := Running + Size;
+        Inc(NextSeq);
+        Inc(Index);
+      End;
+    Count := Index - Last;
+    If Count <= 0 Then Exit;
+    Events := Copy(FEvents, Last, Count);
+    Result := Count;
   Finally
     LeaveCriticalSection(FLock);
   End;

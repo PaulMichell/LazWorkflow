@@ -150,6 +150,8 @@ Type
       The poll reads it without the lock and skips the fill when it still matches the settled value. }
     FFillGeneration: LongInt;
     FFillSettled: LongInt;
+    { One log fill encodes at a time. The session lock is not held across that encode. }
+    FLogFillBusy: LongInt;
     { Set when a resume names this stream and log delivery can begin. }
     FLogResume: Boolean;
     { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
@@ -572,6 +574,7 @@ Begin
   LogFillSeen := False;
   FFillGeneration := 0;
   FFillSettled := -1;
+  FLogFillBusy := 0;
   FLogResume := False;
   FSendPending := False;
   FActiveCommandId := '';
@@ -2504,8 +2507,12 @@ Var
 
 Procedure TMonitorSession.FillLogLane;
 Var
-  CloseLink: Boolean;
-  Queued, Acked: Int64;
+  CloseLink, EncodeNow: Boolean;
+  Queued, Acked, HeadSeen, Room: Int64;
+  SeenGeneration: LongInt;
+  ConversationId, StreamId: String;
+  Frames: TMonitorSyncLogFrameArray;
+  FrameIndex: Integer;
   Source: TMonitorResumeSource;
   Status: TMonitorSyncStatus;
   Answer: TMonitorSyncAnswer;
@@ -2522,50 +2529,91 @@ Begin
       {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorSessionFillSkips);{$ENDIF}
       Exit;
     End;
-  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorSessionFillLocks);{$ENDIF}
-  CloseLink := False;
-  LockSession;
+  { The link and an IDE drain can both fill. The loser leaves the generation open and retries on the next poll. }
+  If InterlockedExchange(FLogFillBusy, 1) <> 0 Then Exit;
   Try
-    If FAwaitingObservation And Assigned(FMirror) And FMirror.HasConversation And Assigned(FOutbox) Then
-      Begin
-        Source := Default(TMonitorResumeSource);
-        FMirror.CaptureResume('', Source);
-        Status := HostSyncStatus;
-        PublishState('status', MonitorResumeStatusValueJson(Status));
-        PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
-        Answer := MonitorSyncResumeAnswer(Source, FConversationId, '', 'observed', 0, Status);
-        If Not Answer.NotReady Then
-          Begin
-            QueueResumeAnswer(Answer);
-            FAwaitingObservation := False;
-            FLogResume := True;
-            FQueuedLogSeq := Answer.Head;
-          End;
-      End;
-    If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
-      Begin
-        SettleIfCaughtUp;
-        Exit;
-      End;
-    If LogFillSeen And (LastFillHead = FMirror.Head) And (LastFillAck = FPhoneAcked) And
-      (LastFillQueued = FQueuedLogSeq) Then
-      Begin
-        SettleIfCaughtUp;
-        Exit;
-      End;
-    Queued := FQueuedLogSeq;
-    Acked := FPhoneAcked;
-    LastFillHead := FMirror.Head;
-    MonitorSyncFill(FMirror, FOutbox, FConversationId, FEpoch, Acked, Queued, CloseLink);
-    FQueuedLogSeq := Queued;
-    LastFillAck := Acked;
-    LastFillQueued := Queued;
-    LogFillSeen := True;
-    If CloseLink Then
-      CloseToListening;
-    SettleIfCaughtUp;
+    {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorSessionFillLocks);{$ENDIF}
+    EncodeNow := False;
+    CloseLink := False;
+    HeadSeen := 0;
+    Room := 0;
+    SeenGeneration := 0;
+    SetLength(Frames, 0);
+    LockSession;
+    Try
+      If FAwaitingObservation And Assigned(FMirror) And FMirror.HasConversation And Assigned(FOutbox) Then
+        Begin
+          Source := Default(TMonitorResumeSource);
+          FMirror.CaptureResume('', Source);
+          Status := HostSyncStatus;
+          PublishState('status', MonitorResumeStatusValueJson(Status));
+          PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
+          Answer := MonitorSyncResumeAnswer(Source, FConversationId, '', 'observed', 0, Status);
+          If Not Answer.NotReady Then
+            Begin
+              QueueResumeAnswer(Answer);
+              FAwaitingObservation := False;
+              FLogResume := True;
+              FQueuedLogSeq := Answer.Head;
+            End;
+        End;
+      SeenGeneration := FFillGeneration;
+      If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
+        Begin
+          SettleIfCaughtUp;
+          Exit;
+        End;
+      If LogFillSeen And (LastFillHead = FMirror.Head) And (LastFillAck = FPhoneAcked) And
+        (LastFillQueued = FQueuedLogSeq) Then
+        Begin
+          SettleIfCaughtUp;
+          Exit;
+        End;
+      Queued := FQueuedLogSeq;
+      Acked := FPhoneAcked;
+      ConversationId := FConversationId;
+      StreamId := FEpoch;
+      FOutbox.Acknowledge(Acked);
+      Room := MonitorCreditWindowBytes - FOutbox.LogPayloadBytes;
+      If Room < 0 Then Room := 0;
+      EncodeNow := True;
+    Finally
+      UnlockSession;
+    End;
+    If Not EncodeNow Then Exit;
+    { The copy is private, so the frame encode does not hold the session lock. }
+    MonitorSyncEncodeLog(FMirror, ConversationId, StreamId, Room, Queued, Frames, HeadSeen);
+    LockSession;
+    Try
+      { A resume, ack, or disconnect bumps the generation. Drop this copy and let the next poll read the new cursors. }
+      If (FFillGeneration = SeenGeneration) And (FQueuedLogSeq = Queued) And (FEpoch = StreamId) And
+        (FConversationId = ConversationId) And FLogResume And Assigned(FOutbox) Then
+        Begin
+          For FrameIndex := 0 To High(Frames) Do
+            Begin
+              If Not FOutbox.AppendLog(Frames[FrameIndex].Seq, Frames[FrameIndex].Bytes) Then Break;
+              Queued := Frames[FrameIndex].Seq;
+              If FOutbox.LogOverflowed Then
+                Begin
+                  CloseLink := True;
+                  Break;
+                End;
+            End;
+          FQueuedLogSeq := Queued;
+          LastFillHead := HeadSeen;
+          LastFillAck := Acked;
+          LastFillQueued := Queued;
+          LogFillSeen := True;
+          If CloseLink Then
+            CloseToListening;
+          { Settled only after the cursors match. A discarded copy leaves the generation open so the next poll refills. }
+          SettleIfCaughtUp;
+        End;
+    Finally
+      UnlockSession;
+    End;
   Finally
-    UnlockSession;
+    InterlockedExchange(FLogFillBusy, 0);
   End;
 End;
 
