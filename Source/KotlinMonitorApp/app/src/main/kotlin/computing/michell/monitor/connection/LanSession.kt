@@ -16,7 +16,9 @@ package computing.michell.monitor.connection
    failed-write peer leaves the read loop and the owned socket is closed.
    The unsent prompt draft is kept across disconnect. A catalogue command
    is written only on the socket that accepted it. Wi-Fi becoming available
-   reconnects at once and resets the backoff. On a LAN the wait is 1, 2, 4,
+   reconnects at once and resets the backoff. A loss is a banner hint, not a
+   latch: a touch, the 30 second in-use retry, and a failed attempt still open
+   the saved endpoint. On a LAN the wait is 1, 2, 4,
    8 seconds with equal jitter, then 30 seconds while the app is in use. A
    touch, a key or a return to the foreground is use, and a link that is
    down tries at once on it. Two minutes without use is idle: the loop stops
@@ -719,6 +721,7 @@ class LanSession(
   /**
    * A touch, a key or a send. Use keeps the 30 second retry going. A link that is down tries at once,
    * unless an attempt began in the last ten seconds, so typing does not start one per key.
+   * A Wi-Fi loss hint does not block this.
    */
   override fun noteActivity() {
     val now = clockMs()
@@ -778,10 +781,13 @@ class LanSession(
     if (mayReconnect() && loop?.isActive != true) startLoop()
   }
 
-  /** Wi-Fi is gone. Do not open another socket until it returns. */
+  /**
+   * Confirmed Wi-Fi loss. A hint for the banner, not a latch. A touch, the in-use
+   * retry, and a failed attempt still open the saved endpoint. This does not close
+   * a live socket, and it does not wake the loop: a wake is a connect signal.
+   */
   fun onWifiLost() {
     lanAvailable = false
-    wakes.trySend(Unit)
   }
 
   /**
@@ -849,7 +855,8 @@ class LanSession(
   }
 
   private fun mayReconnect(): Boolean {
-    return armed && !stopped && !terminal && !policy.paused && inForeground && lanAvailable &&
+    // lanAvailable is a hint. A touch still retries when the watch has reported a loss.
+    return armed && !stopped && !terminal && !policy.paused && inForeground &&
       store.load().address.isNotEmpty()
   }
 
@@ -865,10 +872,17 @@ class LanSession(
         waitBeforeConnect = false
         continue
       }
-      if (!inForeground || !lanAvailable) {
-        val shown = if (!inForeground) BackgroundBanner else WaitingForWifiBanner
-        publishCurrent(epoch, LinkPhase.Disconnected, shown, statusState.value.lastError)
+      if (!inForeground) {
+        publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, statusState.value.lastError)
         wakes.receive()
+        continue
+      }
+      // Confirmed loss is a hint. Park only when nothing is due to try. A touch sets
+      // connectNow. An in-use retry, including the 30 second step, still runs below.
+      if (!lanAvailable && !connectNow && !leftForBackground && !replaceLink && (!waitBeforeConnect || appIdle())) {
+        publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
+        wakes.receive()
+        if (stopped || epochCounter.get() != epoch) return
         continue
       }
       if (connectNow || leftForBackground || replaceLink) {
@@ -878,6 +892,9 @@ class LanSession(
         policy.resetBackoff()
       }
       if (waitBeforeConnect) {
+        if (!lanAvailable && !appIdle()) {
+          publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
+        }
         if (appIdle()) {
           // Nobody is using the app. Stop trying until a touch, a key, the foreground or Wi-Fi wakes the loop.
           publishCurrent(epoch, LinkPhase.Disconnected, IdleOfflineBanner, statusState.value.lastError)
@@ -974,7 +991,7 @@ class LanSession(
 
   private suspend fun attempt(epoch: Int): AttemptResult {
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
-    if (!inForeground || !lanAvailable) return AttemptResult.Deferred
+    if (!inForeground) return AttemptResult.Deferred
     val record = store.load()
     val pinned = normalizeFingerprint(record.fingerprint)
     if (record.fingerprint.isNotEmpty() && pinned.length != 64) {
@@ -1010,11 +1027,9 @@ class LanSession(
       closeWithBye(opened)
       return AttemptResult.Deferred
     }
-    if (!lanAvailable) {
-      closeOwned(opened)
-      return AttemptResult.Deferred
-    }
     link = opened
+    // The endpoint answered, so a stale loss hint must not banner the next drop.
+    lanAvailable = true
     if (!inForeground || stopped || epochCounter.get() != epoch) {
       if (!inForeground && epochCounter.get() == epoch) closeWithBye(opened) else closeOwned(opened)
       return if (epochCounter.get() == epoch && !stopped) AttemptResult.Deferred else AttemptResult.Superseded

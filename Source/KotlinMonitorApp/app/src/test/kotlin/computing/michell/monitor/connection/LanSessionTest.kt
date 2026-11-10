@@ -210,6 +210,51 @@ class LanSessionTest {
   }
 
   @Test
+  fun touchRetriesWhenLanAvailableIsFalseWithoutOnAvailable() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      throw ConnectException("Connection refused")
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      clock.advanceMs(LanActiveWindowMs)
+      waitUntil { session.status.value.banner == IdleOfflineBanner }
+      session.onWifiLost()
+      Thread.sleep(200)
+      assertEquals(1, opens.get())
+      val started = System.currentTimeMillis()
+      session.noteActivity()
+      waitUntil { opens.get() >= 2 }
+      assertTrue(System.currentTimeMillis() - started < 400)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun failedConnectStillRetriesWhenWifiHintIsFalse() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      throw ConnectException("Connection refused")
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      session.onWifiLost()
+      waitUntil(3_000) { opens.get() >= 2 }
+      waitUntil { session.status.value.banner == WaitingForWifiBanner }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun idleStopsRetryingAndATouchTriesAtOnce() {
     val store = pairedStore()
     val clock = SteppableClock()
