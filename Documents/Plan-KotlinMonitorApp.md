@@ -81,7 +81,7 @@ Fix: pass the same monotonic milliseconds `clockMs` already uses into `offer` an
 Acceptance: a `FrameAssembler` or session test advances the wall clock across a partial frame and does not close. Advancing the monotonic clock by `PartialFrameMs` still closes.
 
 ### 1.7 An in-use retry is not Offline
-Status: not started
+Status: complete
 
 `connectionChip` returns Offline for every phase that is not Live and not the narrow syncing case. `LinkPhase.Connecting`, the "Reconnecting" banner, and "Waiting for Wi-Fi" all print Offline. `linkChanged` also clears `catchingUp` on every disconnect, so the syncing exception does not survive the drop that needs it. The user reads a 1 second backoff, or a handshake still in progress, as a dead link.
 
