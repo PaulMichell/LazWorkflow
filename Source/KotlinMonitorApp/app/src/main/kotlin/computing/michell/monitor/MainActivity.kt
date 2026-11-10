@@ -75,6 +75,7 @@ import computing.michell.monitor.ui.menuEdgeSwipeEnabled
 import computing.michell.monitor.ui.menuEdgeSwipeToOpen
 import computing.michell.monitor.ui.menuFlyoutConsumesBack
 import computing.michell.monitor.ui.ApprovalSheet
+import computing.michell.monitor.ui.SaveQuestionDialog
 import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.ConversationScreen
 import computing.michell.monitor.ui.MainTabs
@@ -396,6 +397,9 @@ private fun MonitorShell(model: MonitorViewModel) {
   }
   if (!showSettings && ui.approvalOpen && notice != null) {
     ApprovalSheet(notice, model::allowApproval, model::denyApproval, model::dismissApproval)
+  }
+  if (ui.saveQuestion.isNotEmpty()) {
+    SaveQuestionDialog(onYes = { model.answerSaveQuestion(true) }, onNo = { model.answerSaveQuestion(false) })
   }
 }
 

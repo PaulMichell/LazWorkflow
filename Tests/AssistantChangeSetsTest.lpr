@@ -37,8 +37,10 @@ Type
   TWorkspace = Class(TAssistantIDEWorkspace)
   Public
     Manager: TManager; Project: TProject; Broker: TAssistantToolBroker;
-    Failure, ApprovalAction, Calls, Approvals: Integer;
+    Failure, ApprovalAction, Calls, Approvals, Saves: Integer;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
+    { The fake IDE cannot save; this counts each save an edit asks for, and writes nothing. }
+    Function SaveEditor(Editor: TObject; Out ErrorText: String): Boolean; Override;
     Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
   End;
 Function TEditor.GetSourceText: String;
@@ -94,6 +96,8 @@ Begin
   If (Calls = 1) And (Failure = 6) Then Manager.Editors[1].Syn.Text := 'edit during apply' + LineEnding;
   If (Calls = 2) And (Failure = 2) Then Raise Exception.Create('Injected failure after mutation');
 End;
+Function TWorkspace.SaveEditor(Editor: TObject; Out ErrorText: String): Boolean;
+Begin ErrorText := ''; Inc(Saves); Result := True; End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
 Function Field(Const Text, Name: String): String;
@@ -140,8 +144,10 @@ Begin
   Try
     Reset; Prepare;
     Check('preparation changes no editor', (Workspace.Calls = 0) And (Manager.Editors[0].Syn.Text = OriginalA));
+    Workspace.Saves := 0;
     Check('apply both buffers', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err)
       And (Field(Reply, 'state') = 'applied') And (Manager.Editors[0].Syn.Text = NewA) And (Manager.Editors[1].Syn.Text = NewB));
+    Check('apply saves each changed editor', Workspace.Saves = 2);
     Check('apply receipt cannot replay', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
     Check('apply invalidates old save revision', Not Broker.Execute(Run, 'lazarus_save_buffer',
       '{"path":"a.pas","revision":"' + JsonEscapeText(RevA) + '"}', Reply, Err));

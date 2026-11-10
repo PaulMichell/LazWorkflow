@@ -180,6 +180,8 @@ data class MonitorUi(
   val permissionNote: String = "",
   val approval: ApprovalNotice? = null,
   val approvalOpen: Boolean = false,
+  /** The desktop refused a command over unsaved edits: SaveQuestionSend or SaveQuestionRunPlan, or empty. */
+  val saveQuestion: String = "",
   val banner: String = "",
   val draft: String = "",
   val disconnected: Boolean = false,
@@ -2025,7 +2027,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun runPlan() {
-    session.sendCatalogue(encodeEmpty(MessageKind.RunPlan, session.nextCommandId()))
+    session.sendCatalogue(coordinator.runPlanCommand(saveFirst = false))
+  }
+
+  /** Yes saves the desktop's edits and sends the refused command again. No leaves the prompt in the box. */
+  fun answerSaveQuestion(save: Boolean) {
+    applyUiEffects(coordinator.answerSaveQuestion(save))
   }
 
   fun stopPlan() {

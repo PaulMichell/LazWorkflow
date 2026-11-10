@@ -18,6 +18,9 @@ const val NoSessionMessage = "The Project Assistant window is not open."
 const val UnknownTypeReason = "unknown_type"
 const val PayloadTooLargeReason = "payload_too_large"
 const val HostBusyReason = "host_busy"
+/** The desktop refused a send or run_plan over unsaved edits. Ask, then send again with save_first. */
+const val UnsavedEditsReason = "unsaved_edits"
+const val SaveBeforeTurnQuestion = "Do you want to save all edits and continue?"
 const val PayloadTooLargeMessage = "Text is longer than 65536 characters."
 
 val ModeNames = listOf("inspect", "document", "plan", "build", "chat")
@@ -619,7 +622,32 @@ private fun tryEncodeLimitedText(kind: MessageKind, id: String, text: String): T
   return TextEncode(json.isNotEmpty(), json, "")
 }
 
-fun tryEncodeSend(id: String, text: String): TextEncode = tryEncodeLimitedText(MessageKind.Send, id, text)
+/** saveFirst is the user's Yes to SaveBeforeTurnQuestion: the desktop saves its edits, then starts the turn. */
+fun tryEncodeSend(id: String, text: String, saveFirst: Boolean = false): TextEncode {
+  if (!saveFirst) return tryEncodeLimitedText(MessageKind.Send, id, text)
+  if (utf8Length(text) > MonitorLimits.MaxSendChars) {
+    return TextEncode(false, "", encodeError(id, PayloadTooLargeReason, PayloadTooLargeMessage, id))
+  }
+  val payload = JsonObjectBuilder()
+  payload.add("text", text)
+  payload.add("save_first", true)
+  val json = encodeEnvelope(MessageKind.Send, id, payload.build())
+  return TextEncode(json.isNotEmpty(), json, "")
+}
+
+fun encodeRunPlan(id: String, saveFirst: Boolean): String {
+  if (!saveFirst) return encodeEmpty(MessageKind.RunPlan, id)
+  val payload = JsonObjectBuilder()
+  payload.add("save_first", true)
+  return encodeEnvelope(MessageKind.RunPlan, id, payload.build())
+}
+
+/** Optional save_first on send, run_plan and run_task. Missing, or not a boolean, is false. */
+fun decodeSaveFirst(payloadJson: String): Boolean {
+  val obj = parseObject(payloadJson) ?: return false
+  val value = obj.readBool("save_first", false)
+  return value.ok && value.value
+}
 
 fun tryEncodeSteer(id: String, text: String): TextEncode = tryEncodeLimitedText(MessageKind.Steer, id, text)
 
@@ -942,11 +970,13 @@ fun decodeWorkOnPlan(payloadJson: String): Int? {
   return index.value
 }
 
-fun encodeTaskCommand(kind: MessageKind, id: String, taskId: String, note: String): String {
+fun encodeTaskCommand(kind: MessageKind, id: String, taskId: String, note: String, saveFirst: Boolean = false): String {
   if (kind != MessageKind.RunTask && kind != MessageKind.InsertTask) return ""
   val payload = JsonObjectBuilder()
   payload.add("id", taskId)
   payload.add("note", note)
+  // Insert only fills the composer. It starts no turn, so it has nothing to save first.
+  if (saveFirst && kind == MessageKind.RunTask) payload.add("save_first", true)
   return encodeEnvelope(kind, id, payload.build())
 }
 

@@ -1,7 +1,11 @@
 Unit AssistantIDEWorkspace;
 
-{ Main-thread adapter for the shared tool broker. Project inspection prefers
-  live buffers; opening tabs and saving content are separate explicit tools. (c) 2026 Michell Computing. }
+{ Main-thread adapter for the shared tool broker. Project inspection prefers live buffers. An edit to a file
+  that is open in the editor changes that buffer (Undo kept), moves its caret to the change and saves it; the
+  tab is not activated. A file that is not open is read and written on disk and never opened as a tab.
+
+  Size note: exceeds the 1000 line preference. Buffer, build, test and Git adapters share the run's target
+  checks; splitting them would duplicate those checks. Reviewed 2026-11-10. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -26,8 +30,11 @@ Type
     Function EditorAffectsBuild(Editor: TObject): Boolean;
   Protected
     Function BuildExecutable: String; Virtual;
+    { Editor is a TSourceEditorInterface. Saves it quietly; a test host replaces this. }
+    Function SaveEditor(Editor: TObject; Out ErrorText: String): Boolean; Virtual;
   Public
     Destructor Destroy; Override;
+    Function SavesEdits: Boolean; Override;
     Function IsMarkdownPath(Const Path: String): Boolean; Override;
     Function CanInspectFiles: Boolean; Override;
     Function CanChangeSets: Boolean; Override;
@@ -74,7 +81,7 @@ Type
 Implementation
 
 Uses
-  SysUtils, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
+  SysUtils, Types, md5, Forms, Controls, LazFileUtils, FileUtil, LazIDEIntf, ProjectIntf, SrcEditorIntf, AssistantTools,
   SynEdit, CodeToolManager, AssistantWorkTarget, InterfaceBase, AssistantTestSettings,
   AssistantBuildDependencies, AssistantSymbolTools, AssistantFileCreation, AssistantEditorEdits,
   AssistantIDEContext, AssistantProtocol, AssistantPlan, AssistantImages, fpjson, jsonparser, SafeFileAccess;
@@ -238,7 +245,18 @@ Begin
       Exit;
     End;
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(CanonicalPath);
-  If Not Assigned(Editor) Or Editor.ReadOnly Or Not (Editor.EditorControl Is TCustomSynEdit) Then
+  If Not Assigned(Editor) Then
+    Begin
+      { A file that is not open: the stamp follows its disk bytes. }
+      If Not FileIsWritable(Physical) Then
+        Begin
+          ErrorText := 'Change set requires a writable file.';
+          Exit;
+        End;
+      Stamp := 'disk:' + IntToStr(Length(Text)) + ':' + MD5Print(MD5String(Text));
+      Exit(True);
+    End;
+  If Editor.ReadOnly Or Not (Editor.EditorControl Is TCustomSynEdit) Then
     Begin
       ErrorText := 'Change set requires a writable SynEdit buffer.';
       Exit;
@@ -370,9 +388,102 @@ Begin
     End;
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Resolved);
   If Assigned(Editor) Then Exit(True);
-  If Not CheckInspectableFile(Resolved, ErrorText) Then Exit;
-  Result := OpenEditorReuse(Resolved, Note);
-  If Not Result Then ErrorText := Note;
+  { A file that is not open stays closed. The revision tools read and write it on disk. }
+  Result := CheckInspectableFile(Resolved, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.SavesEdits: Boolean;
+Begin
+  Result := True;
+End;
+
+Function TAssistantIDEWorkspace.SaveEditor(Editor: TObject; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Result := Assigned(LazarusIDE) And
+    (LazarusIDE.DoSaveEditorFile(TSourceEditorInterface(Editor), [sfQuietUnitCheck]) = mrOk);
+  If Not Result Then ErrorText := 'The editor was changed (Undo is available) but could not be saved.';
+End;
+
+{ Raw bytes, so line endings and an encoding mark come back exactly as stored. }
+Function ReadDiskText(Const Path: String; Out Text, ErrorText: String): Boolean;
+Var
+  Stream: TFileStream;
+Begin
+  Result := False;
+  Text := '';
+  If Not CheckInspectableFile(Path, ErrorText) Then Exit;
+  Try
+    Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+    Try
+      SetLength(Text, Stream.Size);
+      If Text <> '' Then Stream.ReadBuffer(Text[1], Length(Text));
+    Finally
+      Stream.Free;
+    End;
+    Result := True;
+  Except
+    On E: Exception Do
+      ErrorText := 'Could not read ' + Path + ': ' + E.Message;
+  End;
+End;
+
+{ Writes a sibling file and renames it over the target, so a failed write never leaves half a file. The physical
+  path keeps a symlinked file a symlink. }
+Function WriteDiskText(Const Path, Text: String; Out ErrorText: String): Boolean;
+Var
+  Physical, Temp: String;
+  Handle: THandle;
+  Guid: TGuid;
+Begin
+  Result := False;
+  ErrorText := '';
+  Physical := GetPhysicalFilename(Path, pfeOriginal);
+  If Physical = '' Then Physical := Path;
+  If CreateGUID(Guid) <> 0 Then
+    Begin
+      ErrorText := 'Could not name a temporary file.';
+      Exit;
+    End;
+  Temp := Physical + '.' + Copy(GUIDToString(Guid), 2, 8) + '.assistant-tmp';
+  If Not TryExclusiveCreate(Temp, Handle, ErrorText) Then
+    Begin
+      ErrorText := 'Could not write ' + Path + ': ' + ErrorText;
+      Exit;
+    End;
+  Try
+    If (Text <> '') And (FileWrite(Handle, Text[1], Length(Text)) <> Length(Text)) Then
+      Begin
+        FileClose(Handle);
+        DeleteFile(Temp);
+        ErrorText := 'Could not write ' + Path + '.';
+        Exit;
+      End;
+    FileClose(Handle);
+  Except
+    On E: Exception Do
+      Begin
+        DeleteFile(Temp);
+        ErrorText := 'Could not write ' + Path + ': ' + E.Message;
+        Exit;
+      End;
+  End;
+  If Not ReplaceWithExclusiveFile(Temp, Physical, ErrorText) Then
+    Begin
+      DeleteFile(Temp);
+      ErrorText := 'Could not replace ' + Path + ': ' + ErrorText;
+      Exit;
+    End;
+  Result := True;
+End;
+
+{ The IDE owns its project, session and package files. Its own save would overwrite a disk edit to them. }
+Function IDEOwnedFile(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '.lpi') Or (Ext = '.lps') Or (Ext = '.lpk');
 End;
 
 Function TAssistantIDEWorkspace.CanCreateFiles: Boolean;
@@ -1004,17 +1115,23 @@ Begin
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(CanonicalPath);
   If Not Assigned(Editor) Then
     Begin
-      ErrorText := 'Open this project file in the Lazarus editor before using buffer tools.';
+      Result := ReadDiskText(CanonicalPath, Text, ErrorText);
       Exit;
     End;
   Text := Editor.SourceText;
   Result := True;
 End;
 
+{ Every edit reaches the disk before the tool replies, so the agent never leaves unsaved work behind. }
 Function TAssistantIDEWorkspace.ReplaceBuffer(Const Path, ExpectedText, NewText: String;
     Out ErrorText: String): Boolean;
+Var
+  Editor: TSourceEditorInterface;
+  EditAt: TPoint;
+  DiskText: String;
 Begin
   Result := False;
+  ErrorText := '';
   If Not AssistantTarget.AllowsWrite(Path) Then
     Begin
       ErrorText := 'Path is outside the selected target write scope.';
@@ -1025,14 +1142,35 @@ Begin
       ErrorText := 'Source editor manager is unavailable.';
       Exit;
     End;
-  Result := ApplyAssistantEditorText(SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path),
-    ExpectedText, NewText, ErrorText);
+  Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path);
+  If Assigned(Editor) Then
+    Begin
+      If Not ApplyAssistantEditorText(Editor, ExpectedText, NewText, EditAt, ErrorText) Then Exit;
+      If ExpectedText <> NewText Then RevealAssistantEdit(Editor, EditAt);
+      Result := SaveEditor(Editor, ErrorText);
+      Exit;
+    End;
+  If IDEOwnedFile(Path) Then
+    Begin
+      ErrorText := 'The IDE owns project, session and package files; change them through Lazarus.';
+      Exit;
+    End;
+  If Not ReadDiskText(Path, DiskText, ErrorText) Then Exit;
+  If DiskText <> ExpectedText Then
+    Begin
+      ErrorText := 'File changed on disk after it was read; read it again before editing.';
+      Exit;
+    End;
+  If ExpectedText = NewText Then Exit(True);
+  Result := WriteDiskText(Path, NewText, ErrorText);
 End;
 
+{ Edits are already saved. An open editor that the user changed since is saved only at the exact text read. }
 Function TAssistantIDEWorkspace.SaveBuffer(Const Path, ExpectedText: String;
     Out ErrorText: String): Boolean;
 Var
   Editor: TSourceEditorInterface;
+  DiskText: String;
 Begin
   Result := False;
   If Not AssistantTarget.AllowsWrite(Path) Then
@@ -1047,13 +1185,19 @@ Begin
       Exit;
     End;
   Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path);
-  If Not Assigned(Editor) Or Editor.ReadOnly Or (Editor.SourceText <> ExpectedText) Then
+  If Not Assigned(Editor) Then
+    Begin
+      Result := ReadDiskText(Path, DiskText, ErrorText) And (DiskText = ExpectedText);
+      If Not Result And (ErrorText = '') Then ErrorText := 'File changed on disk before save; read it again.';
+      Exit;
+    End;
+  If Editor.ReadOnly Or (Editor.SourceText <> ExpectedText) Then
     Begin
       ErrorText := 'Buffer changed, closed, or became read-only before save.';
       Exit;
     End;
-  Result := LazarusIDE.DoSaveEditorFile(Editor, [sfQuietUnitCheck]) = mrOk;
-  If Not Result Then ErrorText := 'Buffer remains edited but could not be saved.';
+  { The IDE skips writing an editor that is not modified. }
+  Result := SaveEditor(Editor, ErrorText);
 End;
 
 Function TAssistantIDEWorkspace.Describe: String;

@@ -20,6 +20,8 @@ import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
 import computing.michell.monitor.protocol.HelloOkMessage
+import computing.michell.monitor.protocol.UnsavedEditsReason
+import computing.michell.monitor.protocol.decodeSaveFirst
 import computing.michell.monitor.protocol.encodeConversationClosed
 import computing.michell.monitor.protocol.encodeError
 import computing.michell.monitor.protocol.decodeResume
@@ -94,6 +96,55 @@ class MonitorCoordinatorTest {
     )))
     assertEquals("keep this", coordinator.state.draft)
     assertEquals("The desktop control is not available.", coordinator.state.banner)
+  }
+
+  @Test
+  fun unsavedEditsAskBeforeSendingAgainWithSaveFirst() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "fix the build"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeError("e1", UnsavedEditsReason, "The desktop has unsaved edits.", "c1")
+    )))
+    assertEquals("fix the build", coordinator.state.draft)
+    assertEquals(SaveQuestionSend, coordinator.state.saveQuestion)
+    assertEquals("", coordinator.state.banner)
+    val sent = coordinator.answerSaveQuestion(true).filterIsInstance<MonitorEffect.Send>().single()
+    val decoded = tryDecodeEnvelope(sent.json)
+    assertTrue(decoded.errorText, decoded.ok)
+    assertEquals(MessageKind.Send, decoded.message.kind)
+    assertTrue(decodeSaveFirst(decoded.message.payloadJson))
+    assertTrue(decoded.message.id != "c1")
+    assertEquals("", coordinator.state.saveQuestion)
+    assertEquals("", coordinator.state.draft)
+  }
+
+  @Test
+  fun noToUnsavedEditsKeepsThePromptAndSendsNothing() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.DraftEdited(coordinator.state, "keep for later"))
+    coordinator.onEvent(MonitorEvent.Submit(coordinator.state))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeError("e1", UnsavedEditsReason, "The desktop has unsaved edits.", "c1")
+    )))
+    assertTrue(coordinator.answerSaveQuestion(false).isEmpty())
+    assertEquals("keep for later", coordinator.state.draft)
+    assertEquals("", coordinator.state.saveQuestion)
+  }
+
+  @Test
+  fun unsavedEditsOnRunPlanAskThenRunWithSaveFirst() {
+    val coordinator = open()
+    val first = tryDecodeEnvelope(coordinator.runPlanCommand(saveFirst = false))
+    assertFalse(decodeSaveFirst(first.message.payloadJson))
+    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(
+      encodeError("e1", UnsavedEditsReason, "The desktop has unsaved edits.", first.message.id)
+    )))
+    assertEquals(SaveQuestionRunPlan, coordinator.state.saveQuestion)
+    val sent = coordinator.answerSaveQuestion(true).filterIsInstance<MonitorEffect.Send>().single()
+    val decoded = tryDecodeEnvelope(sent.json)
+    assertEquals(MessageKind.RunPlan, decoded.message.kind)
+    assertTrue(decodeSaveFirst(decoded.message.payloadJson))
   }
 
 

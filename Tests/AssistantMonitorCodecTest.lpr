@@ -1440,6 +1440,33 @@ Begin
   Check('non-object validating encoder status', (Not TryEncodeMonitorFrame('[]', Bytes, Status)) And (Status = mfsBadJson));
 End;
 
+{ The phone's Yes to the save question. Missing or malformed is no; an older phone never sends it. }
+Procedure TestSaveFirst;
+Var
+  Json, ErrorJson, ErrorText, Text: String;
+  Message: TMonitorMessage;
+  Task: TMonitorTaskCommand;
+Begin
+  Check('send save_first encodes', TryEncodeCommandSend('send-save', 'hello', Json, ErrorJson, True));
+  Check('send save_first decodes', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And
+    DecodeCommandText(Message.PayloadJson, Text) And (Text = 'hello') And DecodeCommandSaveFirst(Message.PayloadJson));
+  Check('plain send encodes', TryEncodeCommandSend('send-plain', 'hello', Json, ErrorJson));
+  Check('plain send does not save first', TryDecodeMonitorEnvelope(Json, Message, ErrorText) And
+    (Pos('save_first', Json) = 0) And Not DecodeCommandSaveFirst(Message.PayloadJson));
+  Check('run_plan save_first decodes', TryDecodeMonitorEnvelope(EncodeCommandRunPlan('plan-save', True), Message, ErrorText) And
+    DecodeCommandSaveFirst(Message.PayloadJson));
+  Check('plain run_plan has no payload field', TryDecodeMonitorEnvelope(EncodeCommandRunPlan('plan-plain', False), Message, ErrorText) And
+    Not DecodeCommandSaveFirst(Message.PayloadJson));
+  Check('run_task save_first decodes', TryDecodeMonitorEnvelope(
+    EncodeCommandTask(mmkRunTask, 'task-save', 'review-unit', 'note', True), Message, ErrorText) And
+    DecodeCommandTask(Message.PayloadJson, Task) And (Task.Id = 'review-unit') And DecodeCommandSaveFirst(Message.PayloadJson));
+  Check('insert_task never carries save_first', Pos('save_first',
+    EncodeCommandTask(mmkInsertTask, 'insert-save', 'review-unit', 'note', True)) = 0);
+  Check('non-boolean save_first is no', TryDecodeMonitorEnvelope(
+    '{"v":3,"id":"odd","type":"send","payload":{"text":"x","save_first":"yes"}}', Message, ErrorText) And
+    Not DecodeCommandSaveFirst(Message.PayloadJson));
+End;
+
 Procedure TestDumpIsNotAProductSwitch;
 Const
   Names: Array[0..4] Of String = (
@@ -1503,6 +1530,7 @@ Begin
   TestBadUtf8;
   TestBadJsonEnvelope;
   TestInboundSingleParse;
+  TestSaveFirst;
   TestDumpIsNotAProductSwitch;
   If FailCount = 0 Then
     Begin

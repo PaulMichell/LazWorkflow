@@ -3,7 +3,8 @@ Unit ProjectAssistantForm;
 { Project Assistant main window (c) 2026 Michell Computing.
 
   Size note: exceeds the 1000 line preference. Reviewed 2026-11-06: a plan item writes a usage
-  line; the run summary adds those lines. }
+  line; the run summary adds those lines. Reviewed 2026-11-10: the save check before a turn lives in
+  AssistantSaveBeforeTurn; the form only asks the question and routes the phone's answer. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -528,6 +529,20 @@ Type
     Function BuildReviewDisplayLabel(Const KindLabel: String;
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
     Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
+  Private
+    { Set while a phone command starts a turn: unsaved work is then saved only when the phone asked for it, and
+      the desktop never shows the question. RemoteRefusal says why the turn did not start. }
+    RemoteTurnStarting, RemoteSaveFirst: Boolean;
+    RemoteRefusal: String;
+    { Before a turn in Mode: asks to save unsaved work it could edit. Yes runs Save All; No, or a failed save, gives
+      the unsaved work the focus. False means do not start the turn. }
+    Function ConfirmSavedBeforeTurn(Mode: TAssistantMode): Boolean;
+    Procedure BeginRemoteTurn(SaveFirst: Boolean);
+    { Ends BeginRemoteTurn. When the turn did not start for unsaved work, ErrorText becomes that reason. }
+    Procedure EndRemoteTurn(Var ErrorText: String);
+    Function RemoteSubmitText(Const MessageText: String; Out ErrorText: String): Boolean;
+    Function StartRemoteRunPlan(Out ErrorText: String): Boolean;
+    Function StartRemoteTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
     Function SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
     { DisplayText is shown/stored; ApiText is what the model receives (may include extra directives). }
     Function SubmitUserTextEx(Const DisplayText, ApiText: String; AutoSend: Boolean): Boolean;
@@ -604,7 +619,9 @@ Type
     Procedure FillMonitorConversationChoices(Ids, Titles: TStrings; Out Current: String; Out Truncated: Boolean);
     /// Copies LoadAssistantTasks. NeedsNote uses AssistantTaskNeedsUserNote.
     Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
-    Function RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
+    { SaveFirst is the phone's Yes to the save question. Without it, unsaved work that the turn could edit refuses
+      the prompt with AssistantUnsavedEditsRefusal, and nothing is saved or started. }
+    Function RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
     Function RemoteSteer(Const MessageText: String; Out ErrorText: String): Boolean;
     Function RemoteStop(Out ErrorText: String): Boolean;
     Function RemoteSelectMode(Const ModeText: String; Out ErrorText: String): Boolean;
@@ -633,9 +650,9 @@ Type
     Function CloseActivePlan(Out ErrorText: String): Boolean;
     Function RemoteClosePlan(Out ErrorText: String): Boolean;
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
-    Function RemoteRunPlan(Out ErrorText: String): Boolean;
+    Function RemoteRunPlan(SaveFirst: Boolean; Out ErrorText: String): Boolean;
     Function RemoteStopPlan(Out ErrorText: String): Boolean;
-    Function RemoteRunTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
+    Function RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
     Function RemoteInsertTask(Const TaskId, Note: String; Out ApiText, ErrorText: String): Boolean;
     Function RemoteTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     Function RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes; Out Mime: String;
@@ -665,7 +682,7 @@ Implementation
 
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, CanvasUtils, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
-  AssistantPlanDocument,
+  AssistantPlanDocument, AssistantSaveBeforeTurn,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
@@ -3209,6 +3226,9 @@ Begin
       RunAssistantModal(BuildSelectionMessage, mtInformation, [mbOK], 0);
       Exit;
     End;
+  { Before the item is marked in progress. }
+  If Not ConfirmSavedBeforeTurn(amBuild) Then
+    Exit;
   Section := TPlanSection(BuildSections[Idx]);
   Title := Section.Title;
   ParentTitle := Section.ParentTitle;
@@ -3439,6 +3459,9 @@ Begin
         mtInformation, [mbOK], 0);
       Exit;
     End;
+  { Before the run starts, so No leaves no run, plan status or chat behind. }
+  If Not ConfirmSavedBeforeTurn(amBuild) Then
+    Exit;
   FPlanAgentRunning := True;
   UpdateWorkActions;
   AssistantSessionObserve.AssistantSessionObserve(asnPlan);
@@ -3649,6 +3672,12 @@ Begin
   FBuildSelectedIndex := Idx;
   If Assigned(BuildTodoList) And (Idx < BuildTodoList.Items.Count) Then
     BuildTodoList.ItemIndex := Idx;
+  { Work saved since the last item, or left unsaved during it, is asked about before the next item starts. }
+  If Not ConfirmSavedBeforeTurn(amBuild) Then
+    Begin
+      StopRunPlan(preUserStop, 'unsaved edits were not saved');
+      Exit;
+    End;
   SetBuildStatusFeedback(Format('Plan agent: package %d…', [FPlanAgentPackagesDone + 1]));
   BuildWorkOnSelectedPackage;
   If Not FSending Then
@@ -8363,6 +8392,55 @@ Begin
     End;
 End;
 
+Function TProjectAssistantForm.ConfirmSavedBeforeTurn(Mode: TAssistantMode): Boolean;
+Var
+  Work: TAssistantUnsavedWork;
+  ErrorText: String;
+Begin
+  Result := True;
+  Work := AssistantUnsavedWork(Mode);
+  If Work = auwNone Then
+    Exit;
+  If RemoteTurnStarting Then
+    Begin
+      { The phone has asked its own question. A desktop dialog would wait for someone who may not be there. }
+      If RemoteSaveFirst And SaveAssistantUnsavedWork(Mode, ErrorText) Then
+        Exit;
+      If RemoteSaveFirst Then
+        RemoteRefusal := 'The desktop could not save: ' + ErrorText
+      Else
+        RemoteRefusal := AssistantUnsavedEditsRefusal;
+      Exit(False);
+    End;
+  If RunAssistantModal(AssistantSaveBeforeTurnQuestion, mtConfirmation, [mbYes, mbNo], 0) = mrYes Then
+    Begin
+      If SaveAssistantUnsavedWork(Mode, ErrorText) Then
+        Exit;
+      SetCurrentSystemNote('Not sent: ' + ErrorText);
+    End;
+  Result := False;
+  { The prompt stays in the composer. The unsaved work, or what is left of it, gets the focus. }
+  Work := AssistantUnsavedWork(Mode);
+  ShowAssistantUnsavedWork(Work);
+  WorkflowLogger.Info('ProjectAssistant', 'Turn not started: unsaved work was not saved.');
+End;
+
+Procedure TProjectAssistantForm.BeginRemoteTurn(SaveFirst: Boolean);
+Begin
+  RemoteTurnStarting := True;
+  RemoteSaveFirst := SaveFirst;
+  RemoteRefusal := '';
+End;
+
+Procedure TProjectAssistantForm.EndRemoteTurn(Var ErrorText: String);
+Begin
+  If RemoteRefusal <> '' Then
+    ErrorText := RemoteRefusal;
+  RemoteTurnStarting := False;
+  RemoteSaveFirst := False;
+  RemoteRefusal := '';
+End;
+
 Function TProjectAssistantForm.SubmitUserText(Const UserText: String; AutoSend: Boolean): Boolean;
 Begin
   Result := SubmitUserTextEx(UserText, UserText, AutoSend);
@@ -8382,6 +8460,9 @@ Begin
   If (Trim(ApiText) = '') And (Length(Refs) = 0) Then
     Exit;
   If FSending Then
+    Exit;
+  { Every backend and every way a turn starts: typed, Run Plan, Fix Error, tasks and the phone. }
+  If AutoSend And (Not ConfirmSavedBeforeTurn(ActiveMode)) Then
     Exit;
   If AutoSend And (Not FUseCodex) And (Not FUseClaude) Then
     Begin
@@ -10192,6 +10273,9 @@ Begin
   Prompt := BuildFixErrorPromptForLine(Line);
   If Prompt = '' Then
     Exit;
+  { Before jumping to the error, so No leaves the editor where it was. }
+  If Not ConfirmSavedBeforeTurn(amBuild) Then
+    Exit;
   If (Line.Filename <> '') And (Line.Line > 0) And Assigned(LazarusIDE) Then
     Begin
       Col := Line.Column;
@@ -10447,6 +10531,9 @@ Begin
     End;
   { A plan run is already refused. Do not archive that run or send into it. }
   If Form.FSending Or Form.FPlanAgentRunning Then
+    Exit;
+  { Before a fresh conversation archives the open one. }
+  If Not Form.ConfirmSavedBeforeTurn(TaskMode) Then
     Exit;
   If Request.FreshConversation And (Not Form.StartNewChat(False, False)) Then
     Exit;
@@ -11204,7 +11291,17 @@ Begin
     End;
 End;
 
-Function TProjectAssistantForm.RemoteSubmit(Const MessageText: String; Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+Begin
+  BeginRemoteTurn(SaveFirst);
+  Try
+    Result := RemoteSubmitText(MessageText, ErrorText);
+  Finally
+    EndRemoteTurn(ErrorText);
+  End;
+End;
+
+Function TProjectAssistantForm.RemoteSubmitText(Const MessageText: String; Out ErrorText: String): Boolean;
 Begin
   Result := False;
   ErrorText := '';
@@ -11470,7 +11567,17 @@ Begin
   Result := True;
 End;
 
-Function TProjectAssistantForm.RemoteRunPlan(Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteRunPlan(SaveFirst: Boolean; Out ErrorText: String): Boolean;
+Begin
+  BeginRemoteTurn(SaveFirst);
+  Try
+    Result := StartRemoteRunPlan(ErrorText);
+  Finally
+    EndRemoteTurn(ErrorText);
+  End;
+End;
+
+Function TProjectAssistantForm.StartRemoteRunPlan(Out ErrorText: String): Boolean;
 Var
   Idx: Integer;
 Begin
@@ -11495,6 +11602,9 @@ Begin
       ErrorText := AssistantPlanRunStartMessage(CollectPlanRunReportFacts(preCleanFinish, ''));
       Exit;
     End;
+  { Before the run starts. A refusal leaves its reason for EndRemoteTurn. }
+  If Not ConfirmSavedBeforeTurn(amBuild) Then
+    Exit;
   FPlanAgentRunning := True;
   AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   SyncCodexUsageIdle;
@@ -11529,7 +11639,17 @@ Begin
   Result := True;
 End;
 
-Function TProjectAssistantForm.RemoteRunTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+Begin
+  BeginRemoteTurn(SaveFirst);
+  Try
+    Result := StartRemoteTask(TaskId, Note, ErrorText);
+  Finally
+    EndRemoteTurn(ErrorText);
+  End;
+End;
+
+Function TProjectAssistantForm.StartRemoteTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
 Var
   Task: TAssistantTask;
   Request: TAssistantTaskRequest;

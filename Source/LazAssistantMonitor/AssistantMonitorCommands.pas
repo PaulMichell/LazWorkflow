@@ -30,9 +30,13 @@ Function EncodeCommandRejected(Const Id, Reason: String; HostVersion, ClientVers
 Function DecodeCommandRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Function EncodeCommandBye(Const Id, Reason: String): String;
 Function DecodeCommandBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
-Function TryEncodeCommandSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+{ SaveFirst is the phone's Yes to the save question: the desktop saves its unsaved edits, then starts the turn. }
+Function TryEncodeCommandSend(Const Id, Text: String; Out Json, ErrorJson: String; SaveFirst: Boolean = False): Boolean;
 Function TryEncodeCommandSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
 Function DecodeCommandText(Const PayloadJson: TMonitorPayload; Out Text: String): Boolean;
+{ Optional save_first on send, run_plan and run_task. Missing, or not a boolean, is False. }
+Function DecodeCommandSaveFirst(Const PayloadJson: TMonitorPayload): Boolean;
+Function EncodeCommandRunPlan(Const Id: String; SaveFirst: Boolean): String;
 Function EncodeCommandEmpty(Kind: TMonitorMessageKind; Const Id: String): String;
 Function EncodeCommandSetMode(Const Id, Mode: String): String;
 Function DecodeCommandSetMode(Const PayloadJson: TMonitorPayload; Out Mode: String): Boolean;
@@ -55,7 +59,7 @@ Function EncodeCommandNewPlan(Const Id, Title: String; HasTitle: Boolean): Strin
 Function DecodeCommandNewPlan(Const PayloadJson: TMonitorPayload; Out Plan: TMonitorPathMessage): Boolean;
 Function EncodeCommandWorkOnPlan(Const Id: String; Index: Integer): String;
 Function DecodeCommandWorkOnPlan(Const PayloadJson: TMonitorPayload; Out Index: Integer): Boolean;
-Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String; SaveFirst: Boolean = False): String;
 Function DecodeCommandTask(Const PayloadJson: TMonitorPayload; Out Command: TMonitorTaskCommand): Boolean;
 Function EncodeCommandInsertResult(Const Id, Text: String): String;
 Function EncodeCommandTicks(Kind: TMonitorMessageKind; Const Id: String; Ticks: Int64): String;
@@ -295,9 +299,52 @@ Begin
   Result := Json <> '';
 End;
 
-Function TryEncodeCommandSend(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
+Function TryEncodeCommandSend(Const Id, Text: String; Out Json, ErrorJson: String; SaveFirst: Boolean): Boolean;
+Var
+  Payload: TJSONObject;
 Begin
-  Result := TryEncodeCommandLimited(mmkSend, Id, Text, Json, ErrorJson);
+  If Not SaveFirst Then
+    Exit(TryEncodeCommandLimited(mmkSend, Id, Text, Json, ErrorJson));
+  Result := False;
+  Json := '';
+  ErrorJson := '';
+  If Length(Text) > MonitorMaxSendChars Then
+    Begin
+      ErrorJson := EncodeMonitorError(Id, MonitorPayloadTooLargeReason, MonitorPayloadTooLargeMessage, Id);
+      Exit;
+    End;
+  Payload := TJSONObject.Create;
+  Payload.Add('text', Text);
+  Payload.Add('save_first', True);
+  Json := EncodeMonitorWith(mmkSend, Id, Payload);
+  Result := Json <> '';
+End;
+
+Function DecodeCommandSaveFirst(Const PayloadJson: TMonitorPayload): Boolean;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+Begin
+  Result := False;
+  If Not ParseMonitorObject(PayloadJson, Data, Obj) Then
+    Exit;
+  Try
+    If Not ReadMonitorBool(Obj, 'save_first', False, Result) Then
+      Result := False;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function EncodeCommandRunPlan(Const Id: String; SaveFirst: Boolean): String;
+Var
+  Payload: TJSONObject;
+Begin
+  If Not SaveFirst Then
+    Exit(EncodeCommandEmpty(mmkRunPlan, Id));
+  Payload := TJSONObject.Create;
+  Payload.Add('save_first', True);
+  Result := EncodeMonitorWith(mmkRunPlan, Id, Payload);
 End;
 
 Function TryEncodeCommandSteer(Const Id, Text: String; Out Json, ErrorJson: String): Boolean;
@@ -491,7 +538,7 @@ Begin
   End;
 End;
 
-Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String): String;
+Function EncodeCommandTask(Kind: TMonitorMessageKind; Const Id, TaskId, Note: String; SaveFirst: Boolean): String;
 Var
   Payload: TJSONObject;
 Begin
@@ -501,6 +548,9 @@ Begin
   Payload := TJSONObject.Create;
   Payload.Add('id', TaskId);
   Payload.Add('note', Note);
+  { Insert only fills the composer; it starts nothing, so it has nothing to save first. }
+  If SaveFirst And (Kind = mmkRunTask) Then
+    Payload.Add('save_first', True);
   Result := EncodeMonitorWith(Kind, Id, Payload);
 End;
 

@@ -109,6 +109,11 @@ Function OpenMarkdownSnippet(Const Key, Title, Body: String): TAssistantMarkdown
 { Force-reload any open viewer for this path (no-op if none open). }
 Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True;
   BringForward: Boolean = True): Boolean;
+{ The first window holding unsaved edits to a named file, or Nil. An untitled new document is not a project file
+  yet, and a snippet is read-only, so neither counts. }
+Function FirstUnsavedMarkdownDocument: TAssistantMarkdownForm;
+{ Saves every window FirstUnsavedMarkdownDocument would find. False, with the file named, when one stays unsaved. }
+Function SaveUnsavedMarkdownDocuments(Out ErrorText: String): Boolean;
 
 Implementation
 
@@ -145,6 +150,41 @@ Begin
           Exit;
         End;
     End;
+End;
+
+Function FirstUnsavedMarkdownDocument: TAssistantMarkdownForm;
+Var
+  I: Integer;
+  Form: TAssistantMarkdownForm;
+Begin
+  Result := Nil;
+  If Not Assigned(MarkdownForms) Then
+    Exit;
+  For I := 0 To MarkdownForms.Count - 1 Do
+    Begin
+      Form := TAssistantMarkdownForm(MarkdownForms[I]);
+      If Assigned(Form) And Form.Dirty And (Not Form.FSnippet) And (Not Form.FNewDocument) And (Form.FileName <> '') Then
+        Exit(Form);
+    End;
+End;
+
+Function SaveUnsavedMarkdownDocuments(Out ErrorText: String): Boolean;
+Var
+  Form: TAssistantMarkdownForm;
+Begin
+  ErrorText := '';
+  Form := FirstUnsavedMarkdownDocument;
+  While Assigned(Form) Do
+    Begin
+      { SaveToDisk asks first when the disk copy is newer. A refusal leaves the window unsaved, and stops here. }
+      If (Not Form.SaveToDisk) Or Form.Dirty Then
+        Begin
+          ErrorText := '"' + ExtractFileName(Form.FileName) + '" was not saved.';
+          Exit(False);
+        End;
+      Form := FirstUnsavedMarkdownDocument;
+    End;
+  Result := True;
 End;
 
 Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean; BringForward: Boolean): Boolean;

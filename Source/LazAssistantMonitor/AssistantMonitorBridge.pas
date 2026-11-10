@@ -55,7 +55,7 @@ Uses
   AssistantMonitorImages, AssistantMonitorState, AssistantMonitorCommands,
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorApproval, AssistantTools, AssistantConversation,
-  ProjectAssistantForm;
+  AssistantSaveBeforeTurn, ProjectAssistantForm;
 
 Const
   ResumeConversationWaitMs = 60000;
@@ -1442,7 +1442,7 @@ Begin
       Begin
         If Not DecodeCommandText(PayloadJson, Text) Then
           Text := '';
-        Result := Form.RemoteSubmit(Text, ErrorText);
+        Result := Form.RemoteSubmit(Text, DecodeCommandSaveFirst(PayloadJson), ErrorText);
       End;
     Ord(mmkSteer):
       Begin
@@ -1518,7 +1518,7 @@ Begin
         Result := False;
       End;
     Ord(mmkRunPlan):
-      Result := Form.RemoteRunPlan(ErrorText);
+      Result := Form.RemoteRunPlan(DecodeCommandSaveFirst(PayloadJson), ErrorText);
     Ord(mmkStopPlan):
       Result := Form.RemoteStopPlan(ErrorText);
     Ord(mmkRunTask):
@@ -1526,7 +1526,7 @@ Begin
         Task.Id := '';
         Task.Note := '';
         DecodeCommandTask(PayloadJson, Task);
-        Result := Form.RemoteRunTask(Task.Id, Task.Note, ErrorText);
+        Result := Form.RemoteRunTask(Task.Id, Task.Note, DecodeCommandSaveFirst(PayloadJson), ErrorText);
       End;
     Ord(mmkInsertTask):
       Begin
@@ -1705,7 +1705,11 @@ Begin
     Begin
       If ErrorText = '' Then
         ErrorText := 'The desktop control is not available.';
-      SendError(Command.ClientId, 'command', ErrorText);
+      { The phone asks the save question for this reason, then sends the command again with save_first. }
+      If ErrorText = AssistantUnsavedEditsRefusal Then
+        SendError(Command.ClientId, AssistantUnsavedEditsReason, ErrorText)
+      Else
+        SendError(Command.ClientId, 'command', ErrorText);
     End
   Else If Not LongRunningCommand(Command.Kind) Then
     Begin

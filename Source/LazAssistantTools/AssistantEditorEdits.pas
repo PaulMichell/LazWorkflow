@@ -15,9 +15,18 @@ Uses
   { Call on the IDE thread. ExpectedText is the exact source snapshot read by the
   caller. A failed precondition makes no changes. Does not save to disk. }
 Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
-    Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
+    Const ExpectedText, NewText: String; Out ErrorText: String): Boolean; Overload;
+  { As above. EditAt is the logical (byte) position where the change starts in the new text. }
+Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
+    Const ExpectedText, NewText: String; Out EditAt: TPoint; Out ErrorText: String): Boolean; Overload;
+  { Moves the editor's caret to EditAt and scrolls it into view. Does not activate the tab, change the active
+    editor, or move the keyboard focus, so a background tab shows the change when the user next opens it. }
+Procedure RevealAssistantEdit(Editor: TSourceEditorInterface; Const EditAt: TPoint);
 
 Implementation
+
+Uses
+  SynEdit;
 
 Function IsBoundary(Const S: String; Offset: Integer): Boolean;
 Begin
@@ -50,10 +59,19 @@ End;
 Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
     Const ExpectedText, NewText: String; Out ErrorText: String): Boolean;
 Var
+  EditAt: TPoint;
+Begin
+  Result := ApplyAssistantEditorText(Editor, ExpectedText, NewText, EditAt, ErrorText);
+End;
+
+Function ApplyAssistantEditorText(Editor: TSourceEditorInterface;
+    Const ExpectedText, NewText: String; Out EditAt: TPoint; Out ErrorText: String): Boolean;
+Var
   Prefix, Suffix, OldLength, NewLength: Integer;
 Begin
   Result := False;
   ErrorText := '';
+  EditAt := Point(1, 1);
   If Not Assigned(Editor) Then
     Begin
       ErrorText := 'Source editor is no longer available.';
@@ -82,6 +100,7 @@ Begin
     (ExpectedText[OldLength - Suffix] = NewText[NewLength - Suffix]) Do Inc(Suffix);
   While Not IsBoundary(ExpectedText, OldLength - Suffix + 1) Or
     Not IsBoundary(NewText, NewLength - Suffix + 1) Do Dec(Suffix);
+  EditAt := TextPosition(NewText, Prefix + 1);
   Try
     { ReplaceText performs Begin/EndUpdate and Begin/EndUndoBlock internally.
       SourceText assignment would clear the user's entire Undo history. }
@@ -92,6 +111,29 @@ Begin
   Except
     On E: Exception Do
       ErrorText := 'Editor update failed; inspect the buffer before retrying: ' + E.Message;
+  End;
+End;
+
+Procedure RevealAssistantEdit(Editor: TSourceEditorInterface; Const EditAt: TPoint);
+Var
+  Control: TCustomSynEdit;
+  Shown: Integer;
+Begin
+  If Not Assigned(Editor) Or Not (Editor.EditorControl Is TCustomSynEdit) Then Exit;
+  Control := TCustomSynEdit(Editor.EditorControl);
+  Try
+    { The SynEdit, not the source editor interface: setting the caret through the interface can make the IDE
+      activate that tab. A caret move alone never takes the focus. }
+    Control.LogicalCaretXY := EditAt;
+    Shown := Control.LinesInWindow;
+    If Shown < 1 Then Shown := 1;
+    If (EditAt.Y < Control.TopLine) Or (EditAt.Y >= Control.TopLine + Shown) Then
+      If EditAt.Y > Shown Div 3 Then
+        Control.TopLine := EditAt.Y - Shown Div 3
+      Else
+        Control.TopLine := 1;
+  Except
+    { Revealing is a courtesy. The edit itself has already succeeded. }
   End;
 End;
 

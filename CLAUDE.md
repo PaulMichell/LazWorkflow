@@ -46,7 +46,8 @@ saved executable recovered without changing connection identity", and also fails
 image output" once that first check is passed. `AssistantUsageTest` is not registered in the runner. Among the
 GUI tests, `AssistantWorkspaceTest` and `AssistantWorkTargetTest` do not build (they call
 `ExecuteAssistantToolForMode` without its `ToolId` argument), and `AssistantEditorEditsTest` fails "Plan advertises
-Markdown edits and saves".
+Markdown edits and saves". `AssistantMCPApprovalTest` fails "the held call completes": it still looks for
+`bufferUpdated`, which commit `d8c7e5c` removed from the broker's edit replies.
 
 A change to a package needs the IDE rebuilt (Tools → Build Lazarus) before it can be seen in the running IDE.
 

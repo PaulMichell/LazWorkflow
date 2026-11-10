@@ -204,17 +204,30 @@ Begin
       IDE cached this directory. Refresh disk metadata without reverting buffers. }
     CodeToolBoss.DirectoryCachePool.IncreaseFileTimeStamp;
     Editor := SourceEditorManagerIntf.SourceEditorIntfWithFilename(Path);
-    If Not Assigned(Editor) Or Not (Editor.CodeToolsBuffer Is TCodeBuffer) Then
+    If Assigned(Editor) Then
       Begin
-        ErrorText := 'The editor has no CodeTools source buffer.';
-        Exit;
-      End;
-    Code := TCodeBuffer(Editor.CodeToolsBuffer);
-    If (Code.Source <> SourceText) Or (Editor.SourceText <> SourceText) Then
-      Begin
-        ErrorText := 'Source changed or CodeTools cache is not synchronized; read the buffer again.';
-        Exit;
-      End;
+        If Not (Editor.CodeToolsBuffer Is TCodeBuffer) Then
+          Begin
+            ErrorText := 'The editor has no CodeTools source buffer.';
+            Exit;
+          End;
+        Code := TCodeBuffer(Editor.CodeToolsBuffer);
+        If (Code.Source <> SourceText) Or (Editor.SourceText <> SourceText) Then
+          Begin
+            ErrorText := 'Source changed or CodeTools cache is not synchronized; read the buffer again.';
+            Exit;
+          End;
+      End
+        Else
+          Begin
+            { A file that is not open: CodeTools loads it from disk without opening a tab. }
+            Code := CodeToolBoss.LoadFile(Path, True, False);
+            If Not Assigned(Code) Or (Code.Source <> SourceText) Then
+              Begin
+                ErrorText := 'Source changed on disk or CodeTools could not load it; read the buffer again.';
+                Exit;
+              End;
+          End;
     If (Line < 1) Or (Line > Code.LineCount) Then
       Begin
         ErrorText := 'Line is outside the current source buffer.';

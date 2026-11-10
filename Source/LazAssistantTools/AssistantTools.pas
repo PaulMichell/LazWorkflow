@@ -695,7 +695,7 @@ Begin
       '"parameters":{"type":"object","properties":{' +
         '"path":{"type":"string","description":"Project-relative path e.g. Source/Foo.pas"},' +
         '"content":{"type":"string","description":"Full non-empty contents (reject empty/probe files)"},' +
-        '"open":{"type":"boolean","description":"After write, open a source tab (default false). A Markdown path opens in the Assistant Markdown viewer instead. Use open_markdown."},' +
+        '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."},' +
         '"add_to_project":{"type":"boolean","description":"Add Pascal unit to the active project (default true only for non-empty units)"}' +
       '},"required":["path","content"]}' +
     '}},' +
@@ -709,7 +709,7 @@ Begin
         '"old_text":{"type":"string","description":"Exact text to find"},' +
         '"new_text":{"type":"string","description":"Replacement text"},' +
         '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-        '"open":{"type":"boolean","description":"After the edit, open a source tab (default false). A Markdown path opens in the Assistant Markdown viewer instead. Use open_markdown."}' +
+        '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."}' +
       '},"required":["path","old_text","new_text"]}' +
     '}},' +
     '{"type":"function","function":{' +
@@ -2493,6 +2493,7 @@ Var
   Ed: TSourceEditorInterface;
   Stream: TFileStream;
   Dir, FullPath, OpenNote: String;
+  EditAt: TPoint;
 Begin
   Result := False;
   Note := '';
@@ -2525,8 +2526,10 @@ Begin
   If Assigned(Ed) Then
     Begin
       Try
-        If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, ErrorText) Then
+        If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, EditAt, ErrorText) Then
           Exit;
+        { Show the change in its tab without activating it or taking the focus. }
+        RevealAssistantEdit(Ed, EditAt);
         If Assigned(LazarusIDE) And (LazarusIDE.DoSaveEditorFile(Ed, [sfQuietUnitCheck]) = mrOk) Then
           Begin
             Note := 'Updated open editor buffer and saved to disk (IDE Undo available).';
@@ -2592,10 +2595,9 @@ Begin
           Else
             Note := Note + ' Opened in the Assistant Markdown viewer (open_markdown).';
         End
-      Else If OpenEditorReuse(FullPath, OpenNote) Then
-        Note := Note + ' ' + OpenNote
       Else
-        Note := Note + ' (' + OpenNote + ')';
+        { An edit never opens a source tab; the user's editor tabs stay as they were. }
+        Note := Note + ' Not opened in the editor: edits are written without opening a tab.';
     End;
 End;
 
@@ -3729,15 +3731,13 @@ Begin
     End;
   If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
     ChangedLfm := True;
-  { Write without opening new tabs; reuse one editor for the form unit if needed. }
+  { Write without opening tabs. An open form unit is updated in its editor and saved. }
   If ChangedPas Then
     If Not SaveProjectFileText(PasPath, PasBody, False, Note, ErrorText) Then
       Exit;
   If ChangedLfm Then
     If Not SaveProjectFileText(LfmPath, LfmBody, False, Note, ErrorText) Then
       Exit;
-  If ChangedPas Or ChangedLfm Then
-    OpenEditorReuse(PasPath, Note);
   ResultText := Format(
     'ensure_form_component %s: %s (%s). pas_changed=%s lfm_changed=%s form_class=%s event=%s',
     [ProjectRelativePath(PasPath), CompName, ClassName,

@@ -354,8 +354,10 @@ The phone sends these. Each payload is unchanged from catalogue 2.
 
 | Type | Payload |
 |---|---|
-| `send`, `steer` | `text` (at most 65 536 characters) |
-| `stop`, `new_conversation`, `run_plan`, `stop_plan`, `close_plan` | none |
+| `send` | `text` (at most 65 536 characters), optional `save_first` (section 7.4) |
+| `steer` | `text` (at most 65 536 characters) |
+| `run_plan` | optional `save_first` (section 7.4) |
+| `stop`, `new_conversation`, `stop_plan`, `close_plan` | none |
 | `set_mode` | `mode` |
 | `select_conversation` | `id` (archive ID, empty for the current conversation) |
 | `select_target` | `path` (empty for the current project) |
@@ -365,7 +367,8 @@ The phone sends these. Each payload is unchanged from catalogue 2.
 | `select_plan` | `path` |
 | `new_plan` | optional `title` |
 | `work_on_plan` | `index` |
-| `run_task`, `insert_task` | `id, note` |
+| `run_task` | `id, note`, optional `save_first` (section 7.4) |
+| `insert_task` | `id, note` |
 
 `approval_decision {tool_id, allow}` is not a command. The link thread applies it at once, as in catalogue 2, and the
 host answers `approval_closed {tool_id, reason}`. `resume`, `ack`, `block_get`, `plan_get`, `turn`, `image_get`,
@@ -414,6 +417,21 @@ The phone never sends a prompt again automatically once the host has reported an
 If the outcome cannot be known, it offers the draft back with "Not delivered — Retry". This keeps the rule that a turn
 that ran a tool is never replayed automatically.
 
+### 7.4 Unsaved edits on the desktop
+
+A turn in Build, Plan or Document mode can edit files, so the desktop does not start one over unsaved work it could
+edit. Build counts every modified editor tab, the project, open packages and Markdown windows. Plan and Document count
+Markdown windows only. Chat and Inspect do not check.
+
+- A `send`, `run_plan` or `run_task` without `save_first` that meets unsaved work is refused with `error {reason:
+  "unsaved_edits", message, ref}`. Nothing is saved, and no run, plan status or conversation changes.
+- The phone then asks "Do you want to save all edits and continue?". Yes sends the same command again, with a **new**
+  ID and `save_first: true`. No keeps the prompt in the phone's composer.
+- With `save_first: true` the desktop runs its Save All, saves the Markdown windows, and then starts the turn. It never
+  shows the question on the desktop for a phone command. If something stays unsaved (a refused save, a new unit whose
+  name was not given), the command is refused with reason `command` and a message naming the problem.
+- An older desktop ignores `save_first` and never sends `unsaved_edits`.
+
 ## 8. Images
 
 `image_get {conversation_id, image_id}` asks for an image. The host answers `image_data {image_id, mime, width,
@@ -434,7 +452,7 @@ used only for its own round-trip measurement.
 `error {reason, message, ref}`: `ref` is the `id` of the message it answers, or empty. `message` is one sentence for
 the user. Reasons: `unknown_type`, `protocol`, `payload_too_large`, `host_busy`, `no_session`, `not_found`,
 `revision_changed`, `overloaded`, `snapshot_too_large` (not sent by a catalogue 3 host, which pages instead; kept so
-the reason set matches item 3.2), `cancelled`, `failed`.
+the reason set matches item 3.2), `cancelled`, `failed`, `unsaved_edits` (section 7.4).
 
 `revision_changed` answers a fetch whose revision moved. The phone starts again from offset 0. `overloaded` is a
 retryable overload, distinct from `not_found`. The phone may ask again. Do not report overload as a missing object.

@@ -25,6 +25,8 @@ import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.decodeConversationClosed
 import computing.michell.monitor.protocol.NoSessionMessage
 import computing.michell.monitor.protocol.NoSessionReason
+import computing.michell.monitor.protocol.UnsavedEditsReason
+import computing.michell.monitor.protocol.encodeRunPlan
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
 import computing.michell.monitor.protocol.decodeModels
@@ -54,6 +56,9 @@ interface DisplayPreferences {
 
 const val CouldNotSendBanner = "Could not send."
 const val HeldPromptMovedBanner = "The desktop has another conversation open. Your prompt is back in the box."
+/** MonitorUi.saveQuestion values: which refused command Yes sends again. */
+const val SaveQuestionSend = "send"
+const val SaveQuestionRunPlan = "run_plan"
 
 sealed class MonitorEvent {
   data class DraftEdited(val current: MonitorUi, val text: String) : MonitorEvent()
@@ -103,6 +108,8 @@ class MonitorCoordinator(
   private var contentHost = ""
   private var submittedText = ""
   private var submittedId = ""
+  /** The last run_plan sent, so its unsaved_edits refusal can be asked about. */
+  private var planRunId = ""
   private var selectedTurn = -1
   private var awaitingConversation = false
   /** Pages for this id arrived after New. They are the conversation that was just left. */
@@ -401,13 +408,37 @@ class MonitorCoordinator(
     return sendActionEnabled(local.view, local.disconnected, linkPhase, local.planRunning, syncingAccept() || offlineHold())
   }
 
-  private fun submit(): List<MonitorEffect>? {
+  /** A run_plan command, remembered so an unsaved_edits refusal can raise the save question. */
+  fun runPlanCommand(saveFirst: Boolean): String = synchronized(gate) {
+    val commandId = session.nextCommandId()
+    planRunId = commandId
+    encodeRunPlan(commandId, saveFirst)
+  }
+
+  /** Yes sends the refused command again with save_first and a new id. No only closes the question;
+      a refused prompt is already back in the box. */
+  fun answerSaveQuestion(save: Boolean): List<MonitorEffect> = synchronized(gate) {
+    val question = local.saveQuestion
+    local = local.copy(saveQuestion = "")
+    if (!save) return emptyList()
+    when (question) {
+      SaveQuestionSend -> submit(saveFirst = true) ?: emptyList()
+      SaveQuestionRunPlan -> {
+        val commandId = session.nextCommandId()
+        planRunId = commandId
+        listOf(MonitorEffect.Send(encodeRunPlan(commandId, true)))
+      }
+      else -> emptyList()
+    }
+  }
+
+  private fun submit(saveFirst: Boolean = false): List<MonitorEffect>? {
     if (!maySubmit()) return null
     val text = local.draft.trim()
     if (text.isEmpty()) return null
     val steer = local.view.canSteer
     val commandId = session.nextCommandId()
-    val encoded = if (steer) tryEncodeSteer(commandId, text) else tryEncodeSend(commandId, text)
+    val encoded = if (steer) tryEncodeSteer(commandId, text) else tryEncodeSend(commandId, text, saveFirst)
     if (!encoded.ok) {
       local = local.copy(banner = "Text is longer than 65536 characters.")
       return emptyList()
@@ -523,19 +554,27 @@ class MonitorCoordinator(
       local = local.copy(banner = "")
       return MonitorEffect.Send(encoded.json)
     }
+    val unsaved = body.reason == UnsavedEditsReason
     if (body.refId.isNotEmpty() && body.refId == submittedId && local.draft.isEmpty() && submittedText.isNotEmpty()) {
       val text = submittedText
       submittedText = ""
       submittedId = ""
+      // The prompt goes back in the box either way. Over unsaved edits, the question decides whether it is sent again.
       local = local.copy(
         draft = text,
         pendingPrompt = "",
         pendingKind = "",
         pendingCommandId = "",
-        banner = body.messageText,
+        banner = if (unsaved) "" else body.messageText,
+        saveQuestion = if (unsaved) SaveQuestionSend else local.saveQuestion,
         view = clearRemoteActions(local.view)
       )
       return MonitorEffect.RememberDraft(text)
+    }
+    if (unsaved && body.refId.isNotEmpty() && body.refId == planRunId) {
+      planRunId = ""
+      local = local.copy(banner = "", saveQuestion = SaveQuestionRunPlan)
+      return null
     }
     // No screen is coming from this resume. Keep the turns already on screen.
     val waiting = body.reason == NoSessionReason || body.messageText == NoSessionMessage

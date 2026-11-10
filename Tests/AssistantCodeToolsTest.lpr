@@ -47,14 +47,22 @@ Type
     Project: TProject;
     Broker: TAssistantToolBroker;
     AfterLookup: Integer;
-    ApprovalAction, ApprovalCalls: Integer;
+    ApprovalAction, ApprovalCalls, Saves: Integer;
     DefineOnApproval: TDefineTemplate;
+    { The fake IDE cannot save. Counting the request is what the edit tools owe the IDE. }
+    Function SaveEditor(Editor: TObject; Out ErrorText: String): Boolean; Override;
     Function Approve(Const Tool, Path, OldText, NewText: String): Boolean;
     Procedure ApplyLookupChange;
     Function SymbolContext(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindReferences(Const Path: String; Line, Column: Integer; SearchPaths: TStrings; MaxResults: Integer; Out ResultText, ErrorText: String): Boolean; Override;
     Function FindDeclaration(Const Path: String; Line, Column: Integer; Out ResultText, ErrorText: String): Boolean; Override;
   End;
+Function TObservedWorkspace.SaveEditor(Editor: TObject; Out ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Inc(Saves);
+  Result := True;
+End;
 Function TObservedWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
 Begin
   Inc(ApprovalCalls); Result := ApprovalAction <> 0;
@@ -384,16 +392,15 @@ Begin
       Args := '{"path":"example.pas","revision":"' + JsonEscapeText(Revision) + '","line":11,"column":3,"new_name":"LocalCount"}';
       Check('Build produces local rename preview', Broker.Execute(Run, 'lazarus_preview_local_rename', Args, Reply, Err));
       ApplyArgs := '{"preview_id":"' + JsonEscapeText(Field(Reply, 'preview_id')) + '"}';
-      Broker.OnApproval := @Workspace.Approve; Workspace.ApprovalAction := 1;
+      Broker.OnApproval := @Workspace.Approve; Workspace.ApprovalAction := 1; Workspace.Saves := 0;
       If Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err) Then
         Begin WriteLn(Err); Check('apply local rename', False); End;
       ExpectedText := StringReplace(RenameSource, 'var Counter: Integer;' + LineEnding + 'begin' + LineEnding,
         'var LocalCount: Integer;' + LineEnding + 'begin' + LineEnding, []);
       ExpectedText := StringReplace(ExpectedText, '  Counter := 1;', '  LocalCount := 1;', []);
       ExpectedText := StringReplace(ExpectedText, '  Counter := Counter + 1;', '  LocalCount := LocalCount + 1;', []);
-      Check('apply changes only previewed positions without saving', (Editor.Syn.Text = ExpectedText)
-        And Not BoolField(Reply, 'saved') And (Field(Reply, 'revision') <> Revision)
-        And Not FileExists(Editor.Path));
+      Check('apply changes only previewed positions and saves the open editor', (Editor.Syn.Text = ExpectedText)
+        And BoolField(Reply, 'saved') And (Workspace.Saves = 1) And (Field(Reply, 'revision') <> Revision));
       Check('preview cannot be replayed', Not Broker.Execute(Run, 'lazarus_apply_local_rename', ApplyArgs, Reply, Err));
       Editor.Syn.Undo;
       Check('one native Undo restores entire local rename', Editor.Syn.Text = RenameSource);
