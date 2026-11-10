@@ -600,7 +600,7 @@ private fun BubbleBlock(
       verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
       if (block.title.isNotEmpty()) Text(block.title, fontWeight = FontWeight.Bold)
-      if (block.body.isNotEmpty()) MarkdownText(block.body)
+      if (block.body.isNotEmpty()) MarkdownText(block.body, live = block.running)
       block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons, fetchImages) }
     }
   }
@@ -615,7 +615,7 @@ private fun ThinkingCard(foldKey: String, block: WireBlock, showThinking: Boolea
       (if (open) "▾ " else "▸ ") + thinkingCardTitle(block.title, block.running, block.durationMs),
       style = thinkingHeaderStyle()
     )
-    if (open && body.isNotEmpty()) MarkdownText(body)
+    if (open && body.isNotEmpty()) MarkdownText(body, live = block.running)
     val footer = thoughtFooter(block.running, block.durationMs)
     if (open && footer.isNotEmpty()) {
       Text(

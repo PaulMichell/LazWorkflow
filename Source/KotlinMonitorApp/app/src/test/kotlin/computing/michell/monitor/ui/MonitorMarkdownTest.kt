@@ -77,6 +77,29 @@ class MonitorMarkdownTest {
   }
 
   @Test
+  fun appendingDoesNotRewalkTheParsedPrefix() {
+    val prefix = "The plan has already explained the layout in detail.\n"
+    val first = extendMonitorMarkdown(null, prefix)
+    val full = prefix + "A new token"
+    val second = extendMonitorMarkdown(first, full)
+    assertEquals(parseMonitorMarkdown(full), second.blocks)
+    assertTrue(second.walked < prefix.length)
+    assertTrue(second.walked <= "A new token".length + 1)
+    val replaced = extendMonitorMarkdown(first, "A different document.")
+    assertEquals(parseMonitorMarkdown("A different document."), replaced.blocks)
+  }
+
+  @Test
+  fun aClosedFenceStillMatchesAFullParseAfterStreaming() {
+    val partial = "Intro\n\n```\ncode\n"
+    val more = partial + "more\n```\nAfter\n"
+    val streamed = extendMonitorMarkdown(extendMonitorMarkdown(null, partial), more)
+    assertEquals(parseMonitorMarkdown(more), streamed.blocks)
+    assertTrue(streamed.blocks.any { block -> block.codeBlock })
+    assertTrue(streamed.walked < more.length)
+  }
+
+  @Test
   fun toolsStayLiteral() {
     assertFalse(rendersMarkdown("tool"))
     assertTrue(rendersMarkdown("steer"))

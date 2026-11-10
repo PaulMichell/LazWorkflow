@@ -42,8 +42,34 @@ fun thinkingDisplayBody(body: String): String {
 }
 
 fun parseMonitorMarkdown(source: String): List<MarkdownBlock> {
-  return MarkdownReader().parse(normaliseMarkdown(source))
+  return extendMonitorMarkdown(null, source).blocks
 }
+
+/**
+ * A streaming append. When [source] still starts with the previous body, lines
+ * already parsed are not walked again. A different body parses from the start.
+ * [MarkdownParse.walked] is the characters this call examined.
+ */
+fun extendMonitorMarkdown(previous: MarkdownParse?, source: String): MarkdownParse {
+  val text = normaliseMarkdown(source)
+  val cursor = previous?.cursor
+  if (cursor != null && text.startsWith(previous.source) && cursor.lineIndex >= 0) {
+    val reader = MarkdownReader()
+    reader.restore(cursor)
+    val blocks = reader.parse(text, cursor.lineIndex)
+    return MarkdownParse(text, blocks, reader.walked, reader.checkpoint(text))
+  }
+  val reader = MarkdownReader()
+  val blocks = reader.parse(text, 0)
+  return MarkdownParse(text, blocks, reader.walked, reader.checkpoint(text))
+}
+
+class MarkdownParse internal constructor(
+  val source: String,
+  val blocks: List<MarkdownBlock>,
+  val walked: Int,
+  internal val cursor: MarkdownCursor
+)
 
 fun markdownPlain(source: String): String {
   return parseMonitorMarkdown(source).joinToString("\n") { block ->
@@ -80,6 +106,27 @@ private fun splitMarkdownLines(value: String): List<String> {
   return if (parts.size > 1 && parts.last().isEmpty()) parts.dropLast(1) else parts
 }
 
+internal class MarkdownCursor(
+  val lineIndex: Int,
+  val blocks: List<MarkdownBlock>,
+  val spans: List<MarkdownSpan>,
+  val open: Boolean,
+  val indent: Int,
+  val quote: Boolean,
+  val codeBlock: Boolean,
+  val headingLevel: Int,
+  val table: Boolean,
+  val tableHeader: Boolean,
+  val align: List<String>,
+  val group: Int,
+  val nextGroup: Int,
+  val paragraphOpen: Boolean,
+  val listContentIndent: Int,
+  val openFence: String?,
+  val fenceGroup: Int,
+  val tableColumns: List<String>?
+)
+
 private class MarkdownReader {
   private val blocks = ArrayList<MarkdownBlock>()
   private val spans = ArrayList<MarkdownSpan>()
@@ -93,17 +140,135 @@ private class MarkdownReader {
   private var align = emptyList<String>()
   private var group = 0
   private var nextGroup = 1
+  private var paragraphOpen = false
+  private var listContentIndent = -1
+  private var openFence: String? = null
+  private var fenceGroup = 0
+  private var tableColumns: List<String>? = null
+  var walked = 0
+  private var checkpointLine = 0
+  private var checkpoint: MarkdownCursor? = null
 
-  fun parse(value: String): List<MarkdownBlock> {
+  fun restore(saved: MarkdownCursor) {
+    blocks.clear()
+    blocks.addAll(saved.blocks)
+    spans.clear()
+    spans.addAll(saved.spans)
+    open = saved.open
+    indent = saved.indent
+    quote = saved.quote
+    codeBlock = saved.codeBlock
+    headingLevel = saved.headingLevel
+    table = saved.table
+    tableHeader = saved.tableHeader
+    align = saved.align
+    group = saved.group
+    nextGroup = saved.nextGroup
+    paragraphOpen = saved.paragraphOpen
+    listContentIndent = saved.listContentIndent
+    openFence = saved.openFence
+    fenceGroup = saved.fenceGroup
+    tableColumns = saved.tableColumns
+    checkpointLine = saved.lineIndex
+    checkpoint = saved
+    walked = 0
+  }
+
+  fun checkpoint(value: String): MarkdownCursor {
+    val saved = checkpoint
+    if (saved != null) return saved
+    return capture(if (value.endsWith("\n")) splitMarkdownLines(value).size else 0)
+  }
+
+  fun parse(value: String, startLine: Int): List<MarkdownBlock> {
     val lines = splitMarkdownLines(value)
-    var index = 0
-    var paragraphOpen = false
-    var listContentIndent = -1
-    while (index < lines.size) {
+    val complete = if (value.endsWith("\n")) lines.size else (lines.size - 1).coerceAtLeast(0)
+    val split = tableHoldBack(lines, startLine, complete)
+    if (startLine < split) parseLines(value, lines, startLine, split)
+    rememberCheckpoint(split)
+    if (split < lines.size) parseLines(value, lines, split, lines.size)
+    finishParagraph()
+    return blocks.toList()
+  }
+
+  private fun tableHoldBack(lines: List<String>, startLine: Int, complete: Int): Int {
+    if (complete <= startLine) return startLine
+    if (complete >= lines.size) return complete
+    val header = splitTableRow(lines[complete - 1]) ?: return complete
+    val separator = splitTableRow(lines[complete]) ?: return complete
+    if (header.size != separator.size || header.isEmpty() || !isSeparatorRow(separator)) return complete
+    return complete - 1
+  }
+
+  private fun isSeparatorRow(cells: List<String>): Boolean {
+    if (cells.isEmpty()) return false
+    for (cell in cells) {
+      var marker = cell
+      if (marker.isEmpty()) return false
+      if (marker[0] == ':') marker = marker.substring(1)
+      if (marker.isNotEmpty() && marker.last() == ':') marker = marker.dropLast(1)
+      if (marker.length < 3 || marker.any { ch -> ch != '-' }) return false
+    }
+    return true
+  }
+
+  private fun rememberCheckpoint(lineIndex: Int) {
+    checkpointLine = lineIndex
+    checkpoint = capture(lineIndex)
+  }
+
+  private fun capture(lineIndex: Int): MarkdownCursor {
+    return MarkdownCursor(
+      lineIndex, blocks.toList(), spans.toList(), open, indent, quote, codeBlock, headingLevel,
+      table, tableHeader, align, group, nextGroup, paragraphOpen, listContentIndent,
+      openFence, fenceGroup, tableColumns
+    )
+  }
+
+  private fun parseLines(value: String, lines: List<String>, from: Int, limit: Int) {
+    var index = from
+    while (index < limit) {
       val raw = lines[index]
+      walked += raw.length + 1
       val bodyStart = raw.indexOfFirst { ch -> ch != ' ' && ch != '\t' }
       val lineIndent = if (bodyStart < 0) raw.length else bodyStart
       val body = if (bodyStart < 0) "" else raw.substring(bodyStart)
+      if (openFence != null) {
+        val closing = raw.trim()
+        val closingIndent = raw.length - raw.trimStart().length
+        val fence = openFence
+        if (fence != null && closingIndent <= 3 && closing.startsWith(fence) && runLength(closing, 0) == closing.length) {
+          if (open && group == fenceGroup) {
+            codeBlock = true
+            finishParagraph()
+          }
+          sealOpenFence()
+          paragraphOpen = false
+          index += 1
+          continue
+        }
+        startParagraph(codeBlock = false, group = fenceGroup)
+        append(raw, false, false, false, false)
+        paragraphOpen = false
+        index += 1
+        continue
+      }
+      if (tableColumns != null) {
+        val columns = tableColumns
+        val nextIndent = raw.length - raw.trimStart().length
+        val nextCells = splitTableRow(raw)
+        if (columns != null && nextIndent < 4 && nextCells != null && nextCells.size <= columns.size) {
+          startParagraph(table = true, tableHeader = false, align = columns)
+          nextCells.forEachIndexed { cellIndex, cell ->
+            if (cellIndex > 0) append("\t", false, false, false, false)
+            inline(cell, false, false, false, 0)
+          }
+          paragraphOpen = false
+          index += 1
+          continue
+        }
+        tableColumns = null
+      }
       if (body.isEmpty()) {
         paragraphOpen = false
         index += 1
@@ -111,8 +276,8 @@ private class MarkdownReader {
       }
       if (index == 0 && raw == "---") {
         var finish = index + 1
-        while (finish < lines.size && lines[finish] != "---") finish += 1
-        if (finish == lines.size) finish = index
+        while (finish < limit && lines[finish] != "---") finish += 1
+        if (finish == limit) finish = index
         while (index <= finish) {
           startParagraph()
           append(lines[index], false, false, false, false)
@@ -125,25 +290,31 @@ private class MarkdownReader {
         val count = runLength(body, 0)
         val fence = body.substring(0, count)
         var finish = index + 1
-        while (finish < lines.size) {
+        while (finish < limit) {
           val closing = lines[finish].trim()
           val closingIndent = lines[finish].length - lines[finish].trimStart().length
           if (closing.startsWith(fence) && runLength(closing, 0) == closing.length && closingIndent <= 3) break
           finish += 1
         }
-        val literal = finish == lines.size
-        val fenceGroup = nextGroup++
+        val literal = finish == limit
+        val openedGroup = nextGroup++
         if (!literal) index += 1
         while (index < finish) {
-          startParagraph(codeBlock = !literal, group = fenceGroup)
+          startParagraph(codeBlock = !literal, group = openedGroup)
           append(lines[index], false, false, false, false)
           index += 1
         }
-        index += 1
+        if (literal) {
+          openFence = fence
+          fenceGroup = openedGroup
+        } else {
+          openFence = null
+          index += 1
+        }
         paragraphOpen = false
         continue
       }
-      val tableEnd = tryTable(lines, index)
+      val tableEnd = tryTable(lines, index, limit)
       if (tableEnd > index) {
         paragraphOpen = false
         index = tableEnd
@@ -211,12 +382,29 @@ private class MarkdownReader {
       paragraphOpen = !blockLine && !hardBreak
       index += 1
     }
-    finishParagraph()
-    return blocks.toList()
   }
 
-  private fun tryTable(lines: List<String>, index: Int): Int {
-    if (index + 1 >= lines.size) return index
+  private fun sealOpenFence() {
+    val revised = ArrayList<MarkdownBlock>()
+    var droppingOpener = true
+    for (block in blocks) {
+      if (block.group != fenceGroup) {
+        revised += block
+        continue
+      }
+      if (droppingOpener) {
+        droppingOpener = false
+        continue
+      }
+      revised += block.copy(codeBlock = true)
+    }
+    blocks.clear()
+    blocks.addAll(revised)
+    openFence = null
+  }
+
+  private fun tryTable(lines: List<String>, index: Int, limit: Int): Int {
+    if (index + 1 >= limit) return index
     val header = splitTableRow(lines[index]) ?: return index
     val separator = splitTableRow(lines[index + 1]) ?: return index
     if (header.size != separator.size || header.isEmpty()) return index
@@ -247,11 +435,17 @@ private class MarkdownReader {
       }
       row += if (headerRow) 2 else 1
       headerRow = false
-      if (row >= lines.size) break
+      if (row >= limit) {
+        tableColumns = columns
+        break
+      }
       val nextRaw = lines[row]
       val nextIndent = nextRaw.length - nextRaw.trimStart().length
       val nextCells = splitTableRow(nextRaw)
-      if (nextIndent >= 4 || nextCells == null || nextCells.size > columns.size) break
+      if (nextIndent >= 4 || nextCells == null || nextCells.size > columns.size) {
+        tableColumns = null
+        break
+      }
       cells = nextCells
     }
     return row

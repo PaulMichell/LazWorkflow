@@ -271,7 +271,7 @@ fun PlanPreviewPanel(
           )
         }
         if (body.isNotEmpty()) {
-          MarkdownText(body, modifier = Modifier.fillMaxWidth())
+          MarkdownText(body, modifier = Modifier.fillMaxWidth(), live = true)
         } else {
           Text(
             "The plan text has not arrived yet.",

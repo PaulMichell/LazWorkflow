@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -60,10 +62,16 @@ fun MarkdownText(
   modifier: Modifier = Modifier,
   color: Color = Color.Unspecified,
   italic: Boolean = false,
-  style: TextStyle? = null
+  style: TextStyle? = null,
+  live: Boolean = false
 ) {
   val resolved = style ?: tightTranscriptStyle()
-  val blocks = remember(source) { parseMonitorMarkdown(source) }
+  val held = remember { mutableStateOf<MarkdownParse?>(null) }
+  val blocks = remember(source, live) {
+    val next = extendMonitorMarkdown(if (live) held.value else null, source)
+    if (live) held.value = next
+    next.blocks
+  }
   if (blocks.isEmpty()) return
   Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     var index = 0
@@ -72,13 +80,14 @@ fun MarkdownText(
       if (block.group != 0 && block.codeBlock) {
         val grouped = ArrayList<MarkdownBlock>()
         val group = block.group
+        val groupKey = index
         while (index < blocks.size && blocks[index].group == group) {
           grouped += blocks[index]
           index += 1
         }
-        CodeGroup(grouped, resolved)
+        key(groupKey) { CodeGroup(grouped, resolved) }
       } else {
-        BlockText(block, color, italic, resolved)
+        key(index) { BlockText(block, color, italic, resolved) }
         index += 1
       }
     }
