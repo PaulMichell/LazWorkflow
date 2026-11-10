@@ -66,6 +66,7 @@ Type
     FCaretTimer: TTimer;
     FCaretOn: Boolean;
     FOwnsCaret: Boolean;
+    CaretWatching: Boolean; { the blink timer is polling for a focus return that may send no message }
     FHookedForm: TCustomForm;
     FSavedFormWindowProc: TWndMethod;
     FFocusHooks: Boolean;
@@ -103,6 +104,8 @@ Type
     Procedure ResetCaretBlink;
     Procedure AcquireCaret;
     Function CaretIsActive: Boolean;
+    Function CaretMayReturn: Boolean;
+    Procedure WatchForCaretReturn;
     Procedure RefreshCaretForFocus;
     Procedure EnsureCaretFocusWatch;
     Procedure InstallFocusHooks;
@@ -1025,20 +1028,54 @@ Begin
     Result := True;
 End;
 
+Function TSpellMemo.CaretMayReturn: Boolean;
+Var
+  HostForm, OwnForm: TCustomForm;
+Begin
+  Result := False;
+  If (Not FReady) Or (csDestroying In ComponentState) Or (csDesigning In ComponentState) Then
+    Exit;
+  If (Not HandleAllocated) Or (Not IsVisible) Then
+    Exit;
+  { Application activation is hooked, so an inactive application needs no polling. }
+  If Assigned(Application) And (Not Application.Active) Then
+    Exit;
+  If FOwnsCaret Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  HostForm := GetParentForm(Self);
+  OwnForm := GetParentForm(Self, False);
+  Result := (Assigned(OwnForm) And (OwnForm.ActiveControl = Self)) Or
+    (Assigned(HostForm) And (HostForm.ActiveControl = Self));
+End;
+
+Procedure TSpellMemo.WatchForCaretReturn;
+Begin
+  { On Qt the main menu deactivates the host form and then returns focus to this
+    memo without an activation, focus or active-control change it can hook. A
+    docked memo cannot hook its host form either. While the memo is still the
+    form's active control, the blink timer keeps checking instead of stopping. }
+  FCaretOn := False;
+  If Not Assigned(FCaretTimer) Then
+    Exit;
+  FCaretTimer.Enabled := CaretMayReturn;
+  CaretWatching := FCaretTimer.Enabled;
+End;
+
 Procedure TSpellMemo.RefreshCaretForFocus;
 Begin
   If (Not FReady) Or (csDestroying In ComponentState) Or (csDesigning In ComponentState) Then
     Exit;
   If CaretIsActive Then
     Begin
-      If Not (Assigned(FCaretTimer) And FCaretTimer.Enabled) Then
+      If CaretWatching Or Not (Assigned(FCaretTimer) And FCaretTimer.Enabled) Then
         UpdateCaret;
     End
   Else
     Begin
-      FCaretOn := False;
-      If Assigned(FCaretTimer) Then
-        FCaretTimer.Enabled := False;
+      WatchForCaretReturn;
       If HandleAllocated Then
         Invalidate;
     End;
@@ -1152,11 +1189,15 @@ End;
 Procedure TSpellMemo.ResetCaretBlink;
 Begin
   FCaretOn := True;
-  If Assigned(FCaretTimer) Then
-    Begin
-      FCaretTimer.Enabled := False;
-      FCaretTimer.Enabled := HandleAllocated And CaretIsActive;
-    End;
+  CaretWatching := False;
+  If Not Assigned(FCaretTimer) Then
+    Exit;
+  FCaretTimer.Enabled := False;
+  If HandleAllocated And CaretIsActive Then
+    FCaretTimer.Enabled := True
+  Else
+    { A click can arrive before the host form reports itself active again. }
+    WatchForCaretReturn;
 End;
 
 Procedure TSpellMemo.AcquireCaret;
@@ -1171,13 +1212,24 @@ Begin
     Exit;
   If Not CaretIsActive Then
     Begin
-      FCaretTimer.Enabled := False;
-      FCaretOn := False;
-      If HandleAllocated Then
-        Invalidate;
+      { Repaint only on the change, so a watching timer does not redraw the memo twice a second. }
+      If FCaretOn Or (Not CaretWatching) Then
+        Begin
+          WatchForCaretReturn;
+          If HandleAllocated Then
+            Invalidate;
+        End
+      Else
+        WatchForCaretReturn;
       Exit;
     End;
-  FCaretOn := Not FCaretOn;
+  If CaretWatching Then
+    Begin
+      CaretWatching := False;
+      FCaretOn := True;
+    End
+  Else
+    FCaretOn := Not FCaretOn;
   If HandleAllocated Then
     Invalidate;
 End;
@@ -1732,9 +1784,8 @@ Procedure TSpellMemo.DoExit;
 Begin
   Inherited DoExit;
   FOwnsCaret := False;
-  If Assigned(FCaretTimer) Then
-    FCaretTimer.Enabled := False;
-  FCaretOn := False;
+  { A menu can bring DoExit while this memo stays the form's active control. }
+  WatchForCaretReturn;
   If HandleAllocated Then
     Invalidate;
 End;
@@ -1894,11 +1945,13 @@ Begin
   Canvas.FillRect(0, ClientHeight - 1, ClientWidth, ClientHeight);
   Canvas.FillRect(0, 0, 1, ClientHeight);
   Canvas.FillRect(ClientWidth - 1, 0, ClientWidth, ClientHeight);
-  If CaretIsActive And (FSelLength = 0) And Assigned(FCaretTimer) And (Not FCaretTimer.Enabled) And HandleAllocated Then
+  If CaretIsActive And (FSelLength = 0) And Assigned(FCaretTimer) And (CaretWatching Or (Not FCaretTimer.Enabled)) And
+    HandleAllocated Then
     Begin
       { A missed focus return, or a timer stopped from inside its own tick,
         used to leave the insertion point invisible while typing still worked. }
       FCaretOn := True;
+      CaretWatching := False;
       FCaretTimer.Enabled := True;
     End;
   If CaretIsActive And FCaretOn And (FSelLength = 0) Then
