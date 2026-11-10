@@ -134,7 +134,7 @@ Depends on 1.1. Resume is currently decided in `flush`, `resumeNow`, `followHost
 Acceptance: a search of `MonitorViewModel.kt` and `MonitorCoordinator.kt` finds no `encodeSyncResume` and no `encodeResume`. The tests in 1.1 still pass against the session method.
 
 ### 3.2 One applier job, not on the main dispatcher
-Status: not started
+Status: complete
 
 `SyncApplier.start(viewModelScope)` runs on the main dispatcher. `tick` holds the applier mutex and calls Room. The reader's apply coroutine also calls `offer`, which flushes the same mutex from `Dispatchers.IO`. A plan batch therefore contends the main thread with Compose, and an ack posted with `Dispatchers.Main.immediate` waits behind that Room work. Credit stalls, which is how 1.4 starts.
 
