@@ -16,7 +16,7 @@ Uses
   {$ENDIF}
   AssistantMonitorState, AssistantMonitorCommands, Classes, SysUtils, DateUtils, SyncObjs, fpjson, AssistantMonitorLinkStubs,
   AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCarrier, AssistantMonitorMirror, AssistantMonitorOutbox,
-  AssistantMonitorSession, AssistantMonitorApproval,
+  AssistantMonitorSession, AssistantMonitorApproval, AssistantMonitorSync,
   AssistantMonitorSettings, AssistantSessionObserve, WorkflowSettings;
 
 Var
@@ -899,6 +899,27 @@ Begin
     Fresh.Free;
   End;
 End;
+
+{ Plan item 4.3. A status value from the sync writer is not parsed again just to see that it is JSON. }
+Procedure TestStatusPublishSkipsValueParse;
+Var
+  Fresh: TMonitorSession;
+  View: TAssistantMonitorView;
+  Bytes: RawByteString;
+  Lane: TMonitorOutboxLane;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    View := Default(TAssistantMonitorView);
+    MonitorJsonParseCount := 0;
+    Fresh.PublishState('status', MonitorStatusValueJson(View), True);
+    Check('one status publish does not parse the value', MonitorJsonParseCount = 0);
+    Check('one status publish is queued on the state lane', Fresh.TakeOutboundFrameWithLane(Bytes, Lane) And (Lane = molState));
+    Check('one status publish is a LAM1 frame', Copy(Bytes, 1, 4) = MonitorFrameMagic);
+  Finally
+    Fresh.Free;
+  End;
+End;
 {$ENDIF}
 
 { A catalogue 3 event large enough to fill the credit window, and too large for an outbox chunk. }
@@ -1642,6 +1663,7 @@ Begin
       TestChunkedStateEncodeCloses;
       {$IFDEF MONITOR_COUNT_PARSES}
       TestStateFrameParsesOnce;
+      TestStatusPublishSkipsValueParse;
       {$ENDIF}
       TestOldCatalogueRejects;
       TestCatalogueMismatchHello;

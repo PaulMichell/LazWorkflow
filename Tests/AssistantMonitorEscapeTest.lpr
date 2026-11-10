@@ -483,11 +483,11 @@ Begin
   Try
     Paths.Add(WindowsPath);
     Captions.Add(Awkward);
-    Session.PublishState('status', MonitorStatusValueJson(View));
-    Session.PublishState('target', MonitorTargetValueJson(View));
-    Session.PublishState('targets', MonitorTargetsValueJson(WindowsPath, Paths, Captions));
-    Session.PublishState('conversations', MonitorConversationsValueJson(Awkward, False, Paths, Captions));
-    Session.PublishState('plan', MonitorPlanValueJson(PlanPath, Awkward, True, 'rev-1', Rows));
+    Session.PublishState('status', MonitorStatusValueJson(View), True);
+    Session.PublishState('target', MonitorTargetValueJson(View), True);
+    Session.PublishState('targets', MonitorTargetsValueJson(WindowsPath, Paths, Captions), True);
+    Session.PublishState('conversations', MonitorConversationsValueJson(Awkward, False, Paths, Captions), True);
+    Session.PublishState('plan', MonitorPlanValueJson(PlanPath, Awkward, True, 'rev-1', Rows), True);
   Finally
     Captions.Free;
     Paths.Free;

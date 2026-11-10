@@ -669,7 +669,7 @@ Begin
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('status', MonitorStatusValueJson(View));
+  Session.PublishState('status', MonitorStatusValueJson(View), True);
 End;
 
 Procedure TAssistantMonitorBridge.PublishSession(Form: TProjectAssistantForm);
@@ -684,11 +684,11 @@ Begin
   { History current is empty for the open chat; publish only a durable identity. }
   Form.FillMonitorIdentity(ConversationId, ProjectRoot, Title);
   If (ConversationId <> '') And (ConversationId <> 'current') Then
-    Session.PublishState('conversation', MonitorConversationValueJson(ConversationId));
+    Session.PublishState('conversation', MonitorConversationValueJson(ConversationId), True);
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('session', MonitorSessionValueJson(View));
+  Session.PublishState('session', MonitorSessionValueJson(View), True);
 End;
 
 Procedure TAssistantMonitorBridge.PublishMode(Form: TProjectAssistantForm);
@@ -702,7 +702,7 @@ Begin
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('mode', MonitorModeValueJson(View));
+  Session.PublishState('mode', MonitorModeValueJson(View), True);
 End;
 
 Procedure TAssistantMonitorBridge.PublishTarget(Form: TProjectAssistantForm);
@@ -716,7 +716,7 @@ Begin
   Form.FillMonitorView(View);
   View.RemoteApproval := MonitorRemoteApprovalEnabled;
   ApplyHostFlags(View);
-  Session.PublishState('target', MonitorTargetValueJson(View));
+  Session.PublishState('target', MonitorTargetValueJson(View), True);
 End;
 
 Procedure TAssistantMonitorBridge.PublishTargets(Form: TProjectAssistantForm);
@@ -732,7 +732,7 @@ Begin
   Captions := TStringList.Create;
   Try
     Form.FillMonitorTargetChoices(Paths, Captions, Current);
-    Session.PublishState('targets', MonitorTargetsValueJson(Current, Paths, Captions));
+    Session.PublishState('targets', MonitorTargetsValueJson(Current, Paths, Captions), True);
   Finally
     Captions.Free;
     Paths.Free;
@@ -753,7 +753,7 @@ Begin
   Titles := TStringList.Create;
   Try
     Form.FillMonitorConversationChoices(Ids, Titles, Current, Truncated);
-    Session.PublishState('conversations', MonitorConversationsValueJson(Current, Truncated, Ids, Titles));
+    Session.PublishState('conversations', MonitorConversationsValueJson(Current, Truncated, Ids, Titles), True);
   Finally
     Titles.Free;
     Ids.Free;
@@ -773,7 +773,7 @@ Begin
   Captions := TStringList.Create;
   Try
     Form.FillMonitorModelChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('models', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
+    Session.PublishState('models', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions), True);
   Finally
     Captions.Free;
     Ids.Free;
@@ -793,7 +793,7 @@ Begin
   Captions := TStringList.Create;
   Try
     Form.FillMonitorReasoningChoices(Ids, Captions, Current, Note);
-    Session.PublishState('reasoning', MonitorNamedChoicesValueJson(Current, '', Note, False, Ids, Captions));
+    Session.PublishState('reasoning', MonitorNamedChoicesValueJson(Current, '', Note, False, Ids, Captions), True);
   Finally
     Captions.Free;
     Ids.Free;
@@ -812,7 +812,7 @@ Begin
   Captions := TStringList.Create;
   Try
     Form.FillMonitorPermissionsChoices(Ids, Captions, Current, Backend, Note);
-    Session.PublishState('permissions', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions));
+    Session.PublishState('permissions', MonitorNamedChoicesValueJson(Current, Backend, Note, True, Ids, Captions), True);
   Finally
     Captions.Free;
     Ids.Free;
@@ -831,7 +831,7 @@ Begin
   Captions := TStringList.Create;
   Try
     Form.FillMonitorPlanChoices(Paths, Captions);
-    Session.PublishState('plan_choices', MonitorPlanChoicesValueJson(Paths, Captions));
+    Session.PublishState('plan_choices', MonitorPlanChoicesValueJson(Paths, Captions), True);
   Finally
     Captions.Free;
     Paths.Free;
@@ -850,7 +850,7 @@ Begin
   Form.FillMonitorView(View);
   Form.FillMonitorPlan(Rows);
   Session.PublishState('plan', MonitorPlanValueJson(View.PlanPath, View.PlanTitle, View.PlanRunning,
-    Form.PlanDocumentRevision, Rows));
+    Form.PlanDocumentRevision, Rows), True);
   Session.NotePlanCachedRevision(View.PlanPath, Form.PlanDocumentRevision);
 End;
 
@@ -863,7 +863,7 @@ Begin
   If Not Assigned(Session) Then
     Exit;
   Form.FillMonitorTasks(Tasks);
-  Session.PublishState('tasks', MonitorTasksValueJson(Tasks));
+  Session.PublishState('tasks', MonitorTasksValueJson(Tasks), True);
 End;
 
 Procedure TAssistantMonitorBridge.PushStatus(Form: TProjectAssistantForm);

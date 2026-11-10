@@ -158,6 +158,8 @@ Type
     FAwaitingObservation: Boolean;
     FStateKeys: TStringArray;
     FStateValues: TStringArray;
+    { Parallel to FStateKeys. True when the value came from an AssistantMonitorSync writer. }
+    FStateWriterBuilt: Array Of Boolean;
     FEpoch: String;
     FConversationId: String;
     FProjectRoot: String;
@@ -256,7 +258,7 @@ Type
     Procedure PullPlanSlice(Pulls: Boolean);
     Procedure PlanFetchReady;
     Procedure QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
-    Procedure RememberState(Const Key, ValueJson: String);
+    Procedure RememberState(Const Key, ValueJson: String; WriterBuilt: Boolean);
     Procedure PublishRememberedState;
   Public
     Constructor Create;
@@ -336,7 +338,8 @@ Type
     Procedure NoteCommandAccepted(Const Id: String);
     Procedure NoteCommandRejected(Const Id, Reason: String);
     Procedure NoteCommandDone(Const Id: String; Const DoneText: String = '');
-    Procedure PublishState(Const Key, ValueJson: String);
+    { WriterBuilt skips the value parse. Pass True only for an AssistantMonitorSync state writer. }
+    Procedure PublishState(Const Key, ValueJson: String; WriterBuilt: Boolean = False);
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
     Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
@@ -1615,10 +1618,10 @@ Begin
   Status := HostSyncStatus;
   PublishRememberedState;
   { The tool id and the conversation id are escaped by the AssistantMonitorSync writers. }
-  PublishState('status', MonitorResumeStatusValueJson(Status));
-  PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
+  PublishState('status', MonitorResumeStatusValueJson(Status), True);
+  PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId), True);
   If (FConversationId <> '') And (FConversationId <> 'current') Then
-    PublishState('conversation', MonitorConversationValueJson(FConversationId));
+    PublishState('conversation', MonitorConversationValueJson(FConversationId), True);
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
   LogFillSeen := False;
@@ -2376,7 +2379,7 @@ Begin
     FOutbox.Notify;
 End;
 
-Procedure TMonitorSession.RememberState(Const Key, ValueJson: String);
+Procedure TMonitorSession.RememberState(Const Key, ValueJson: String; WriterBuilt: Boolean);
 Var
   Index: Integer;
 Begin
@@ -2384,16 +2387,20 @@ Begin
     If FStateKeys[Index] = Key Then
       Begin
         FStateValues[Index] := ValueJson;
+        FStateWriterBuilt[Index] := WriterBuilt;
         Exit;
       End;
   SetLength(FStateKeys, Length(FStateKeys) + 1);
   SetLength(FStateValues, Length(FStateValues) + 1);
+  SetLength(FStateWriterBuilt, Length(FStateKeys));
   FStateKeys[High(FStateKeys)] := Key;
   FStateValues[High(FStateValues)] := ValueJson;
+  FStateWriterBuilt[High(FStateWriterBuilt)] := WriterBuilt;
 End;
 
-{ One parse of the value. The envelope is built from that value, so QueueFrame does not parse it again.
-  An invalid value is dropped, which is what a raw embed of broken JSON used to fail in TryEncodeMonitorFrame. }
+{ One parse of a value that did not come from an AssistantMonitorSync writer. Those writers already return one
+  JSON object. An invalid value is dropped, which is what a raw embed of broken JSON used to fail in
+  TryEncodeMonitorFrame. }
 Function StateValueIsJson(Const ValueJson: String): Boolean;
 Var
   Data: TJSONData;
@@ -2417,7 +2424,7 @@ Begin
   End;
 End;
 
-Procedure TMonitorSession.PublishState(Const Key, ValueJson: String);
+Procedure TMonitorSession.PublishState(Const Key, ValueJson: String; WriterBuilt: Boolean);
 Var
   Frames: TStringArray;
   Encoded: Array Of RawByteString;
@@ -2426,8 +2433,9 @@ Var
 Begin
   If (Key = '') Or (Not Assigned(FOutbox)) Then
     Exit;
-  RememberState(Key, ValueJson);
-  If Not StateValueIsJson(ValueJson) Then
+  RememberState(Key, ValueJson, WriterBuilt);
+  { A writer-built value is already one JSON object, so it is not parsed again. }
+  If (Not WriterBuilt) And (Not StateValueIsJson(ValueJson)) Then
     Begin
       Inc(FFramesDropped);
       Exit;
@@ -2463,7 +2471,7 @@ Var
   Index: Integer;
 Begin
   For Index := 0 To High(FStateKeys) Do
-    PublishState(FStateKeys[Index], FStateValues[Index]);
+    PublishState(FStateKeys[Index], FStateValues[Index], FStateWriterBuilt[Index]);
 End;
 
 Procedure TMonitorSession.QueueResumeAnswer(Const Answer: TMonitorSyncAnswer);
@@ -2546,8 +2554,8 @@ Begin
           Source := Default(TMonitorResumeSource);
           FMirror.CaptureResume('', Source);
           Status := HostSyncStatus;
-          PublishState('status', MonitorResumeStatusValueJson(Status));
-          PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
+          PublishState('status', MonitorResumeStatusValueJson(Status), True);
+          PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId), True);
           Answer := MonitorSyncResumeAnswer(Source, FConversationId, '', 'observed', 0, Status);
           If Not Answer.NotReady Then
             Begin
