@@ -63,10 +63,9 @@ Type
 { Control and approval stay on control. Other state names its key. Slices are the log.
   Fetch answers and turn pages are bulk. snapshot_end is the barrier. The frame is parsed, so a frame
   written by fpjson AsJSON, with spaces around each colon, is classified like a hand-written one. }
-Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String): Boolean;
+Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String; Out Seq: Int64): Boolean;
 Function MonitorSyncStateFrame(Const Id, Key, ValueJson: String): String;
 { One state frame, or chunk frames of that value when the envelope exceeds 32 KiB. }
-Function MonitorSyncEventSeq(Const Json: String): Int64;
 Function MonitorSyncStateFrames(Const Id, Key, ValueJson: String): TStringArray;
 
 { One resume answer. State frames are not included; the caller queues those first. }
@@ -375,7 +374,7 @@ Begin
     Result := Item.AsString;
 End;
 
-Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String): Boolean;
+Function MonitorSyncClassify(Const Json: String; Out Lane: TMonitorSyncLane; Out StateKey: String; Out Seq: Int64): Boolean;
 Var
   Data: TJSONData;
   Root, Payload: TJSONObject;
@@ -383,6 +382,7 @@ Var
 Begin
   Lane := mslControl;
   StateKey := '';
+  Seq := 0;
   Result := False;
   { Parsed, not searched as text. fpjson AsJSON writes "type" : "plan_data", with spaces. Known producers
     pass the lane to QueueFrame and do not call this. Unknown-origin frames still do. }
@@ -403,6 +403,8 @@ Begin
     If Root.Find('payload') Is TJSONObject Then
       Payload := TJSONObject(Root.Find('payload'));
     TypeName := StringMember(Root, 'type');
+    If Assigned(Payload) And Assigned(Payload.Find('seq')) And (Payload.Find('seq').JSONType = jtNumber) Then
+      Seq := Payload.Find('seq').AsInt64;
     If TypeName = 'state' Then
       Begin
         Key := StringMember(Payload, 'key');
@@ -416,6 +418,12 @@ Begin
     Else If TypeName = 'event' Then
       Begin
         Lane := mslLog;
+        Result := True;
+      End
+    Else If TypeName = 'plan' Then
+      Begin
+        Lane := mslState;
+        StateKey := 'plan';
         Result := True;
       End
     Else If (TypeName = 'block_data') Or (TypeName = 'image_data') Or (TypeName = 'plan_data') Or
@@ -455,23 +463,6 @@ End;
 Function MonitorSyncStateFrame(Const Id, Key, ValueJson: String): String;
 Begin
   Result := Envelope(Id, 'state', '{"key":"' + JsonEscapeText(Key) + '","value":' + ValueJson + '}');
-End;
-
-Function MonitorSyncEventSeq(Const Json: String): Int64;
-Var
-  Token, Tail: String;
-  At, EndAt: Integer;
-Begin
-  Result := 0;
-  Token := '"seq":';
-  At := Pos(Token, Json);
-  If At = 0 Then
-    Exit;
-  Tail := Copy(Json, At + Length(Token), 24);
-  EndAt := 1;
-  While (EndAt <= Length(Tail)) And (Tail[EndAt] In ['0'..'9', '-']) Do
-    Inc(EndAt);
-  Result := StrToInt64Def(Copy(Tail, 1, EndAt - 1), 0);
 End;
 
 Function MonitorSyncStateFrames(Const Id, Key, ValueJson: String): TStringArray;

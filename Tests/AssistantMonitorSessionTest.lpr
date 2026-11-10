@@ -687,6 +687,28 @@ End;
 { A live part is a real envelope. The id carries the name, so a check can find the part in the sent frames. }
 
 
+Procedure TestSpacedEventSeq;
+Var
+  Fresh: TMonitorSession;
+  Json: String;
+  Bytes: RawByteString;
+  Lane: TMonitorOutboxLane;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    Json := '{"v":3,"id":"e-spaced","type":"event","payload":{"conversation_id":"c","stream_id":"aa","seq" : 7,' +
+      '"event":"block_append","data":{"block_id":"b","offset":0,"text":"x"}}}';
+    Check('spaced seq event queues', Fresh.TryQueueHostJson(Json));
+    Check('spaced seq event is on the log lane', Fresh.TakeOutboundFrameWithLane(Bytes, Lane) And (Lane = molLog));
+    Check('a lower seq is not the stored sequence', Not Fresh.TryQueueHostJson(
+      '{"v":3,"id":"e-low","type":"event","payload":{"seq" : 6,"event":"block_append","data":{}}}'));
+    Check('the next seq still queues', Fresh.TryQueueHostJson(
+      '{"v":3,"id":"e-next","type":"event","payload":{"seq" : 8,"event":"block_append","data":{}}}'));
+  Finally
+    Fresh.Free;
+  End;
+End;
+
 Procedure TestPlanFrameBeforeBulk;
 Var
   Before, Index: Integer;
@@ -1537,6 +1559,7 @@ Begin
       TestRevokedNewSocket;
       TestDisplayApproval;
       TestBareSignalAndCancel;
+      TestSpacedEventSeq;
       TestPlanFrameBeforeBulk;
       TestEncodeFailureNotQueued;
       TestChunkedStateEncodeCloses;

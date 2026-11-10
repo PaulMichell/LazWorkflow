@@ -663,28 +663,6 @@ Begin
   Result := 'h' + IntToStr(FHostSeq);
 End;
 
-Type
-  THostLane = (hlControl, hlPlan, hlBulk);
-
-Function HostLane(Const Json: String): THostLane;
-Var
-  Message: TMonitorMessage;
-  ErrorText: String;
-Begin
-  { An envelope the codec cannot decode stays on control. EncodeHostFrame has already refused text that is not JSON. }
-  Result := hlControl;
-  If Not TryDecodeMonitorEnvelope(Json, Message, ErrorText) Then
-    Exit;
-  If Message.TypeName = 'event' Then
-    Exit(hlBulk);
-  Case Message.Kind Of
-    mmkPlan: Result := hlPlan;
-    mmkImageData, mmkSnapshotPage, mmkChunk: Result := hlBulk;
-  Else
-    Result := hlControl;
-  End;
-End;
-
 { The "type" value of a frame, for a log line. The frame may not be JSON, so this is a text search. Only
   lowercase letters, digits and underscores are kept, at most 32 of them, so no frame content is logged. }
 Function FrameTypeHint(Const Json: String): String;
@@ -850,7 +828,11 @@ Begin
     mslState:
       Begin
         If FOutbox.ReplaceState(StateKey, One, Replaced) Then
-          Result := True
+          Begin
+            If Replaced > 0 Then
+              Inc(FFramesDropped);
+            Result := True;
+          End
         Else
           CloseToListening;
       End;
@@ -887,99 +869,29 @@ End;
 
 Function TMonitorSession.QueueSend(Const Json: String): Boolean;
 Var
-  Lane: THostLane;
-  SyncLane: TMonitorSyncLane;
+  Lane: TMonitorSyncLane;
   StateKey: String;
   Seq: Int64;
-  Bytes: RawByteString;
-  One: Array Of RawByteString;
-  Replaced: Integer;
 Begin
   Result := False;
   If (Json = '') Or Not Assigned(FOutbox) Then
     Exit;
-  If MonitorSyncClassify(Json, SyncLane, StateKey) Then
+  { One parse. A frame the classifier does not name stays on control. }
+  If Not MonitorSyncClassify(Json, Lane, StateKey, Seq) Then
     Begin
-      If Not EncodeHostFrame(Json, Bytes) Then
-        Begin
-          CloseForQueueFailure;
-          Exit;
-        End;
-      SetLength(One, 1);
-      One[0] := Bytes;
-      Case SyncLane Of
-        mslState:
-          Begin
-            If FOutbox.ReplaceState(StateKey, One, Replaced) Then
-              Result := True
-            Else
-              CloseForQueueFailure;
-          End;
-        mslLog:
-          Result := FOutbox.AppendLog(MonitorSyncEventSeq(Json), Bytes);
-        mslBulk:
-          Begin
-            If FOutbox.AddBulk(One) Then
-              Result := True
-            Else
-              QueueOverload(Json);
-          End;
-        mslBarrier:
-          Begin
-            FOutbox.HoldBarrier(Bytes, 1);
-            Result := True;
-          End;
-      Else
-        If FOutbox.AddControl(Bytes) Then
-          Result := True
-        Else
-          CloseForQueueFailure;
-      End;
-      Exit;
-    End;
-  If Not EncodeHostFrame(Json, Bytes) Then
-    Begin
-      If FrameIsBye(Json) Then
-        Begin
-          CloseToListening;
-          Result := True;
-        End
-      Else
-        CloseForQueueFailure;
-      Exit;
-    End;
-  Lane := HostLane(Json);
-  SetLength(One, 1);
-  One[0] := Bytes;
-  If Lane = hlPlan Then
-    Begin
-      If Not FOutbox.ReplaceState('plan', One, Replaced) Then
-        CloseForQueueFailure
-      Else
-        Begin
-          If Replaced > 0 Then
-            Inc(FFramesDropped);
-          Result := True;
-        End;
-      Exit;
-    End;
-  If Lane = hlBulk Then
-    Begin
-      If FOutbox.AddBulk(One) Then
-        Result := True
-      Else
-        QueueOverload(Json);
-      Exit;
-    End;
-  If FOutbox.AddControl(Bytes) Then
-    Result := True
-  Else If FrameIsBye(Json) Then
+      Lane := mslControl;
+      StateKey := '';
+      Seq := 0;
+    End
+  Else If Lane <> mslLog Then
+    Seq := 0;
+  Result := QueueFrame(Json, Lane, StateKey, Seq);
+  { A bye that cannot be queued still closes. QueueFrame already closed when the frame could not be encoded. }
+  If (Not Result) And FrameIsBye(Json) Then
     Begin
       CloseToListening;
       Result := True;
-    End
-  Else
-    CloseForQueueFailure;
+    End;
 End;
 
 Function TMonitorSession.Transmit(Const Json: String): Boolean;
