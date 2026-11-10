@@ -30,7 +30,7 @@ Fix: one resume rule. Send `resume` only from the hello path, from an explicit g
 Acceptance: a coordinator test with a live phase, an empty `content` board, and a Room cursor of seq 50 sends nothing for several flush ticks. A test that the desktop conversation id arrives does not emit stream `""` / seq 0 when that cursor exists. A test that `enterForeground` while already in the foreground and already live sends no resume. `ProtocolV3FixtureTest` still accepts the catalogue resume fixture.
 
 ### 1.2 Keep the socket up when the screen sleeps during a plan
-Status: not started
+Status: complete
 
 `MainActivity` registers `ACTION_SCREEN_OFF` and calls `leaveForeground`. `onStop` does the same. `LanSession.leaveForeground` sends `bye` reason `background` and closes the socket. A plan that outlasts the screen timeout therefore always shows Offline, with the phone still on the desk and the radio still associated. There is no foreground service, no wake lock, and no Wi-Fi lock in `AndroidManifest.xml`. After the bye, Android may also freeze the process; the host then hits `MonitorDeadSessionMs` (30 s) even if the bye was lost.
 
