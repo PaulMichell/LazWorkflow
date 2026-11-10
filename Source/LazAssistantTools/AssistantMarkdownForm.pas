@@ -23,6 +23,7 @@ Type
     PreviewModeAction: TAction;
     SourceModeAction: TAction;
     OpenDialog: TOpenDialog;
+    SaveDialog: TSaveDialog;
     ToolBar: TToolBar;
     ToolButtonOpen: TToolButton;
     ToolButtonSave: TToolButton;
@@ -56,8 +57,11 @@ Type
     FSnippet: Boolean;
     FSnippetKey: String;
     FSnippetTitle: String;
+    FNewDocument: Boolean;
     PreviewControl: TStyledMemo;
     PreviewLoader: TStyledMarkdown;
+    Function DocumentTitle: String;
+    Function PromptSaveAs(Out Target: String): Boolean;
     Procedure EnsurePreview;
     Procedure ApplyViewMode;
     Procedure UpdateCaption;
@@ -78,17 +82,27 @@ Type
     Function PromptOpen: Boolean;
     { Read-only preview of one section. Not a project file, so Save and reload stay off. }
     Procedure LoadSnippet(Const Key, Title, Body: String);
+    { Empty, untitled document in Source view. The first Save asks where to write it. }
+    Procedure StartNewDocument;
     { Re-read from disk (e.g. after LLM write_markdown). Skips if dirty unless Force. }
     Function ReloadFromDisk(Force: Boolean = False): Boolean;
     Property FileName: String Read FFileName;
     Property SnippetKey: String Read FSnippetKey;
     Property Dirty: Boolean Read FDirty;
+    Property IsNewDocument: Boolean Read FNewDocument;
     Property ViewMode: TMarkdownViewMode Read FViewMode;
   End;
+
+Const
+  NewMarkdownDocumentTitle = '<New Markdown>';
 
 { Opens an existing viewer for FileName, or creates one. Empty FileName shows the open dialog.
   When the viewer is already open, reloads content from disk. }
 Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
+{ Always opens a new window holding an untitled, unsaved document. }
+Function OpenNewMarkdownDocument: TAssistantMarkdownForm;
+{ Where Save puts a new document first: the project's Documents folder, or the project root without one. }
+Function NewMarkdownDocumentFolder: String;
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
 { Same preview as a plan file, limited to one section. Reuses the window for Key. }
 Function OpenMarkdownSnippet(Const Key, Title, Body: String): TAssistantMarkdownForm;
@@ -101,7 +115,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  LazFileUtils, WorkflowLog, WorkflowEvents, LazIDEIntf, ProjectIntf;
+  LazFileUtils, WorkflowLog, WorkflowEvents, LazIDEIntf, ProjectIntf, AssistantProjectPaths, AssistantPlan;
 
 Const
   PreviewContentMargin = 4;
@@ -231,6 +245,45 @@ Begin
   Result.Show;
 End;
 
+Function OpenNewMarkdownDocument: TAssistantMarkdownForm;
+Var
+  OwnerComp: TComponent;
+Begin
+  OwnerComp := Application;
+  If Assigned(LazarusIDE) And Assigned(LazarusIDE.OwningComponent) Then
+    OwnerComp := LazarusIDE.OwningComponent;
+  Result := TAssistantMarkdownForm.Create(OwnerComp);
+  Result.StartNewDocument;
+  Result.Show;
+  Result.BringToFront;
+  If Result.SourceMemo.CanFocus Then
+    Result.SourceMemo.SetFocus;
+End;
+
+Function NewMarkdownDocumentFolder: String;
+Var
+  Project: TLazProject;
+  MainName, Root: String;
+Begin
+  Result := '';
+  If (Not Assigned(LazarusIDE)) Or (Not Assigned(LazarusIDE.ActiveProject)) Then
+    Exit;
+  Project := LazarusIDE.ActiveProject;
+  MainName := '';
+  If Assigned(Project.MainFile) Then
+    MainName := Project.MainFile.Filename;
+  Root := ResolveAssistantProjectRoot(Project.ProjectInfoFile, MainName);
+  If Root = '' Then
+    Root := ExtractFilePath(Project.ProjectInfoFile);
+  If Root = '' Then
+    Exit;
+  Root := IncludeTrailingPathDelimiter(Root);
+  If DirectoryExistsUTF8(Root + AssistantDocumentsDirName) Then
+    Result := Root + AssistantDocumentsDirName
+  Else
+    Result := ExcludeTrailingPathDelimiter(Root);
+End;
+
 Function TAssistantMarkdownForm.ReloadFromDisk(Force: Boolean): Boolean;
 Begin
   Result := False;
@@ -263,6 +316,7 @@ Begin
   FSnippet := False;
   FSnippetKey := '';
   FSnippetTitle := '';
+  FNewDocument := False;
   PreviewControl := Nil;
   PreviewLoader := Nil;
 End;
@@ -349,16 +403,23 @@ Begin
     End;
 End;
 
+Function TAssistantMarkdownForm.DocumentTitle: String;
+Begin
+  If FSnippet And (FSnippetTitle <> '') Then
+    Result := FSnippetTitle
+  Else If FNewDocument Then
+    Result := NewMarkdownDocumentTitle
+  Else If FFileName = '' Then
+    Result := 'Markdown'
+  Else
+    Result := ExtractFileName(FFileName);
+End;
+
 Procedure TAssistantMarkdownForm.UpdateCaption;
 Var
   Title: String;
 Begin
-  If FSnippet And (FSnippetTitle <> '') Then
-    Title := FSnippetTitle
-  Else If FFileName = '' Then
-    Title := 'Markdown'
-  Else
-    Title := ExtractFileName(FFileName);
+  Title := DocumentTitle;
   If FDirty And (Not FSnippet) Then
     Title := Title + ' *';
   Caption := Title;
@@ -370,6 +431,8 @@ Var
 Begin
   If FSnippet Then
     LeftText := 'Review'
+  Else If FNewDocument Then
+    LeftText := 'Not saved yet'
   Else If FFileName = '' Then
     LeftText := 'No file'
   Else
@@ -404,7 +467,8 @@ Begin
       Exit;
     End;
   OpenAction.Enabled := True;
-  SaveAction.Enabled := (FFileName <> '') And FDirty;
+  { A new document can be saved before any typing, to create an empty file. }
+  SaveAction.Enabled := FNewDocument Or ((FFileName <> '') And FDirty);
 End;
 
 Procedure TAssistantMarkdownForm.SetDirty(IsDirty: Boolean);
@@ -422,7 +486,7 @@ Begin
   Result := True;
   If FSnippet Or (Not FDirty) Then
     Exit;
-  Case MessageDlg('Save changes to ' + ExtractFileName(FFileName) + ' before closing?',
+  Case MessageDlg('Save changes to ' + DocumentTitle + ' before closing?',
     mtConfirmation, [mbYes, mbNo, mbCancel], 0) Of
     mrYes:
       Result := SaveToDisk;
@@ -539,29 +603,88 @@ Begin
   End;
 End;
 
-Function TAssistantMarkdownForm.SaveToDisk: Boolean;
+Function TAssistantMarkdownForm.PromptSaveAs(Out Target: String): Boolean;
+Var
+  InitialDir: String;
+  Existing: TAssistantMarkdownForm;
 Begin
   Result := False;
-  If FFileName = '' Then
+  Target := '';
+  InitialDir := NewMarkdownDocumentFolder;
+  If InitialDir <> '' Then
+    SaveDialog.InitialDir := InitialDir;
+  SaveDialog.FileName := '';
+  If Not SaveDialog.Execute Then
     Exit;
-  If DiskCopyIsNewer Then
+  Target := ExpandFileName(Trim(SaveDialog.FileName));
+  If Target = '' Then
+    Exit;
+  { Not every widgetset applies DefaultExt, and its overwrite prompt only saw the name as typed. }
+  If ExtractFileExt(Target) = '' Then
     Begin
-      UpdateStatus;
-      Case ConfirmNewerDiskCopy Of
-        mrYes: { Explicit overwrite of the newer disk copy. };
-        mrNo:
-          Begin
-            Result := LoadFromDisk;
-            If Result And Assigned(StatusFooter) Then
-              StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
+      Target := Target + '.md';
+      If FileExists(Target) And (MessageDlg('"' + ExtractFileName(Target) + '" already exists. Replace it?',
+        mtConfirmation, [mbYes, mbNo], 0) <> mrYes) Then
+        Begin
+          Target := '';
+          Exit;
+        End;
+    End;
+  { Two live windows on one file would each overwrite the other's edits. }
+  Existing := FindMarkdownDocument(Target);
+  If Assigned(Existing) And (Existing <> Self) Then
+    Begin
+      MessageDlg('"' + ExtractFileName(Target) + '" is already open in another Markdown window. ' +
+        'Close that window or choose another name.', mtWarning, [mbOK], 0);
+      Target := '';
+      Exit;
+    End;
+  Result := True;
+End;
+
+Function TAssistantMarkdownForm.SaveToDisk: Boolean;
+Var
+  Target: String;
+Begin
+  Result := False;
+  If FSnippet Then
+    Exit;
+  If FNewDocument Then
+    Begin
+      If Not PromptSaveAs(Target) Then
+        Exit;
+    End
+  Else
+    Begin
+      Target := FFileName;
+      If Target = '' Then
+        Exit;
+      If DiskCopyIsNewer Then
+        Begin
+          UpdateStatus;
+          Case ConfirmNewerDiskCopy Of
+            mrYes: { Explicit overwrite of the newer disk copy. };
+            mrNo:
+              Begin
+                Result := LoadFromDisk;
+                If Result And Assigned(StatusFooter) Then
+                  StatusFooter.SetRightText('Reloaded ' + FormatDateTime('hh:nn:ss', Now));
+                Exit;
+              End;
+          Else
             Exit;
           End;
-      Else
-        Exit;
-      End;
+        End;
     End;
   Try
-    SourceMemo.Lines.SaveToFile(FFileName);
+    SourceMemo.Lines.SaveToFile(Target);
+    { The document only takes the name once the file is written, so a failed write leaves it new. }
+    If FNewDocument Then
+      Begin
+        FFileName := Target;
+        FNewDocument := False;
+        WatchTimer.Enabled := True;
+      End;
     FDiskAge := FileAge(FFileName);
     FPendingDiskReload := False;
     SetDirty(False);
@@ -569,6 +692,8 @@ Begin
     NotifyDocumentSaved;
     NotifyDocumentChanged;
     Result := True;
+    UpdateCaption;
+    RefreshActionState;
     UpdateStatus;
     WorkflowLogger.Info('AssistantMarkdown', 'Saved ' + FFileName);
   Except
@@ -580,6 +705,7 @@ End;
 Function TAssistantMarkdownForm.OpenFile(Const FileName: String): Boolean;
 Var
   Expanded: String;
+  WasNew: Boolean;
 Begin
   Result := False;
   Expanded := ExpandFileName(Trim(FileName));
@@ -587,8 +713,18 @@ Begin
     Exit;
   If FDirty And (Not ConfirmDiscardEdits) Then
     Exit;
+  WasNew := FNewDocument;
   FFileName := Expanded;
+  FNewDocument := False;
   Result := LoadFromDisk;
+  If (Not Result) And WasNew Then
+    Begin
+      FFileName := '';
+      FNewDocument := True;
+      UpdateCaption;
+      UpdateStatus;
+      RefreshActionState;
+    End;
   If Result Then
     Begin
       Show;
@@ -652,9 +788,38 @@ Begin
   UpdateStatus;
 End;
 
+Procedure TAssistantMarkdownForm.StartNewDocument;
+Begin
+  FSnippet := False;
+  FSnippetKey := '';
+  FSnippetTitle := '';
+  FNewDocument := True;
+  FFileName := '';
+  FPendingDiskReload := False;
+  FDiskAge := -1;
+  WatchTimer.Enabled := False;
+  DebounceTimer.Enabled := False;
+  FLoading := True;
+  Try
+    SourceMemo.ReadOnly := False;
+    SourceMemo.Clear;
+    ApplyPreviewText('');
+    { An empty preview has nowhere to type, so a new document starts in Source view. }
+    FViewMode := mvmSource;
+    ApplyViewMode;
+    FDirty := False;
+  Finally
+    FLoading := False;
+  End;
+  UpdateCaption;
+  UpdateStatus;
+  RefreshActionState;
+End;
+
 Procedure TAssistantMarkdownForm.LoadSnippet(Const Key, Title, Body: String);
 Begin
   FSnippet := True;
+  FNewDocument := False;
   FSnippetKey := Key;
   FSnippetTitle := Title;
   FFileName := '';

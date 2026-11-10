@@ -50,6 +50,14 @@ object AssistantMarkdownForm: TAssistantMarkdownForm
     Left = 120
     Top = 48
   end
+  object SaveDialog: TSaveDialog
+    Title = 'Save new Markdown document'
+    DefaultExt = '.md'
+    Filter = 'Markdown (*.md;*.markdown;*.mdown)|*.md;*.markdown;*.mdown|All files (*)|*'
+    Options = [ofOverwritePrompt, ofEnableSizing, ofViewDetail]
+    Left = 360
+    Top = 48
+  end
   object ToolBar: TToolBar
     Left = 0
     Height = 28

@@ -41,6 +41,7 @@ Type
 
 Var
   CmdAssistantChat: TIDECommand;
+  CmdAssistantNewMarkdown: TIDECommand;
   CmdAssistantOpenMarkdown: TIDECommand;
   CmdAssistantReviewCompile: TIDECommand;
   CmdAssistantReviewBuild: TIDECommand;
@@ -98,6 +99,12 @@ End;
 Procedure DoAssistantSettings(Sender: TObject);
 Begin
   ShowAssistantSettingsForm;
+End;
+
+Procedure DoAssistantNewMarkdown(Sender: TObject);
+Begin
+  WorkflowLogger.Info('ProjectAssistant', 'New Markdown document requested');
+  OpenNewMarkdownDocument;
 End;
 
 Procedure DoAssistantOpenMarkdown(Sender: TObject);
@@ -311,6 +318,7 @@ Begin
 
     Key := IDEShortCut(VK_UNKNOWN, []);
     CmdAssistantChat := RegisterIDECommand(Cat, 'ProjectAssistant', 'Project Assistant', Key, Nil, @ShowProjectAssistantWindow);
+    CmdAssistantNewMarkdown := RegisterIDECommand(Cat, 'AssistantNewMarkdown', 'New Markdown Document', Key, Nil, @DoAssistantNewMarkdown);
     CmdAssistantOpenMarkdown := RegisterIDECommand(Cat, 'AssistantOpenMarkdown', 'Open Markdown Document', Key, Nil, @DoAssistantOpenMarkdown);
     CmdAssistantReviewCompile := RegisterIDECommand(Cat, 'AssistantReviewCompile', 'Review Compile',
       Key, Nil, @DoAssistantReviewCompile);
@@ -341,6 +349,7 @@ Begin
     MainSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantMainCmds');
     RegisterIDEMenuCommand(MainSec, 'ProjectAssistant', 'Project Assistant', Nil, Nil, CmdAssistantChat);
     WorkSec := RegisterIDEMenuSection(AssistantMenu, 'AssistantWorkCmds');
+    RegisterIDEMenuCommand(WorkSec, 'AssistantNewMarkdown', 'New Markdown', Nil, Nil, CmdAssistantNewMarkdown);
     RegisterIDEMenuCommand(WorkSec, 'AssistantOpenMarkdown', 'Open Markdown...', Nil, Nil, CmdAssistantOpenMarkdown);
     RegisterIDEMenuCommand(WorkSec, 'AssistantReviewCompile', 'Review Compile', Nil, Nil, CmdAssistantReviewCompile);
     RegisterIDEMenuCommand(WorkSec, 'AssistantReviewBuild', 'Review Build', Nil, Nil, CmdAssistantReviewBuild);
