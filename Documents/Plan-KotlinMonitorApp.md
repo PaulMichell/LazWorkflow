@@ -165,7 +165,7 @@ Fix: collect on `Dispatchers.IO`. Publish only the changed turn to the UI. Decod
 Acceptance: a fake store that emits two block updates and one unchanged image list decodes that image once. The UI state after the second append reuses the unchanged turn instances (identity, not a deep copy).
 
 ### 4.2 Do not reparse the whole live body on every token
-Status: not started
+Status: complete
 
 `MarkdownText` does `remember(source) { parseMonitorMarkdown(source) }`. A streaming thought or answer changes `source` on every batch, so the whole body is parsed again, and the `Column` inside the row is rebuilt. A long plan thought makes this the main-thread cost beside 4.1.
 
