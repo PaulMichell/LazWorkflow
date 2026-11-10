@@ -424,7 +424,7 @@ End;
 
 Function LongRunningCommand(Kind: Integer): Boolean;
 Const
-  LongRunningKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkWorkOnPlan), Ord(mmkRunTask)];
+  LongRunningKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkRunTask)];
 Begin
   { send is done when the turn ends. run_plan and run_task are done when the plan flag drops.
     A steer finishes when the form accepts it. }

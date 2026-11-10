@@ -1591,7 +1591,7 @@ End;
 
 Procedure TMonitorSession.HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
 Const
-  BusyKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkWorkOnPlan), Ord(mmkRunTask)];
+  BusyKinds = [Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkRunTask)];
 Var
   Blocked: Boolean;
   MessageText: String;

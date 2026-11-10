@@ -868,6 +868,37 @@ Begin
   CheckClientVersionReject('v2 hello', 2);
 End;
 
+Procedure TestWorkOnPlanDoesNotBlockSend;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Json, ErrorJson: String;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('work_on_plan starts live', Session.State = mssLive);
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandWorkOnPlan('work-on-plan', 0));
+    Check('work_on_plan is delivered', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkWorkOnPlan)));
+    Check('work_on_plan does not close the link', (Session.State = mssLive) And (Not Session.CloseRequested));
+    Check('send after work_on_plan encodes', TryEncodeCommandSend('send-after-work', 'hello', Json, ErrorJson, False));
+    Carrier.DeliverJson(Json);
+    Check('send after work_on_plan is admitted', (Sink.Calls = 2) And (Sink.Kind = Ord(mmkSend)));
+    Check('send after work_on_plan is queued', QueuedOnce('send-after-work'));
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Flags := Default(TMonitorHostFlags);
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestCommandLifecycle;
 Var
   Sink: TCommandSink;
@@ -1490,6 +1521,7 @@ Begin
       TestAckRules;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
+      TestWorkOnPlanDoesNotBlockSend;
       TestCommandLifecycle;
       TestSelectTarget;
       TestSelectConversation;
