@@ -415,6 +415,19 @@ Begin
   ExpectCounts('clean finish counts', Report, 0, 0, 0, 5);
   Check('clean finish does not ask to run again', Not Has(Report, AssistantPlanRunAgain));
   Check('clean finish does not mention blocked actions', Not Has(Report, AssistantPlanRunBlockedLeft));
+  Check('an untimed report has no run time', Not Has(Report, 'Total run time'));
+
+  Check('run time starts at 0:00', FormatPlanRunElapsed(0) = '0:00');
+  Check('run time under a minute', FormatPlanRunElapsed(59999) = '0:59');
+  Check('run time under an hour', FormatPlanRunElapsed(3599999) = '59:59');
+  Check('run time from an hour shows hours', FormatPlanRunElapsed(3600000) = '1:00:00');
+  Check('run time over an hour', FormatPlanRunElapsed(QWord(3807) * 1000) = '1:03:27');
+  Check('run time over ten hours', FormatPlanRunElapsed(QWord(36005) * 1000) = '10:00:05');
+  Sample.ElapsedMs := QWord(3807) * 1000;
+  Report := AssistantPlanRunReport(Sample);
+  Check('a timed report gives the total run time', Has(Report, 'Total run time: 1:03:27.'));
+  Check('the run time follows the counts',
+    Pos('Total run time', Report) > Pos(AssistantPlanRunCountsLine(0, 0, 0, 5), Report));
 
   Sample := Facts(preCleanFinish, '', 1, 0, 0, 1, 3, False, [Item('Review the form', 'review "Review the form"', True)]);
   Report := AssistantPlanRunReport(Sample);

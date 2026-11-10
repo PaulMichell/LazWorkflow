@@ -62,12 +62,16 @@ Type
     BlockedItems: TPlanRunBlockedItemArray;
     { A fault that says not to continue with Run Plan. Context limit is that case too. }
     TerminalFault: Boolean;
+    { Wall-clock time of the whole run. 0 when no run was timed, such as the start dialog. }
+    ElapsedMs: QWord;
   End;
 
 Function DefaultPlanRunReportFacts: TPlanRunReportFacts;
 { Same line as the plan list, including the empty-plan suffix. }
 Function AssistantPlanRunCountsLine(NotStarted, InProgress, Blocked, Complete: Integer): String;
 Function AssistantPlanRunWhy(Const Facts: TPlanRunReportFacts): String;
+{ Run total for the status card and the report: m:ss under an hour, h:mm:ss from an hour. }
+Function FormatPlanRunElapsed(ElapsedMs: QWord): String;
 { One conversation report. Does not say that all packages are complete when a blocked item remains. }
 Function AssistantPlanRunReport(Const Facts: TPlanRunReportFacts): String;
 { Start dialog when FindNextIncompleteBuildSection found nothing to run. }
@@ -315,6 +319,18 @@ Begin
   Result.Complete := 0;
   Result.BlockedItems := Nil;
   Result.TerminalFault := False;
+  Result.ElapsedMs := 0;
+End;
+
+Function FormatPlanRunElapsed(ElapsedMs: QWord): String;
+Var
+  Secs: QWord;
+Begin
+  Secs := ElapsedMs Div 1000;
+  If Secs >= 3600 Then
+    Result := Format('%d:%2.2d:%2.2d', [Secs Div 3600, (Secs Mod 3600) Div 60, Secs Mod 60])
+  Else
+    Result := Format('%d:%2.2d', [Secs Div 60, Secs Mod 60]);
 End;
 
 Function AssistantPlanRunCountsLine(NotStarted, InProgress, Blocked, Complete: Integer): String;
@@ -432,6 +448,8 @@ Begin
   Why := AssistantPlanRunWhy(Facts);
   Result := '**Plan run ended:** ' + Why + LineEnding + LineEnding +
     AssistantPlanRunCountsLine(Facts.NotStarted, Facts.InProgress, Facts.Blocked, Facts.Complete);
+  If Facts.ElapsedMs > 0 Then
+    Result := Result + LineEnding + LineEnding + 'Total run time: ' + FormatPlanRunElapsed(Facts.ElapsedMs) + '.';
   Blocked := AssistantPlanRunBlockedLines(Facts);
   If Blocked <> '' Then
     Result := Result + LineEnding + LineEnding + Blocked;

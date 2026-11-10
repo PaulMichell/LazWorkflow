@@ -308,6 +308,7 @@ Type
     FReviewInProgress: Boolean;
     StreamStart: TDateTime;
     FTurnStartTick: QWord;
+    FPlanRunStartTick: QWord; { Set when Run Plan starts, 0 when no run is timed. }
     FTurnStartedAt: String;
     FStatusPhase: String; { One of the six progress words while FSending. }
     { Text already on screen when Connecting… began. A repeated snapshot is not new stream text. }
@@ -492,6 +493,8 @@ Type
     Procedure AccountUsageTimerTimer(Sender: TObject);
     Procedure ReleaseAccountUsageRefresh;
     Function FormatElapsedStatus(Const Phase: String): String;
+    Function PlanRunElapsedSuffix: String;
+    Function StatusActivityReserve(Const Shown: String): String;
     Procedure SetStreamPhase(Const Phase: String);
     Procedure SetSending(IsSending: Boolean);
     Procedure ElapsedTimerTimer(Sender: TObject);
@@ -881,6 +884,7 @@ Begin
   FReviewInProgress := False;
   StreamStart := 0;
   FTurnStartTick := 0;
+  FPlanRunStartTick := 0;
   FTurnStartedAt := '';
   FStatusPhase := '';
   FLastChatPaintTick := 0;
@@ -3279,10 +3283,16 @@ End;
 Function TProjectAssistantForm.EndRunPlan(Kind: TPlanRunEndKind; Const Detail: String): String;
 Var
   Facts: TPlanRunReportFacts;
+  RunMs: QWord;
 Begin
   Result := '';
   If Not FPlanAgentRunning Then
     Exit;
+  { Read the run clock first, so the report's total covers the whole run. }
+  RunMs := 0;
+  If FPlanRunStartTick <> 0 Then
+    RunMs := GetTickCount64 - FPlanRunStartTick;
+  FPlanRunStartTick := 0;
   FPlanAgentRunning := False;
   UpdateWorkActions;
   ReleasePlanStallWatch;
@@ -3290,6 +3300,7 @@ Begin
   Application.RemoveAsyncCalls(Self);
   RefreshBuildTodos;
   Facts := CollectPlanRunReportFacts(Kind, Detail);
+  Facts.ElapsedMs := RunMs;
   Result := AssistantPlanRunReport(Facts);
   If FPlanItemUsage <> '' Then
     Result := Result + LineEnding + PlanRunUsageSummary(FPlanItemUsage);
@@ -3410,6 +3421,7 @@ Begin
   If Not ConfirmSavedBeforeTurn(amBuild) Then
     Exit;
   FPlanAgentRunning := True;
+  FPlanRunStartTick := GetTickCount64;
   UpdateWorkActions;
   AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   SyncCodexUsageIdle;
@@ -4613,7 +4625,24 @@ Begin
     End;
   Mins := Secs Div 60;
   Rem := Secs Mod 60;
-  Result := Format('%s %d:%2.2d', [Shown, Mins, Rem]);
+  Result := Format('%s %d:%2.2d', [Shown, Mins, Rem]) + PlanRunElapsedSuffix;
+End;
+
+Function TProjectAssistantForm.PlanRunElapsedSuffix: String;
+Begin
+  { The whole run's time, in brackets after the turn clock. Empty outside Run Plan. }
+  Result := '';
+  If FPlanAgentRunning And (FPlanRunStartTick <> 0) Then
+    Result := ' (' + FormatPlanRunElapsed(GetTickCount64 - FPlanRunStartTick) + ')';
+End;
+
+Function TProjectAssistantForm.StatusActivityReserve(Const Shown: String): String;
+Begin
+  { The footer reserves the phase plus seven digits and two colons, and uses the phase for nothing else.
+    During Run Plan, widen it for ' (h:mm:ss)' as well, so the centre cards do not move on each tick. }
+  Result := Shown;
+  If PlanRunElapsedSuffix <> '' Then
+    Result := Shown + ' (00:)';
 End;
 
 Procedure TProjectAssistantForm.SetStreamPhase(Const Phase: String);
@@ -4629,7 +4658,7 @@ Begin
     End;
   FStatusPhase := Phase;
   Shown := AssistantProgressPhase(Phase);
-  StatusFooter.SetRightActivityText(FormatElapsedStatus(Shown), Shown);
+  StatusFooter.SetRightActivityText(FormatElapsedStatus(Shown), StatusActivityReserve(Shown));
   If PhaseChanged Then
     AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
@@ -5032,7 +5061,7 @@ Begin
       If (FStatusPhase <> '') And Assigned(StatusFooter) Then
         Begin
           StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
-            AssistantProgressPhase(FStatusPhase));
+            StatusActivityReserve(AssistantProgressPhase(FStatusPhase)));
           AssistantSessionObserve.AssistantSessionObserve(asnStatus);
         End;
       Exit;
@@ -5578,13 +5607,13 @@ Begin
         Begin
           If FSending And (FStatusPhase <> '') Then
             StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
-              AssistantProgressPhase(FStatusPhase));
+              StatusActivityReserve(AssistantProgressPhase(FStatusPhase)));
           PollTransportWait;
           Exit;
         End;
       If FSending And (FStatusPhase <> '') Then
         StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
-          AssistantProgressPhase(FStatusPhase));
+          StatusActivityReserve(AssistantProgressPhase(FStatusPhase)));
       If Assigned(FCodexRun) Then
         Begin
           PollCodex;
@@ -5980,7 +6009,7 @@ Begin
   Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
-    StatusText := AssistantStatusReady
+    StatusText := AssistantStatusReady + PlanRunElapsedSuffix { Between plan items the run total stays in view. }
   Else
     StatusText := AssistantStatusOffline;
   ModelText := Trim(FActiveModel);
@@ -6013,7 +6042,7 @@ Begin
   FContextStatusText := CentreText;
   ApplyAccountUsageLabel;
   If FSending Then
-    StatusFooter.SetRightActivityText(StatusText, AssistantProgressPhase(FStatusPhase))
+    StatusFooter.SetRightActivityText(StatusText, StatusActivityReserve(AssistantProgressPhase(FStatusPhase)))
   Else
     StatusFooter.SetRightText(StatusText);
   StatusFooter.SetLeftHint('');
@@ -8088,7 +8117,7 @@ Begin
       If FLiveThinking <> '' Then
         FContextUsed := FContextUsed + Length(FLiveThinking) Div 4;
       { Item 3.2 continues an unfinished decision instead of stopping here. }
-      StatusFooter.SetRightText(AssistantStatusReady);
+      StatusFooter.SetRightText(AssistantStatusReady + PlanRunElapsedSuffix);
     End;
   FStreamingActive := False;
   FLastTurnHadError := ResolvedError <> '';
@@ -11553,6 +11582,7 @@ Begin
   If Not ConfirmSavedBeforeTurn(amBuild) Then
     Exit;
   FPlanAgentRunning := True;
+  FPlanRunStartTick := GetTickCount64;
   AssistantSessionObserve.AssistantSessionObserve(asnPlan);
   SyncCodexUsageIdle;
   SetAssistantPlanViewerQuiet(True);
