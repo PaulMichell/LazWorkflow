@@ -103,7 +103,7 @@ Delete those four functions and the private helpers that exist only for them. Re
 Acceptance: a search of `app/src/main` finds no `reduceMonitor`, `mergeApplied`, `applyLink` or `connectionLabel`. `:app:testDebugUnitTest` passes. The coordinator tests still cover send, steer, unsaved edits, and a live-to-disconnected chip.
 
 ### 2.2 Remove the empty coordinator stubs
-Status: not started
+Status: complete
 
 These always return empty or null, and the callers ignore that result:
 
