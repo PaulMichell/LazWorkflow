@@ -1358,11 +1358,10 @@ Begin
   CodeArmed := PairCodeActive;
   If (Not FPairCodeRequired) And ((Not CodeArmed) Or (Trim(Pair.Code) = '')) Then
     Begin
-      { Require Pairing Code is off. No code is needed, but a phone that reports a certificate other than this host's
-        is talking to something in between, so it is still refused. }
+      { Require Pairing Code is off. No code is needed. When this host has a certificate, the phone must report
+        that same fingerprint. Omitting it, or reporting another, means something is in between. }
       FCodeExpired := False;
-      If (Pair.Fingerprint <> '') And (FHostFingerprint <> '') And
-        (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
+      If (FHostFingerprint <> '') And (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
         Begin
           RejectLocked('fingerprint', True);
           Exit;

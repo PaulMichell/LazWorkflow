@@ -365,6 +365,11 @@ Begin
   Try
     NewSocket;
     DeliverHello('');
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandPair('pair', '', ''));
+    ExpectRejected('codeless pair without a fingerprint', 'fingerprint', True);
+    NewSocket;
+    DeliverHello('');
     DeliverPair('');
     ExpectPairOk;
     Session.RevokeClient(SavedClientId);
