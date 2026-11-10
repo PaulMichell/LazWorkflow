@@ -72,7 +72,7 @@ Fix: `lanAvailable` false is a hint, not a latch. A touch, the 30 s in-use retry
 Acceptance: a watch test with `onLost` and `wifiPresent` still true does not call `onDown`. A session test with `lanAvailable` forced false and a touch calls the connector again without an `onAvailable`.
 
 ### 1.6 Time a partial frame on the monotonic clock
-Status: not started
+Status: complete
 
 `readFrames` stamps `FrameAssembler.partialExpired` with `System.currentTimeMillis`. The dead-session check uses `clock.nanoTime`. A step of the wall clock (NTP, a manual change) can expire a partial frame that is only a few hundred milliseconds old and close the link with `ReadEnd.PeerClosed`. That reconnects in the middle of a plan snapshot. The protocol's 10 s partial-frame limit is a duration, not a civil time.
 
