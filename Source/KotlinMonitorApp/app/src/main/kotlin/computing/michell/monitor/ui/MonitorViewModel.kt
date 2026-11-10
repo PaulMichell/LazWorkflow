@@ -136,12 +136,10 @@ import computing.michell.monitor.protocol.encodePath
 import computing.michell.monitor.protocol.encodeSetMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -1219,13 +1217,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         }
       }
     }
-    viewModelScope.launch(Dispatchers.Default) {
-      while (isActive) {
-        delay(ScreenRefreshMs)
-        val effects = coordinator.flush(uiState.value) ?: continue
-        withContext(Dispatchers.Main) { applyUiEffects(effects) }
-      }
-    }
     viewModelScope.launch {
       session.status.collect { status -> onLink(status) }
     }
@@ -1458,8 +1449,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun enterForeground() {
-    // A reconnect resumes from hello. A screen that stayed connected still needs the head and the plan.
-    if (!session.enterForeground()) session.requestLiveSync()
+    // A return from the background reconnects, and hello resumes from the Room cursor.
+    // An already-open socket is delivering the plan. Do not ask the host to start again.
+    session.enterForeground()
   }
 
   fun leaveForeground() {
@@ -1542,7 +1534,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheBackToListState.value = !live
     watchScreen(row.host, row.id)
     if (live) {
-      queueStoredResume()
+      coordinator.resumeStoredOpen(row.id, row.streamId, row.seq)?.let { effect ->
+        if (effect is MonitorEffect.Send) session.sendCatalogue(effect.json)
+      }
       session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), row.id))
     }
   }
@@ -1700,16 +1694,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val record = store.load()
     val host = if (hostIdIsValid(record.hostId)) record.hostId else record.fingerprint
     if (host.isEmpty()) return
-    uiState.value = coordinator.noteHostConversation(id)
-    if (id != resumedConversation) {
-      resumedConversation = id
-      session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume(session.nextCommandId(), id, "", 0L))
-    }
+    val named = coordinator.onDesktopConversation(id)
+    uiState.value = coordinator.state
+    if (named.isNotEmpty()) applyUiEffects(named)
     if (id == watchedConversation && contentWatch?.isActive == true) return
     watchScreen(host, id)
   }
-
-  private var resumedConversation = ""
 
   private fun watchScreen(hostId: String, conversationId: String) {
     if (hostId.isEmpty() || conversationId.isEmpty()) {
@@ -2466,7 +2456,6 @@ fun microphoneAsk(granted: Boolean, asked: Boolean, showRationale: Boolean): Mic
   return MicrophoneAsk.RequestPermission
 }
 
-private const val ScreenRefreshMs = 250L
 private const val DisplayPreferenceFile = "monitor-display"
 private const val DisplayThinkingKey = "thinking"
 private const val DisplayToolsKey = "tools"

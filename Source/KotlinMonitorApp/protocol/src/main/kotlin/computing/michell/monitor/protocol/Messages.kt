@@ -1934,16 +1934,6 @@ fun tryEncodeImageData(
 }
 
 
-fun encodeResume(id: String, epoch: String, cursor: Long, commands: List<String> = emptyList()): String {
-  val payload = JsonObjectBuilder()
-  payload.add("epoch", epoch)
-  payload.add("cursor", cursor)
-  if (commands.isNotEmpty()) {
-    payload.add("commands", JsonValue.Arr(commands.map { JsonValue.Str(it) }))
-  }
-  return encodeEnvelope(MessageKind.Resume, id, payload.build())
-}
-
 data class CommandStateMessage(val ref: String, val state: String, val reason: String)
 
 fun encodeCommandStates(id: String, states: List<CommandStateMessage>): String {

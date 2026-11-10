@@ -35,7 +35,6 @@ import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.encodeClosedScreen
 import computing.michell.monitor.protocol.encodeEmpty
-import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeSyncResume
 import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
@@ -118,8 +117,11 @@ class MonitorCoordinator(
   private var resumeConversation = ""
   private var resumeStream = ""
   private var resumeSeq = 0L
-  /** Last time an empty screen asked the desktop for the open turn. */
-  private var screenAskedAt = 0L
+  /** The resume this socket already sent. A later hello must not ask for it again. */
+  private var sentResumeEpoch = -1
+  private var sentResumeConversation = ""
+  private var sentResumeStream = ""
+  private var sentResumeSeq = -1L
   /** Live until the first status, so an idle form can send before that frame. */
   private var linkPhase = LinkPhase.Live
   /** Send or New tapped while Syncing, before the socket can take it. */
@@ -220,21 +222,9 @@ class MonitorCoordinator(
     }
   }
 
-  /** Asks again while the link is up and this chat still has no turn.
-      An empty outline answered before the window was bound must not be the last word. */
-  fun flush(current: MonitorUi): List<MonitorEffect>? = synchronized(gate) {
-    if (!commandsReady()) return null
-    val board = content.current()
-    if (board.turns.isNotEmpty() || board.live != null) {
-      screenAskedAt = 0L
-      return null
-    }
-    if (local.conversationId.isEmpty() && !local.catchingUp) return null
-    val now = clock.nowMs()
-    if (screenAskedAt != 0L && now - screenAskedAt < 2000L) return null
-    screenAskedAt = now
-    listOf(resumeNow())
-  }
+  /** Does not resume. The screen is Room, and an empty coordinator board is not an empty chat.
+      Hello, a gap, and opening a stored conversation are the only resume senders. */
+  fun flush(current: MonitorUi): List<MonitorEffect>? = null
 
   /** The retry chip may offer the old text. It must not become the composer on the next open. */
   fun noteUndelivered(current: MonitorUi, text: String): MonitorUi = synchronized(gate) {
@@ -274,18 +264,47 @@ class MonitorCoordinator(
 
   fun revealHeldLink(current: MonitorUi, status: LinkStatus): List<MonitorEffect>? = null
 
-  /** The desktop named the chat New and Send write. Drop a board that belongs to another id. */
+  /** The desktop named the chat New and Send write. Drop a board that belongs to another id.
+      A Room cursor for this id stays. Naming the chat does not resume. */
   fun noteHostConversation(id: String): MonitorUi = synchronized(gate) {
-    if (!conversationIdIsIdentity(id)) return published()
-    if (id == local.conversationId && content.current().conversationId == id) return published()
+    onDesktopConversation(id)
+    published()
+  }
+
+  /** The user opened a stored conversation. One resume, unless this socket is already on that cursor. */
+  fun resumeStoredOpen(id: String, streamId: String, seq: Long): MonitorEffect? = synchronized(gate) {
+    if (!conversationIdIsIdentity(id)) return null
+    noteResumeCursor(id, streamId, seq)
+    if (alreadyReceiving(id, streamId, seq)) return null
+    rememberSent(id, streamId, seq)
+    local = local.copy(catchingUp = true)
+    MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), id, streamId, seq))
+  }
+
+  /** State key `conversation`. No resume. A stored cursor is not replaced with seq 0. */
+  fun onDesktopConversation(id: String): List<MonitorEffect> = synchronized(gate) {
+    if (!conversationIdIsIdentity(id)) return emptyList()
+    val stored = roomCursorFor(id)
     awaitingConversation = false
     closedAwaitId = ""
     if (content.current().conversationId != id) content.replace(contentHost, id, emptyList(), null)
-    resumeConversation = id
-    resumeStream = ""
-    resumeSeq = 0L
-    local = local.copy(conversationId = id, hostEpoch = "", hostCursor = 0L, reviewingOffline = false)
-    published()
+    if (stored == null) {
+      resumeConversation = id
+      resumeStream = ""
+      resumeSeq = 0L
+      local = local.copy(conversationId = id, hostEpoch = "", hostCursor = 0L, reviewingOffline = false)
+    } else {
+      resumeConversation = id
+      resumeStream = stored.first
+      resumeSeq = stored.second
+      local = local.copy(
+        conversationId = id,
+        hostEpoch = stored.first,
+        hostCursor = stored.second,
+        reviewingOffline = false
+      )
+    }
+    emptyList()
   }
 
   /** Chrome from a state frame. The conversation board stays with the store. */
@@ -498,7 +517,7 @@ class MonitorCoordinator(
     when (message.kind) {
       MessageKind.HelloOk -> {
         effects += noteHello(message)
-        effects += resumeNow()
+        resumeNow()?.let { effects += it }
       }
       MessageKind.SnapshotPage, MessageKind.BlockData -> {
         // Slices, fetches, and the baseline own the board. These frames must not paint it.
@@ -600,22 +619,31 @@ class MonitorCoordinator(
     resetMatch()
     val changedConversation = hello.conversationId.isNotEmpty() && hello.conversationId != local.conversationId
     if (changedConversation) {
-      // Reconnect follows the desktop's open chat, rather than resuming the cached chat.
+      // Reconnect follows the desktop's open chat, rather than resuming a different cached chat.
       session.takeSyncResume()
-      resumeConversation = ""
-      resumeStream = ""
-      resumeSeq = 0L
+      val kept = roomCursorFor(hello.conversationId)
+      if (kept == null) {
+        resumeConversation = ""
+        resumeStream = ""
+        resumeSeq = 0L
+      }
     }
     val board = content.current()
     val haveBody = board.turns.isNotEmpty() || board.live != null
     val announced = hello.epoch.ifEmpty { local.hostEpoch }
     val sameEpoch = announced.isEmpty() || announced == local.hostEpoch
     val keepPlace = !changedConversation && haveBody && sameEpoch && local.hostCursor > 0L
+    val keptStored = roomCursorFor(hello.conversationId.ifEmpty { local.conversationId })
     local = local.copy(
       conversationId = hello.conversationId.ifEmpty { local.conversationId },
       // A saved epoch must not reject the chat the desktop is about to send.
-      hostEpoch = announced,
-      hostCursor = if (keepPlace) local.hostCursor else 0L,
+      // A Room cursor is not replaced by the desktop head.
+      hostEpoch = keptStored?.first ?: announced,
+      hostCursor = when {
+        keptStored != null -> keptStored.second
+        keepPlace -> local.hostCursor
+        else -> 0L
+      },
       projectRoot = hello.projectRoot.ifEmpty { local.projectRoot },
       conversationTitle = hello.title.ifEmpty { local.conversationTitle },
       catchingUp = true
@@ -647,20 +675,52 @@ class MonitorCoordinator(
     return filed
   }
 
-  private fun resumeNow(): MonitorEffect {
-    local = local.copy(catchingUp = true)
+  /** Hello, or a resume queued for that hello. Not a timer. Not a zero cursor over a Room row. */
+  private fun resumeNow(): MonitorEffect? {
     val owed = session.takeSyncResume()
-    if (owed != null) return MonitorEffect.Send(owed)
-    if (resumeConversation.isNotEmpty()) {
-      return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), resumeConversation, resumeStream, resumeSeq))
+    if (owed != null) {
+      local = local.copy(catchingUp = true)
+      return MonitorEffect.Send(owed)
     }
-    val board = content.current()
-    val haveBody = board.turns.isNotEmpty() || board.live != null
-    if (haveBody && board.conversationId == local.conversationId && local.conversationId.isNotEmpty() &&
-      (local.hostEpoch.isNotEmpty() || local.hostCursor > 0L)) {
-      return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), local.conversationId, local.hostEpoch, local.hostCursor))
+    val stored = roomCursorFor(local.conversationId)
+    val conversationId = stored?.let { local.conversationId.ifEmpty { resumeConversation } } ?: local.conversationId
+    val streamId = stored?.first ?: ""
+    val seq = stored?.second ?: 0L
+    if (alreadyReceiving(conversationId, streamId, seq)) return null
+    rememberSent(conversationId, streamId, seq)
+    local = local.copy(catchingUp = true)
+    return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), conversationId, streamId, seq))
+  }
+
+  /** Room's cursor for this id, or null when Room has no row. Seq 0 with an empty stream is no row.
+      A hello head copied into hostEpoch is not a row: that write happens after this lookup, and a
+      restored screen is the only hostCursor that counts before a noteResumeCursor. */
+  private fun roomCursorFor(id: String): Pair<String, Long>? {
+    if (id.isEmpty()) return null
+    if (resumeConversation == id && (resumeStream.isNotEmpty() || resumeSeq > 0L)) return resumeStream to resumeSeq
+    if (resumeConversation.isEmpty() && local.conversationId == id && local.hostCursor > 0L) {
+      return local.hostEpoch to local.hostCursor
     }
-    return MonitorEffect.Send(encodeResume(session.nextCommandId(), "", 0L))
+    return null
+  }
+
+  private fun alreadyReceiving(conversationId: String, streamId: String, seq: Long): Boolean {
+    return linkPhase == LinkPhase.Live && sentResumeEpoch == session.linkEpoch &&
+      sentResumeConversation == conversationId && sentResumeStream == streamId && sentResumeSeq == seq
+  }
+
+  private fun rememberSent(conversationId: String, streamId: String, seq: Long) {
+    sentResumeEpoch = session.linkEpoch
+    sentResumeConversation = conversationId
+    sentResumeStream = streamId
+    sentResumeSeq = seq
+  }
+
+  private fun forgetSentResume() {
+    sentResumeEpoch = -1
+    sentResumeConversation = ""
+    sentResumeStream = ""
+    sentResumeSeq = -1L
   }
 
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {
@@ -698,6 +758,7 @@ class MonitorCoordinator(
     }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
+      forgetSentResume()
       closedAwaitId = ""
       // A paused, pinned or forgotten link will not come back by itself. A prompt waiting for it goes back in the box.
       val comesBack = status.phase != LinkPhase.Paused && session.reconnectable

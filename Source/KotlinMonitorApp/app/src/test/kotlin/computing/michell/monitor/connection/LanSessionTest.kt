@@ -357,6 +357,25 @@ class LanSessionTest {
   }
 
   @Test
+  fun alreadyForegroundOnALiveLinkSendsNoResume() {
+    val store = pairedStore()
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      val before = link.frames().size
+      assertFalse(session.enterForeground())
+      session.requestLiveSync()
+      Thread.sleep(200)
+      assertEquals(before, link.frames().size)
+      assertFalse(link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume })
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun helloCollectorResumesAfterAuthAndKeepsTheRequestedConversation() = runBlocking {
     val store = pairedStore()
     val ledger = MemoryCommandLedger()

@@ -637,26 +637,51 @@ class MonitorCoordinatorTest {
   }
 
   @Test
-  fun anEmptyHelloKeepsAskingUntilTheOpenTurnArrives() {
+  fun anEmptyHelloDoesNotKeepAsking() {
     val clock = MovableClock(1_000L)
     val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+    val hello = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
       "hello", HelloOkMessage("nonce", "ide", "epoch", 0, "conversation-1", "/work", "", "")
-    ))))
-    val first = coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>()
-    assertEquals(1, first.size)
-    assertTrue(first.single().json.contains("resume"))
+    )))).orEmpty()
+    assertEquals(1, hello.filterIsInstance<MonitorEffect.Send>().size)
     assertNull(coordinator.flush(coordinator.state))
-    clock.millis += 2_000L
-    assertEquals(1, coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>().size)
-    val point = encodeSnapshotPage(
-      "page-1",
-      """{"point":true,"point_end":true,"conversation_id":"conversation-1","stream_id":"epoch","seq":1,"turn":{"live":true,"turn_id":"live-1","turn_index":1,"blocks":[{"block_id":"u","kind":"user","title":"","state":"ok","body":"the prompt"}]}}"""
-    )
-    coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(point)))
-    assertNull(coordinator.state.live)
     clock.millis += 5_000L
-    assertEquals(1, coordinator.flush(coordinator.state).orEmpty().filterIsInstance<MonitorEffect.Send>().size)
+    assertNull(coordinator.flush(coordinator.state))
+  }
+
+  @Test
+  fun flushDoesNotResumeWhileARoomCursorIsAlreadyStored() {
+    val clock = MovableClock(1_000L)
+    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.noteResumeCursor("conversation-1", "stream-9", 50)
+    assertTrue(coordinator.state.turns.isEmpty())
+    assertNull(coordinator.state.live)
+    repeat(4) {
+      assertNull(coordinator.flush(coordinator.state))
+      clock.millis += 2_000L
+    }
+  }
+
+  @Test
+  fun desktopConversationKeepsTheRoomCursorAndDoesNotResumeFromZero() {
+    val coordinator = open()
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.noteResumeCursor("conversation-1", "stream-9", 50)
+    val named = coordinator.onDesktopConversation("conversation-1")
+    assertTrue(named.none { effect -> effect is MonitorEffect.Send })
+    assertEquals("stream-9", coordinator.state.hostEpoch)
+    assertEquals(50L, coordinator.state.hostCursor)
+    val hello = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
+      "hello", HelloOkMessage("nonce", "ide", "stream-9", 80, "conversation-1", "/work", "Chat", "")
+    )))).orEmpty()
+    val sent = hello.filterIsInstance<MonitorEffect.Send>().single()
+    val payload = tryDecodeEnvelope(sent.json).message.payloadJson
+    assertTrue(payload.contains("stream-9"))
+    assertFalse(payload.contains("\"seq\":0"))
+    assertFalse(payload.contains("\"cursor\":0"))
+    assertEquals(50L, decodeResume(payload)!!.cursor)
+    assertEquals("stream-9", decodeResume(payload)!!.epoch)
   }
 
   @Test

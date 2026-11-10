@@ -44,8 +44,8 @@ import computing.michell.monitor.protocol.decodeTicks
 import computing.michell.monitor.protocol.encodeAuth
 import computing.michell.monitor.protocol.encodeBye
 import computing.michell.monitor.protocol.encodeEmpty
-import computing.michell.monitor.protocol.encodeResume
 import computing.michell.monitor.protocol.encodeHello
+import computing.michell.monitor.protocol.encodeSyncResume
 import computing.michell.monitor.protocol.encodePair
 import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.SyncFrame
@@ -638,10 +638,6 @@ class LanSession(
     return if (next.isEmpty()) json else next
   }
 
-  private fun resumeNow(epoch: String, cursor: Long): String {
-    return encodeResume(newId(), epoch, cursor, ledger.openIds())
-  }
-
   private suspend fun applyHostStates(states: List<HostCommandState>, owned: TlsLink) {
     val plan = ledger.applyHost(states)
     for (json in plan.resendJson) {
@@ -726,12 +722,10 @@ class LanSession(
   }
 
   /**
-   * The socket is still open, so hello will not run. Ask for the desktop point and the plan again.
-   * A return from the background reconnects and resumes there instead.
+   * A live socket is already delivering the plan. Asking the host to resume clears its log.
+   * A return from the background reconnects, and hello resumes from the Room cursor.
    */
   fun requestLiveSync() {
-    if (!inForeground || link == null) return
-    sendCatalogue(resumeNow("", 0))
   }
 
   /** Activity is no longer visible. Send bye, then wait until it returns. */
@@ -1193,7 +1187,8 @@ class LanSession(
           val presented = normalizeFingerprint(owned.peerFingerprint)
           if (presented.length == 64) store.save(store.load().copy(fingerprint = presented))
           pairCode = ""
-          offerControl(resumeNow("", 0), owned, outbound)
+          // First pair has no Room row. Resume after pair_ok, not with the epoch/cursor-only frame.
+          offerControl(encodeSyncResume(newId(), "", "", 0L), owned, outbound)
         }
       }
       MessageKind.HelloOk -> {
