@@ -165,6 +165,12 @@ data class MonitorUi(
   val pendingEpoch: Int = 0,
   val promptBaseline: Set<String> = emptySet(),
   val activityStartedMs: Long = 0,
+  /** Host sample of the plan run, or -1 when the host has not named one. */
+  val planRunElapsedMs: Long = -1,
+  /** The sample already applied to planRunStartedMs. -1 until the first sample. */
+  val planRunSampleMs: Long = -1,
+  /** Wall start of the plan run. The right-hand total ticks from this. */
+  val planRunStartedMs: Long = 0,
   val activityObservedMs: Int = 0,
   val activityAppliedMs: Long = 0,
   val clockToken: Int = 0,
@@ -377,7 +383,7 @@ fun clearRemoteActions(view: WireView): WireView {
 
 /** A live idle host. Offline and a missing sign-in flag are not a second status. */
 fun idleActivity(statusText: String): String {
-  val text = statusText.trim()
+  val text = stripPlanRunSuffix(statusText.trim())
   if (text.isEmpty() || text == "Ready" || text == "Offline" || text == "Not signed in" || hostHasElapsed(text)) return "Ready"
   return text
 }
@@ -479,6 +485,63 @@ fun formatActivityClock(elapsedMs: Long): String {
   return "${secs / 60}:${(secs % 60).toString().padStart(2, '0')}"
 }
 
+/** Same shape as the desktop plan total: m:ss, or h:mm:ss once an hour has passed. */
+fun formatPlanRunElapsed(elapsedMs: Long): String {
+  val secs = (elapsedMs / 1000L).coerceAtLeast(0L)
+  val rem = (secs % 60L).toString().padStart(2, '0')
+  return if (secs >= 3600L) {
+    val hours = secs / 3600L
+    val mins = ((secs % 3600L) / 60L).toString().padStart(2, '0')
+    "$hours:$mins:$rem"
+  } else {
+    "${secs / 60L}:$rem"
+  }
+}
+
+private val PlanRunSuffix = Regex(""" \((\d+):(\d{2})(?::(\d{2}))?\)$""")
+
+/** Elapsed milliseconds in a trailing ` (m:ss)` or ` (h:mm:ss)`. -1 when the text has none. */
+fun planRunElapsedMs(text: String): Long {
+  val match = PlanRunSuffix.find(text.trim()) ?: return -1L
+  val head = match.groupValues[1].toLongOrNull() ?: return -1L
+  val mid = match.groupValues[2].toLongOrNull() ?: return -1L
+  val tail = match.groupValues[3]
+  val secs = if (tail.isEmpty()) head * 60L + mid else head * 3600L + mid * 60L + (tail.toLongOrNull() ?: 0L)
+  return secs * 1000L
+}
+
+fun stripPlanRunSuffix(text: String): String = text.replace(PlanRunSuffix, "").trim()
+
+fun planRunSuffix(startedMs: Long, nowMs: Long): String {
+  if (startedMs <= 0L || nowMs < startedMs) return ""
+  return " (${formatPlanRunElapsed(nowMs - startedMs)})"
+}
+
+/**
+ * Keeps the plan total moving with the desktop. A later sample may start the clock earlier.
+ * It must not pull a running total back. A stopped plan clears it.
+ */
+fun notePlanRunClock(state: MonitorUi, nowMs: Long): MonitorUi {
+  val running = state.planRunning || state.view.planRunning
+  if (!running || nowMs <= 0L) {
+    if (state.planRunStartedMs == 0L && state.planRunSampleMs < 0L && state.planRunElapsedMs < 0L) return state
+    return state.copy(planRunStartedMs = 0L, planRunSampleMs = -1L, planRunElapsedMs = -1L)
+  }
+  val fromText = planRunElapsedMs(state.view.statusText)
+  val sample = when {
+    state.planRunElapsedMs >= 0L -> state.planRunElapsedMs
+    fromText >= 0L -> fromText
+    else -> -1L
+  }
+  if (sample >= 0L && sample != state.planRunSampleMs) {
+    val sampledStart = (nowMs - sample).coerceAtLeast(0L)
+    val start = if (state.planRunStartedMs <= 0L || sampledStart < state.planRunStartedMs) sampledStart else state.planRunStartedMs
+    return state.copy(planRunStartedMs = start, planRunSampleMs = sample)
+  }
+  if (state.planRunStartedMs <= 0L) return state.copy(planRunStartedMs = nowMs)
+  return state
+}
+
 const val PhaseWaiting = "Waiting…"
 const val PhaseThinking = "Thinking…"
 const val PhaseStreaming = "Streaming…"
@@ -509,8 +572,8 @@ fun activityPhase(view: WireView, pending: Boolean, pendingKind: String, blocks:
     if (named.isNotEmpty() && named != "Ready" && named != "Offline" && named != "Not signed in") return progressPhase(named)
   }
   if (view.phase.isNotEmpty() && view.phase != "Ready" && view.phase != "Offline" && view.phase != "Not signed in") return progressPhase(view.phase)
-  if (view.planRunning && view.statusText.isNotEmpty() && view.statusText != "Ready" &&
-    view.statusText != "Offline" && view.statusText != "Not signed in") return view.statusText
+  val status = stripPlanRunSuffix(view.statusText)
+  if (view.planRunning && status.isNotEmpty() && status != "Ready" && status != "Offline" && status != "Not signed in") return status
   val running = blocks.lastOrNull { block -> block.running }
   if (running != null) {
     return when (running.kind) {
@@ -533,11 +596,17 @@ fun activityCaption(
   nowMs: Long,
   blocks: List<WireBlock> = emptyList(),
   live: WireTurn? = null,
-  linkLive: Boolean = true
+  linkLive: Boolean = true,
+  planRunning: Boolean = false,
+  planStartedMs: Long = 0L
 ): String {
   // The left label owns the link. A live idle host is Ready. Offline is not repeated on the right.
   if (!linkLive) return ""
-  if (!turnStillRunning(view, pending, blocks, live)) return idleActivity(view.statusText)
+  val planOn = planRunning || view.planRunning
+  val total = if (planOn) planRunSuffix(planStartedMs, nowMs) else ""
+  // Between plan items the turn is idle. Ready keeps the run total, as on the desktop.
+  val betweenItems = planOn && !view.sending && !pending
+  if (betweenItems || !turnStillRunning(view, pending, blocks, live)) return idleActivity(view.statusText) + total
   val phase = activityPhase(view, pending, pendingKind, blocks)
   // A missing start must not be replaced with now. That freezes the caption at 0:00.
   val elapsed = observedElapsedMs(view, live, blocks).toLong()
@@ -546,8 +615,8 @@ fun activityCaption(
     elapsed > 0L && nowMs > elapsed -> nowMs - elapsed
     else -> 0L
   }
-  if (nowMs <= 0L || start <= 0L || nowMs < start) return phase
-  return "$phase ${formatActivityClock(nowMs - start)}"
+  if (nowMs <= 0L || start <= 0L || nowMs < start) return phase + total
+  return "$phase ${formatActivityClock(nowMs - start)}$total"
 }
 
 fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, commandId: String = ""): MonitorUi {

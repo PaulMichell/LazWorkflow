@@ -304,6 +304,7 @@ class MonitorCoordinator(
       planPath = next.planPath,
       planTitle = next.planTitle,
       planRunning = next.planRunning,
+      planRunElapsedMs = next.planRunElapsedMs,
       planRows = next.planRows,
       planChoices = next.planChoices,
       targetChoices = next.targetChoices,
@@ -396,6 +397,8 @@ class MonitorCoordinator(
 
   private fun published(): MonitorUi {
     deriveDisconnected()
+    val clocked = notePlanRunClock(local, clock.nowMs())
+    if (clocked !== local) local = clocked
     quietFinishedBlocks()
     val board = content.current()
     if (local.pendingPrompt.isNotEmpty()) {

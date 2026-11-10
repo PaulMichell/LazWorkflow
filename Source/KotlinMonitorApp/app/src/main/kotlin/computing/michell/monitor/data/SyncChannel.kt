@@ -345,9 +345,16 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
   return when (key) {
     "status" -> {
       val started = value.textField("started_at")?.let { startedAtMillis(it) }
+      val planRunning = value.flagField("plan_running") ?: ui.planRunning
+      val namedElapsed = value.intField("plan_elapsed_ms")?.toLong()?.coerceAtLeast(0L)
       ui.copy(
         statusBusy = value.flagField("busy") ?: ui.statusBusy,
-        planRunning = value.flagField("plan_running") ?: ui.planRunning,
+        planRunning = planRunning,
+        planRunElapsedMs = when {
+          !planRunning -> -1L
+          namedElapsed != null -> namedElapsed
+          else -> ui.planRunElapsedMs
+        },
         activityStartedMs = when {
           value.flagField("busy") == false && value.flagField("sending") == false -> 0L
           started != null -> started

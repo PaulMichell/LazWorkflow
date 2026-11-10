@@ -405,9 +405,10 @@ fun ActivityStatus(
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
   val linkLive = ideLinkLive(ui.disconnected, phase)
   val running = turnStillRunning(ui.view, pending, blocks, ui.live)
+  val planRunning = ui.planRunning || ui.view.planRunning
   // A host sample may move the start. That must not restart the one-second tick.
-  LaunchedEffect(running, linkLive) {
-    if (!running || !linkLive) return@LaunchedEffect
+  LaunchedEffect(running, planRunning, linkLive) {
+    if ((!running && !planRunning) || !linkLive) return@LaunchedEffect
     while (true) {
       now = System.currentTimeMillis()
       delay(1000)
@@ -415,7 +416,8 @@ fun ActivityStatus(
   }
   val model = runtimeCaption(ui.view.model, ui.modelChoices)
   val activity = activityCaption(
-    ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
+    ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive,
+    planRunning, ui.planRunStartedMs
   )
   // A prompt waiting for the link is still busy. An in-use retry says Reconnecting, not Offline.
   val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else heldPromptActivity(pending, phase)

@@ -130,6 +130,25 @@ class MonitorReducerTest {
       emptyView().copy(sending = true, busy = true, signedIn = true, statusText = "Thinking…", canSend = false),
       false, "", 1_000L, 5_000L, listOf(thought), live
     ))
+    val planView = emptyView().copy(sending = true, busy = true, planRunning = true, statusText = "Thinking…", canSend = false)
+    assertEquals("Thinking… 0:04 (1:05)", activityCaption(
+      planView, false, "", 66_000L, 70_000L, listOf(thought), live, planRunning = true, planStartedMs = 5_000L
+    ))
+    assertEquals("Ready (1:02:03)", activityCaption(
+      emptyView().copy(signedIn = true, statusText = "Ready", planRunning = true),
+      false, "", 0L, 3_723_001L, planRunning = true, planStartedMs = 1L
+    ))
+    val seeded = notePlanRunClock(
+      MonitorUi(planRunning = true, view = emptyView().copy(planRunning = true, statusText = "Thinking… 0:04 (4:56)")),
+      500_000L
+    )
+    assertEquals(500_000L - 296_000L, seeded.planRunStartedMs)
+    val kept = notePlanRunClock(seeded.copy(view = seeded.view.copy(statusText = "Ready")), 510_000L)
+    assertEquals(seeded.planRunStartedMs, kept.planRunStartedMs)
+    assertEquals("Ready (5:06)", activityCaption(
+      kept.view, false, "", 0L, 510_000L, planRunning = true, planStartedMs = kept.planRunStartedMs
+    ))
+    assertEquals(0L, notePlanRunClock(kept.copy(planRunning = false, view = kept.view.copy(planRunning = false)), 220_000L).planRunStartedMs)
     val now = 1_700_000_000_000L
     assertEquals(now - 724_000L, activityStart(now - 2_000L, now, 724_000, 0))
     assertEquals(now - 20_000L, activityStart(now - 20_000L, now, 10_000, 9_000))
