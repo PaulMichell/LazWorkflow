@@ -143,7 +143,7 @@ Run the tick loop on `Dispatchers.IO`. `offer`, `offerFrame` and `noteRefused` a
 Acceptance: a test or a debug assertion that `tick` is not entered on the main dispatcher. An existing applier test still commits a 50 ms batch and emits one ack.
 
 ### 3.3 The chip has one input
-Status: not started
+Status: complete
 
 Depends on 1.7. `disconnected`, `LinkPhase`, `catchingUp`, `pairedElsewhere` and the banner can disagree. `applyLink` is not on the live path (2.1). `linkChanged` writes `disconnected` and the banner; the chip then ignores the banner.
 
