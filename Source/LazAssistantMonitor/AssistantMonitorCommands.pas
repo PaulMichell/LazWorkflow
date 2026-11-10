@@ -27,6 +27,8 @@ Function DecodeCommandHelloOk(Const PayloadJson: TMonitorPayload; Out HelloOk: T
 Function EncodeCommandAuth(Const Id, ClientId, Hmac: String): String;
 Function DecodeCommandAuth(Const PayloadJson: TMonitorPayload; Out Auth: TMonitorAuth): Boolean;
 Function EncodeCommandRejected(Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
+{ Envelope version is the client's, not the host's. Used only for a catalogue mismatch. }
+Function EncodeCommandRejectedVersion(EnvelopeVersion: Integer; Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
 Function DecodeCommandRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;
 Function EncodeCommandBye(Const Id, Reason: String): String;
 Function DecodeCommandBye(Const PayloadJson: TMonitorPayload; Out Bye: TMonitorBye): Boolean;
@@ -251,6 +253,24 @@ Begin
   Payload.Add('host_version', HostVersion);
   Payload.Add('client_version', ClientVersion);
   Result := EncodeMonitorWith(mmkRejected, Id, Payload);
+End;
+
+Function EncodeCommandRejectedVersion(EnvelopeVersion: Integer; Const Id, Reason: String; HostVersion, ClientVersion: Integer): String;
+Var
+  Payload: TJSONObject;
+Begin
+  Result := '';
+  If Not MonitorRejectedReasonIsKnown(Reason) Then
+    Exit;
+  Payload := TJSONObject.Create;
+  Try
+    Payload.Add('reason', Reason);
+    Payload.Add('host_version', HostVersion);
+    Payload.Add('client_version', ClientVersion);
+    Result := EncodeMonitorEnvelopeVersion(EnvelopeVersion, mmkRejected, Id, Payload);
+  Finally
+    Payload.Free;
+  End;
 End;
 
 Function DecodeCommandRejected(Const PayloadJson: TMonitorPayload; Out Rejected: TMonitorRejected): Boolean;

@@ -790,11 +790,56 @@ End;
 
 
 
+Procedure CheckClientVersionReject(Const Title: String; ClientVersion: Integer);
+Var
+  Data: TJSONData;
+  Root, Payload: TJSONObject;
+Begin
+  Check(Title + ' closes', Session.CloseRequested And (Session.State = mssListening));
+  Data := Nil;
+  Try
+    Data := GetJSON(LastJson);
+  Except
+    Data := Nil;
+  End;
+  Check(Title + ' is JSON', Data Is TJSONObject);
+  If Not (Data Is TJSONObject) Then
+    Begin
+      Data.Free;
+      Exit;
+    End;
+  Try
+    Root := TJSONObject(Data);
+    Check(Title + ' envelope version', Root.Get('v', 0) = ClientVersion);
+    Check(Title + ' type', Root.Get('type', '') = 'rejected');
+    Payload := Nil;
+    If Root.Find('payload') Is TJSONObject Then
+      Payload := TJSONObject(Root.Find('payload'));
+    Check(Title + ' payload', Assigned(Payload));
+    If Assigned(Payload) Then
+      Begin
+        Check(Title + ' reason protocol', Payload.Get('reason', '') = 'protocol');
+        Check(Title + ' host version', Payload.Get('host_version', 0) = MonitorCatalogueVersion);
+        Check(Title + ' client version', Payload.Get('client_version', 0) = ClientVersion);
+      End;
+  Finally
+    Data.Free;
+  End;
+End;
+
 Procedure TestOldCatalogueRejects;
 Begin
   Carrier.ClearSent;
   Carrier.DeliverJson('{"v":1,"id":"old","type":"ping","payload":{"ticks":1}}');
-  ExpectRejected('old catalogue', 'protocol', True);
+  CheckClientVersionReject('old catalogue', 1);
+End;
+
+Procedure TestCatalogueMismatchHello;
+Begin
+  NewSocket;
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":2,"id":"hello-v2","type":"hello","payload":{"client_name":"Old phone","client_version":"2"}}');
+  CheckClientVersionReject('v2 hello', 2);
 End;
 
 Procedure TestCommandLifecycle;
@@ -1440,6 +1485,7 @@ Begin
       TestStateFrameParsesOnce;
       {$ENDIF}
       TestOldCatalogueRejects;
+      TestCatalogueMismatchHello;
       CheckOtherSections('at end');
     Except
       On E: Exception Do

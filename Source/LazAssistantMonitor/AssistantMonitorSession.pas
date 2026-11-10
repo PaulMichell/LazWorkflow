@@ -183,6 +183,8 @@ Type
     Procedure LogLine(Level: Integer; Const Text: String);
     Procedure ClearConnection;
     Procedure RejectLocked(Const Reason: String; DoClose: Boolean);
+    { Catalogue mismatch. The envelope uses the client's version so an older phone can read it. }
+    Procedure RejectVersionLocked(ClientVersion: Integer);
     Procedure CloseToListening;
     Function IsRevoked(Const ClientId: String): Boolean;
     Function FindClient(Const ClientId: String): Integer;
@@ -1265,6 +1267,17 @@ Begin
     CloseToListening;
 End;
 
+Procedure TMonitorSession.RejectVersionLocked(ClientVersion: Integer);
+Var
+  Json: String;
+Begin
+  Json := EncodeCommandRejectedVersion(ClientVersion, NewHostId, 'protocol', MonitorCatalogueVersion, ClientVersion);
+  QueueControl(Json);
+  LogLine(2, 'rejected reason=protocol client_version=' + IntToStr(ClientVersion) + ' bind=' + FBindAddress +
+    ' port=' + IntToStr(FPort));
+  CloseToListening;
+End;
+
 Function TMonitorSession.KindAllowedBeforeAuth(Kind: Integer): Boolean;
 Begin
   Result := (Kind = Ord(mmkHello)) Or (Kind = Ord(mmkPair)) Or (Kind = Ord(mmkAuth)) Or
@@ -1850,7 +1863,11 @@ Begin
     Begin
       LogLine(2, 'version mismatch bytes=' + IntToStr(Length(Frame.Json)) + ' bind=' + FBindAddress +
         ' port=' + IntToStr(FPort));
-      RejectLocked('protocol', True);
+      { Only a catalogue mismatch is answered in the client's version. Any other failure stays on catalogue 3. }
+      If ErrorText = 'Unsupported catalogue version.' Then
+        RejectVersionLocked(Message.Version)
+      Else
+        RejectLocked('protocol', True);
       Exit;
     End;
   If Message.TypeName = 'ack' Then

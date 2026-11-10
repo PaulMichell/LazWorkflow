@@ -372,6 +372,8 @@ Function DecodeMonitorOneString(Const PayloadJson: TMonitorPayload; Const Field:
 
 { Empty when the id is unsafe or the object would exceed the frame cap. }
 Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
+{ The version-mismatch reject only. Every other frame stays on MonitorCatalogueVersion. }
+Function EncodeMonitorEnvelopeVersion(Version: Integer; Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
 Function TryDecodeMonitorEnvelope(Const Json: String; Out Message: TMonitorMessage; Out ErrorText: String): Boolean;
 Function MonitorUnknownTypeError(Const RefId, TypeName: String): String;
 Function EncodeMonitorError(Const Id, Reason, MessageText, RefId: String): String;
@@ -838,7 +840,7 @@ Begin
   Result := True;
 End;
 
-Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
+Function EncodeMonitorEnvelopeVersion(Version: Integer; Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
 Var
   Root: TJSONObject;
   Owned: Integer;
@@ -849,7 +851,7 @@ Begin
   Root := TJSONObject.Create;
   Owned := -1;
   Try
-    Root.Add('v', MonitorCatalogueVersion);
+    Root.Add('v', Version);
     Root.Add('id', Id);
     Root.Add('type', MonitorMessageKindName(Kind));
     { The caller still owns Payload. Add it for AsJSON, then extract it so Root.Free does not free it.
@@ -869,6 +871,11 @@ Begin
       Root.Extract(Owned);
     Root.Free;
   End;
+End;
+
+Function EncodeMonitorEnvelope(Kind: TMonitorMessageKind; Const Id: String; Const Payload: TJSONObject): String;
+Begin
+  Result := EncodeMonitorEnvelopeVersion(MonitorCatalogueVersion, Kind, Id, Payload);
 End;
 
 Function EncodeWith(Kind: TMonitorMessageKind; Const Id: String; Payload: TJSONObject): String;
@@ -1052,8 +1059,9 @@ Begin
         Exit;
       End;
     Root := TJSONObject(Data);
-    { Only the current catalogue is supported. }
-    If Root.Get('v', 0) <> MonitorCatalogueVersion Then
+    { Only the current catalogue is supported. The client's v is kept so the one reject can be written in that version. }
+    Message.Version := Root.Get('v', 0);
+    If Message.Version <> MonitorCatalogueVersion Then
       Begin
         ErrorText := 'Unsupported catalogue version.';
         Exit;
