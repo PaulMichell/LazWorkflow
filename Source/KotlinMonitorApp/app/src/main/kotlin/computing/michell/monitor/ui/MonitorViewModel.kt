@@ -1139,9 +1139,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheBackToListState.value = !live
     watchScreen(row.host, row.id)
     if (live) {
-      coordinator.resumeStoredOpen(row.id, row.streamId, row.seq)?.let { effect ->
-        if (effect is MonitorEffect.Send) session.sendCatalogue(effect.json)
-      }
+      coordinator.resumeStoredOpen(row.id, row.streamId, row.seq)
       session.sendCatalogue(encodeSelectConversation(session.nextCommandId(), row.id))
     }
   }
@@ -1343,6 +1341,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         if (row != null) {
           coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
           coordinator.noteSyncTime(row.updatedAt)
+          session.resumeFromRoom(row.id, row.streamId, row.seq)
         }
         loadStoredImages(read.images)
       }
@@ -1350,11 +1349,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   private fun queueStoredResume() {
-    val id = watchedConversation.ifEmpty { coordinator.state.conversationId }
-    if (id.isEmpty()) return
-    val stream = coordinator.state.hostEpoch
-    val seq = coordinator.state.hostCursor
-    session.queueSyncResume(computing.michell.monitor.protocol.encodeSyncResume(session.nextCommandId(), id, stream, seq))
+    val cursor = coordinator.resumeCursor()
+    if (cursor.first.isEmpty() && watchedConversation.isEmpty()) return
+    val id = cursor.first.ifEmpty { watchedConversation }
+    session.resumeFromRoom(id, cursor.second, cursor.third)
   }
 
   private fun loadStoredImages(images: List<computing.michell.monitor.data.ImageRecord>) {
@@ -1404,10 +1402,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           computing.michell.monitor.protocol.encodeAck(session.nextCommandId(), effect.conversationId, effect.streamId, effect.seq)
         )
         is computing.michell.monitor.data.SyncEffect.Resume -> {
-          val json = computing.michell.monitor.protocol.encodeSyncResume(
-            session.nextCommandId(), effect.conversationId, effect.streamId, effect.seq
-          )
-          if (effect.hold) session.queueSyncResume(json) else session.sendCatalogue(json)
+          if (effect.hold) session.reconnect()
+          session.resumeFromRoom(effect.conversationId, effect.streamId, effect.seq)
         }
         computing.michell.monitor.data.SyncEffect.Reconnect -> {
           if (computing.michell.monitor.data.reconnectAllowed(
@@ -1730,6 +1726,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return
     execute(effects)
+    if (hello != null) {
+      val cursor = coordinator.resumeCursor()
+      session.resumeFromRoom(cursor.first, cursor.second, cursor.third)
+    }
   }
 
   /** The next open paints this name before the desktop frame arrives. */

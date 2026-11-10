@@ -8,6 +8,7 @@ import computing.michell.monitor.protocol.MonitorMessage
 import computing.michell.monitor.protocol.authMac
 import computing.michell.monitor.protocol.decodeAuth
 import computing.michell.monitor.protocol.decodeBye
+import computing.michell.monitor.protocol.decodeResume
 import computing.michell.monitor.protocol.decodeHello
 import computing.michell.monitor.protocol.decodePair
 import computing.michell.monitor.protocol.encodeBye
@@ -454,6 +455,32 @@ class LanSessionTest {
   }
 
   @Test
+  fun resumeFromRoomRefusesTheSameTripleWhileTheSocketIsLive() {
+    val store = pairedStore()
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-9", 50L))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      val before = link.frames().size
+      assertFalse(session.resumeFromRoom("conversation-1", "stream-9", 50L))
+      Thread.sleep(200)
+      assertEquals(before, link.frames().size)
+      val payload = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }.payloadJson
+      assertEquals(50L, decodeResume(payload)!!.cursor)
+      assertEquals("stream-9", decodeResume(payload)!!.epoch)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun helloCollectorResumesAfterAuthAndKeepsTheRequestedConversation() = runBlocking {
     val store = pairedStore()
     val ledger = MemoryCommandLedger()
@@ -463,9 +490,7 @@ class LanSessionTest {
     val collector = launch(Dispatchers.Unconfined) {
       session.messages.collect { message ->
         if (message.kind == MessageKind.HelloOk) {
-          session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume(
-            "resume-selected", "conversation-selected", "stream-selected", 42L
-          ))
+          session.resumeFromRoom("conversation-selected", "stream-selected", 42L)
         }
       }
     }
@@ -514,8 +539,8 @@ class LanSessionTest {
         "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
       ))))
       waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
-      // The coordinator sends the one resume after hello. The session adds the open commands to it.
-      session.sendCatalogue(computing.michell.monitor.protocol.encodeSyncResume("resume-1", "conversation-1", "stream-1", 0L))
+      // The screen asks the session to resume. Open commands are attached on the way out.
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-1", 0L))
       waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
       val resume = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }
       assertTrue(resume.payloadJson.contains("send-1"))

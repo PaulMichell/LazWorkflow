@@ -202,19 +202,22 @@ class MonitorCoordinatorTest {
 
   @Test
   fun firstHelloRequestsABaselineInsteadOfClaimingTheDesktopHead() {
-    val coordinator = open()
+    val session = FakeSession()
+    val coordinator = open(session)
     val hello = HelloOkMessage("nonce", "ide", "epoch", 200, "conversation-1", "/work", "Chat", "")
     val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello)))).orEmpty()
-    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
-    val asked = decodeResume(tryDecodeEnvelope(sent.json).message.payloadJson)!!
-    assertEquals("", asked.epoch)
-    assertEquals(0L, asked.cursor)
+    assertTrue(effects.none { effect -> effect is MonitorEffect.Send })
+    val cursor = coordinator.resumeCursor()
+    assertTrue(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
+    assertEquals(Triple("conversation-1", "", 0L), session.resumes.single())
+    assertFalse(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
     assertEquals(0L, coordinator.state.hostCursor)
   }
 
   @Test
   fun reconnectFollowsTheDesktopConversationInsteadOfTheCachedCursor() {
-    val coordinator = open()
+    val session = FakeSession()
+    val coordinator = open(session)
     coordinator.restoreOffline(MonitorUi(
       conversationId = "conversation-old", hostEpoch = "stream-old", hostCursor = 118,
       turns = listOf(WireTurn(1, "turn-old", "build", "", "Old conversation", ""))
@@ -224,17 +227,17 @@ class MonitorCoordinatorTest {
     val effects = coordinator.onEvent(MonitorEvent.Incoming(
       coordinator.state, envelope(encodeHelloOk("hello", hello))
     )).orEmpty()
-    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
-    val payload = tryDecodeEnvelope(sent.json).message.payloadJson
-    assertFalse(payload.contains("conversation-old"))
-    assertEquals("", decodeResume(payload)!!.epoch)
-    assertEquals(0L, decodeResume(payload)!!.cursor)
+    assertTrue(effects.none { effect -> effect is MonitorEffect.Send })
+    val cursor = coordinator.resumeCursor()
+    assertTrue(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
+    assertEquals(Triple("conversation-new", "", 0L), session.resumes.single())
     assertEquals("conversation-new", coordinator.state.conversationId)
   }
 
   @Test
   fun helloResumesFromTheStoredCursor() {
-    val coordinator = open()
+    val session = FakeSession()
+    val coordinator = open(session)
     val prompt = WireBlock("user", "u", "", "", "", "the prompt", false, true, 0, emptyList())
     coordinator.restoreOffline(MonitorUi(
       conversationId = "conversation-1",
@@ -242,12 +245,13 @@ class MonitorCoordinatorTest {
       hostCursor = 118,
       turns = listOf(WireTurn(1, "turn-1", "build", "", "the prompt", "", blocks = listOf(prompt)))
     ))
+    coordinator.noteResumeCursor("conversation-1", "epoch", 118)
     val hello = HelloOkMessage("nonce", "ide", "epoch", 200, "conversation-1", "/work", "Chat", "")
     val effects = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk("hello", hello)))).orEmpty()
-    val sent = effects.filterIsInstance<MonitorEffect.Send>().single()
-    val asked = decodeResume(tryDecodeEnvelope(sent.json).message.payloadJson)
-    assertEquals("epoch", asked!!.epoch)
-    assertEquals(118L, asked.cursor)
+    assertTrue(effects.none { effect -> effect is MonitorEffect.Send })
+    val cursor = coordinator.resumeCursor()
+    assertTrue(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
+    assertEquals(Triple("conversation-1", "epoch", 118L), session.resumes.single())
     assertEquals("the prompt", coordinator.state.turns.single().blocks.single().body)
   }
 
@@ -639,11 +643,15 @@ class MonitorCoordinatorTest {
   @Test
   fun anEmptyHelloDoesNotKeepAsking() {
     val clock = MovableClock(1_000L)
-    val coordinator = MonitorCoordinator(FakeSession(), clock, FixedDisplay(true, true))
+    val session = FakeSession()
+    val coordinator = MonitorCoordinator(session, clock, FixedDisplay(true, true))
     val hello = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
       "hello", HelloOkMessage("nonce", "ide", "epoch", 0, "conversation-1", "/work", "", "")
     )))).orEmpty()
-    assertEquals(1, hello.filterIsInstance<MonitorEffect.Send>().size)
+    assertTrue(hello.none { effect -> effect is MonitorEffect.Send })
+    val cursor = coordinator.resumeCursor()
+    assertTrue(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
+    assertFalse(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
     assertNull(coordinator.flush(coordinator.state))
     clock.millis += 5_000L
     assertNull(coordinator.flush(coordinator.state))
@@ -665,7 +673,8 @@ class MonitorCoordinatorTest {
 
   @Test
   fun desktopConversationKeepsTheRoomCursorAndDoesNotResumeFromZero() {
-    val coordinator = open()
+    val session = FakeSession()
+    val coordinator = open(session)
     coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
     coordinator.noteResumeCursor("conversation-1", "stream-9", 50)
     val named = coordinator.onDesktopConversation("conversation-1")
@@ -675,13 +684,11 @@ class MonitorCoordinatorTest {
     val hello = coordinator.onEvent(MonitorEvent.Incoming(coordinator.state, envelope(encodeHelloOk(
       "hello", HelloOkMessage("nonce", "ide", "stream-9", 80, "conversation-1", "/work", "Chat", "")
     )))).orEmpty()
-    val sent = hello.filterIsInstance<MonitorEffect.Send>().single()
-    val payload = tryDecodeEnvelope(sent.json).message.payloadJson
-    assertTrue(payload.contains("stream-9"))
-    assertFalse(payload.contains("\"seq\":0"))
-    assertFalse(payload.contains("\"cursor\":0"))
-    assertEquals(50L, decodeResume(payload)!!.cursor)
-    assertEquals("stream-9", decodeResume(payload)!!.epoch)
+    assertTrue(hello.none { effect -> effect is MonitorEffect.Send })
+    val cursor = coordinator.resumeCursor()
+    assertTrue(session.resumeFromRoom(cursor.first, cursor.second, cursor.third))
+    assertEquals(Triple("conversation-1", "stream-9", 50L), session.resumes.single())
+    assertFalse(session.resumeFromRoom("conversation-1", "stream-9", 50L))
   }
 
   @Test
@@ -830,6 +837,15 @@ private class FakeSession : SessionPort {
   private var draft = ""
   private var ids = 1
   var canReconnect = false
+  val resumes = mutableListOf<Triple<String, String, Long>>()
+  private var sent: Triple<String, String, Long>? = null
+  override fun resumeFromRoom(conversationId: String, streamId: String, seq: Long): Boolean {
+    val triple = Triple(conversationId, streamId, seq)
+    if (sent == triple) return false
+    sent = triple
+    resumes += triple
+    return true
+  }
   override val reconnectable: Boolean get() = canReconnect
   override val promptDraft: String get() = draft
   override val hostAddress: String = ""

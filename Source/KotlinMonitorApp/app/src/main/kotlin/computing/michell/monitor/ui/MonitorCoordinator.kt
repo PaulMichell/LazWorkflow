@@ -35,7 +35,7 @@ import computing.michell.monitor.protocol.decodeStatusPayload
 import computing.michell.monitor.protocol.decodeText
 import computing.michell.monitor.protocol.encodeClosedScreen
 import computing.michell.monitor.protocol.encodeEmpty
-import computing.michell.monitor.protocol.encodeSyncResume
+
 import computing.michell.monitor.protocol.encodeTurnRequest
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.tryEncodeSteer
@@ -116,11 +116,6 @@ class MonitorCoordinator(
   private var resumeConversation = ""
   private var resumeStream = ""
   private var resumeSeq = 0L
-  /** The resume this socket already sent. A later hello must not ask for it again. */
-  private var sentResumeEpoch = -1
-  private var sentResumeConversation = ""
-  private var sentResumeStream = ""
-  private var sentResumeSeq = -1L
   /** Live until the first status, so an idle form can send before that frame. */
   private var linkPhase = LinkPhase.Live
   /** Send or New tapped while Syncing, before the socket can take it. */
@@ -256,14 +251,18 @@ class MonitorCoordinator(
     published()
   }
 
-  /** The user opened a stored conversation. One resume, unless this socket is already on that cursor. */
-  fun resumeStoredOpen(id: String, streamId: String, seq: Long): MonitorEffect? = synchronized(gate) {
-    if (!conversationIdIsIdentity(id)) return null
+  /** The user opened a stored conversation. The session writes the one resume. */
+  fun resumeStoredOpen(id: String, streamId: String, seq: Long) = synchronized(gate) {
+    if (!conversationIdIsIdentity(id)) return
     noteResumeCursor(id, streamId, seq)
-    if (alreadyReceiving(id, streamId, seq)) return null
-    rememberSent(id, streamId, seq)
-    local = local.copy(catchingUp = true)
-    MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), id, streamId, seq))
+    if (session.resumeFromRoom(id, streamId, seq)) local = local.copy(catchingUp = true)
+  }
+
+  /** The cursor a hello or a gap should hand to the session. Seq 0 and an empty stream mean no Room row. */
+  fun resumeCursor(): Triple<String, String, Long> = synchronized(gate) {
+    val stored = roomCursorFor(local.conversationId)
+    val conversationId = stored?.let { local.conversationId.ifEmpty { resumeConversation } } ?: local.conversationId
+    Triple(conversationId, stored?.first ?: "", stored?.second ?: 0L)
   }
 
   /** State key `conversation`. No resume. A stored cursor is not replaced with seq 0. */
@@ -502,7 +501,6 @@ class MonitorCoordinator(
     when (message.kind) {
       MessageKind.HelloOk -> {
         effects += noteHello(message)
-        resumeNow()?.let { effects += it }
       }
       MessageKind.SnapshotPage, MessageKind.BlockData -> {
         // Slices, fetches, and the baseline own the board. These frames must not paint it.
@@ -605,7 +603,6 @@ class MonitorCoordinator(
     val changedConversation = hello.conversationId.isNotEmpty() && hello.conversationId != local.conversationId
     if (changedConversation) {
       // Reconnect follows the desktop's open chat, rather than resuming a different cached chat.
-      session.takeSyncResume()
       val kept = roomCursorFor(hello.conversationId)
       if (kept == null) {
         resumeConversation = ""
@@ -660,23 +657,6 @@ class MonitorCoordinator(
     return filed
   }
 
-  /** Hello, or a resume queued for that hello. Not a timer. Not a zero cursor over a Room row. */
-  private fun resumeNow(): MonitorEffect? {
-    val owed = session.takeSyncResume()
-    if (owed != null) {
-      local = local.copy(catchingUp = true)
-      return MonitorEffect.Send(owed)
-    }
-    val stored = roomCursorFor(local.conversationId)
-    val conversationId = stored?.let { local.conversationId.ifEmpty { resumeConversation } } ?: local.conversationId
-    val streamId = stored?.first ?: ""
-    val seq = stored?.second ?: 0L
-    if (alreadyReceiving(conversationId, streamId, seq)) return null
-    rememberSent(conversationId, streamId, seq)
-    local = local.copy(catchingUp = true)
-    return MonitorEffect.Send(encodeSyncResume(session.nextCommandId(), conversationId, streamId, seq))
-  }
-
   /** Room's cursor for this id, or null when Room has no row. Seq 0 with an empty stream is no row.
       A hello head copied into hostEpoch is not a row: that write happens after this lookup, and a
       restored screen is the only hostCursor that counts before a noteResumeCursor. */
@@ -687,25 +667,6 @@ class MonitorCoordinator(
       return local.hostEpoch to local.hostCursor
     }
     return null
-  }
-
-  private fun alreadyReceiving(conversationId: String, streamId: String, seq: Long): Boolean {
-    return linkPhase == LinkPhase.Live && sentResumeEpoch == session.linkEpoch &&
-      sentResumeConversation == conversationId && sentResumeStream == streamId && sentResumeSeq == seq
-  }
-
-  private fun rememberSent(conversationId: String, streamId: String, seq: Long) {
-    sentResumeEpoch = session.linkEpoch
-    sentResumeConversation = conversationId
-    sentResumeStream = streamId
-    sentResumeSeq = seq
-  }
-
-  private fun forgetSentResume() {
-    sentResumeEpoch = -1
-    sentResumeConversation = ""
-    sentResumeStream = ""
-    sentResumeSeq = -1L
   }
 
   fun noteSyncTime(updatedAt: Long) = synchronized(gate) {
@@ -744,7 +705,6 @@ class MonitorCoordinator(
     }
     val down = status.phase == LinkPhase.Disconnected || status.phase == LinkPhase.Paused
     if (down) {
-      forgetSentResume()
       closedAwaitId = ""
       // A paused, pinned or forgotten link will not come back by itself. A prompt waiting for it goes back in the box.
       val comesBack = status.phase != LinkPhase.Paused && session.reconnectable

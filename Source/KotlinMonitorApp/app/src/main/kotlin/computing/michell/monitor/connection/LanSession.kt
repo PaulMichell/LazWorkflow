@@ -514,8 +514,12 @@ interface SessionPort {
   fun updateDraft(text: String)
   fun sendCatalogue(json: String)
   fun resetImages()
-  fun takeSyncResume(): String? = null
-  fun queueSyncResume(json: String) {}
+  /**
+   * The only resume. Stores the Room cursor and writes it once on this live socket.
+   * The same triple is refused while that socket is still up. A later cursor, a gap,
+   * or a new socket may send again.
+   */
+  fun resumeFromRoom(conversationId: String, streamId: String, seq: Long): Boolean = false
   fun reconnect() {}
   /** The link is down but will come back on its own or on use. A prompt may wait for it. */
   val reconnectable: Boolean get() = false
@@ -558,7 +562,10 @@ class LanSession(
   private val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
   private var applier: computing.michell.monitor.data.SyncApplier? = null
-  private var owedResume: String? = null
+  private var sentResumeEpoch = -1
+  private var sentResumeConversation = ""
+  private var sentResumeStream = ""
+  private var sentResumeSeq = -1L
   @Volatile
   private var lastSentMs = 0L
   @Volatile
@@ -1076,14 +1083,35 @@ class LanSession(
     applierReady.trySend(Unit)
   }
 
-  override fun queueSyncResume(json: String) {
-    owedResume = json
+  override fun resumeFromRoom(conversationId: String, streamId: String, seq: Long): Boolean {
+    if (!canWriteResume()) return false
+    val epoch = epochCounter.get()
+    if (sentResumeEpoch == epoch && sentResumeConversation == conversationId &&
+      sentResumeStream == streamId && sentResumeSeq == seq) return false
+    // Room moving the cursor forward is not another resume. A gap is an earlier seq.
+    if (sentResumeEpoch == epoch && sentResumeConversation == conversationId &&
+      conversationId.isNotEmpty() && seq > sentResumeSeq) return false
+    writeResume(conversationId, streamId, seq)
+    return true
   }
 
-  override fun takeSyncResume(): String? {
-    val json = owedResume
-    owedResume = null
-    return json
+  private fun canWriteResume(): Boolean = link != null
+
+  private fun writeResume(conversationId: String, streamId: String, seq: Long) {
+    val json = encodeSyncResume(nextCommandId(), conversationId, streamId, seq)
+    val outbound = writer
+    val owned = link
+    if (outbound != null && owned != null && socketOwner == Thread.currentThread()) {
+      val prepared = resumeWithOpenCommands(json)
+      val frame = tryEncodeFrame(prepared)
+      if (frame.ok) outbound.offerControl(frame.bytes)
+    } else {
+      sendCatalogue(json)
+    }
+    sentResumeEpoch = epochCounter.get()
+    sentResumeConversation = conversationId
+    sentResumeStream = streamId
+    sentResumeSeq = seq
   }
 
   override fun reconnect() {
@@ -1299,8 +1327,8 @@ class LanSession(
           val presented = normalizeFingerprint(owned.peerFingerprint)
           if (presented.length == 64) store.save(store.load().copy(fingerprint = presented))
           pairCode = ""
-          // First pair has no Room row. Resume after pair_ok, not with the epoch/cursor-only frame.
-          offerControl(encodeSyncResume(newId(), "", "", 0L), owned, outbound)
+          // First pair has no Room row. One resume, owned here, not by the screen.
+          resumeFromRoom("", "", 0L)
         }
       }
       MessageKind.HelloOk -> {
@@ -1310,7 +1338,7 @@ class LanSession(
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)
           if (mac.isNotEmpty()) offerControl(encodeAuth(newId(), record.clientId, mac), owned, outbound)
-          // The coordinator sends the one resume. A second one here queues the mirror twice.
+          // The screen asks for the one resume after hello. Do not write a second here.
         }
       }
       MessageKind.CommandStates -> {
@@ -1450,6 +1478,10 @@ class LanSession(
   private fun closeLink() {
     closeOwned(link)
     link = null
+    sentResumeEpoch = -1
+    sentResumeConversation = ""
+    sentResumeStream = ""
+    sentResumeSeq = -1L
   }
 
   private fun closeOwned(owned: TlsLink?) {
