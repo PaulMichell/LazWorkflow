@@ -174,7 +174,7 @@ Fix: for a live block, parse on a short trailing window or debounce to one parse
 Acceptance: a pure test that appending to a previously parsed body does not re-walk the unchanged prefix. `MonitorMarkdownTest` still passes for a full document.
 
 ### 4.3 Count UTF-8 without copying the block
-Status: not started
+Status: complete
 
 `utf8Length` in `FrameCodec.kt` calls `strictUtf8Bytes`, which allocates a byte array of the whole string. `holdAppend`, `prefixHash`, and the applier call it on the live body as that body grows. A multi-hundred-kilobyte thought therefore allocates a full copy on every append, on top of the Room write.
 
