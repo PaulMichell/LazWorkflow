@@ -127,7 +127,7 @@ Acceptance: `encodeSyncResume` is the only resume encoder in `app/src/main` and 
 ## 3. Simplifications
 
 ### 3.1 One resume cursor, owned by the session
-Status: not started
+Status: complete
 
 Depends on 1.1. Resume is currently decided in `flush`, `resumeNow`, `followHostConversation`, `requestLiveSync`, `queueStoredResume`, hello, and `onSyncEffect`. The UI should not encode a resume. The session exposes one operation, `resumeFromRoom(conversationId, streamId, seq)`, and refuses a second call for the same triple while that socket is live. The ViewModel tells it the cursor when Room emits, and tells it to resume on hello and on a gap. That is the whole API.
 
