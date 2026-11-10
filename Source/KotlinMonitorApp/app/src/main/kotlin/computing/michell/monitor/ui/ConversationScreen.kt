@@ -421,7 +421,7 @@ fun ActivityStatus(
   val activity = activityCaption(
     ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive
   )
-  // A prompt waiting for the link is still busy. The left already says Offline.
+  // A prompt waiting for the link is still busy. An in-use retry says Reconnecting, not Offline.
   val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else heldPromptActivity(pending, phase)
   val statusStyle = MaterialTheme.typography.bodySmall
   val chip = connectionChip(
@@ -432,7 +432,9 @@ fun ActivityStatus(
     ui.statusBusy,
     ui.hostCursor,
     ui.syncHead,
-    ui.lastSyncMs
+    ui.lastSyncMs,
+    reconnectable = ui.reconnectable,
+    banner = ui.banner
   )
   val connectionText = statusConnectionLabel(chip.label, ui.banner)
   // The link is plain on the left. Notices are toasts, not a second chip.

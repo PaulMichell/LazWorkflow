@@ -741,6 +741,7 @@ class MonitorCoordinator(
 
   private fun linkChanged(status: LinkStatus): List<MonitorEffect> {
     linkPhase = status.phase
+    local = local.copy(reconnectable = session.reconnectable)
     val replaced = status.lastError == ReplacedReason || status.banner == PairedElsewhereLabel
     if (replaced) {
       val restored = abandonHeld(true)

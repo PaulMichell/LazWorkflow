@@ -224,6 +224,8 @@ data class MonitorUi(
   val pairedElsewhere: Boolean = false,
   /** The link is down but will come back. Send is held until it does. */
   val sendWhileOffline: Boolean = false,
+  /** The session will open the saved endpoint again. The chip uses this, not a dropped catch-up flag. */
+  val reconnectable: Boolean = false,
   val lastSyncMs: Long = 0,
   val syncHead: Long = 0,
   val desktopPoint: Int = 0,
@@ -258,7 +260,8 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     permissionNote = state.permissionNote,
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
-    connectionGeneration = state.connectionGeneration + 1
+    connectionGeneration = state.connectionGeneration + 1,
+    reconnectable = state.reconnectable
   )
 }
 
@@ -313,7 +316,7 @@ fun statusNotice(banner: String): String {
   }
 }
 
-/** Left status slot. A notice never replaces Live, Offline, Syncing, or Busy. */
+/** Left status slot. A notice never replaces Live, Offline, Syncing, Busy, Reconnecting, or Connecting. */
 fun statusConnectionLabel(chipLabel: String, banner: String): String {
   if (statusNotice(banner).isNotEmpty()) return chipLabel
   return chipLabel

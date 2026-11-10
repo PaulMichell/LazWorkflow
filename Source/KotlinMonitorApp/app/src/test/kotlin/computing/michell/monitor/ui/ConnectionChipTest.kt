@@ -2,7 +2,10 @@ package computing.michell.monitor.ui
 
 /* Connection chip and lazy row keys (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.connection.IdleOfflineBanner
 import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.connection.ReconnectingBanner
+import computing.michell.monitor.connection.WaitingForWifiBanner
 import computing.michell.monitor.protocol.NoSessionMessage
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
@@ -41,6 +44,46 @@ class ConnectionChipTest {
     )
     assertTrue(offline.label.startsWith("Offline · "))
     assertFalse(offline.label == ChipOffline)
+  }
+
+  @Test
+  fun anInUseRetryIsNotOffline() {
+    val retry = connectionChip(
+      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1_700_000_000_000L,
+      ZoneOffset.UTC, reconnectable = true, banner = ReconnectingBanner
+    )
+    assertFalse(retry.label.startsWith(ChipOffline))
+    assertEquals(ChipReconnecting, retry.label)
+    val connecting = connectionChip(
+      LinkPhase.Connecting, true, false, false, false, 0, 0, 0,
+      reconnectable = true, banner = ReconnectingBanner
+    )
+    assertEquals(ChipConnecting, connecting.label)
+    val paused = connectionChip(
+      LinkPhase.Paused, true, false, false, false, 0, 0, 1L,
+      reconnectable = true, banner = ReconnectingBanner
+    )
+    assertTrue(paused.label.startsWith(ChipOffline))
+    val idle = connectionChip(
+      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1L,
+      reconnectable = true, banner = IdleOfflineBanner
+    )
+    assertTrue(idle.label.startsWith(ChipOffline))
+    val wifi = connectionChip(
+      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1L,
+      reconnectable = true, banner = WaitingForWifiBanner
+    )
+    assertTrue(wifi.label.startsWith(ChipOffline))
+    val unpaired = connectionChip(
+      LinkPhase.Disconnected, true, false, false, false, 0, 0, 0,
+      reconnectable = false, banner = ReconnectingBanner
+    )
+    assertEquals(ChipOffline, unpaired.label)
+    val busy = connectionChip(
+      LinkPhase.Live, false, false, false, true, 0, 0, 0,
+      reconnectable = true, banner = ReconnectingBanner
+    )
+    assertEquals(ChipBusy, busy.label)
   }
 
   @Test
