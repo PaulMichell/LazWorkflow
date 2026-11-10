@@ -300,8 +300,11 @@ class FrameAssembler(val readChunk: Int = ReadChunkBytes) {
   }
 
   fun partialExpired(nowMs: Long): Boolean {
+    if (filled == 0) return false
     val since = partialSince
-    return filled > 0 && since != 0L && nowMs - since >= MonitorLimits.PartialFrameMs
+    // A backward step is not a duration. Empty pending is not a partial frame.
+    if (nowMs < since) return false
+    return nowMs - since >= MonitorLimits.PartialFrameMs
   }
 
   fun offer(chunk: ByteArray, offset: Int = 0, count: Int = chunk.size - offset, nowMs: Long): AssembledFrames {

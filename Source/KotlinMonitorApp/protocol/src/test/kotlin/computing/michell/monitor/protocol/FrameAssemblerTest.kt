@@ -159,6 +159,19 @@ class FrameAssemblerTest {
   }
 
   @Test
+  fun backwardStepDoesNotExpireAPartialFrame() {
+    val frame = encoded(encodeTicks(MessageKind.Ping, "slow", 3))
+    val assembler = FrameAssembler()
+    val started = 50_000L
+    assembler.offer(frame, 0, 8, started)
+    assertTrue(assembler.pendingSize > 0)
+    assertFalse(assembler.partialExpired(started - 60_000L))
+    assertFalse(assembler.partialExpired(0L))
+    assertFalse(assembler.partialExpired(started + MonitorLimits.PartialFrameMs - 1))
+    assertTrue(assembler.partialExpired(started + MonitorLimits.PartialFrameMs))
+  }
+
+  @Test
   fun moreBytesOfTheSameFrameDoNotResetThePartialClock() {
     val frame = encoded(encodeTicks(MessageKind.Ping, "slow", 3))
     val assembler = FrameAssembler()

@@ -1087,6 +1087,32 @@ class LanSessionTest {
   }
 
   @Test
+  fun partialFrameIgnoresAWallStepAndExpiresOnTheMonotonicClock() {
+    val clock = SteppableClock()
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      // A stamp of 0 is ambiguous with "no partial". Start after that sentinel.
+      clock.advanceMs(1_000L)
+      clock.advanceWallMs(1_000_000L)
+      val seen = link.readEntries.get()
+      link.push(byteArrayOf(0x4C, 0x41, 0x4D, 0x31))
+      waitUntil { link.readEntries.get() > seen }
+      Thread.sleep(100)
+      clock.advanceWallMs(-120_000L)
+      clock.advanceWallMs(MonitorLimits.PartialFrameMs + 240_000L)
+      Thread.sleep(200)
+      assertFalse(link.closed)
+      clock.advanceMs(MonitorLimits.PartialFrameMs)
+      waitUntil(2_000) { link.closed && session.status.value.banner == ReconnectingBanner }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun timeoutReadDoesNotResetTheDeadline() {
     val clock = SteppableClock()
     val link = ScriptedLink()

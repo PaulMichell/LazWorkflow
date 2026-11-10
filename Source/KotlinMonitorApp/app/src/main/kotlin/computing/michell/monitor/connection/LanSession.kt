@@ -317,6 +317,8 @@ private enum class ReadEnd {
 /** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
 interface MonotonicClock {
   fun nanoTime(): Long
+  /** Civil milliseconds. A partial frame must not be timed with this. */
+  fun wallTimeMillis(): Long = System.currentTimeMillis()
   fun addListener(listener: () -> Unit) {}
   fun removeListener(listener: () -> Unit) {}
 }
@@ -328,9 +330,17 @@ object SystemMonotonicClock : MonotonicClock {
 /** Advances only when the test says so, and wakes delivery waits without sleeping. */
 class SteppableClock : MonotonicClock {
   private var nanos = 0L
+  private var wallMs = 0L
   private val listeners = mutableListOf<() -> Unit>()
 
   override fun nanoTime(): Long = nanos
+
+  override fun wallTimeMillis(): Long = wallMs
+
+  /** A civil-time step. Does not move nanoTime and does not wake listeners. */
+  fun advanceWallMs(ms: Long) {
+    wallMs += ms
+  }
 
   override fun addListener(listener: () -> Unit) {
     synchronized(listeners) { listeners += listener }
@@ -1206,9 +1216,10 @@ class LanSession(
         val count = readOnce(current, buffer)
         if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
         if (count < 0) return finishRead(epoch, current, ReadEnd.PeerClosed)
+        // Partial-frame age is a duration on this clock, not civil time.
+        val now = clockMs()
         if (count > 0) {
-          val arrived = System.currentTimeMillis()
-          val batch = reader.offer(buffer, 0, count, arrived)
+          val batch = reader.offer(buffer, 0, count, now)
           for (frame in batch.frames) {
             noteInbound()
             onFrame(frame, epoch, current, outbound)
@@ -1216,7 +1227,6 @@ class LanSession(
           }
           if (batch.status != FrameStatus.Ok) return finishRead(epoch, current, ReadEnd.PeerClosed)
         }
-        val now = System.currentTimeMillis()
         if (reader.partialExpired(now)) return finishRead(epoch, current, ReadEnd.PeerClosed)
         if (inboundIsDead() || writeStuck()) return finishRead(epoch, current, ReadEnd.Dead)
         if (epochCounter.get() != epoch) return finishRead(epoch, current, ReadEnd.PeerClosed)
