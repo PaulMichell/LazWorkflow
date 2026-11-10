@@ -144,9 +144,30 @@ fun strictUtf8Bytes(text: String): ByteArray? {
   }
 }
 
+/** Byte length the UTF-8 codec would write. Does not allocate. An unpaired surrogate fails like the codec. */
 fun utf8Length(text: String): Int {
-  val bytes = strictUtf8Bytes(text) ?: return Int.MAX_VALUE
-  return bytes.size
+  var total = 0L
+  var index = 0
+  val length = text.length
+  while (index < length) {
+    val ch = text[index]
+    val code = ch.code
+    when {
+      code < 0x80 -> total += 1L
+      code < 0x800 -> total += 2L
+      ch.isHighSurrogate() -> {
+        val next = index + 1
+        if (next >= length || !text[next].isLowSurrogate()) return Int.MAX_VALUE
+        total += 4L
+        index = next
+      }
+      ch.isLowSurrogate() -> return Int.MAX_VALUE
+      else -> total += 3L
+    }
+    if (total > Int.MAX_VALUE) return Int.MAX_VALUE
+    index += 1
+  }
+  return total.toInt()
 }
 
 fun encodeImageBytes(bytes: ByteArray): String {
