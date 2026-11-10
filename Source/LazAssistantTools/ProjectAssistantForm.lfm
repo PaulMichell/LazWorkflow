@@ -143,8 +143,6 @@ object ProjectAssistantForm: TProjectAssistantForm
         Align = alClient
         TabIndex = 0
         TabOrder = 0
-        OnChange = SidebarPagesChange
-        OnChanging = SidebarPagesChanging
         object HistorySheet: TTabSheet
           Caption = 'History'
           ClientHeight = 568
