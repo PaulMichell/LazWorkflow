@@ -203,6 +203,9 @@ Begin
         'Do not enable it to run a script. A one-off execution uses run_command: one program and its arguments, no shell, and no new script. ' +
         'Python is not an assistant dependency. A saved repeatable cross-platform test is an InstantFPC program in the repository Tests/ directory, ' +
         'not under Source/. Invoke it with instantfpc through run_command. delete_path and rename_path stay inside the project root.' + LineEnding +
+        'Files made only for testing and not part of the project (test output directories, logs, generated inputs, captures) go in ' +
+        'Temporary/ at the project root; create it when needed. Never use the system temporary directory or the source folders for them. ' +
+        'Everything in Temporary/ must be safe to delete between sessions, so never keep anything there that is needed later.' + LineEnding +
         'Use run_git for repository inspection, explicit staging and commits. ' +
         'When a file has other uncommitted edits, stage only this item''s hunks with stage_patch and a unified diff; do not stage the whole file. ' +
         'Commit that index with commit -m and no paths. Do not pass the partially staged file after --, because that records the working tree. ' +

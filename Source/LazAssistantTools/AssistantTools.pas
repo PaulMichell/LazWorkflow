@@ -2032,7 +2032,7 @@ Begin
   N := LowerCase(DirName);
   Result := (N = '.git') Or (N = '.svn') Or (N = '.hg') Or (N = 'node_modules') Or
     (N = '__pycache__') Or (N = 'backup') Or (N = 'lib') Or (N = 'units') Or
-    (N = '.grok') Or (N = '.assistant');
+    (N = '.grok') Or (N = '.assistant') Or (N = 'temporary');
 End;
 
 Function CollectSearchableFiles(Const DirPath, Glob: String; Files: TStringList;

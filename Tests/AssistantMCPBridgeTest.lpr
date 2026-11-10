@@ -1208,8 +1208,11 @@ Begin
     (ArgumentAt(Command, 0) = 'Tests/RunAssistantTests.pas') And (ArgumentAt(Command, 1) = '--lazarus-root') And
     (ArgumentAt(Command, 2) = '/lazarus') And (ArgumentAt(Command, 3) = '--only') And (ArgumentAt(Command, 4) = 'GoodTest') And
     (ArgumentAt(Command, 5) = '--only') And (ArgumentAt(Command, 6) = 'OtherTest') And (ArgumentAt(Command, 7) = '--output-dir'));
-  Check('output-dir is a temporary directory', (Pos(IncludeTrailingPathDelimiter(GetTempDir), ArgumentAt(Command, 8)) = 1) And
+  Check('output-dir is under Temporary in the project',
+    (Pos(IncludeTrailingPathDelimiter(Root) + 'Temporary' + PathDelim + 'Tests-', ArgumentAt(Command, 8)) = 1) And
     DirectoryExists(ArgumentAt(Command, 8)));
+  Check('the project Temporary folder ignores its own contents',
+    FileExists(IncludeTrailingPathDelimiter(Root) + 'Temporary' + PathDelim + '.gitignore'));
   Check('a name with a space is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     OnlyRequest(['Good Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
   Check('a name with a slash is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
@@ -1226,7 +1229,7 @@ Begin
   Command := Workspace.LastCommand;
   Check('define arguments follow the configured arguments', (ArgumentCount(Command) = 7) And
     (ArgumentAt(Command, 3) = '--define') And (ArgumentAt(Command, 4) = 'DEBUG') And (ArgumentAt(Command, 5) = '--output-dir') And
-    (Pos(IncludeTrailingPathDelimiter(GetTempDir), ArgumentAt(Command, 6)) = 1));
+    (Pos(IncludeTrailingPathDelimiter(Root) + 'Temporary' + PathDelim, ArgumentAt(Command, 6)) = 1));
   DefineDir := ArgumentAt(Command, 6);
   Check('heaptrc is passed with only', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And

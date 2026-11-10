@@ -37,7 +37,8 @@ Type
   names, each an existing Tests/<name>.lpr), memory_check ('none', 'heaptrc' or 'valgrind', which needs a non-empty
   only) and defines (at most 8 names, each passed as --define). With no options CommandJSON comes back unchanged; any
   option needs the repository runner Tests/RunAssistantTests.pas. The output directory names the build, the memory
-  check, the sorted defines and the tests, so a run never reuses units compiled with other flags. }
+  check, the sorted defines and the tests, so a run never reuses units compiled with other flags. It is made under
+  Temporary/ at the project root, never in the system temporary directory. }
 Function ApplyTestOptions(Const CommandJSON, ProjectRoot, OptionsJSON: String; Out NewCommand, ErrorText: String): Boolean;
 
 Implementation
@@ -49,6 +50,36 @@ Const
   MaxTestOnlyNames = 32;
   { The runner's MaxDefines. }
   MaxTestDefines = 8;
+  { Files made only for testing go in this folder at the project root. Everything in it can be deleted between
+    sessions. }
+  ProjectTemporaryFolder = 'Temporary';
+
+{ Make Name inside the project's Temporary folder and return its path in Directory. The folder gets a .gitignore that
+  ignores everything in it, so test output never shows as a change in a Git project. A .gitignore that cannot be
+  written does not stop the run; Git then only lists the folder as untracked. }
+Function ForceProjectTemporaryDirectory(Const ProjectRoot, Name: String; Out Directory: String): Boolean;
+Var
+  Base, IgnoreFile: String;
+  Lines: TStringList;
+Begin
+  Base := IncludeTrailingPathDelimiter(ProjectRoot) + ProjectTemporaryFolder;
+  Directory := IncludeTrailingPathDelimiter(Base) + Name;
+  Result := ForceDirectories(Directory);
+  If Not Result Then Exit;
+  IgnoreFile := IncludeTrailingPathDelimiter(Base) + '.gitignore';
+  If FileExists(IgnoreFile) Then Exit;
+  Lines := TStringList.Create;
+  Try
+    Lines.Add('*');
+    Try
+      Lines.SaveToFile(IgnoreFile);
+    Except
+      On EStreamError Do ;
+    End;
+  Finally
+    Lines.Free;
+  End;
+End;
 
 Function ValidTestProgramName(Const Name: String): Boolean;
 Var
@@ -302,10 +333,9 @@ Begin
       Token := Token + '-d' + Defines[I];
     For I := 0 To Only.Count - 1 Do
       Token := Token + '-' + Only[I];
-    OutputDir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + ShortDirToken(Token);
-    If Not ForceDirectories(OutputDir) Then
+    If Not ForceProjectTemporaryDirectory(ProjectRoot, 'Tests-' + ShortDirToken(Token), OutputDir) Then
       Begin
-        ErrorText := 'Could not create a temporary test output directory.';
+        ErrorText := 'Could not create a test output directory under ' + ProjectTemporaryFolder + '/ in the project.';
         Exit;
       End;
     For I := 0 To Only.Count - 1 Do

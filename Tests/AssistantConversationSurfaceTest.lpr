@@ -4,6 +4,13 @@ Uses cthreads, Interfaces, Forms, Controls, Classes, SysUtils, Math, Graphics, L
   StyledTextTypes, AssistantTrace, AssistantConversationSurface, AssistantImages, AssistantImageView;
 Procedure Check(Const Name:String; OK:Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ',Name); Halt(1); End; WriteLn('ok ',Name); End;
+{ A capture goes beside the runner's logs, which are under Temporary/ in the project. }
+Function CaptureFileName(Const Name:String):String;
+Begin
+  Result:=GetEnvironmentVariable('LAZ_TEST_OUTPUT_DIR');
+  If Result='' Then Result:=GetTempDir;
+  Result:=IncludeTrailingPathDelimiter(Result)+Name;
+End;
 Type
   TImageSurface=Class(TAssistantConversationSurface)
   Public
@@ -317,7 +324,7 @@ Begin
      Trace.EnsureAnswer.Body:='Ready for your next message.'; Trace.ApplyWorkedFooter(1200);
      View.ShowToolUse:=True; Sync; View.JumpToStart; Application.ProcessMessages;
      Bitmap:=Host.GetFormImage; PNG:=TPortableNetworkGraphic.Create;
-     Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-conversation-canvas.png'); Finally PNG.Free; Bitmap.Free; End;
+     Try PNG.Assign(Bitmap); PNG.SaveToFile(CaptureFileName('laz-conversation-canvas.png')); Finally PNG.Free; Bitmap.Free; End;
    End;
  Finally Host.Free; Trace.Free; End;
 End.

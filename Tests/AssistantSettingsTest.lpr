@@ -23,6 +23,13 @@ Class Function TIDE.GetPrimaryConfigPath: String;
 Begin Result := ConfigRoot; End;
 Procedure Check(Const Name: String; OK: Boolean);
 Begin If Not OK Then Begin WriteLn('FAIL ', Name); Halt(1); End; WriteLn('ok   ', Name); End;
+{ A capture goes beside the runner's logs, which are under Temporary/ in the project. }
+Function CaptureFileName(Const Name: String): String;
+Begin
+  Result := GetEnvironmentVariable('LAZ_TEST_OUTPUT_DIR');
+  If Result = '' Then Result := GetTempDir;
+  Result := IncludeTrailingPathDelimiter(Result) + Name;
+End;
 Procedure CheckPlanRunEffort;
 Var
   Config: TAssistantConfig;
@@ -218,13 +225,13 @@ Begin
     If GetEnvironmentVariable('LAZ_SETTINGS_CAPTURE') <> '' Then
       Begin
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
-        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-settings.png'); Finally PNG.Free; Bitmap.Free; End;
+        Try PNG.Assign(Bitmap); PNG.SaveToFile(CaptureFileName('laz-assistant-settings.png')); Finally PNG.Free; Bitmap.Free; End;
         Pages.ActivePageIndex := 0; Application.ProcessMessages;
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
-        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-general.png'); Finally PNG.Free; Bitmap.Free; End;
+        Try PNG.Assign(Bitmap); PNG.SaveToFile(CaptureFileName('laz-assistant-general.png')); Finally PNG.Free; Bitmap.Free; End;
         Pages.ActivePageIndex := 2; Application.ProcessMessages;
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
-        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-spelling.png'); Finally PNG.Free; Bitmap.Free; End;
+        Try PNG.Assign(Bitmap); PNG.SaveToFile(CaptureFileName('laz-assistant-spelling.png')); Finally PNG.Free; Bitmap.Free; End;
       End;
     Pages.ActivePageIndex := 2; Application.ProcessMessages;
     Check('spell settings fit inside the Spelling page',
@@ -242,7 +249,7 @@ Begin
       Begin
         Pages.ActivePageIndex := 3; Application.ProcessMessages;
         Bitmap := Dialog.GetFormImage; PNG := TPortableNetworkGraphic.Create;
-        Try PNG.Assign(Bitmap); PNG.SaveToFile('/tmp/laz-assistant-project-tests.png'); Finally PNG.Free; Bitmap.Free; End;
+        Try PNG.Assign(Bitmap); PNG.SaveToFile(CaptureFileName('laz-assistant-project-tests.png')); Finally PNG.Free; Bitmap.Free; End;
       End;
     Dialog.SaveToConfig;
     TestSettings := TAssistantTestSettings.Create(StoreDir, ConfigRoot + '/fixture.lpi');

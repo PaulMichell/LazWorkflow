@@ -1951,7 +1951,7 @@ Begin
     'Each name must match an existing Tests/<name>.lpr and is passed as --only. ' +
     'Optional memory_check (none, heaptrc or valgrind) and defines (a list of conditional names passed as --define) also apply only to ' +
     'Tests/RunAssistantTests.pas. A memory check other than none needs only; valgrind runs far slower than heaptrc. ' +
-    'Output goes to a temporary directory chosen here. ' +
+    'Output goes to a directory chosen here under Temporary/ at the project root. ' +
     'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
     '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}},' +
     '"memory_check":{"type":"string","enum":["none","heaptrc","valgrind"]},"defines":{"type":"array","items":{"type":"string"}}},' +

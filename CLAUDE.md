@@ -21,11 +21,19 @@ The compiler is FPC 3.3.1 with the Lazarus checkout at `/home/paul/Projects/Free
 
 ```sh
 instantfpc Tests/RunAssistantTests.pas --lazarus-root /home/paul/Projects/FreePascal/Lazarus \
-  --only AssistantClaudeClientTest --output-dir <a temporary directory>
+  --only AssistantClaudeClientTest --output-dir Temporary/<run name>
 ```
 
 `--only` may repeat. `--gui` adds the GUI tests (a display is required). Every run also builds the packages, so a
-passing run means the package compiles. Write output to a temporary directory, never under `Source/`.
+passing run means the package compiles. Without `--output-dir` the runner makes `Temporary/Tests-<pid>-<n>`.
+
+Files made only for testing and not part of the project (test output directories, logs, generated inputs, screenshots,
+scratch scripts) go in `Temporary/` at the project root. Create it when needed. Never use `/tmp` or the system
+temporary directory, and never put them under `Source/` or `Tests/`. `Temporary/` is ignored by Git, and everything in
+it must be safe to delete between sessions, so keep nothing there that is needed later. Test programs still make their
+own scratch fixtures in the system temporary directory: a fixture inside this repository would find its `.git` and
+`.assistant` when it searches upwards for a root. Screenshots that a test saves go to `LAZ_TEST_OUTPUT_DIR`, which the
+runner sets to its output directory.
 
 `--define NAME` passes `-dNAME` to every fpc build and to the monitor package build. `--heaptrc` and `--valgrind`
 build and run only the named test programs, so each needs at least one `--only`. They cannot be combined, and

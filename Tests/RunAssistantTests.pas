@@ -5,7 +5,11 @@ Program RunAssistantTests;
 
   Invoke with InstantFPC. Python is not used:
     instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout>
-  Compiled test programs are written to a temporary directory, not beside these sources.
+  Compiled test programs and logs are written to Temporary/Tests-<pid>-<n> at the repository root, not beside these
+  sources and not in the system temporary directory; --output-dir chooses another directory. Everything under
+  Temporary/ can be deleted between sessions. Test programs get the output directory in LAZ_TEST_OUTPUT_DIR for files
+  someone will look at, such as screenshots. Their own scratch fixtures stay in the system temporary directory, because
+  a fixture inside this repository would find its .git and .assistant folders when it searches upwards for a root.
 
   --define NAME passes -dNAME to every fpc build and to the monitor package build. --heaptrc and --valgrind
   build and run only the named test programs, so each needs at least one --only. They cannot be combined, and
@@ -100,6 +104,7 @@ Begin
   WriteLn(StdErr, 'instantfpc Tests/RunAssistantTests.pas --lazarus-root <Lazarus checkout> [--only ProgramName]...');
   WriteLn(StdErr, '  [--output-dir Dir] [--library-dir Dir]... [--define NAME]... [--gui] [--compile-only]');
   WriteLn(StdErr, '  [--package-check] [--independent] [--heaptrc | --valgrind]');
+  WriteLn(StdErr, 'Without --output-dir, output goes to a new Temporary/Tests-<pid>-<n> at the repository root.');
   WriteLn(StdErr, '--define NAME passes -dNAME to every fpc build and to the monitor package build;');
   WriteLn(StdErr, '  NAME matches [A-Za-z_][A-Za-z0-9_]*, at most ' + IntToStr(MaxDefines) + ' names.');
   WriteLn(StdErr, '--heaptrc builds the test programs (not the packages) with ' + HeaptrcBuildFlags[0] + ' and runs them with ' +
@@ -504,9 +509,12 @@ Begin
     Command.Add('-Fl' + ExpandFileName(LibraryDirs[I]));
 End;
 
+{ The default output directory is a new Temporary/Tests-<pid>-<n> at the repository root. Temporary/ gets a .gitignore
+  that ignores everything in it; one that cannot be written leaves the folder untracked but does not stop the run. }
 Function NewOutputDirectory(Const Requested: String): String;
 Var
   I: Integer;
+  Base, IgnoreFile: String;
 Begin
   If Requested <> '' Then
     Begin
@@ -515,13 +523,23 @@ Begin
         FailUsage('Could not create output directory: ' + Result);
       Exit;
     End;
+  Base := RepoFile('Temporary');
+  If Not ForceDirectories(Base) Then
+    FailUsage('Could not create ' + Base);
+  IgnoreFile := IncludeTrailingPathDelimiter(Base) + '.gitignore';
+  If Not FileExists(IgnoreFile) Then
+    Try
+      WriteTextFile(IgnoreFile, '*' + LineEnding);
+    Except
+      On EStreamError Do ;
+    End;
   For I := 0 To 100 Do
     Begin
-      Result := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-assistant-tests-' + IntToStr(GetProcessID) + '-' + IntToStr(I);
+      Result := IncludeTrailingPathDelimiter(Base) + 'Tests-' + IntToStr(GetProcessID) + '-' + IntToStr(I);
       If Not DirectoryExists(Result) And CreateDir(Result) Then
         Exit;
     End;
-  FailUsage('Could not create a temporary output directory.');
+  FailUsage('Could not create an output directory under ' + Base);
 End;
 
 Function RepositoryRoot: String;
@@ -754,19 +772,16 @@ End;
 Procedure ExecuteTest(Const TestName, LabelName, Arg: String; TimeoutSec: Integer; Out Run: TRunResult);
 Var
   Command, Environment: TStringList;
-  ChildEnvironment: TStrings;
   ValgrindLog: String;
 Begin
   Command := TStringList.Create;
   Environment := TStringList.Create;
   Try
-    ChildEnvironment := Nil;
+    { A test saves files someone will look at, such as screenshots, in the output directory. }
+    Environment.Add('LAZ_TEST_OUTPUT_DIR=' + ExcludeTrailingPathDelimiter(OutputDir));
     ValgrindLog := '';
     If MemoryCheck = mcHeaptrc Then
-      Begin
-        Environment.Add(HeaptrcEnvironment);
-        ChildEnvironment := Environment;
-      End
+      Environment.Add(HeaptrcEnvironment)
     Else If MemoryCheck = mcValgrind Then
       Begin
         ValgrindLog := IncludeTrailingPathDelimiter(OutputDir) + LabelName + '.valgrind.log';
@@ -790,7 +805,7 @@ Begin
     Command.Add(OutputBinary(OutputDir, TestName));
     If Arg <> '' Then
       Command.Add(Arg);
-    ExecuteCommand(LabelName, Command, TimeoutSec, ChildEnvironment, ValgrindLog, MemoryCheck = mcHeaptrc, Run);
+    ExecuteCommand(LabelName, Command, TimeoutSec, Environment, ValgrindLog, MemoryCheck = mcHeaptrc, Run);
   Finally
     Environment.Free;
     Command.Free;

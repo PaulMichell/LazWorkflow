@@ -327,10 +327,12 @@ Begin
   Result := WalkToAssistantStoreRoot(Dir);
 End;
 
+{ Temporary holds test output, which can include copies of packages. }
 Function SkipFolderCompileDirectory(Const DirectoryName: String): Boolean;
 Begin
   Result := (DirectoryName = '') Or (DirectoryName[1] = '.') Or
-    (CompareText(DirectoryName, 'backup') = 0) Or (CompareText(DirectoryName, 'lib') = 0);
+    (CompareText(DirectoryName, 'backup') = 0) Or (CompareText(DirectoryName, 'lib') = 0) Or
+    (CompareText(DirectoryName, 'Temporary') = 0);
 End;
 
 Procedure CollectFolderCompileFiles(Const RootDirectory: String; Files: TStrings);

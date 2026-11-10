@@ -35,5 +35,7 @@ Thumbs.db
 
 # Assistant
 .assistant
+# Files made only for testing; safe to delete between sessions
+/Temporary/
 # Command-line tools built to the repository root
 /PascalStyle

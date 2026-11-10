@@ -66,6 +66,18 @@ Sequence multi-file refactors so every commit compiles standalone. When hoisting
 
 Fixes should be verified before committing: build and exercise the change, preferably on the affected platform. When a change touches code the current environment cannot compile (for example `{$IFDEF DARWIN}` units edited away from a Mac), say so explicitly and list the specific checks to run before the commit is made.
 
+## Temporary Files for Testing
+
+Files made only for testing and not part of the project — test output directories, compiled test binaries, logs,
+generated inputs, screenshots, and scratch scripts — go in a `Temporary` folder at the project root. Create it when
+needed and keep it out of version control. Do not use `/tmp`, the system temporary directory, or the project's source
+folders for them. Everything in `Temporary` must be safe to delete between sessions: never keep anything there that a
+later step needs, and move a file that turns out to be worth keeping into the project proper.
+
+A test program's own scratch fixtures, such as a fake project with its own `.git`, are the exception. Keep those in the
+system temporary directory when the code under test searches parent folders for a project or repository root, because
+a fixture inside the project would find the real one.
+
 ## Compiler Directives
 
 Every unit and program begins with the standard FPC mode block immediately after the opening comment or program/unit declaration.
