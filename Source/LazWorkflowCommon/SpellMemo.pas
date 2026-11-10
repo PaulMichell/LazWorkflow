@@ -68,6 +68,7 @@ Type
     FOwnsCaret: Boolean;
     CaretWatching: Boolean; { the blink timer is polling for a focus return that may send no message }
     CaretReturnPending: Boolean; { lost focus to something that is not an LCL control, such as a menu }
+    CaretClaimedByInput: Boolean; { a click or key reached this memo since focus last left; outranks stale Active flags }
     FHookedForm: TCustomForm;
     FSavedFormWindowProc: TWndMethod;
     FFocusHooks: Boolean;
@@ -1018,6 +1019,14 @@ Begin
   Result := False;
   If csDesigning In ComponentState Then
     Exit;
+  { A click or key here proves the window is in use. After a Qt main menu opened
+    with the mouse, Application.Active and the host form's Active flag can stay
+    False, and the click that should bring the caret back would hide it again. }
+  If CaretClaimedByInput Then
+    Begin
+      Result := True;
+      Exit;
+    End;
   If Assigned(Application) And (Not Application.Active) Then
     Exit;
   { Keys follow the widgetset focus. After a Qt main menu closes, the form's
@@ -1069,6 +1078,11 @@ Begin
     Exit;
   If (Not HandleAllocated) Or (Not IsVisible) Then
     Exit;
+  If CaretClaimedByInput Then
+    Begin
+      Result := True;
+      Exit;
+    End;
   { Application activation is hooked, so an inactive application needs no polling. }
   If Assigned(Application) And (Not Application.Active) Then
     Exit;
@@ -1189,6 +1203,8 @@ Procedure TSpellMemo.HostFormWindowProc(Var Message: TLMessage);
 Begin
   If Assigned(FSavedFormWindowProc) Then
     FSavedFormWindowProc(Message);
+  If Message.Msg = CM_DEACTIVATE Then
+    CaretClaimedByInput := False;
   If (Message.Msg = LM_ACTIVATE) Or (Message.Msg = CM_ACTIVATE) Or (Message.Msg = CM_DEACTIVATE) Then
     RefreshCaretForFocus;
 End;
@@ -1196,11 +1212,19 @@ End;
 {$PUSH}{$HINTS OFF}
 Procedure TSpellMemo.ApplicationFocusChanged(Sender: TObject);
 Begin
+  If Assigned(Application) And (Not Application.Active) Then
+    CaretClaimedByInput := False;
   RefreshCaretForFocus;
 End;
 
 Procedure TSpellMemo.ScreenActiveFormChanged(Sender: TObject; Form: TCustomForm);
+Var
+  ActiveForm: TCustomForm;
 Begin
+  ActiveForm := Screen.ActiveCustomForm;
+  If Assigned(ActiveForm) And (ActiveForm <> GetParentForm(Self)) And (ActiveForm <> GetParentForm(Self, False)) And
+    (Not ActiveForm.ContainsControl(Self)) Then
+    CaretClaimedByInput := False;
   RefreshCaretForFocus;
 End;
 
@@ -1209,7 +1233,10 @@ Begin
   { A menu is not an LCL control, so this sees only a real move to another control. }
   If Assigned(Screen.ActiveControl) And (Screen.ActiveControl <> Self) And
     (Not ContainsControl(Screen.ActiveControl)) Then
-    CaretReturnPending := False;
+    Begin
+      CaretReturnPending := False;
+      CaretClaimedByInput := False;
+    End;
   RefreshCaretForFocus;
 End;
 {$POP}
@@ -1239,6 +1266,7 @@ End;
 Procedure TSpellMemo.AcquireCaret;
 Begin
   FOwnsCaret := True;
+  CaretClaimedByInput := True;
   UpdateCaret;
 End;
 
@@ -1766,6 +1794,9 @@ Begin
   Inherited MouseDown(Button, Shift, X, Y);
   FOwnsCaret := True;
   SetFocus;
+  { Set after SetFocus: Qt may give no focus or activation message for a click
+    that follows a mouse-opened main menu, so the click itself claims the caret. }
+  CaretClaimedByInput := True;
   EnsurePopupHook;
   FDragOrigin := Point(X, Y);
   { The second button-down of a double-click must not move the caret. LCL then
@@ -1837,6 +1868,7 @@ Procedure TSpellMemo.DoExit;
 Begin
   Inherited DoExit;
   FOwnsCaret := False;
+  CaretClaimedByInput := False;
   { A menu can bring DoExit while this memo stays the form's active control.
     Keep watching until another LCL control takes the focus. }
   CaretReturnPending := (Not Assigned(Screen)) Or (Not Assigned(Screen.ActiveControl)) Or
