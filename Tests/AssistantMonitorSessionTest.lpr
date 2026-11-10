@@ -754,6 +754,32 @@ Begin
   End;
 End;
 
+{ A chunk whose envelope is over the frame cap must close the link and must not enter the outbox. }
+Procedure TestChunkedStateEncodeCloses;
+Var
+  Fresh: TMonitorSession;
+  ErrorText, Key: String;
+  Bytes: RawByteString;
+  Lane: TMonitorOutboxLane;
+  SawKey: Boolean;
+Begin
+  Fresh := TMonitorSession.Create;
+  Try
+    Check('chunk failure can listen', Fresh.StartListening('127.0.0.1', 9, ErrorText));
+    Fresh.PublishState('status', '{"busy":false}');
+    Key := StringOfChar('k', MonitorMaxPayloadBytes);
+    Fresh.PublishState(Key, '{"ok":true}');
+    Check('unframeable state closes the link', Fresh.CloseRequested And (Fresh.State = mssListening));
+    SawKey := False;
+    While Fresh.TakeOutboundFrameWithLane(Bytes, Lane) Do
+      If Pos(Key, String(Bytes)) > 0 Then
+        SawKey := True;
+    Check('unframeable state is not in the outbox', Not SawKey);
+  Finally
+    Fresh.Free;
+  End;
+End;
+
 { Plan item 5.1. Compile with -dMONITOR_COUNT_PARSES. One state frame parses its value once and does not parse
   the envelope again to classify it or to write the LAM1 header. }
 {$IFDEF MONITOR_COUNT_PARSES}
@@ -1481,6 +1507,7 @@ Begin
       TestBareSignalAndCancel;
       TestPlanFrameBeforeBulk;
       TestEncodeFailureNotQueued;
+      TestChunkedStateEncodeCloses;
       {$IFDEF MONITOR_COUNT_PARSES}
       TestStateFrameParsesOnce;
       {$ENDIF}

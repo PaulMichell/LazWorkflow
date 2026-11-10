@@ -2536,6 +2536,8 @@ Begin
         If Not EncodeMonitorFrameBytes(Frames[Index], Encoded[Index]) Then
           Begin
             Inc(FFramesDropped);
+            { Nothing of this key has been replaced yet. Close, as a single frame that cannot be encoded does. }
+            CloseToListening;
             Exit;
           End;
       If Not FOutbox.ReplaceState(Key, Encoded, Replaced) Then
