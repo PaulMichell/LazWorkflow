@@ -114,7 +114,6 @@ fun ConversationScreen(
   onSend: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
-  onNeed: (Int) -> Unit,
   onVisibleTurns: (Set<Int>) -> Unit,
   onViewWidth: (Int) -> Unit,
   dictation: DictationState,
@@ -138,7 +137,7 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    ConversationPane(shown, phase, bitmaps, onNeed, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
+    ConversationPane(shown, phase, bitmaps, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
     }
@@ -187,7 +186,6 @@ private fun ConversationPane(
   ui: MonitorUi,
   phase: LinkPhase,
   bitmaps: Map<String, Bitmap>,
-  onNeed: (Int) -> Unit,
   onVisibleTurns: (Set<Int>) -> Unit,
   onViewWidth: (Int) -> Unit,
   modifier: Modifier
@@ -199,7 +197,6 @@ private fun ConversationPane(
   val listState = rememberLazyListState()
   var followHead by remember { mutableStateOf(true) }
   val programmatic = remember { mutableStateOf(false) }
-  val need = rememberUpdatedState(onNeed)
   val reportVisible = rememberUpdatedState(onVisibleTurns)
   // The pending bubble is drawn after the rows, so the head is one past them while it shows.
   val pendingShown = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
@@ -249,7 +246,6 @@ private fun ConversationPane(
         val visible = indices.mapNotNull { index -> rows.getOrNull(index)?.turnIndex }.filter { index -> index >= 0 }.toSet()
         if (visible.isEmpty()) reportVisible.value(prefetchRecent(virtualSlots(ui.turns, ui.live, showLive)))
         else reportVisible.value(visible)
-        visible.forEach { index -> need.value(index) }
       }
   }
   LazyColumn(

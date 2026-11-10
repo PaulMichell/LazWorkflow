@@ -74,7 +74,6 @@ sealed class MonitorEffect {
   data class Send(val json: String) : MonitorEffect()
   data class RememberDraft(val text: String) : MonitorEffect()
   data object LeaveDictation : MonitorEffect()
-  data object Prefetch : MonitorEffect()
   data object ClearCaches : MonitorEffect()
   data class DecodeImage(val message: MonitorMessage) : MonitorEffect()
   data class FileClosed(
@@ -136,12 +135,6 @@ class MonitorCoordinator(
     if (named.isEmpty() || shownModel(local.view.model).isNotEmpty()) return
     local = local.copy(view = local.view.copy(model = named))
   }
-
-  val holdingLink: Boolean get() = false
-  val requestedTurnEntries: Set<Int> get() = emptySet()
-  val inFlightImageKeys: Set<String> get() = emptySet()
-  val loadedImageKeys: Set<String> get() = emptySet()
-  val bitmapKeyEntries: Set<String> get() = emptySet()
 
   /** Shows a Room conversation. A live open is Syncing until the host snapshot arrives.
       The current plan stays. A stored conversation does not carry that host row. */
@@ -255,14 +248,6 @@ class MonitorCoordinator(
   fun noteImagesExpired(imageIds: List<String>) {}
 
   fun noteBitmap(key: String) {}
-
-  fun collectMissing(current: MonitorUi): List<MonitorEffect> = emptyList()
-
-  fun turnForImage(imageId: String): Int? = null
-
-  fun requestTurnFetch(current: MonitorUi, index: Int): List<MonitorEffect> = emptyList()
-
-  fun revealHeldLink(current: MonitorUi, status: LinkStatus): List<MonitorEffect>? = null
 
   /** The desktop named the chat New and Send write. Drop a board that belongs to another id.
       A Room cursor for this id stays. Naming the chat does not resume. */

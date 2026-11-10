@@ -331,7 +331,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                     ) {
                       ConversationScreen(
                         ui, link.phase, bitmaps, model::changePrompt, model::sendOrSteer, model::stop, model::newConversation,
-                        model::requestTurn, model::noteVisibleTurns, model::noteViewWidth,
+                        model::noteVisibleTurns, model::noteViewWidth,
                         dictation, model::toggleDictationOn, model::toggleDictationOff,
                         permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
                         model::retryUndelivered, stored

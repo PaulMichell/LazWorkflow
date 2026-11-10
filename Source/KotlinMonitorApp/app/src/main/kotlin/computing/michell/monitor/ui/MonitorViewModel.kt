@@ -1569,13 +1569,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     if (px > 0) viewWidthPx = px
   }
 
-  fun requestTurn(index: Int) {
-    if (index < 0) return
-    val effects = coordinator.requestTurnFetch(uiState.value, index)
-    if (effects.isEmpty()) return
-    applyUiEffects(effects)
-  }
-
   fun selectTarget(path: String) {
     val json = targetSelectionCommand(uiState.value, path, session.nextCommandId()) ?: return
     session.sendCatalogue(json)
@@ -1825,7 +1818,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         MonitorEffect.LeaveDictation -> leaveDictation()
         is MonitorEffect.RememberDraft -> session.updateDraft(effect.text)
         is MonitorEffect.Send -> session.sendCatalogue(effect.json)
-        MonitorEffect.Prefetch -> applyUiEffects(coordinator.collectMissing(uiState.value))
         MonitorEffect.ClearCaches -> {
           images.reset()
           imageCache.reset()
@@ -1974,7 +1966,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val part = message.inbound as? InboundPayload.ImagePart ?: return null
     val joined = images.accept(part.image, part.bytes) ?: return null
     val bitmap = decodeBounded(joined) ?: return null
-    val turnIndex = coordinator.turnForImage(part.image.imageId) ?: uiState.value.live?.turnIndex ?: -1
+    val turnIndex = uiState.value.live?.turnIndex ?: -1
     return DecodedImage(uiState.value.hostGeneration, part.image.imageId, part.image.revision, turnIndex, bitmap)
   }
 
