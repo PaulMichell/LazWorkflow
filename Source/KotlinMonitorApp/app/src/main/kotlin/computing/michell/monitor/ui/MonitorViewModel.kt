@@ -27,7 +27,6 @@ import computing.michell.monitor.data.ConversationRecord
 import computing.michell.monitor.data.ConversationRepository
 import computing.michell.monitor.data.StoredPlan
 import computing.michell.monitor.data.hasStoredPlan
-import computing.michell.monitor.data.documentFromRows
 import computing.michell.monitor.ui.BoardContent
 import computing.michell.monitor.data.RoomCommandLedger
 import computing.michell.monitor.data.DefaultConversationCap
@@ -1287,14 +1286,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     viewModelScope.launch(Dispatchers.IO) { conversations.retain() }
   }
 
-  private data class ScreenRead(
-    val turns: List<computing.michell.monitor.data.TurnRecord>,
-    val blocks: List<computing.michell.monitor.data.BlockRecord>,
-    val images: List<computing.michell.monitor.data.ImageRecord>,
-    val repairs: List<computing.michell.monitor.data.BlockRepairRecord>,
-    val row: ConversationRecord?
-  )
-
   /** Send and New write the desktop's open chat. The screen has to be that chat. */
   private fun followHostConversation(id: String) {
     if (!conversationIdIsIdentity(id)) return
@@ -1322,35 +1313,32 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     watchedHost = hostId
     watchedConversation = conversationId
     contentWatch?.cancel()
-    contentWatch = viewModelScope.launch {
-      kotlinx.coroutines.flow.combine(
-        conversations.turns(hostId, conversationId),
-        conversations.blocks(hostId, conversationId),
-        conversations.images(hostId, conversationId),
-        conversations.repairs(hostId, conversationId),
-        conversations.conversation(hostId, conversationId)
-      ) { turns, blocks, images, repairs, row ->
-        ScreenRead(turns, blocks, images, repairs, row)
-      }.collect { read ->
-        val document = documentFromRows(read.turns, read.blocks, read.repairs, read.images)
-        val live = document.live
-        val stored = if (live == null) document.turns else document.turns.filter { turn -> turn.id != live.id }
-        val next = BoardContent(hostId, conversationId, stored, live)
-        val current = storedBoardState.value
-        val nextHasRows = next.turns.isNotEmpty() || next.live != null
-        val currentHasRows = current.turns.isNotEmpty() || current.live != null
-        if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = next
-        val grants = screenFetch.replaceBoard(conversationId, stored, live)
-        withContext(Dispatchers.Main) { sendFetchGrants(grants) }
-        val row = read.row
-        if (row != null) {
-          coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
-          coordinator.noteSyncTime(row.updatedAt)
-          session.resumeFromRoom(row.id, row.streamId, row.seq)
+    contentWatch = watchStoredScreen(
+      viewModelScope,
+      conversations.turns(hostId, conversationId),
+      conversations.blocks(hostId, conversationId),
+      conversations.images(hostId, conversationId),
+      conversations.repairs(hostId, conversationId),
+      conversations.conversation(hostId, conversationId),
+      hostId,
+      conversationId,
+      ::imageFileLength,
+      onBoard = { board, row ->
+        withContext(Dispatchers.Main) {
+          val current = storedBoardState.value
+          val nextHasRows = board.turns.isNotEmpty() || board.live != null
+          val currentHasRows = current.turns.isNotEmpty() || current.live != null
+          if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = board
+          sendFetchGrants(screenFetch.replaceBoard(conversationId, board.turns, board.live))
+          if (row != null) {
+            coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
+            coordinator.noteSyncTime(row.updatedAt)
+            session.resumeFromRoom(row.id, row.streamId, row.seq)
+          }
         }
-        loadStoredImages(read.images)
-      }
-    }
+      },
+      decode = { image -> decodeStoredImage(image) }
+    )
   }
 
   private fun queueStoredResume() {
@@ -1360,28 +1348,21 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     session.resumeFromRoom(id, cursor.second, cursor.third)
   }
 
-  private fun loadStoredImages(images: List<computing.michell.monitor.data.ImageRecord>) {
-    if (images.isEmpty()) return
-    viewModelScope.launch(Dispatchers.IO) {
-      val generation = uiState.value.hostGeneration
-      val decoded = LinkedHashMap<String, Bitmap>()
-      for (image in images) {
-        if (image.filePath.isEmpty()) continue
-        val file = java.io.File(image.filePath)
-        if (!file.isFile) continue
-        val bytes = try {
-          file.readBytes()
-        } catch (error: Exception) {
-          continue
-        }
-        val bitmap = decodeBounded(bytes) ?: continue
-        decoded[imageCacheText(ImageCacheKey(generation, image.id, 0))] = bitmap
-      }
-      if (decoded.isEmpty()) return@launch
-      withContext(Dispatchers.Main) {
-        if (uiState.value.hostGeneration != generation) return@withContext
-        bitmapsState.update { current -> current + decoded }
-      }
+  private suspend fun decodeStoredImage(image: computing.michell.monitor.data.ImageRecord) {
+    if (image.filePath.isEmpty()) return
+    val file = File(image.filePath)
+    if (!file.isFile) return
+    val generation = uiState.value.hostGeneration
+    val bytes = try {
+      file.readBytes()
+    } catch (error: Exception) {
+      return
+    }
+    val bitmap = decodeBounded(bytes) ?: return
+    withContext(Dispatchers.Main) {
+      if (uiState.value.hostGeneration != generation) return@withContext
+      val key = imageCacheText(ImageCacheKey(generation, image.id, 0))
+      bitmapsState.update { current -> current + (key to bitmap) }
     }
   }
 
