@@ -216,8 +216,8 @@ Type
     Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure QueueOverload(Const Json: String);
     Procedure CloseForQueueFailure;
-    { Caller holds the session lock. Does not lock again, and does not touch the mirror or outbox. }
-    Procedure NoteLogAck(Const PayloadJson: TMonitorPayload);
+    { Caller holds the session lock. A stale stream is ignored. A seq past the head queues an error and does not move credit. }
+    Procedure NoteLogAck(Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure HandleApproval(Const PayloadJson: TMonitorPayload);
     Function ClosedToolSeen(Const ToolId: String): Boolean;
     Procedure RememberClosedTool(Const ToolId: String);
@@ -278,6 +278,8 @@ Type
     Function MirrorCursor: Int64;
     /// Highest log sequence an ack has stored. Zero until the first ack or resume cursor.
     Function LogAcked: Int64;
+    /// Log frames still held for replay, taken or not. An ignored ack does not change this.
+    Function LogLaneCount: Integer;
     { Oldest sequence the log has folded away. Zero when the tail from the start is still held. }
     Function MirrorDroppedThrough: Int64;
     { The harness folds the log without an 8 MiB fill. A later append applies the budget. }
@@ -789,7 +791,7 @@ Begin
   QueueSend(Json);
 End;
 
-Procedure TMonitorSession.NoteLogAck(Const PayloadJson: TMonitorPayload);
+Procedure TMonitorSession.NoteLogAck(Const Id: String; Const PayloadJson: TMonitorPayload);
 Var
   Data: TJSONData;
   Obj: TJSONObject;
@@ -812,6 +814,14 @@ Begin
   End;
   If (StreamId = '') Or (Seq < 0) Then
     Exit;
+  { A previous conversation, or a stream this host is not serving. Credit stays where it is. }
+  If (FEpoch = '') Or (LowerCase(StreamId) <> FEpoch) Then
+    Exit;
+  If Assigned(FMirror) And (Seq > FMirror.Head) Then
+    Begin
+      QueueControl(EncodeMonitorError(NewHostId, 'protocol', 'Ack is beyond the sent head.', Id));
+      Exit;
+    End;
   If Seq > FPhoneAcked Then
     FPhoneAcked := Seq;
   FApplyLogAck := True;
@@ -1847,7 +1857,7 @@ Begin
   If Message.TypeName = 'ack' Then
     Begin
       If (FState = mssLive) Or (FState = mssBusy) Then
-        NoteLogAck(Message.PayloadJson);
+        NoteLogAck(Message.Id, Message.PayloadJson);
       Exit;
     End;
   If Message.TypeName = 'block_get' Then
@@ -2396,6 +2406,14 @@ Begin
   Finally
     UnlockSession;
   End;
+End;
+
+Function TMonitorSession.LogLaneCount: Integer;
+Begin
+  Result := 0;
+  If Not Assigned(FOutbox) Then
+    Exit;
+  Result := FOutbox.LaneCount(molLog);
 End;
 
 Function TMonitorSession.MirrorDroppedThrough: Int64;

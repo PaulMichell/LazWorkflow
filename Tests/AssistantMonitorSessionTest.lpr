@@ -580,6 +580,21 @@ Begin
   End;
 End;
 
+Function AckTurn: TAssistantMonitorTurn;
+Begin
+  Result := Default(TAssistantMonitorTurn);
+  Result.TurnIndex := 0;
+  Result.Id := 'ack-turn';
+  Result.Mode := 'build';
+  Result.Prompt := 'prompt';
+  Result.CreatedAt := '2026-01-01T00:00:00Z';
+  SetLength(Result.Blocks, 1);
+  Result.Blocks[0].Kind := 'answer';
+  Result.Blocks[0].BlockId := 'ack-block';
+  Result.Blocks[0].Body := 'answer';
+  Result.Blocks[0].Ok := True;
+End;
+
 Procedure TestAckThroughCarrier;
 Var
   Sink: TCommandSink;
@@ -592,6 +607,8 @@ Begin
   Carrier.ClearSent;
   Carrier.DeliverJson(EncodeCommandAuth('auth-ack', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
   Check('ack setup is live', Session.State = mssLive);
+  Session.BeginMirrorEpoch('stream-1', 'conv', '/work', 'Ack');
+  Session.ObserveTurn(AckTurn);
   Check('ack starts at zero', Session.LogAcked = 0);
   Carrier.DeliverJson('{"v":3,"id":"ack-1","type":"ack","payload":{"conversation_id":"conv","stream_id":"stream-1","seq":4}}');
   Check('ack through the carrier advances', Session.LogAcked = 4);
@@ -615,6 +632,46 @@ Begin
     Session.OnCommand := Nil;
     Sink.Free;
   End;
+End;
+
+Procedure TestAckRules;
+Var
+  Nonce: String;
+  Queued, Acked, Index: Integer;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+  ErrorText: String;
+  SawError: Boolean;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeCommandAuth('auth-ack-rules', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('ack rules start live', Session.State = mssLive);
+  Session.BeginMirrorEpoch('stream-ack', 'conv-ack', '/work', 'Ack rules');
+  Session.ObserveTurn(AckTurn);
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":3,"id":"resume-ack","type":"resume","payload":{"epoch":"stream-ack","cursor":0,' +
+    '"conversation_id":"conv-ack","commands":[]}}');
+  Queued := Session.LogLaneCount;
+  Acked := Session.LogAcked;
+  Check('the open stream has log frames queued', Queued > 0);
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":3,"id":"ack-stale","type":"ack","payload":{"conversation_id":"old","stream_id":"other-stream","seq":99}}');
+  Check('a stale stream is ignored', Session.LogAcked = Acked);
+  Check('a stale stream leaves the log queued', Session.LogLaneCount = Queued);
+  Check('a stale stream sends no error', Carrier.SentCount = 0);
+  Carrier.DeliverJson('{"v":3,"id":"ack-past","type":"ack","payload":{"conversation_id":"conv-ack","stream_id":"stream-ack","seq":99}}');
+  Check('a seq past the head does not move credit', Session.LogAcked = Acked);
+  Check('a seq past the head leaves the log queued', Session.LogLaneCount = Queued);
+  SawError := False;
+  For Index := 0 To Carrier.SentCount - 1 Do
+    If TryDecodeMonitorEnvelope(Carrier.SentJson(Index), Message, ErrorText) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And (ErrorBody.Reason = 'protocol') And (ErrorBody.RefId = 'ack-past') Then
+      SawError := True;
+  Check('a seq past the head is a protocol error', SawError);
+  Check('a refused ack stays open', (Session.State = mssLive) And (Not Session.CloseRequested));
 End;
 
 Function BulkFrame(Index: Integer): String;
@@ -1354,6 +1411,7 @@ Begin
       TestPairSuccess;
       TestHmac;
       TestAckThroughCarrier;
+      TestAckRules;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
       TestCommandLifecycle;
