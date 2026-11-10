@@ -139,6 +139,10 @@ Type
     FIntake: TMonitorCommandIntake;
     { Highest event sequence the phone has acknowledged, and the highest put in the log lane. }
     FPhoneAcked: Int64;
+    { Set under the session lock. The mirror and outbox are told after the lock is released. }
+    FApplyLogAck: Boolean;
+    FApplyLogAckStream: String;
+    FApplyLogAckSeq: Int64;
     FQueuedLogSeq: Int64;
     LastFillHead, LastFillAck, LastFillQueued: Int64;
     LogFillSeen: Boolean;
@@ -212,6 +216,7 @@ Type
     Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure QueueOverload(Const Json: String);
     Procedure CloseForQueueFailure;
+    { Caller holds the session lock. Does not lock again, and does not touch the mirror or outbox. }
     Procedure NoteLogAck(Const PayloadJson: TMonitorPayload);
     Procedure HandleApproval(Const PayloadJson: TMonitorPayload);
     Function ClosedToolSeen(Const ToolId: String): Boolean;
@@ -231,7 +236,7 @@ Type
     Procedure SetPairCodeRequired(Required: Boolean);
     Function GetBoundAddress: String;
     Function GetConnectedClientName: String;
-    { Locked reads for the link and IDE threads. The session lock is recursive, so a holder may call them. }
+    { These take the session lock. It is not recursive: do not call them while holding it. }
     Function GetState: TMonitorSessionState;
     Function GetCloseRequested: Boolean;
     Function LinkPulls: Boolean;
@@ -271,6 +276,8 @@ Type
     Procedure RestoreMirror(Const Epoch, ConversationId, ProjectRoot, Title: String; Cursor: Int64);
     Function MirrorEpoch: String;
     Function MirrorCursor: Int64;
+    /// Highest log sequence an ack has stored. Zero until the first ack or resume cursor.
+    Function LogAcked: Int64;
     { Oldest sequence the log has folded away. Zero when the tail from the start is still held. }
     Function MirrorDroppedThrough: Int64;
     { The harness folds the log without an 8 MiB fill. A later append applies the budget. }
@@ -805,18 +812,11 @@ Begin
   End;
   If (StreamId = '') Or (Seq < 0) Then
     Exit;
-  If Assigned(FMirror) Then
-    FMirror.NoteAck(StreamId, Seq);
-  If Assigned(FOutbox) Then
-    FOutbox.Acknowledge(Seq);
-  LockSession;
-  Try
-    If Seq > FPhoneAcked Then
-      FPhoneAcked := Seq;
-  Finally
-    UnlockSession;
-  End;
-  FillLogLane;
+  If Seq > FPhoneAcked Then
+    FPhoneAcked := Seq;
+  FApplyLogAck := True;
+  FApplyLogAckStream := StreamId;
+  FApplyLogAckSeq := Seq;
 End;
 
 Function FrameIsBye(Const Json: String): Boolean;
@@ -2388,6 +2388,16 @@ Begin
   End;
 End;
 
+Function TMonitorSession.LogAcked: Int64;
+Begin
+  LockSession;
+  Try
+    Result := FPhoneAcked;
+  Finally
+    UnlockSession;
+  End;
+End;
+
 Function TMonitorSession.MirrorDroppedThrough: Int64;
 Begin
   If Assigned(FMirror) Then
@@ -2923,9 +2933,10 @@ End;
 
 Procedure TMonitorSession.InboundFrame(Const Frame: TMonitorFrame);
 Var
-  RunCommand, RunClose: Boolean;
+  RunCommand, RunClose, ApplyAck: Boolean;
   CommandKind: Integer;
-  CommandId, CloseId, CloseReason: String;
+  CommandId, CloseId, CloseReason, AckStream: String;
+  AckSeq: Int64;
   CommandPayload: TMonitorPayload;
   Handler: TMonitorCommandHandler;
   CloseHandler: TMonitorApprovalCloseHandler;
@@ -2934,6 +2945,7 @@ Begin
   Try
     FPendingCommand := False;
     FPendingApprovalClose := False;
+    FApplyLogAck := False;
     HandleLocked(Frame);
     RunCommand := FPendingCommand;
     CommandKind := FPendingCommandKind;
@@ -2947,9 +2959,21 @@ Begin
     CloseReason := FPendingApprovalCloseReason;
     CloseHandler := FOnApprovalClosed;
     FPendingApprovalClose := False;
+    ApplyAck := FApplyLogAck;
+    AckStream := FApplyLogAckStream;
+    AckSeq := FApplyLogAckSeq;
+    FApplyLogAck := False;
   Finally
     UnlockSession;
   End;
+  { The mirror and outbox take their own locks. FillLogLane runs in DrainOutbound, after this lock is gone. }
+  If ApplyAck Then
+    Begin
+      If Assigned(FMirror) Then
+        FMirror.NoteAck(AckStream, AckSeq);
+      If Assigned(FOutbox) Then
+        FOutbox.Acknowledge(AckSeq);
+    End;
   { Apply the command before flushing bulk. A blocked bulk write must not swallow a send. }
   If RunClose And Assigned(CloseHandler) Then
     CloseHandler(CloseId, CloseReason);

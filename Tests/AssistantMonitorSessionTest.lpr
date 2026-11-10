@@ -580,6 +580,43 @@ Begin
   End;
 End;
 
+Procedure TestAckThroughCarrier;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Json, ErrorJson, Nonce: String;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeCommandAuth('auth-ack', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('ack setup is live', Session.State = mssLive);
+  Check('ack starts at zero', Session.LogAcked = 0);
+  Carrier.DeliverJson('{"v":3,"id":"ack-1","type":"ack","payload":{"conversation_id":"conv","stream_id":"stream-1","seq":4}}');
+  Check('ack through the carrier advances', Session.LogAcked = 4);
+  Carrier.DeliverJson('{"v":3,"id":"ack-old","type":"ack","payload":{"conversation_id":"conv","stream_id":"stream-1","seq":2}}');
+  Check('an older ack does not move back', Session.LogAcked = 4);
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('send after ack encodes', TryEncodeCommandSend('send-after-ack', 'hello', Json, ErrorJson, False));
+    Carrier.DeliverJson(Json);
+    Check('send after ack is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSend)));
+    Check('send after ack stays open', (Session.State = mssLive) And (Not Session.CloseRequested));
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Flags := Default(TMonitorHostFlags);
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Function BulkFrame(Index: Integer): String;
 Begin
   Result := '{"v":3,"id":"bulk-' + IntToStr(Index) + '","type":"snapshot_page","payload":{}}';
@@ -1316,6 +1353,7 @@ Begin
       TestPairAfterDiscard;
       TestPairSuccess;
       TestHmac;
+      TestAckThroughCarrier;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
       TestCommandLifecycle;
