@@ -50,7 +50,7 @@ Fix: one connection thread for one socket. It reads with the 1 s timeout, writes
 Acceptance: extend `LanSessionTest` with a connector whose write blocks until a read is attempted. The session must still record inbound bytes and answer a ping. A second test closes the socket when a write outlives `DeadSessionMs`. The existing silent-peer test still closes at 30 s and does not treat a 1 s read timeout as a dead host.
 
 ### 1.4 Do not drop events and then close a live socket
-Status: not started
+Status: complete
 
 `AccountedEvents` holds 512 KiB. Past that, `offer` does not queue the event, sets overflow, and returns success. `LanSession.onFrame` sends one `refusedEvents` entry and keeps reading. Those events are never applied and never acked. The host has already counted them against `credit_window_bytes` and will not move the log until an ack. The replay the refusal asks for is dropped the same way while the window stays full. `SyncResumePolicy` then emits `SyncEffect.Reconnect`. `onSyncEffect` calls `session.reconnect()`, and `startLoop` increments the epoch and closes the socket that was still carrying control frames.
 
