@@ -740,6 +740,20 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aLiveLinkThatDropsShowsReconnectingNotOffline() {
+    val session = FakeSession()
+    session.canReconnect = true
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    val live = chipOf(coordinator, LinkPhase.Live)
+    assertEquals(ChipLive, live.label)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    val dropped = chipOf(coordinator, LinkPhase.Disconnected)
+    assertEquals(ChipReconnecting, dropped.label)
+    assertFalse(dropped.label.startsWith(ChipOffline))
+  }
+
+  @Test
   fun aLinkThatWillNotComeBackKeepsSendOff() {
     val session = FakeSession()
     val coordinator = open(session)
@@ -765,6 +779,15 @@ class MonitorCoordinatorTest {
     assertTrue(effects != null)
     assertTrue(effects.orEmpty().filterIsInstance<MonitorEffect.Send>().isEmpty())
     return coordinator
+  }
+
+  private fun chipOf(coordinator: MonitorCoordinator, phase: LinkPhase): ConnectionChip {
+    val state = coordinator.state
+    return connectionChip(
+      phase, state.disconnected, state.pairedElsewhere, state.catchingUp, state.statusBusy,
+      state.hostCursor, state.syncHead, state.lastSyncMs,
+      reconnectable = state.reconnectable, banner = state.banner
+    )
   }
 
   private fun hello(coordinator: MonitorCoordinator, conversationId: String): List<MonitorEffect> {

@@ -37,7 +37,12 @@ class OfflineCacheUiTest {
     assertFalse(restored.reachedLive)
     assertFalse(restored.view.canSend)
     assertEquals(OfflineBanner, restored.banner)
-    assertEquals("offline", connectionLabel(restored, computing.michell.monitor.connection.LinkPhase.Idle))
+    val chip = connectionChip(
+      computing.michell.monitor.connection.LinkPhase.Idle, restored.disconnected, restored.pairedElsewhere,
+      restored.catchingUp, restored.statusBusy, restored.hostCursor, restored.syncHead, restored.lastSyncMs,
+      banner = restored.banner
+    )
+    assertTrue(chip.label.startsWith(ChipOffline))
   }
 
   @Test

@@ -72,16 +72,8 @@ import computing.michell.monitor.connection.WaitingForWifiBanner
 import computing.michell.monitor.connection.IdleOfflineBanner
 import computing.michell.monitor.connection.WifiLanWatch
 import computing.michell.monitor.protocol.ApprovalNotice
-import computing.michell.monitor.protocol.ErrorBody
 import computing.michell.monitor.protocol.ImageAssembly
-import computing.michell.monitor.protocol.HelloOkMessage
 import computing.michell.monitor.protocol.InboundPayload
-import computing.michell.monitor.protocol.MirrorPlace
-import computing.michell.monitor.protocol.applyBlockDataJson
-import computing.michell.monitor.protocol.noteHelloIdentity
-import computing.michell.monitor.protocol.notePhoneClosed
-import computing.michell.monitor.protocol.notePhoneEpoch
-import computing.michell.monitor.protocol.PhoneScreen
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModeNames
 import computing.michell.monitor.protocol.MonitorLimits
@@ -92,44 +84,19 @@ import computing.michell.monitor.protocol.PlanRow
 import computing.michell.monitor.protocol.WireBlock
 import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.WireView
-import computing.michell.monitor.protocol.decodeApprovalRequested
-import computing.michell.monitor.protocol.NoSessionMessage
-import computing.michell.monitor.protocol.NoSessionReason
-import computing.michell.monitor.protocol.decodeError
-import computing.michell.monitor.protocol.decodeImageUnavailable
-import computing.michell.monitor.protocol.decodeMode
-import computing.michell.monitor.protocol.decodePlan
-import computing.michell.monitor.protocol.decodeRejected
-import computing.michell.monitor.protocol.decodeStatusPayload
-import computing.michell.monitor.protocol.decodeTarget
-import computing.michell.monitor.protocol.decodeTargets
-
-import computing.michell.monitor.protocol.decodeText
-import computing.michell.monitor.protocol.applySnapshotPageJson
-import computing.michell.monitor.protocol.snapshotPageTurn
-
 import computing.michell.monitor.protocol.encodeApprovalDecision
 import computing.michell.monitor.protocol.encodeEmpty
 import computing.michell.monitor.protocol.encodePlanChoices
 import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
-import computing.michell.monitor.protocol.ConversationsMessage
 import computing.michell.monitor.protocol.ModelChoice
-import computing.michell.monitor.protocol.ModelsMessage
 import computing.michell.monitor.protocol.PermissionChoice
-import computing.michell.monitor.protocol.PermissionsMessage
 import computing.michell.monitor.protocol.ReasoningChoice
-import computing.michell.monitor.protocol.ReasoningMessage
-import computing.michell.monitor.protocol.decodeModels
-import computing.michell.monitor.protocol.decodePermissions
-import computing.michell.monitor.protocol.decodeReasoning
 import computing.michell.monitor.protocol.encodeMenuChoices
 import computing.michell.monitor.protocol.encodeSetModel
 import computing.michell.monitor.protocol.encodeSetPermissions
 import computing.michell.monitor.protocol.encodeSetReasoning
 import computing.michell.monitor.protocol.TargetChoice
-import computing.michell.monitor.protocol.TargetsMessage
-import computing.michell.monitor.protocol.decodeConversations
 import computing.michell.monitor.protocol.encodeSelectConversation
 import computing.michell.monitor.protocol.conversationIdIsIdentity
 import computing.michell.monitor.protocol.hostIdIsValid
@@ -272,20 +239,6 @@ fun emptyView(): WireView {
   )
 }
 
-fun connectionLabel(ui: MonitorUi, phase: LinkPhase): String {
-  // Patch flags are authoritative. A lost status frame must not leave the label on busy.
-  if (phase == LinkPhase.Live && !ui.disconnected) {
-    if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
-    return "live"
-  }
-  if (phase == LinkPhase.Connecting) return "connecting"
-  if (ui.banner == OfflineBanner) return "offline"
-  if (ui.disconnected || phase == LinkPhase.Disconnected || phase == LinkPhase.Paused) return "disconnected"
-  if (ui.view.busy || ui.view.sending || ui.view.planRunning || ui.planRunning) return "busy"
-  if (ui.reachedLive) return "live"
-  return "disconnected"
-}
-
 const val ConnectingBanner = "Connecting…"
 
 const val StallGapMs = 5_000L
@@ -320,26 +273,6 @@ fun statusNotice(banner: String): String {
 fun statusConnectionLabel(chipLabel: String, banner: String): String {
   if (statusNotice(banner).isNotEmpty()) return chipLabel
   return chipLabel
-}
-
-fun applyLink(state: MonitorUi, phase: LinkPhase, banner: String): MonitorUi {
-  if (phase == LinkPhase.Idle) {
-    if (state.reachedLive) return state
-    return state.copy(disconnected = true, pairHold = false)
-  }
-  val closed = phase == LinkPhase.Disconnected || phase == LinkPhase.Paused
-  if (closed && banner.isNotEmpty()) return noteSocketClosed(state, banner)
-  if (phase == LinkPhase.Connecting) {
-    val shown = if (banner.isEmpty() || banner == ReconnectingBanner) ConnectingBanner else banner
-    return state.copy(disconnected = true, banner = shown, pairHold = false)
-  }
-  if (phase == LinkPhase.Live) {
-    val shown = if (linkBanner(state.banner)) "" else state.banner
-    return state.copy(disconnected = false, banner = shown, pairHold = false)
-  }
-  if (closed || (!state.disconnected && state.banner != ReconnectingBanner)) return state
-  val shown = if (banner.isEmpty() || banner == ReconnectingBanner) "" else banner
-  return state.copy(disconnected = false, banner = shown)
 }
 
 fun actionCaption(view: WireView): String {
@@ -523,7 +456,7 @@ fun activityStart(keptStart: Long, nowMs: Long, observedMs: Int, previousObserve
   return nowMs
 }
 
-/** Same live check connectionLabel uses. Anything else is no IDE connection. */
+/** Live means the socket is up. Anything else is no IDE connection. */
 fun ideLinkLive(disconnected: Boolean, phase: LinkPhase): Boolean {
   return phase == LinkPhase.Live && !disconnected
 }
@@ -633,74 +566,6 @@ fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, com
   )
 }
 
-fun mergeApplied(current: MonitorUi, next: MonitorUi, useReducedDraft: Boolean, clearDisconnect: Boolean, nowMs: Long = 0L): MonitorUi {
-  if (next.generation < current.generation) return current
-  val history = retainLoaded(current.history + next.history, next.turns)
-  // An empty draft is explicit. Do not refill it from an older insert still sitting on next.
-  val draft = if (useReducedDraft) next.draft else current.draft
-  // Snapshot and transcript no longer race the screen. The reduced turn is the turn.
-  val mergedLive = next.live
-  val baseline = current.promptBaseline
-  val merged = next.copy(live = mergedLive, history = history, promptBaseline = baseline)
-  val dropStatus = (next.banner.isEmpty() && bannerIsStatus(current.banner)) ||
-    (current.banner.isEmpty() && bannerIsStatus(next.banner))
-  val nextBanner = if (dropStatus) "" else next.banner
-  val pendingLeft = current.pendingPrompt.isNotEmpty()
-  val blocks = displayBlocks(mergedLive)
-  val running = turnStillRunning(next.view, pendingLeft, blocks, mergedLive)
-  val observed = observedElapsedMs(next.view, mergedLive, blocks)
-  val keptStart = if (current.activityStartedMs > 0L) current.activityStartedMs else next.activityStartedMs
-  val patchReplaced = next.activityAppliedMs > current.activityAppliedMs
-  val start = when {
-    !running -> 0L
-    patchReplaced -> next.activityStartedMs
-    else -> activityStart(keptStart, nowMs, observed, current.activityObservedMs)
-  }
-  return next.copy(
-    draft = draft,
-    pairHold = if (clearDisconnect) false else current.pairHold,
-    settingsOpen = current.settingsOpen,
-    banner = if (clearDisconnect || dropStatus) "" else if (nextBanner.isNotEmpty()) nextBanner else current.banner,
-    disconnected = if (clearDisconnect || !next.disconnected) false else current.disconnected,
-    history = history,
-    live = mergedLive,
-    showThinking = current.showThinking,
-    showTools = current.showTools,
-    pendingPrompt = current.pendingPrompt,
-    pendingKind = current.pendingKind,
-    pendingEpoch = maxOf(current.pendingEpoch, next.pendingEpoch),
-    promptBaseline = baseline,
-    activityStartedMs = start,
-    activityObservedMs = if (running && observed > 0) observed else if (running) current.activityObservedMs else 0
-  )
-}
-
-fun reduceMonitor(state: MonitorUi, message: MonitorMessage): MonitorUi {
-  if (!message.changesState && message.kind != MessageKind.Error) return state
-  if (message.inbound !is InboundPayload.None) return reduceInbound(state, message.inbound)
-  return when (message.kind) {
-    MessageKind.SnapshotPage -> applySnapshotPage(state, message.payloadJson)
-    MessageKind.Status -> applyStatus(state, message.payloadJson)
-    MessageKind.Mode -> applyMode(state, message.payloadJson)
-    MessageKind.Target -> applyTarget(state, message.payloadJson)
-    MessageKind.Targets -> applyTargets(state, message.payloadJson)
-    MessageKind.Conversations -> applyConversations(state, message.payloadJson)
-    MessageKind.Models -> applyModels(state, message.payloadJson)
-    MessageKind.Reasoning -> applyReasoning(state, message.payloadJson)
-    MessageKind.Permissions -> applyPermissions(state, message.payloadJson)
-    MessageKind.Plan -> applyPlan(state, message.payloadJson)
-    MessageKind.ApprovalRequested -> applyApprovalRequested(state, message.payloadJson)
-    MessageKind.ApprovalClosed -> state.copy(approvalOpen = false)
-    MessageKind.InsertResult -> applyInsertResult(state, message.payloadJson)
-    MessageKind.Rejected -> applyRejected(state, message)
-    MessageKind.Error -> applyError(state, message.payloadJson)
-    MessageKind.ImageUnavailable -> applyImageUnavailable(state, message.payloadJson)
-    MessageKind.BlockData -> applyBlockDataMessage(state, message.payloadJson)
-    // A host frame this build cannot apply stays on screen. It must not close the socket.
-    else -> state
-  }
-}
-
 fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   val shown = if (banner.isEmpty()) HostClosedBanner else banner
   val already = state.disconnected
@@ -714,241 +579,12 @@ fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   )
 }
 
-private fun mirrorOf(state: MonitorUi): MirrorPlace {
-  return MirrorPlace(state.hostEpoch, state.hostCursor, state.catchingUp, state.announcedEpoch,
-    state.conversationId, state.projectRoot, state.conversationTitle)
-}
-
-private fun MonitorUi.withMirror(place: MirrorPlace): MonitorUi {
-  return copy(hostEpoch = place.epoch, hostCursor = place.cursor, catchingUp = place.catchingUp,
-    announcedEpoch = place.announcedEpoch, conversationId = place.conversationId, projectRoot = place.projectRoot,
-    conversationTitle = place.title)
-}
-
-private fun phoneOf(state: MonitorUi): PhoneScreen {
-  return PhoneScreen(
-    state.hostEpoch, state.hostCursor, state.catchingUp, state.announcedEpoch, state.turns, state.live,
-    state.resumeOnce, state.closedConversationId,
-    state.closedTitle, "", state.conversationId, state.projectRoot, state.conversationTitle
-  )
-}
-
-private fun MonitorUi.withPhone(phone: PhoneScreen): MonitorUi {
-  val file = phone.fileClosedId.isNotEmpty() && !closedQueued
-  return copy(
-    hostEpoch = phone.epoch,
-    hostCursor = phone.cursor,
-    catchingUp = phone.catchingUp,
-    announcedEpoch = phone.announcedEpoch,
-    turns = phone.turns,
-    live = phone.live,
-    resumeOnce = phone.resumeOnce,
-    closedConversationId = phone.closedId,
-    closedTitle = phone.closedTitle,
-    closedPending = if (file) true else closedPending,
-    closedQueued = closedQueued || file,
-    conversationId = phone.conversationId,
-    projectRoot = phone.projectRoot,
-    conversationTitle = phone.title,
-    blockFetchIds = phone.blockFetchIds
-  )
-}
-
-private fun applyHelloIdentity(state: MonitorUi, hello: HelloOkMessage): MonitorUi {
-  val hasScreen = state.live != null || state.turns.isNotEmpty() || state.history.isNotEmpty()
-  var next = state.withMirror(noteHelloIdentity(mirrorOf(state), hello.epoch, hello.cursor, hello.conversationId,
-    hello.projectRoot, hello.title, hasScreen))
-  if (next.catchingUp && hello.epoch.isNotEmpty() && hello.epoch != state.hostEpoch) {
-    val filed = notePhoneEpoch(phoneOf(state), hello.epoch)
-    if (filed.fileClosedId.isNotEmpty() && !next.closedQueued) {
-      next = next.copy(closedPending = true, closedQueued = true)
-    }
-  }
-  if (next.catchingUp || hello.epoch != next.hostEpoch || hello.title.isEmpty() || hello.title == next.conversationTitle) return next
-  return next.copy(conversationTitle = hello.title)
-}
-
-private fun applyBlockDataMessage(state: MonitorUi, payloadJson: String): MonitorUi {
-  return state.withPhone(applyBlockDataJson(phoneOf(state), payloadJson))
-}
-
-
-
-
-private fun reduceInbound(state: MonitorUi, inbound: InboundPayload): MonitorUi {
-  return when (inbound) {
-    is InboundPayload.Status -> state.copy(view = state.view.patchStatus(inbound.view))
-    is InboundPayload.Mode -> state.copy(view = state.view.copy(mode = inbound.value.mode, modeLocked = inbound.value.locked))
-    is InboundPayload.Target -> applyTargetFrame(state, inbound.value.kind, inbound.value.display, inbound.value.root)
-    is InboundPayload.Targets -> applyTargetsFrame(state, inbound.value)
-    is InboundPayload.Conversations -> applyConversationsFrame(state, inbound.value)
-    is InboundPayload.Models -> applyModelsFrame(state, inbound.value)
-    is InboundPayload.Reasoning -> applyReasoningFrame(state, inbound.value)
-    is InboundPayload.Permissions -> applyPermissionsFrame(state, inbound.value)
-    is InboundPayload.Plan -> applyPlanMessage(state, inbound.value)
-    is InboundPayload.ApprovalRequest -> state.copy(approval = inbound.notice, approvalOpen = true)
-    is InboundPayload.Insert -> state.copy(draft = inbound.text)
-    is InboundPayload.Error -> applyErrorValue(state, inbound.body)
-    is InboundPayload.Rejected -> {
-      val reason = inbound.value.reason
-      val hold = reason == "protocol" || reason == "pair_code" || reason == "fingerprint"
-      state.copy(disconnected = true, banner = reason, pairHold = hold || state.pairHold)
-    }
-    is InboundPayload.ImageMissing -> state.copy(imageReasons = state.imageReasons + (inbound.value.imageId to inbound.value.reason))
-    is InboundPayload.HelloOk -> applyHelloIdentity(state, inbound.value)
-    is InboundPayload.ConversationClosed -> state.withPhone(
-      notePhoneClosed(phoneOf(state), inbound.value.conversationId, inbound.value.title)
-    )
-    else -> state
-  }
-}
-
-
-/** Snapshot drops the drawer lists. The following host frames fill them again. */
-internal fun MonitorUi.clearedMenuLists(): MonitorUi {
-  return copy(
-    planChoices = emptyList(),
-    targetChoices = emptyList(),
-    targetCurrent = "",
-    conversationChoices = emptyList(),
-    conversationCurrent = "",
-    conversationsTruncated = false,
-    modelChoices = emptyList(),
-    modelBackend = "",
-    modelNote = "",
-    reasoningChoices = emptyList(),
-    reasoningCurrent = "",
-    reasoningNote = "",
-    permissionChoices = emptyList(),
-    permissionCurrent = "",
-    permissionNote = ""
-  )
-}
-
-
-private fun applySnapshotPage(state: MonitorUi, payloadJson: String): MonitorUi {
-  val applied = applySnapshotPageJson(state.turns, state.live, payloadJson) ?: return state
-  val fetched = snapshotPageTurn(payloadJson)
-  val history = if (fetched == null || applied.second?.id == fetched.id) state.history
-    else state.history + (fetched.turnIndex to fetched)
-  return state.copy(
-    turns = applied.first,
-    live = applied.second,
-    history = history,
-    reachedLive = true,
-    generation = state.generation + 1
-  )
-}
-
 /** A finished host turn. The status frame can be missed; this must not leave the label on busy. */
 fun hostTranscriptIdle(phase: String, statusText: String): Boolean {
   val named = phase.trim()
   if (named.isNotEmpty() && named != "Ready" && named != "Offline" && named != "Not signed in") return false
   val text = statusText.trim()
   return text == "Ready" || text == "Offline" || text == "Not signed in"
-}
-
-private fun applyStatus(state: MonitorUi, payloadJson: String): MonitorUi {
-  val status = decodeStatusPayload(payloadJson) ?: return state
-  return state.copy(
-    view = state.view.patchStatus(status),
-    disconnected = false,
-    banner = if (bannerIsStatus(state.banner)) "" else state.banner,
-    reachedLive = true
-  )
-}
-
-private fun applyMode(state: MonitorUi, payloadJson: String): MonitorUi {
-  val mode = decodeMode(payloadJson) ?: return state
-  return state.copy(view = state.view.copy(mode = mode.mode, modeLocked = mode.locked))
-}
-
-private fun applyTarget(state: MonitorUi, payloadJson: String): MonitorUi {
-  val target = decodeTarget(payloadJson) ?: return state
-  return applyTargetFrame(state, target.kind, target.display, target.root)
-}
-
-/** A new folder drops plan, target, and conversation lists. Connection lists stay. */
-internal fun applyTargetFrame(state: MonitorUi, kind: String, display: String, root: String): MonitorUi {
-  val sameFolder = state.view.targetRoot == root
-  return state.copy(
-    planChoices = if (sameFolder) state.planChoices else emptyList(),
-    planBody = if (sameFolder) state.planBody else "",
-    selectedPlan = if (sameFolder) state.selectedPlan else -1,
-    targetChoices = if (sameFolder) state.targetChoices else emptyList(),
-    targetCurrent = if (sameFolder) state.targetCurrent else "",
-    conversationChoices = if (sameFolder) state.conversationChoices else emptyList(),
-    conversationCurrent = if (sameFolder) state.conversationCurrent else "",
-    conversationsTruncated = if (sameFolder) state.conversationsTruncated else false,
-    view = state.view.copy(targetKind = kind, targetDisplay = display, targetRoot = root)
-  )
-}
-
-private fun applyTargets(state: MonitorUi, payloadJson: String): MonitorUi {
-  val targets = decodeTargets(payloadJson) ?: return state
-  return applyTargetsFrame(state, targets)
-}
-
-private fun applyTargetsFrame(state: MonitorUi, targets: TargetsMessage): MonitorUi {
-  return state.copy(targetChoices = targets.choices, targetCurrent = targets.current)
-}
-
-private fun applyConversations(state: MonitorUi, payloadJson: String): MonitorUi {
-  val conversations = decodeConversations(payloadJson) ?: return state
-  return applyConversationsFrame(state, conversations)
-}
-
-/** Replaces the history list only. Turns and the unsent draft stay. */
-internal fun applyConversationsFrame(state: MonitorUi, conversations: ConversationsMessage): MonitorUi {
-  return state.copy(
-    conversationChoices = conversations.choices,
-    conversationCurrent = conversations.current,
-    conversationsTruncated = conversations.truncated
-  )
-}
-
-private fun applyModels(state: MonitorUi, payloadJson: String): MonitorUi {
-  val models = decodeModels(payloadJson) ?: return state
-  return applyModelsFrame(state, models)
-}
-
-/** The list and the current id. An empty current must not blank a model the status bar already shows. */
-internal fun applyModelsFrame(state: MonitorUi, models: ModelsMessage): MonitorUi {
-  val named = if (models.current.isNotEmpty()) models.current else state.view.model
-  return state.copy(
-    modelChoices = models.choices,
-    modelBackend = models.backend,
-    modelNote = models.note,
-    view = state.view.copy(model = named)
-  )
-}
-
-private fun applyReasoning(state: MonitorUi, payloadJson: String): MonitorUi {
-  val reasoning = decodeReasoning(payloadJson) ?: return state
-  return applyReasoningFrame(state, reasoning)
-}
-
-/** Replaces the effort list only. view.effort is a caption and must not move this check. */
-internal fun applyReasoningFrame(state: MonitorUi, reasoning: ReasoningMessage): MonitorUi {
-  return state.copy(
-    reasoningChoices = reasoning.choices,
-    reasoningCurrent = reasoning.current,
-    reasoningNote = reasoning.note
-  )
-}
-
-private fun applyPermissions(state: MonitorUi, payloadJson: String): MonitorUi {
-  val permissions = decodePermissions(payloadJson) ?: return state
-  return applyPermissionsFrame(state, permissions)
-}
-
-/** Replaces the permission list only. view.approvalCaption is a short word and must not move this check. */
-internal fun applyPermissionsFrame(state: MonitorUi, permissions: PermissionsMessage): MonitorUi {
-  return state.copy(
-    permissionChoices = permissions.choices,
-    permissionCurrent = permissions.current,
-    permissionNote = permissions.note
-  )
 }
 
 /**
@@ -982,65 +618,6 @@ internal fun applyPlanMessage(state: MonitorUi, plan: computing.michell.monitor.
     selectedPlan = if (samePath) state.selectedPlan else -1,
     view = state.view.copy(planPath = plan.path, planTitle = plan.title, planRunning = plan.running)
   )
-}
-
-private fun applyPlan(state: MonitorUi, payloadJson: String): MonitorUi {
-  val plan = decodePlan(payloadJson) ?: return state
-  return applyPlanMessage(state, plan)
-}
-
-private fun applyApprovalRequested(state: MonitorUi, payloadJson: String): MonitorUi {
-  val notice = decodeApprovalRequested(payloadJson) ?: return state
-  return state.copy(approval = notice, approvalOpen = true)
-}
-
-private fun applyInsertResult(state: MonitorUi, payloadJson: String): MonitorUi {
-  val text = decodeText(payloadJson) ?: return state
-  return state.copy(draft = text)
-}
-
-fun protocolUpdateText(hostVersion: Int, clientVersion: Int): String {
-  return "Update the app or the IDE: this IDE speaks protocol $hostVersion, the app speaks protocol $clientVersion."
-}
-
-private fun applyRejected(state: MonitorUi, message: MonitorMessage): MonitorUi {
-  val rejected = decodeRejected(message.payloadJson)
-  val reason = rejected?.reason ?: message.reason
-  val hold = reason == "protocol" || reason == "pair_code" || reason == "fingerprint"
-  val banner = if (reason == "protocol" && rejected != null) protocolUpdateText(rejected.hostVersion, rejected.clientVersion) else reason
-  return state.copy(disconnected = true, banner = banner, pairHold = hold || state.pairHold)
-}
-
-private fun applyError(state: MonitorUi, payloadJson: String): MonitorUi {
-  val error = decodeError(payloadJson) ?: return state.copy(banner = payloadJson)
-  return applyErrorValue(state, error)
-}
-
-private fun applyErrorValue(state: MonitorUi, error: ErrorBody): MonitorUi {
-  if (error.messageText == NothingRunningToSteer && (state.draft.isNotEmpty() || state.pendingPrompt.isNotEmpty()) && !state.disconnected) {
-    return state.copy(
-      banner = "",
-      draft = state.draft.ifEmpty { state.pendingPrompt },
-      pendingPrompt = "",
-      pendingKind = "",
-      rescueSteer = true,
-      generation = state.generation + 1,
-      view = state.view.copy(canSteer = false, canSend = true, sending = false, busy = false, canStop = false)
-    )
-  }
-  if (error.messageText == NothingRunningToSteer) {
-    return state.copy(banner = error.messageText, view = state.view.copy(canSteer = false))
-  }
-  // The window was not ready. Keep the cached turns; the bar must not sit on Syncing.
-  if (error.reason == NoSessionReason || error.messageText == NoSessionMessage) {
-    return state.copy(banner = error.messageText, catchingUp = false)
-  }
-  return state.copy(banner = error.messageText)
-}
-
-private fun applyImageUnavailable(state: MonitorUi, payloadJson: String): MonitorUi {
-  val image = decodeImageUnavailable(payloadJson) ?: return state
-  return state.copy(imageReasons = state.imageReasons + (image.imageId to image.reason))
 }
 
 internal fun WireView.patchStatus(status: WireView): WireView {

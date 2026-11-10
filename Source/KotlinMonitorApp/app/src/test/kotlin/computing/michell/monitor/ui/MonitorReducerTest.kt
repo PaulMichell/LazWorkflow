@@ -1,46 +1,22 @@
 package computing.michell.monitor.ui
 
-/* Catalogue reduction without a device (c) 2026 Michell Computing. */
+/* Screen helpers that are not the catalogue-2 reducer (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.ConnectionRefusedBanner
 import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.ReconnectingBanner
-import computing.michell.monitor.protocol.ApprovalNotice
-import computing.michell.monitor.protocol.MonitorLimits
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.PlanRow
-import computing.michell.monitor.protocol.PlanChoice
 import computing.michell.monitor.protocol.ConversationChoice
 import computing.michell.monitor.protocol.MessageKind
 import computing.michell.monitor.protocol.ModelChoice
 import computing.michell.monitor.protocol.PermissionChoice
 import computing.michell.monitor.protocol.ReasoningChoice
 import computing.michell.monitor.protocol.TargetChoice
-import computing.michell.monitor.protocol.encodeConversations
-import computing.michell.monitor.protocol.encodeEnvelope
-import computing.michell.monitor.protocol.encodeModels
+import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.protocol.WireTurn
 import computing.michell.monitor.protocol.encodePath
-import computing.michell.monitor.protocol.encodePermissions
-import computing.michell.monitor.protocol.encodeReasoning
 import computing.michell.monitor.protocol.encodeSelectConversation
 import computing.michell.monitor.protocol.encodeSetModel
 import computing.michell.monitor.protocol.encodeSetPermissions
 import computing.michell.monitor.protocol.encodeSetReasoning
-import computing.michell.monitor.protocol.encodeTargets
-import computing.michell.monitor.protocol.statusToJson
-
-import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.encodeApprovalClosed
-import computing.michell.monitor.protocol.encodeApprovalRequested
-import computing.michell.monitor.protocol.encodeError
-import computing.michell.monitor.protocol.encodeImageUnavailable
-import computing.michell.monitor.protocol.encodeInsertResult
-import computing.michell.monitor.protocol.encodeTarget
-import computing.michell.monitor.protocol.encodePlan
-import computing.michell.monitor.protocol.encodeRejected
-import computing.michell.monitor.protocol.encodeConversationClosed
-import computing.michell.monitor.protocol.tryDecodeEnvelope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -49,72 +25,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MonitorReducerTest {
-  @Test
-  fun selectingAnotherPlanClearsTheOldWorkSelection() {
-    val state = MonitorUi(planPath = "Documents/Old.md", selectedPlan = 7,
-      planChoices = listOf(PlanChoice("Documents/Old.md", "Old")))
-    val next = reduceMonitor(state, message(encodePlan("plan", "Documents/New.md", "New", false, emptyList())))
-    assertEquals("Documents/New.md", next.planPath)
-    assertEquals(-1, next.selectedPlan)
-    assertTrue(next.planChoices.isEmpty())
-  }
-
-  @Test
-  fun planResponseReplacesChoicesAndKeepsConversation() {
-    val state = MonitorUi(planPath = "Documents/Plan.md", selectedPlan = 2, draft = "keep this")
-    val frame = encodePlan("plan", state.planPath, "Plan", false, emptyList())
-      .replace("\"rows\" : []", "\"rows\" : [], \"choices\" : [{\"path\":\"Plan.md\",\"caption\":\"Project plan\"}]")
-    val next = reduceMonitor(state, message(frame))
-    assertEquals(listOf(PlanChoice("Plan.md", "Project plan")), next.planChoices)
-    assertEquals("keep this", next.draft)
-    assertEquals(2, next.selectedPlan)
-    val emptyFrame = frame.replace("[{\"path\":\"Plan.md\",\"caption\":\"Project plan\"}]", "[]")
-    assertTrue(reduceMonitor(next, message(emptyFrame)).planChoices.isEmpty())
-  }
-
-  @Test
-  fun targetChangeDropsChoicesFromThePreviousProject() {
-    val keptTalk = listOf(ConversationChoice("archive-1", "Yesterday", false))
-    val state = MonitorUi(view = emptyView().copy(targetRoot = "/old/"),
-      selectedPlan = 3, planChoices = listOf(PlanChoice("Plan.md", "Old project")),
-      targetChoices = listOf(TargetChoice("", "Current Project")), targetCurrent = "",
-      conversationChoices = keptTalk)
-    val same = reduceMonitor(state, message(encodeTarget("same", "project", "Old", "/old/")))
-    assertEquals(state.planChoices, same.planChoices)
-    assertEquals(state.targetChoices, same.targetChoices)
-    assertEquals(keptTalk, same.conversationChoices)
-    val next = reduceMonitor(state, message(encodeTarget("next", "project", "New", "/new/")))
-    assertTrue(next.planChoices.isEmpty())
-    assertTrue(next.targetChoices.isEmpty())
-    assertEquals("", next.targetCurrent)
-    assertTrue(next.conversationChoices.isEmpty())
-    assertEquals(-1, next.selectedPlan)
-    assertEquals("New", next.view.targetDisplay)
-    assertEquals("", next.conversationCurrent)
-    assertFalse(next.conversationsTruncated)
-  }
-
-  @Test
-  fun conversationsFrameFillsHistoryAndLeavesTurnsAndDraft() {
-    val turns = listOf(WireTurn(0, "stored", "chat", "", "older", ""))
-    val state = MonitorUi(turns = turns, draft = "unsent", live = WireTurn(-2, "live", "chat", "", "now", ""))
-    val frame = encodeConversations("conversations", "", listOf(
-      ConversationChoice("", "Current — hello", true),
-      ConversationChoice("20261019T120000000", "Older (2)", false)
-    ), true)
-    val next = reduceMonitor(state, message(frame))
-    assertEquals("", next.conversationCurrent)
-    assertTrue(next.conversationsTruncated)
-    assertEquals(listOf(
-      ConversationChoice("", "Current — hello", true),
-      ConversationChoice("20261019T120000000", "Older (2)", false)
-    ), next.conversationChoices)
-    assertEquals(turns, next.turns)
-    assertEquals("live", next.live?.id)
-    assertEquals("unsent", next.draft)
-  }
-
-
   @Test
   fun choosingTheCurrentIdEncodesNothingAndACaptionDoesNotMoveTheCheck() {
     val state = MonitorUi(
@@ -151,216 +61,25 @@ class MonitorReducerTest {
     assertNotNull(permissions)
     assertEquals(encodeSetPermissions("permissions-next", "auto"), permissions)
     assertFalse(permissions!!.contains("approval_decision"))
-    val caption = reduceMonitor(state, message(encodeEnvelope(
-      MessageKind.Status, "status-captions",
-      statusToJson(emptyView().copy(effort = "High", approvalCaption = "Auto", model = "grok-3"))
-    )))
-    assertEquals("High", caption.view.effort)
-    assertEquals("Auto", caption.view.approvalCaption)
-    assertEquals("grok-3", caption.view.model)
-    assertEquals("", caption.reasoningCurrent)
-    assertEquals("ask", caption.permissionCurrent)
-    assertEquals(state.reasoningChoices, caption.reasoningChoices)
-    assertEquals(state.permissionChoices, caption.permissionChoices)
-  }
-
-  @Test
-  fun statusCarriesCreditUsageAndALaterFrameCanClearIt() {
-    val reported = emptyView().copy(
-      model = "grok-4",
-      usageCaption = "Credits used: 42%",
-      usageHint = "Weekly limit: 42%"
-    )
-    val shown = reduceMonitor(MonitorUi(), message(encodeEnvelope(
-      MessageKind.Status, "status-usage", statusToJson(reported)
-    )))
-    assertEquals("Credits used: 42%", shown.view.usageCaption)
-    assertEquals("Weekly limit: 42%", shown.view.usageHint)
-    assertEquals("grok-4", shown.view.model)
-    val cleared = reduceMonitor(shown, message(encodeEnvelope(
-      MessageKind.Status, "status-clear", statusToJson(emptyView().copy(model = "grok-4"))
-    )))
-    assertEquals("", cleared.view.usageCaption)
-    assertEquals("", cleared.view.usageHint)
-    assertEquals("grok-4", cleared.view.model)
-  }
-
-  @Test
-  fun planFrameKeepsTheDocumentForTheSamePath() {
-    val first = reduceMonitor(MonitorUi(), message(encodePlan(
-      "plan-body", "Documents/Plan.md", "Plan", false, emptyList(), "# Plan"
-    )))
-    assertEquals("# Plan", first.planBody)
-    assertEquals("Documents/Plan.md", first.planPath)
-    val kept = reduceMonitor(first, message(encodePlan(
-      "plan-again", "Documents/Plan.md", "Plan", true, emptyList()
-    )))
-    assertEquals("# Plan", kept.planBody)
-    assertTrue(kept.planRunning)
-    val cleared = reduceMonitor(kept, message(encodePlan(
-      "plan-other", "Documents/Other.md", "Other", false, emptyList()
-    )))
-    assertEquals("", cleared.planBody)
-    assertEquals("Documents/Other.md", cleared.planPath)
-    val emptied = reduceMonitor(first, message(encodePlan(
-      "plan-empty", "Documents/Plan.md", "Plan", false, emptyList(), complete = true
-    )))
-    assertEquals("", emptied.planBody)
-    assertEquals("Documents/Plan.md", emptied.planPath)
-  }
-
-
-  @Test
-  fun modelsFrameFillsTheListAndATargetChangeKeepsIt() {
-    val choices = listOf(ModelChoice("grok-4", "grok-4 — 256k context"), ModelChoice("grok-3", "grok-3"))
-    val frame = encodeModels("models", "grok-4", "grok", "The rest of this list is in desktop Settings.", choices)
-    val filled = reduceMonitor(MonitorUi(view = emptyView().copy(model = "grok-4", targetRoot = "/old/")), message(frame))
-    assertEquals(choices, filled.modelChoices)
-    assertEquals("grok", filled.modelBackend)
-    assertEquals("The rest of this list is in desktop Settings.", filled.modelNote)
-    assertEquals("grok-4", filled.view.model)
-    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
-    assertEquals(choices, moved.modelChoices)
-    assertEquals("grok", moved.modelBackend)
-    assertEquals("The rest of this list is in desktop Settings.", moved.modelNote)
-    val status = encodeEnvelope(MessageKind.Status, "status-model", statusToJson(emptyView().copy(model = "grok-3")))
-    val checked = reduceMonitor(moved, message(status))
-    assertEquals("grok-3", checked.view.model)
-    assertEquals(choices, checked.modelChoices)
-  }
-
-  @Test
-  fun reasoningFrameIsTheCheckAndATargetOrEffortCaptionDoesNotReplaceIt() {
-    val choices = listOf(
-      ReasoningChoice("", "Model default"),
-      ReasoningChoice("low", "Low"),
-      ReasoningChoice("high", "High"),
-      ReasoningChoice("xhigh", "XHigh")
-    )
-    val frame = encodeReasoning("reasoning", "", "", choices)
-    val start = MonitorUi(view = emptyView().copy(effort = "Default", model = "grok-4", targetRoot = "/old/"))
-    val filled = reduceMonitor(start, message(frame))
-    assertEquals(choices, filled.reasoningChoices)
-    assertEquals("", filled.reasoningCurrent)
-    assertEquals("", filled.reasoningNote)
-    assertEquals("Default", filled.view.effort)
-    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
-    assertEquals(choices, moved.reasoningChoices)
-    assertEquals("", moved.reasoningCurrent)
-    val status = encodeEnvelope(MessageKind.Status, "status-effort", statusToJson(emptyView().copy(effort = "High", model = "grok-3")))
-    val caption = reduceMonitor(moved, message(status))
-    assertEquals("High", caption.view.effort)
-    assertEquals("grok-3", caption.view.model)
-    assertEquals("", caption.reasoningCurrent)
-    assertEquals(choices, caption.reasoningChoices)
-    val shrunk = listOf(ReasoningChoice("medium", "Medium"), ReasoningChoice("high", "High"))
-    val next = reduceMonitor(caption, message(encodeReasoning("reasoning-next", "medium", "", shrunk)))
-    assertEquals(shrunk, next.reasoningChoices)
-    assertEquals("medium", next.reasoningCurrent)
-    assertEquals("High", next.view.effort)
-    val none = reduceMonitor(next, message(encodeReasoning(
-      "reasoning-none", "", "This connection does not set an effort level.", emptyList()
-    )))
-    assertTrue(none.reasoningChoices.isEmpty())
-    assertEquals("", none.reasoningCurrent)
-    assertEquals("This connection does not set an effort level.", none.reasoningNote)
-    assertEquals("High", none.view.effort)
-  }
-
-  @Test
-  fun permissionsFrameIsTheCheckAndATargetOrApprovalCaptionDoesNotReplaceIt() {
-    val choices = listOf(
-      PermissionChoice("ask", "Ask before file changes and builds"),
-      PermissionChoice("auto", "Auto: allow project tools"),
-      PermissionChoice("always", "Always: allow registered tools")
-    )
-    val frame = encodePermissions("permissions", "ask", "codex", "", choices)
-    val start = MonitorUi(view = emptyView().copy(approvalCaption = "Ask", targetRoot = "/old/"), approvalOpen = false)
-    val filled = reduceMonitor(start, message(frame))
-    assertEquals(choices, filled.permissionChoices)
-    assertEquals("ask", filled.permissionCurrent)
-    assertEquals("", filled.permissionNote)
-    assertEquals("Ask", filled.view.approvalCaption)
-    assertFalse(filled.approvalOpen)
-    val moved = reduceMonitor(filled, message(encodeTarget("next", "project", "New", "/new/")))
-    assertEquals(choices, moved.permissionChoices)
-    assertEquals("ask", moved.permissionCurrent)
-    val status = encodeEnvelope(
-      MessageKind.Status, "status-approval", statusToJson(emptyView().copy(approvalCaption = "Always"))
-    )
-    val caption = reduceMonitor(moved, message(status))
-    assertEquals("Always", caption.view.approvalCaption)
-    assertEquals("ask", caption.permissionCurrent)
-    assertEquals(choices, caption.permissionChoices)
-    val notice = ApprovalNotice(true, "tool-1", "write_file", "short", "Build", true)
-    val asked = reduceMonitor(caption, message(encodeApprovalRequested("approval", notice)))
-    assertTrue(asked.approvalOpen)
-    assertEquals("ask", asked.permissionCurrent)
-    assertEquals(choices, asked.permissionChoices)
-    val next = reduceMonitor(asked, message(encodePermissions("permissions-next", "always", "codex", "", choices)))
-    assertEquals("always", next.permissionCurrent)
-    assertEquals("Always", next.view.approvalCaption)
-    assertTrue(next.approvalOpen)
-    val none = reduceMonitor(next, message(encodePermissions(
-      "permissions-none", "", "", "No connection is selected.", emptyList()
-    )))
-    assertTrue(none.permissionChoices.isEmpty())
-    assertEquals("", none.permissionCurrent)
-    assertEquals("No connection is selected.", none.permissionNote)
-    assertEquals("Always", none.view.approvalCaption)
-  }
-
-  @Test
-  fun targetsFrameFillsTheChoiceList() {
-    val frame = encodeTargets("targets", "", listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")))
-    val next = reduceMonitor(MonitorUi(), message(frame))
-    assertEquals("", next.targetCurrent)
-    assertEquals(listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")), next.targetChoices)
-    assertTrue(next.planChoices.isEmpty())
   }
 
   @Test
   fun loadedBlockKeepsTheFullBody() {
     val body = "x".repeat(4000)
-    val turn = WireTurn(1, "a", "chat", "", "", "", blocks = listOf(WireBlock("answer", "b", "", "", "", body, false, true, 0, emptyList())))
+    val turn = WireTurn(1, "a", "chat", "", "", "", blocks = listOf(
+      WireBlock("answer", "b", "", "", "", body, false, true, 0, emptyList())
+    ))
     assertEquals(body, shownBlocks(turn, true, true).single().body)
   }
 
-
-
-
   @Test
-  fun planPatchesThoseParts() {
-    val planned = reduceMonitor(MonitorUi(), message(encodePlan("plan", "Documents/Plan.md", "Monitor", true, listOf(PlanRow(1, 1, "Row", "", "pending", true)))))
-    assertEquals("Monitor", planned.planTitle)
-    assertTrue(planned.planRunning)
-  }
-
-  @Test
-  fun approvalOpensAndClosesAndInsertFillsThePrompt() {
-    val notice = ApprovalNotice(true, "tool-1", "write_file", "short", "Build", true)
-    val open = reduceMonitor(MonitorUi(draft = "old"), message(encodeApprovalRequested("approval", notice)))
-    assertTrue(open.approvalOpen)
-    assertEquals("write_file", open.approval?.toolName)
-    val closed = reduceMonitor(open, message(encodeApprovalClosed("closed", "tool-1", "denied")))
-    assertFalse(closed.approvalOpen)
-    assertEquals("old", closed.draft)
-    val filled = reduceMonitor(closed, message(encodeInsertResult("insert", "note text")))
-    assertEquals("note text", filled.draft)
-  }
-
-  @Test
-  fun rejectedAndSocketEofKeepTheDraft() {
+  fun socketCloseKeepsTheDraftAndDoesNotBumpGenerationTwice() {
     val kept = WireTurn(1, "a", "chat", "", "hi", "", prompt = "hi")
-    val start = MonitorUi(draft = "unsent", reachedLive = true, turns = listOf(kept), history = mapOf(1 to kept))
-    val rejected = reduceMonitor(start, message(encodeRejected("rejected", "protocol", 1, 1)))
-    assertEquals("unsent", rejected.draft)
-    assertTrue(rejected.disconnected)
-    assertTrue(rejected.pairHold)
     val liveTurn = WireTurn(-2, "live", "chat", "", "hi", "", prompt = "hi", blocks = listOf(
       WireBlock("answer", "", "", "", "", "kept", false, true, 0, emptyList())
     ))
-    val closed = noteSocketClosed(start.copy(live = liveTurn), HostClosedBanner)
+    val start = MonitorUi(draft = "unsent", reachedLive = true, turns = listOf(kept), history = mapOf(1 to kept), live = liveTurn)
+    val closed = noteSocketClosed(start, HostClosedBanner)
     assertEquals("unsent", closed.draft)
     assertEquals("kept", closed.live?.blocks?.first()?.body)
     assertEquals(HostClosedBanner, closed.banner)
@@ -375,14 +94,6 @@ class MonitorReducerTest {
   }
 
   @Test
-  fun imageUnavailableNamesTheReasonAndLeavesTheSessionUp() {
-    val next = reduceMonitor(MonitorUi(reachedLive = true), message(encodeImageUnavailable("image", "tile-1", "missing")))
-    assertEquals("missing", next.imageReasons["tile-1"])
-    assertFalse(next.disconnected)
-    assertTrue(next.reachedLive)
-  }
-
-  @Test
   fun actionCaptionFollowsCanSteerAndCanSendNotBusy() {
     val busySteer = emptyView().copy(busy = true, canSteer = true, canSend = false)
     assertEquals("Steer", actionCaption(busySteer))
@@ -394,9 +105,8 @@ class MonitorReducerTest {
     assertFalse(actionEnabled(neither))
   }
 
-
   @Test
-  fun sendClearsTheDraftAndShowsThePromptBeforeTheHostReplies() {
+  fun aWaitingPromptShowsElapsedTimeUntilTheTurnFinishes() {
     val start = MonitorUi(draft = "fix the form", view = emptyView().copy(canSend = true, signedIn = true, model = "grok-4", backend = "grok"))
     val next = beginSubmit(start, "fix the form", false, 1_000L)
     assertEquals("", next.draft)
@@ -404,11 +114,6 @@ class MonitorReducerTest {
     assertEquals("user", next.pendingKind)
     assertEquals(PhaseWaiting, next.view.phase)
     assertFalse(promptShown(next, next.pendingPrompt))
-    val echoed = next.copy(live = WireTurn(-2, "live", "build", "", "fix the form", "", prompt = "fix the form", blocks = listOf(
-      WireBlock("user", "u", "", "", "", "fix the form", false, true, 0, emptyList())
-    )))
-    val merged = mergeApplied(next, echoed, false, false)
-    assertEquals("fix the form", merged.pendingPrompt)
     assertEquals("grok-4", runtimeCaption(next.view))
     assertEquals("Waiting… 0:02", activityCaption(next.view, true, "user", 1_000L, 3_000L))
     assertEquals("Ready", activityCaption(emptyView().copy(signedIn = true, statusText = "Ready"), false, "", 0L, 3_000L))
@@ -464,70 +169,4 @@ class MonitorReducerTest {
     assertFalse(turnStillRunning(idleView, false, listOf(answer), live))
     assertEquals("Ready", activityCaption(idleView, false, "", idle.activityStartedMs, 30_000L, listOf(answer), live))
   }
-
-  @Test
-  fun reconnectingClearsWhenTheLinkReturns() {
-    val closed = noteSocketClosed(MonitorUi(reachedLive = true, banner = ""), ReconnectingBanner)
-    assertEquals(ReconnectingBanner, closed.banner)
-    assertTrue(closed.disconnected)
-    assertEquals("disconnected", connectionLabel(closed, LinkPhase.Disconnected))
-    val back = applyLink(closed, LinkPhase.Connecting, "")
-    assertEquals(ConnectingBanner, back.banner)
-    assertTrue(back.disconnected)
-    assertEquals("connecting", connectionLabel(back, LinkPhase.Connecting))
-    val live = applyLink(back, LinkPhase.Live, "")
-    assertEquals("", live.banner)
-    assertFalse(live.disconnected)
-    val recovered = applyLink(noteSocketClosed(MonitorUi(reachedLive = true), ConnectionRefusedBanner), LinkPhase.Live, "")
-    assertEquals("", recovered.banner)
-    assertFalse(recovered.disconnected)
-    val idle = applyLink(MonitorUi(banner = OfflineBanner, disconnected = true, turns = listOf(WireTurn(1, "a", "build", "", "Row", ""))), LinkPhase.Idle, "")
-    assertTrue(idle.disconnected)
-    assertEquals(OfflineBanner, idle.banner)
-    assertEquals("Row", idle.turns[0].promptPreview)
-    assertEquals("offline", connectionLabel(idle, LinkPhase.Idle))
-  }
-
-  @Test
-  fun steerWithNoConversationBecomesASend() {
-    val start = MonitorUi(draft = "finish the form", view = emptyView().copy(canSteer = true, canSend = false))
-    val next = reduceMonitor(start, message(encodeError("err", "command", NothingRunningToSteer, "steer-1")))
-    assertTrue(next.rescueSteer)
-    assertFalse(next.view.canSteer)
-    assertTrue(next.view.canSend)
-    assertEquals("", next.banner)
-    assertEquals("finish the form", next.draft)
-  }
-
-
-
-
-
-
-
-
-  @Test
-  fun aLiveReduceDoesNotRestoreTheOfflineBanner() {
-    val shown = MonitorUi(banner = "", disconnected = false, reachedLive = true)
-    val cached = shown.copy(banner = OfflineBanner, disconnected = true)
-    val kept = mergeApplied(shown, cached, false, false)
-    assertEquals("", kept.banner)
-    assertFalse(kept.disconnected)
-    val status = shown.copy(banner = "", disconnected = false, view = emptyView().copy(canSteer = true))
-    val cleared = mergeApplied(cached, status, false, false)
-    assertEquals("", cleared.banner)
-    assertFalse(cleared.disconnected)
-    assertTrue(cleared.view.canSteer)
-  }
-
-
-
-
 }
-
-private fun message(json: String): computing.michell.monitor.protocol.MonitorMessage {
-  val decoded = tryDecodeEnvelope(json)
-  assertTrue(decoded.errorText, decoded.ok)
-  return decoded.message
-}
-
