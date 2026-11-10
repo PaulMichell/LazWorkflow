@@ -61,7 +61,7 @@ Fix: when the 512 KiB window is full, stop reading further log events (leave the
 Acceptance: a unit test fills `AccountedEvents` and shows the next event is not dropped and not acked. A coordinator or applier test that a gap fires `Resume` and not `Reconnect` while the link phase is Live. After the window drains, the held event is applied in order.
 
 ### 1.5 A Wi-Fi callback must not latch the link off
-Status: not started
+Status: complete
 
 `WifiLanWatch.onLost` can run while a roam or a capabilities change briefly makes `wifiPresent` false. `onWifiLost` sets `lanAvailable` false. `mayReconnect` requires that flag, and `noteActivity` returns immediately when `mayReconnect` is false, so a touch does not retry. Only `enterForeground` and `onWifiAvailable` set the flag back. If the network never left, Android does not send another `onAvailable`. The next real close (1.1 or 1.2) then waits on `wakes` with the banner "Waiting for Wi-Fi" until the screen is turned off and on. The chip shows Offline the whole time, on a radio that is up.
 
