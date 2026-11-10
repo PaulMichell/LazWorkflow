@@ -212,9 +212,7 @@ Type
     { One LAM1 frame for Json. False counts the frame in FFramesDropped and logs its type and status.
       Raw JSON is never returned in Bytes. The caller decides whether the failure closes the link. }
     Function EncodeHostFrame(Const Json: String; Out Bytes: RawByteString): Boolean;
-    Procedure EnqueueAccepted(Const Json: String);
     { Caller holds the session lock. The previous unsent plan is counted as dropped. }
-    Procedure StorePlanSend(Const Json: String);
     Procedure StorePlanFrames(Const Frames: TStringArray);
     Procedure QueueOverload(Const Json: String);
     Procedure CloseForQueueFailure;
@@ -324,8 +322,6 @@ Type
     Function AllocateHostId: String;
     /// Queues one host frame and drains it. Does not build the JSON.
     Procedure SendHostJson(Const Json: String);
-    { Replaces the unsent plan frames as one set and drains. A later plan drops the previous set. }
-    Procedure ReplacePlanFrames(Const Frames: TStringArray);
     { Moves a recorded command and tells the phone. Unknown ids are ignored. }
     Procedure NoteCommandAccepted(Const Id: String);
     Procedure NoteCommandRejected(Const Id, Reason: String);
@@ -762,35 +758,6 @@ Begin
     CloseForQueueFailure
   Else If Replaced > 0 Then
     Inc(FFramesDropped);
-End;
-
-Procedure TMonitorSession.StorePlanSend(Const Json: String);
-Var
-  Frames: TStringArray;
-Begin
-  If Json = '' Then
-    Exit;
-  SetLength(Frames, 1);
-  Frames[0] := Json;
-  StorePlanFrames(Frames);
-End;
-
-Procedure TMonitorSession.ReplacePlanFrames(Const Frames: TStringArray);
-Begin
-  If Length(Frames) = 0 Then
-    Exit;
-  LockSession;
-  Try
-    StorePlanFrames(Frames);
-  Finally
-    UnlockSession;
-  End;
-  DrainOutbound;
-End;
-
-Procedure TMonitorSession.EnqueueAccepted(Const Json: String);
-Begin
-  QueueSend(Json);
 End;
 
 Procedure TMonitorSession.NoteLogAck(Const Id: String; Const PayloadJson: TMonitorPayload);
