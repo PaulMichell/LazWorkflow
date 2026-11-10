@@ -39,7 +39,7 @@ Leaving the app (`onStop` because another activity is in front, and this is not 
 Acceptance: a session test can drive `leaveForeground` from a screen-off flag separately from `onStop`. Screen-off while `planRunning` does not close the owned socket and does not send bye. `onStop` still does. The manifest declares the service and the lock permission the implementation uses, and no other new permission.
 
 ### 1.3 One thread owns the TLS socket
-Status: not started
+Status: complete
 
 `SslSocketConnector` builds a blocking `SSLSocket` (`soTimeout` 1 s, `keepAlive` true, `tcpNoDelay` never set). `readUntilClose` then runs `readFrames` and `ConnectionWriter.run` as two coroutines. `readFrames` calls `input.read`. `writeBytes` calls `output.write` and `flush` on the other thread, under `socketLock` only. `SSLSocket` is not safe for a concurrent read and write. During a plan the phone writes an ack about every 250 ms while the host writes a continuous stream. A write that blocks because the TCP window is full (the host is inside `HandleResume`, or not reading) holds the SSL engine; the reader never reaches `noteInbound`. Thirty seconds later `inboundIsDead` and the host's `CheckTimeoutsLocked` both close the link. The chip goes Offline. Idle, the two threads rarely overlap, so the same phone looks fine until a plan starts.
 
