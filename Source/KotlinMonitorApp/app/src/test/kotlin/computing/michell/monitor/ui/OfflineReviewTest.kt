@@ -27,14 +27,14 @@ class OfflineReviewTest {
     val document = OfflineCacheDocument(emptyList(), emptyList(), null, "", "", emptyList(), -1, "")
     val reviewed = reviewedCacheState(MonitorUi(), document, stored, true)
     assertTrue(reviewed.reviewingOffline)
-    assertTrue(reviewed.disconnected)
+    assertFalse(reviewed.disconnected)
     assertFalse(reviewed.view.canSend)
     assertEquals(OfflineReviewBanner, reviewed.banner)
     val syncing = syncingCacheState(MonitorUi(), document, stored)
     assertFalse(syncing.reviewingOffline)
     assertTrue(syncing.catchingUp)
     assertFalse(syncing.disconnected)
-    assertEquals(ChipSyncing, connectionChip(LinkPhase.Connecting, false, false, true, false, 0, 0, 0).label)
+    assertEquals(ChipConnecting, connectionChip(LinkPhase.Connecting, true, false).label)
   }
 
   private fun row(host: String, id: String, title: String, updatedAt: Long, pinned: Boolean): ConversationRecord {

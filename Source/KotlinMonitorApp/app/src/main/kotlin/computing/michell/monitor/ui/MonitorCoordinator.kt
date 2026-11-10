@@ -143,7 +143,6 @@ class MonitorCoordinator(
     val kept = keepShownPlan(cached, local)
     local = kept.copy(
       draft = kept.draft.ifEmpty { typed },
-      disconnected = !liveSync,
       reachedLive = false,
       catchingUp = liveSync,
       reviewingOffline = !liveSync,
@@ -159,8 +158,11 @@ class MonitorCoordinator(
       history = emptyMap(),
       view = if (liveSync) kept.view else clearRemoteActions(kept.view),
       showThinking = display.showThinking,
-      showTools = display.showTools
+      showTools = display.showTools,
+      reconnectable = local.reconnectable,
+      linkBanner = local.linkBanner
     )
+    deriveDisconnected()
     content.replace(contentHost, kept.conversationId, kept.turns, kept.live)
   }
 
@@ -177,10 +179,10 @@ class MonitorCoordinator(
       submittedId = ""
     }
     held.clear()
+    if (linkPhase == LinkPhase.Live && !local.reachedLive) linkPhase = LinkPhase.Idle
     val kept = keepShownPlan(cached, local)
     local = kept.copy(
       draft = kept.draft.ifEmpty { typed },
-      disconnected = true,
       reachedLive = false,
       pairHold = false,
       settingsOpen = false,
@@ -192,8 +194,11 @@ class MonitorCoordinator(
       history = emptyMap(),
       view = clearRemoteActions(kept.view),
       showThinking = display.showThinking,
-      showTools = display.showTools
+      showTools = display.showTools,
+      reconnectable = local.reconnectable,
+      linkBanner = local.linkBanner
     )
+    deriveDisconnected()
     content.replace(contentHost, kept.conversationId, kept.turns, kept.live)
   }
 
@@ -291,7 +296,8 @@ class MonitorCoordinator(
     emptyList()
   }
 
-  /** Chrome from a state frame. The conversation board stays with the store. */
+  /** Chrome from a state frame. The conversation board stays with the store.
+      The link flag is not chrome: a state row must not latch disconnected while the socket is up. */
   fun noteSyncedChrome(next: MonitorUi): MonitorUi = synchronized(gate) {
     local = local.copy(
       view = next.view,
@@ -382,7 +388,14 @@ class MonitorCoordinator(
     content.replace(contentHost, board.conversationId, turns, live)
   }
 
+  /** `disconnected` is phase != Live && !reconnectable. Nothing else may latch it. */
+  private fun deriveDisconnected() {
+    val derived = linkDisconnected(linkPhase, local.reconnectable)
+    if (local.disconnected != derived) local = local.copy(disconnected = derived)
+  }
+
   private fun published(): MonitorUi {
+    deriveDisconnected()
     quietFinishedBlocks()
     val board = content.current()
     if (local.pendingPrompt.isNotEmpty()) {
@@ -687,17 +700,22 @@ class MonitorCoordinator(
 
   private fun linkChanged(status: LinkStatus): List<MonitorEffect> {
     linkPhase = status.phase
-    local = local.copy(reconnectable = session.reconnectable)
+    val reconnectable = session.reconnectable
+    local = local.copy(
+      reconnectable = reconnectable,
+      disconnected = linkDisconnected(status.phase, reconnectable),
+      linkBanner = status.banner
+    )
     val replaced = status.lastError == ReplacedReason || status.banner == PairedElsewhereLabel
     if (replaced) {
       val restored = abandonHeld(true)
       local = local.copy(
         pairedElsewhere = true,
-        disconnected = true,
         catchingUp = false,
         statusBusy = false,
         sendWhileOffline = false,
         banner = PairedElsewhereLabel,
+        linkBanner = PairedElsewhereLabel,
         view = clearRemoteActions(local.view)
       )
       noteRunClock()
@@ -707,32 +725,38 @@ class MonitorCoordinator(
     if (down) {
       closedAwaitId = ""
       // A paused, pinned or forgotten link will not come back by itself. A prompt waiting for it goes back in the box.
-      val comesBack = status.phase != LinkPhase.Paused && session.reconnectable
+      val comesBack = status.phase != LinkPhase.Paused && reconnectable
       val returned = if (comesBack) emptyList() else returnHeld("")
+      val shown = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner }
       local = local.copy(
         pairedElsewhere = false,
-        disconnected = true,
         catchingUp = false,
         statusBusy = false,
         sendWhileOffline = comesBack,
         approvalOpen = false,
         approval = null,
-        banner = status.banner.ifEmpty { if (status.phase == LinkPhase.Paused) HostClosedBanner else ReconnectingBanner },
+        banner = shown,
+        linkBanner = shown,
         view = viewAfterDrop(clearRemoteActions(local.view))
       )
       noteRunClock()
       return returned
     }
     if (status.phase == LinkPhase.Connecting) {
-      local = local.copy(sendWhileOffline = !local.pairedElsewhere && session.reconnectable)
+      val shown = status.banner.ifEmpty { ConnectingBanner }
+      local = local.copy(
+        sendWhileOffline = !local.pairedElsewhere && reconnectable,
+        banner = shown,
+        linkBanner = shown
+      )
     }
     if (status.phase == LinkPhase.Live || status.phase == LinkPhase.Idle) {
       local = local.copy(
         pairedElsewhere = false,
-        disconnected = false,
         reachedLive = true,
         sendWhileOffline = false,
-        banner = if (linkBanner(local.banner)) "" else local.banner
+        banner = if (linkBanner(local.banner)) "" else local.banner,
+        linkBanner = ""
       )
     }
     val released = releaseHeld()
@@ -780,7 +804,8 @@ class MonitorCoordinator(
     held.clear()
     content.clear()
     contentHost = clientId
-    local = MonitorUi(draft = draft, showThinking = display.showThinking, showTools = display.showTools, disconnected = true)
+    local = MonitorUi(draft = draft, showThinking = display.showThinking, showTools = display.showTools)
+    deriveDisconnected()
     return listOf(MonitorEffect.ClearCaches)
   }
 
@@ -788,7 +813,8 @@ class MonitorCoordinator(
     held.clear()
     content.clear()
     contentHost = ""
-    local = MonitorUi(showThinking = display.showThinking, showTools = display.showTools, disconnected = true)
+    local = MonitorUi(showThinking = display.showThinking, showTools = display.showTools)
+    deriveDisconnected()
     return listOf(MonitorEffect.ClearCaches, MonitorEffect.RememberDraft(""))
   }
 

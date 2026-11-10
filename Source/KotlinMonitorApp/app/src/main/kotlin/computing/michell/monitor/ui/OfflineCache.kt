@@ -142,7 +142,6 @@ fun reviewedCacheState(state: MonitorUi, document: OfflineCacheDocument, row: Co
 /** A stored conversation opened on a live link. Syncing until the host snapshot arrives. */
 fun syncingCacheState(state: MonitorUi, document: OfflineCacheDocument, row: ConversationRecord): MonitorUi {
   return reviewedCacheState(state, document, row, true).copy(
-    disconnected = false,
     reviewingOffline = false,
     catchingUp = true,
     banner = "",
@@ -228,7 +227,6 @@ fun applyOfflineCache(state: MonitorUi, document: OfflineCacheDocument, hasAddre
     selectedPlan = document.selectedPlan,
     // An unsent prompt is not a default. Opening the app must not put it back in the composer.
     draft = "",
-    disconnected = true,
     reachedLive = false,
     pairHold = false,
     settingsOpen = false,

@@ -83,7 +83,7 @@ class MonitorReducerTest {
     assertEquals("unsent", closed.draft)
     assertEquals("kept", closed.live?.blocks?.first()?.body)
     assertEquals(HostClosedBanner, closed.banner)
-    assertTrue(closed.disconnected)
+    assertFalse(closed.disconnected)
     assertEquals(start.turns, closed.turns)
     assertEquals(start.history, closed.history)
     assertFalse(closed.view.canSteer)

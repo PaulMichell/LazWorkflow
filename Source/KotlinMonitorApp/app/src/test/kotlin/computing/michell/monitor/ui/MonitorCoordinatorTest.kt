@@ -10,6 +10,7 @@ import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.CatalogueWrite
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.LinkStatus
+import computing.michell.monitor.connection.IdleOfflineBanner
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MessageKind
@@ -747,6 +748,30 @@ class MonitorCoordinatorTest {
   }
 
   @Test
+  fun aLiveStatusClearsDisconnectedAndChromeDoesNotSetItAgain() {
+    val session = FakeSession()
+    val coordinator = open(session)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Disconnected, ReconnectingBanner, "")))
+    assertTrue(coordinator.state.disconnected)
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    assertFalse(coordinator.state.disconnected)
+    val chrome = coordinator.state.copy(
+      disconnected = true,
+      statusBusy = true,
+      banner = "Plan incomplete",
+      view = coordinator.state.view.copy(canSend = true, busy = true, sending = true)
+    )
+    coordinator.noteSyncedChrome(chrome)
+    assertFalse(coordinator.state.disconnected)
+    assertEquals(ChipBusy, chipOf(coordinator, LinkPhase.Live).label)
+    session.canReconnect = true
+    coordinator.onEvent(MonitorEvent.LinkChanged(coordinator.state, LinkStatus(LinkPhase.Live, "", "")))
+    coordinator.noteSyncedChrome(coordinator.state.copy(disconnected = true, statusBusy = false, banner = IdleOfflineBanner))
+    assertFalse(coordinator.state.disconnected)
+    assertEquals(ChipLive, chipOf(coordinator, LinkPhase.Live).label)
+  }
+
+  @Test
   fun aLiveLinkThatDropsShowsReconnectingNotOffline() {
     val session = FakeSession()
     session.canReconnect = true
@@ -791,9 +816,7 @@ class MonitorCoordinatorTest {
   private fun chipOf(coordinator: MonitorCoordinator, phase: LinkPhase): ConnectionChip {
     val state = coordinator.state
     return connectionChip(
-      phase, state.disconnected, state.pairedElsewhere, state.catchingUp, state.statusBusy,
-      state.hostCursor, state.syncHead, state.lastSyncMs,
-      reconnectable = state.reconnectable, banner = state.banner
+      phase, state.reconnectable, state.statusBusy, state.lastSyncMs, banner = state.linkBanner
     )
   }
 

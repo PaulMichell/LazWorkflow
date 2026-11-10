@@ -1,8 +1,9 @@
 package computing.michell.monitor.ui
 
-/* One connection chip. Busy comes only from the state channel.
-   Catch-up is not a status. A live link says Live or Busy, the same as the desktop.
-   An in-use retry says Reconnecting, or Connecting once the attempt has started.
+/* One connection chip. The label follows the link phase, whether that link will
+   reconnect, and busy. A catch-up flag, a paired-elsewhere flag, and a chrome
+   banner are not inputs. A parked wait still uses the banner the link itself
+   published, so idle-until-touch and a confirmed Wi-Fi loss stay Offline.
    (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.BackgroundBanner
@@ -35,28 +36,20 @@ fun linkSyncing(
   return phase == LinkPhase.Live || phase == LinkPhase.Connecting || !disconnected
 }
 
+/**
+ * Live or Busy when the socket is up. Reconnecting or Connecting while an in-use
+ * retry will come back. Offline otherwise. `banner` is the link status text, not
+ * a chrome note: it only keeps a parked wait from printing Reconnecting.
+ */
 fun connectionChip(
   phase: LinkPhase,
-  disconnected: Boolean,
-  pairedElsewhere: Boolean,
-  catchingUp: Boolean,
-  statusBusy: Boolean,
-  appliedSeq: Long,
-  syncHead: Long,
-  lastSyncMs: Long,
+  reconnectable: Boolean,
+  busy: Boolean,
+  lastSyncMs: Long = 0L,
   zone: ZoneId = ZoneId.systemDefault(),
-  reconnectable: Boolean = false,
   banner: String = ""
 ): ConnectionChip {
-  if (pairedElsewhere) return ConnectionChip(PairedElsewhereLabel)
-  val live = phase == LinkPhase.Live && !disconnected
-  // The log cursor is not a progress count. Sync runs behind a live screen.
-  // Busy still wins on a live link while a plan or turn is running.
-  if (live && statusBusy) return ConnectionChip(ChipBusy)
-  if (live) return ConnectionChip(ChipLive)
-  if (linkSyncing(phase, disconnected, catchingUp, pairedElsewhere)) {
-    return ConnectionChip(syncingLabel(appliedSeq, syncHead))
-  }
+  if (phase == LinkPhase.Live) return ConnectionChip(if (busy) ChipBusy else ChipLive)
   if (inUseRetry(phase, reconnectable, banner)) {
     val label = if (phase == LinkPhase.Connecting) ChipConnecting else ChipReconnecting
     return ConnectionChip(label)

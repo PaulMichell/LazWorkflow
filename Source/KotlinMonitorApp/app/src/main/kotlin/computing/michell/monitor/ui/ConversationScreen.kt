@@ -422,15 +422,10 @@ fun ActivityStatus(
   val statusStyle = MaterialTheme.typography.bodySmall
   val chip = connectionChip(
     phase,
-    ui.disconnected,
-    ui.pairedElsewhere,
-    ui.catchingUp,
+    ui.reconnectable,
     ui.statusBusy,
-    ui.hostCursor,
-    ui.syncHead,
     ui.lastSyncMs,
-    reconnectable = ui.reconnectable,
-    banner = ui.banner
+    banner = ui.linkBanner
   )
   val connectionText = statusConnectionLabel(chip.label, ui.banner)
   // The link is plain on the left. Notices are toasts, not a second chip.

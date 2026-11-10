@@ -33,13 +33,12 @@ class OfflineCacheUiTest {
     assertEquals("Anchor the composer", restored.turns[0].promptPreview)
     assertEquals(0, restored.selectedPlan)
     assertEquals("", restored.draft)
-    assertTrue(restored.disconnected)
+    assertFalse(restored.disconnected)
     assertFalse(restored.reachedLive)
     assertFalse(restored.view.canSend)
     assertEquals(OfflineBanner, restored.banner)
     val chip = connectionChip(
-      computing.michell.monitor.connection.LinkPhase.Idle, restored.disconnected, restored.pairedElsewhere,
-      restored.catchingUp, restored.statusBusy, restored.hostCursor, restored.syncHead, restored.lastSyncMs,
+      computing.michell.monitor.connection.LinkPhase.Idle, false, restored.statusBusy, restored.lastSyncMs,
       banner = restored.banner
     )
     assertTrue(chip.label.startsWith(ChipOffline))
@@ -111,7 +110,7 @@ class OfflineCacheUiTest {
     assertEquals("current", reviewed.conversationId)
     assertEquals("/work/LazWorkflow", reviewed.projectRoot)
     assertFalse(reviewed.view.canSend)
-    assertTrue(reviewed.disconnected)
+    assertFalse(reviewed.disconnected)
     assertEquals(OfflineReviewBanner, reviewed.banner)
   }
 
@@ -173,7 +172,7 @@ class OfflineCacheUiTest {
     val restored = applyOfflineCache(MonitorUi(), document, false)
     assertEquals("Release layout", restored.planTitle)
     assertEquals(NoAddressBanner, restored.banner)
-    assertTrue(restored.disconnected)
+    assertFalse(restored.disconnected)
   }
 
   @Test

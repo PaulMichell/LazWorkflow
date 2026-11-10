@@ -193,6 +193,8 @@ data class MonitorUi(
   val sendWhileOffline: Boolean = false,
   /** The session will open the saved endpoint again. The chip uses this, not a dropped catch-up flag. */
   val reconnectable: Boolean = false,
+  /** Banner published with the link status. Chrome notes must not replace it. The chip reads this. */
+  val linkBanner: String = "",
   val lastSyncMs: Long = 0,
   val syncHead: Long = 0,
   val desktopPoint: Int = 0,
@@ -228,7 +230,8 @@ fun resetConversation(state: MonitorUi, clearDraft: Boolean, hostGeneration: Int
     hostGeneration = hostGeneration,
     conversationGeneration = conversationGeneration,
     connectionGeneration = state.connectionGeneration + 1,
-    reconnectable = state.reconnectable
+    reconnectable = state.reconnectable,
+    linkBanner = state.linkBanner
   )
 }
 
@@ -461,6 +464,11 @@ fun ideLinkLive(disconnected: Boolean, phase: LinkPhase): Boolean {
   return phase == LinkPhase.Live && !disconnected
 }
 
+/** Button lock. A later state frame must not leave this true while the socket is up. */
+fun linkDisconnected(phase: LinkPhase, reconnectable: Boolean): Boolean {
+  return phase != LinkPhase.Live && !reconnectable
+}
+
 fun displayInterrupted(ui: MonitorUi, phase: LinkPhase): Boolean {
   val running = ui.view.sending || ui.view.busy || ui.view.planRunning
   if (!running) return false
@@ -568,9 +576,8 @@ fun beginSubmit(state: MonitorUi, text: String, steer: Boolean, nowMs: Long, com
 
 fun noteSocketClosed(state: MonitorUi, banner: String): MonitorUi {
   val shown = if (banner.isEmpty()) HostClosedBanner else banner
-  val already = state.disconnected
+  val already = state.banner == shown
   return state.copy(
-    disconnected = true,
     banner = shown,
     generation = if (already) state.generation else state.generation + 1,
     connectionGeneration = if (already) state.connectionGeneration else state.connectionGeneration + 1,
@@ -863,7 +870,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
             conversationTitle = open?.title ?: coordinator.state.conversationTitle,
             lastSyncMs = open?.updatedAt ?: 0L
           )
-        } else coordinator.state.copy(disconnected = true, banner = NoAddressBanner, reachedLive = false)
+        } else coordinator.state.copy(banner = NoAddressBanner, reachedLive = false)
         coordinator.restoreOffline(seeded)
       }
       if (cachedPlan != null) {
@@ -1076,7 +1083,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val clientId = if (endpointChanged) "" else record.clientId
     val effects = coordinator.onEvent(MonitorEvent.HostChanged(uiState.value, address, port, clientId))
     if (effects != null) applyUiEffects(effects)
-    uiState.update { it.copy(pairHold = false, disconnected = true, banner = ConnectingBanner) }
+    uiState.update { it.copy(pairHold = false, banner = ConnectingBanner) }
     session.connect(address, port, pairCode.value.trim())
     pairCode.value = ""
   }
@@ -1115,8 +1122,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         projectRoot = row.projectRoot,
         hostEpoch = row.streamId,
         hostCursor = row.seq,
-        reviewingOffline = false,
-        disconnected = false
+        reviewingOffline = false
       )
     } else {
       uiState.value.copy(
@@ -1126,7 +1132,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         hostEpoch = row.streamId,
         hostCursor = row.seq,
         reviewingOffline = true,
-        disconnected = true,
         banner = OfflineReviewBanner,
         approvalOpen = false,
         approval = null,

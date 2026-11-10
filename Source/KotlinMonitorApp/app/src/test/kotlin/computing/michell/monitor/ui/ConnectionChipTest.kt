@@ -18,29 +18,28 @@ import org.junit.Test
 class ConnectionChipTest {
   @Test
   fun liveAndBusyComeFromTheStateChannel() {
-    val idle = connectionChip(LinkPhase.Live, false, false, false, false, 0, 0, 0)
+    val idle = connectionChip(LinkPhase.Live, false, false)
     assertEquals(ChipLive, idle.label)
-    val patchBusy = connectionChip(LinkPhase.Live, false, false, false, false, 4, 0, 0)
+    val patchBusy = connectionChip(LinkPhase.Live, false, false, lastSyncMs = 4L)
     assertEquals(ChipLive, patchBusy.label)
-    val stateBusy = connectionChip(LinkPhase.Live, false, false, false, true, 4, 0, 0)
+    val stateBusy = connectionChip(LinkPhase.Live, false, true, lastSyncMs = 4L)
     assertEquals(ChipBusy, stateBusy.label)
   }
 
   @Test
   fun aLiveCatchUpDoesNotPrintTheLogCursor() {
-    val chip = connectionChip(LinkPhase.Live, false, false, true, false, 413, 0, 0)
+    val chip = connectionChip(LinkPhase.Live, false, false, lastSyncMs = 413L)
     assertEquals(ChipLive, chip.label)
     assertEquals(ChipSyncing, syncingLabel(413, 0))
   }
 
   @Test
   fun syncingShowsProgressAndOfflineShowsTheLastSync() {
-    val syncing = connectionChip(LinkPhase.Connecting, false, false, true, false, 4, 10, 0)
-    assertEquals("Syncing 40%", syncing.label)
+    assertEquals("Syncing 40%", syncingLabel(4, 10))
     assertTrue(linkSyncing(LinkPhase.Connecting, false, true, false))
     assertFalse(linkSyncing(LinkPhase.Connecting, false, false, false))
     val offline = connectionChip(
-      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1_700_000_000_000L, ZoneOffset.UTC
+      LinkPhase.Disconnected, false, false, 1_700_000_000_000L, ZoneOffset.UTC
     )
     assertTrue(offline.label.startsWith("Offline · "))
     assertFalse(offline.label == ChipOffline)
@@ -49,39 +48,33 @@ class ConnectionChipTest {
   @Test
   fun anInUseRetryIsNotOffline() {
     val retry = connectionChip(
-      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1_700_000_000_000L,
-      ZoneOffset.UTC, reconnectable = true, banner = ReconnectingBanner
+      LinkPhase.Disconnected, true, false, 1_700_000_000_000L,
+      ZoneOffset.UTC, ReconnectingBanner
     )
     assertFalse(retry.label.startsWith(ChipOffline))
     assertEquals(ChipReconnecting, retry.label)
     val connecting = connectionChip(
-      LinkPhase.Connecting, true, false, false, false, 0, 0, 0,
-      reconnectable = true, banner = ReconnectingBanner
+      LinkPhase.Connecting, true, false, banner = ReconnectingBanner
     )
     assertEquals(ChipConnecting, connecting.label)
     val paused = connectionChip(
-      LinkPhase.Paused, true, false, false, false, 0, 0, 1L,
-      reconnectable = true, banner = ReconnectingBanner
+      LinkPhase.Paused, true, false, 1L, banner = ReconnectingBanner
     )
     assertTrue(paused.label.startsWith(ChipOffline))
     val idle = connectionChip(
-      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1L,
-      reconnectable = true, banner = IdleOfflineBanner
+      LinkPhase.Disconnected, true, false, 1L, banner = IdleOfflineBanner
     )
     assertTrue(idle.label.startsWith(ChipOffline))
     val wifi = connectionChip(
-      LinkPhase.Disconnected, true, false, false, false, 0, 0, 1L,
-      reconnectable = true, banner = WaitingForWifiBanner
+      LinkPhase.Disconnected, true, false, 1L, banner = WaitingForWifiBanner
     )
     assertTrue(wifi.label.startsWith(ChipOffline))
     val unpaired = connectionChip(
-      LinkPhase.Disconnected, true, false, false, false, 0, 0, 0,
-      reconnectable = false, banner = ReconnectingBanner
+      LinkPhase.Disconnected, false, false, banner = ReconnectingBanner
     )
     assertEquals(ChipOffline, unpaired.label)
     val busy = connectionChip(
-      LinkPhase.Live, false, false, false, true, 0, 0, 0,
-      reconnectable = true, banner = ReconnectingBanner
+      LinkPhase.Live, true, true, banner = ReconnectingBanner
     )
     assertEquals(ChipBusy, busy.label)
   }
@@ -100,8 +93,9 @@ class ConnectionChipTest {
 
   @Test
   fun replacedIsPairedElsewhere() {
-    val chip = connectionChip(LinkPhase.Paused, true, true, false, true, 3, 3, 1L)
-    assertEquals(PairedElsewhereLabel, chip.label)
+    val chip = connectionChip(LinkPhase.Paused, false, true, 1L, banner = PairedElsewhereLabel)
+    assertTrue(chip.label.startsWith(ChipOffline))
+    assertEquals("", statusNotice(PairedElsewhereLabel))
   }
 
   @Test
