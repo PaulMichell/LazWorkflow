@@ -11,8 +11,8 @@ package computing.michell.monitor.connection
    proxy never reaches the desktop listener. Reads and writes run on Dispatchers.IO. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
-   is refused. Inbound messages wait on a bounded queue. A slow collector
-   is a failed delivery, not a dropped frame. A silent, rejected, or
+   is refused. A full credit window stops the read. The event is held, not
+   dropped and not acked. A silent, rejected, or
    failed-write peer leaves the read loop and the owned socket is closed.
    The unsent prompt draft is kept across disconnect. A catalogue command
    is written only on the socket that accepted it. Wi-Fi becoming available
@@ -1063,6 +1063,7 @@ class LanSession(
 
   override fun reconnect() {
     if (stopped) return
+    if (!computing.michell.monitor.data.reconnectAllowed(statusState.value.phase == LinkPhase.Live, framesArriving())) return
     policy.resume()
     startLoop()
   }
@@ -1178,6 +1179,15 @@ class LanSession(
           return finishRead(epoch, current, ReadEnd.Background)
         }
         if (inboundIsDead() || writeStuck()) return finishRead(epoch, current, ReadEnd.Dead)
+        if (events.shouldPauseRead()) {
+          delay(50)
+          noteHeartbeat(epoch, current, outbound)
+          val paused = outbound.poll()
+          if (paused != null && !writeBytes(paused, current) && readEnd == ReadEnd.Continue) {
+            return finishRead(epoch, current, ReadEnd.WriteFailed)
+          }
+          continue
+        }
         val count = readOnce(current, buffer)
         if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
         if (count < 0) return finishRead(epoch, current, ReadEnd.PeerClosed)
@@ -1238,8 +1248,10 @@ class LanSession(
     val sync = decodeSyncEnvelope(frame.json)
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
-      val accepted = events.offer(sync.event, sync.wireBytes)
-      if (events.takeOverflow() || !accepted) refusedEvents.trySend(sync.event)
+      when (events.offer(sync.event, sync.wireBytes)) {
+        CreditOffer.Rejected -> refusedEvents.trySend(sync.event)
+        CreditOffer.Queued, CreditOffer.Held -> {}
+      }
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
       return
     }
@@ -1384,9 +1396,19 @@ class LanSession(
   }
 
   private fun inboundIsDead(): Boolean {
+    if (events.shouldPauseRead()) return false
     val delta = clock.nanoTime() - lastInboundNanos
     if (delta <= 0L) return false
     return delta / 1_000_000L >= MonitorLimits.DeadSessionMs
+  }
+
+  /** Bytes are still coming, or we stopped reading so they can sit in TCP. */
+  fun framesArriving(): Boolean {
+    if (link == null) return false
+    if (events.shouldPauseRead()) return true
+    val quiet = clock.nanoTime() - lastInboundNanos
+    if (quiet <= 0L) return true
+    return quiet / 1_000_000L < MonitorLimits.DeadSessionMs
   }
 
   private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String) {

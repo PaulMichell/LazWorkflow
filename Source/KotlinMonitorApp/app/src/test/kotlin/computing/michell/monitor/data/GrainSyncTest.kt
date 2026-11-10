@@ -4,6 +4,7 @@ package computing.michell.monitor.data
    assertions to match today's wire. (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.AccountedEvents
+import computing.michell.monitor.connection.CreditOffer
 import computing.michell.monitor.protocol.MonitorEvent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -50,11 +51,11 @@ class GrainSyncTest {
   }
 
   @Test
-  fun anAccountedEventsBudgetOverflowEmitsResume() {
+  fun anAccountedEventsBudgetOverflowHoldsTheEvent() {
     val events = AccountedEvents(budgetBytes = 4)
-    assertTrue(events.offer(append(1), 4))
-    val overflow = events.offer(append(2), 4)
-    assertTrue("7.1 an AccountedEvents budget overflow emits resume", overflow)
+    assertEquals(CreditOffer.Queued, events.offer(append(1), 4))
+    assertEquals(CreditOffer.Held, events.offer(append(2), 4))
+    assertEquals(listOf(append(2)), events.heldEvents())
   }
 
   @Test

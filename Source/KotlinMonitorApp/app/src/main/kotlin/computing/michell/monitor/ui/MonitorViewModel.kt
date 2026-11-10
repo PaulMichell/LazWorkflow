@@ -1829,7 +1829,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           )
           if (effect.hold) session.queueSyncResume(json) else session.sendCatalogue(json)
         }
-        computing.michell.monitor.data.SyncEffect.Reconnect -> session.reconnect()
+        computing.michell.monitor.data.SyncEffect.Reconnect -> {
+          if (computing.michell.monitor.data.reconnectAllowed(
+            link.value.phase == computing.michell.monitor.connection.LinkPhase.Live,
+            session.framesArriving()
+          )) session.reconnect()
+        }
         computing.michell.monitor.data.SyncEffect.FetchReady -> {
           // Resume replaces the host bulk queue, including body replies already requested.
           screenFetch.setConnected(false)

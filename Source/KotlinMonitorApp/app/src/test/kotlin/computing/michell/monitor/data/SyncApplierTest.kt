@@ -5,6 +5,7 @@ package computing.michell.monitor.data
 import computing.michell.monitor.protocol.MonitorEvent
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -91,6 +92,27 @@ class SyncApplierTest {
     clock.now = 21_050L
     assertTrue(caught.tick().isEmpty())
     assertEquals(3L, store.seq("c1"))
+  }
+
+  @Test
+  fun aGapWhileLiveResumesAndDoesNotReconnect() {
+    val policy = SyncResumePolicy()
+    val first = policy.onGap(computing.michell.monitor.data.SyncGap("c1", "stream-a", 2L), 0L)
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 2L), first)
+    assertFalse(reconnectAllowed(linkLive = true, framesArriving = true))
+    var now = 0L
+    val admitted = mutableListOf<SyncEffect>()
+    if (first != null) admitted += first
+    repeat(6) {
+      now += 8_000L
+      for (effect in policy.tick(now)) {
+        if (effect == SyncEffect.Reconnect && !reconnectAllowed(true, true)) continue
+        admitted += effect
+      }
+    }
+    assertTrue(admitted.any { effect -> effect is SyncEffect.Resume })
+    assertTrue(admitted.none { effect -> effect == SyncEffect.Reconnect })
+    assertTrue(reconnectAllowed(linkLive = false, framesArriving = false))
   }
 
   @Test

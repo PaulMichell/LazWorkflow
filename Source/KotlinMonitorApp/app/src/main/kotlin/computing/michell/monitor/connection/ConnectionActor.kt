@@ -79,32 +79,51 @@ class ConnectionWriter(private val write: suspend (ByteArray) -> Boolean) {
   }
 }
 
+enum class CreditOffer {
+  Queued,
+  Held,
+  Rejected
+}
+
 class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong()) {
   private val channel = Channel<CountedEvent>(Channel.UNLIMITED)
-  private val queued = java.util.concurrent.atomic.AtomicLong(0)
-  private val overflow = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val gate = Any()
+  private var queued = 0L
+  private val held = ArrayDeque<CountedEvent>()
 
-  val queuedBytes: Long get() = queued.get()
+  val queuedBytes: Long get() = synchronized(gate) { queued }
 
-  /** True when the event is queued, or the window overflowed and a resume is owed. */
-  fun offer(event: MonitorEvent, bytes: Int): Boolean {
-    if (bytes < 0) return false
-    val next = queued.addAndGet(bytes.toLong())
-    if (next > budgetBytes) {
-      queued.addAndGet(-bytes.toLong())
-      overflow.set(true)
-      return true
+  /** A full window holds the event. It is not queued, so it is not acked. */
+  fun offer(event: MonitorEvent, bytes: Int): CreditOffer {
+    if (bytes < 0) return CreditOffer.Rejected
+    val counted = CountedEvent(event, bytes)
+    synchronized(gate) {
+      if (held.isNotEmpty() || queued + bytes > budgetBytes) {
+        held.addLast(counted)
+        return CreditOffer.Held
+      }
+      queued += bytes
     }
-    if (!channel.trySend(CountedEvent(event, bytes)).isSuccess) {
-      queued.addAndGet(-bytes.toLong())
-      return false
+    if (!channel.trySend(counted).isSuccess) {
+      synchronized(gate) {
+        queued -= bytes
+        held.addLast(counted)
+      }
+      return CreditOffer.Held
     }
-    return true
+    return CreditOffer.Queued
   }
+
+  fun shouldPauseRead(): Boolean = synchronized(gate) { held.isNotEmpty() }
+
+  fun heldEvents(): List<MonitorEvent> = synchronized(gate) { held.map { it.event } }
 
   suspend fun receive(): MonitorEvent {
     val counted = channel.receive()
-    queued.addAndGet(-counted.bytes.toLong())
+    synchronized(gate) {
+      queued -= counted.bytes
+      admitHeld()
+    }
     return counted.event
   }
 
@@ -112,7 +131,19 @@ class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong(
     channel.close()
   }
 
-  fun takeOverflow(): Boolean = overflow.getAndSet(false)
+  private fun admitHeld() {
+    while (held.isNotEmpty()) {
+      val next = held.first()
+      if (queued + next.bytes > budgetBytes) return
+      held.removeFirst()
+      queued += next.bytes
+      if (!channel.trySend(next).isSuccess) {
+        queued -= next.bytes
+        held.addFirst(next)
+        return
+      }
+    }
+  }
 }
 
 private data class CountedEvent(val event: MonitorEvent, val bytes: Int)

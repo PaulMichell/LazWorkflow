@@ -531,6 +531,12 @@ fun estimatedEventBytes(event: MonitorEvent): Int {
   return utf8Length(text) + 128
 }
 
+/** A live socket that is still receiving is not closed to cure a gap. */
+fun reconnectAllowed(linkLive: Boolean, framesArriving: Boolean): Boolean {
+  if (linkLive && framesArriving) return false
+  return true
+}
+
 /** Four resumes, then reconnect. A later applied seq clears the wait. */
 class SyncResumePolicy {
   private val waits = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
