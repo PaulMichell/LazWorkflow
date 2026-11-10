@@ -156,7 +156,7 @@ Acceptance: the 1.7 chip tests, plus a coordinator test that a Live status clear
 These are the costs that grow while a plan streams. They also delay acks, so they belong in the same robustness work. Do not rewrite the markdown parser or the JSON codec beyond the items below.
 
 ### 4.1 Do not rebuild the conversation or redecode images on every append
-Status: not started
+Status: complete
 
 `watchScreen` collects turns, blocks, images, repairs and the conversation row on the main `viewModelScope`. Every Room emission, which a plan produces about every 50 ms, calls `documentFromRows` on the full block list and copies every body into a new `WireTurn` graph. It then launches `loadStoredImages`, which reads and decodes every image file again and merges them into `bitmapsState`. There is no cancellation of the previous decode. `observeBlocks` has no incremental query; it returns every body in the conversation.
 
