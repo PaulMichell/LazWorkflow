@@ -67,6 +67,7 @@ Type
     FCaretOn: Boolean;
     FOwnsCaret: Boolean;
     CaretWatching: Boolean; { the blink timer is polling for a focus return that may send no message }
+    CaretReturnPending: Boolean; { lost focus to something that is not an LCL control, such as a menu }
     FHookedForm: TCustomForm;
     FSavedFormWindowProc: TWndMethod;
     FFocusHooks: Boolean;
@@ -103,6 +104,7 @@ Type
     Procedure CaretTimerTick(Sender: TObject);
     Procedure ResetCaretBlink;
     Procedure AcquireCaret;
+    Function HoldsWidgetFocus: Boolean;
     Function CaretIsActive: Boolean;
     Function CaretMayReturn: Boolean;
     Procedure WatchForCaretReturn;
@@ -186,6 +188,7 @@ Type
     Procedure Loaded; Override;
     Procedure InitializeWnd; Override;
     Procedure GetDialogCode(Var Message: TLMGetDlgCode); Message LM_GETDLGCODE;
+    Procedure WMSetFocus(Var Message: TLMSetFocus); Message LM_SETFOCUS;
     Procedure KeyDown(Var Key: Word; Shift: TShiftState); Override;
     Procedure UTF8KeyPress(Var UTF8Key: TUTF8Char); Override;
     Procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); Override;
@@ -260,7 +263,7 @@ Type
 Implementation
 
 Uses
-  Dialogs, Clipbrd, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
+  Dialogs, Clipbrd, LCLIntf, LazUTF8, SpellCheckerConfig, SpellEngine, WorkflowLog;
 
 Const
   SpellUndoLimit = 200;
@@ -985,6 +988,28 @@ Begin
     End;
 End;
 
+Function TSpellMemo.HoldsWidgetFocus: Boolean;
+Var
+  FocusHandle: HWND;
+  FocusControl: TWinControl;
+Begin
+  { The widgetset's own focus, which decides where keys go. Form Active flags
+    and ActiveControl are LCL bookkeeping that a Qt menu can leave stale. }
+  Result := False;
+  If Not HandleAllocated Then
+    Exit;
+  FocusHandle := LCLIntf.GetFocus;
+  If FocusHandle = 0 Then
+    Exit;
+  If FocusHandle = Handle Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  FocusControl := FindOwnerControl(FocusHandle);
+  Result := Assigned(FocusControl) And ((FocusControl = Self) Or ContainsControl(FocusControl));
+End;
+
 Function TSpellMemo.CaretIsActive: Boolean;
 Var
   HostForm, OwnForm, ActiveForm: TCustomForm;
@@ -995,6 +1020,13 @@ Begin
     Exit;
   If Assigned(Application) And (Not Application.Active) Then
     Exit;
+  { Keys follow the widgetset focus. After a Qt main menu closes, the form's
+    Active flag and the LCL focus calls need not report that focus came back. }
+  If HoldsWidgetFocus Then
+    Begin
+      Result := True;
+      Exit;
+    End;
   HostForm := GetParentForm(Self);
   OwnForm := GetParentForm(Self, False);
   { Deactivation leaves ActiveControl on this memo and does not call DoExit.
@@ -1040,7 +1072,7 @@ Begin
   { Application activation is hooked, so an inactive application needs no polling. }
   If Assigned(Application) And (Not Application.Active) Then
     Exit;
-  If FOwnsCaret Then
+  If FOwnsCaret Or CaretReturnPending Then
     Begin
       Result := True;
       Exit;
@@ -1053,10 +1085,10 @@ End;
 
 Procedure TSpellMemo.WatchForCaretReturn;
 Begin
-  { On Qt the main menu deactivates the host form and then returns focus to this
-    memo without an activation, focus or active-control change it can hook. A
-    docked memo cannot hook its host form either. While the memo is still the
-    form's active control, the blink timer keeps checking instead of stopping. }
+  { On Qt the main menu can return focus to this memo without an activation,
+    focus or active-control change it can hook, and a docked memo cannot hook
+    its host form. Until another LCL control takes the focus, the blink timer
+    keeps checking the widgetset focus instead of stopping. }
   FCaretOn := False;
   If Not Assigned(FCaretTimer) Then
     Exit;
@@ -1174,6 +1206,10 @@ End;
 
 Procedure TSpellMemo.ScreenActiveControlChanged(Sender: TObject; LastControl: TControl);
 Begin
+  { A menu is not an LCL control, so this sees only a real move to another control. }
+  If Assigned(Screen.ActiveControl) And (Screen.ActiveControl <> Self) And
+    (Not ContainsControl(Screen.ActiveControl)) Then
+    CaretReturnPending := False;
   RefreshCaretForFocus;
 End;
 {$POP}
@@ -1226,6 +1262,9 @@ Begin
   If CaretWatching Then
     Begin
       CaretWatching := False;
+      CaretReturnPending := False;
+      If HoldsWidgetFocus Then
+        FOwnsCaret := True;
       FCaretOn := True;
     End
   Else
@@ -1775,16 +1814,33 @@ Procedure TSpellMemo.DoEnter;
 Begin
   Inherited DoEnter;
   FOwnsCaret := True;
+  CaretReturnPending := False;
   EnsureCaretFocusWatch;
   UpdateCaret;
   Invalidate;
+End;
+
+Procedure TSpellMemo.WMSetFocus(Var Message: TLMSetFocus);
+Begin
+  Inherited;
+  { The form calls DoEnter only when its focused control changes. Focus that
+    comes back from a menu to the same control arrives here and nowhere else. }
+  If (Not FReady) Or (csDestroying In ComponentState) Or (csDesigning In ComponentState) Then
+    Exit;
+  FOwnsCaret := True;
+  CaretReturnPending := False;
+  EnsureCaretFocusWatch;
+  UpdateCaret;
 End;
 
 Procedure TSpellMemo.DoExit;
 Begin
   Inherited DoExit;
   FOwnsCaret := False;
-  { A menu can bring DoExit while this memo stays the form's active control. }
+  { A menu can bring DoExit while this memo stays the form's active control.
+    Keep watching until another LCL control takes the focus. }
+  CaretReturnPending := (Not Assigned(Screen)) Or (Not Assigned(Screen.ActiveControl)) Or
+    (Screen.ActiveControl = Self) Or ContainsControl(Screen.ActiveControl);
   WatchForCaretReturn;
   If HandleAllocated Then
     Invalidate;
