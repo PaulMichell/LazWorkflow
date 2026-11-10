@@ -2,9 +2,9 @@ package computing.michell.monitor.connection
 
 /* Reader, writer, and heartbeat for one monitor socket (c) 2026 Michell Computing.
 
-   The reader never waits for the UI. Ping is answered on the control lane.
-   The writer drains control, then commands, then acks. A ping goes out only
-   after 10 s with nothing sent. 30 s with nothing received closes the link. */
+   The session thread is the only caller of the socket streams. It polls one
+   frame here, control before commands before acks. Ping is answered on the
+   control lane. 30 s with nothing received closes the link. */
 
 import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.MonitorLimits
@@ -41,6 +41,13 @@ class ConnectionWriter(private val write: suspend (ByteArray) -> Boolean) {
   fun offerCommand(bytes: ByteArray): Boolean = commands.trySend(bytes).isSuccess
 
   fun offerAck(bytes: ByteArray): Boolean = acks.trySend(bytes).isSuccess
+
+  /** One frame, or null. Does not wait. Control beats a command, which beats an ack. */
+  fun poll(): ByteArray? {
+    return control.tryReceive().getOrNull()
+      ?: commands.tryReceive().getOrNull()
+      ?: acks.tryReceive().getOrNull()
+  }
 
   fun close() {
     control.close()

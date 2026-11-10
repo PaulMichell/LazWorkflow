@@ -40,6 +40,9 @@ import kotlinx.coroutines.yield
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Date
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.security.auth.x500.X500Principal
 import org.junit.Assert.assertArrayEquals
@@ -863,6 +866,104 @@ class LanSessionTest {
   }
 
   @Test
+  fun aWriteThatWaitsForAReadStillAnswersPing() {
+    val readAttempted = AtomicBoolean(false)
+    val ping = frameOf(encodeTicks(MessageKind.Ping, "host-ping", 42))
+    val inbound = ArrayDeque<Byte>()
+    for (byte in ping) inbound.addLast(byte)
+    val written = mutableListOf<ByteArray>()
+    val link = object : TlsLink {
+      override val peerFingerprint = ""
+      override val input = object : InputStream() {
+        override fun read(): Int {
+          val buffer = ByteArray(1)
+          val count = read(buffer, 0, 1)
+          if (count <= 0) return -1
+          return buffer[0].toInt() and 0xFF
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+          readAttempted.set(true)
+          synchronized(inbound) {
+            if (inbound.isEmpty()) return 0
+            var count = 0
+            while (count < length && inbound.isNotEmpty()) {
+              buffer[offset + count] = inbound.removeFirst()
+              count += 1
+            }
+            return count
+          }
+        }
+      }
+      override val output = object : OutputStream() {
+        override fun write(value: Int) {
+          write(byteArrayOf(value.toByte()))
+        }
+
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+          val start = System.currentTimeMillis()
+          while (!readAttempted.get()) {
+            if (System.currentTimeMillis() - start > 2_000) throw IOException("read was not attempted")
+            Thread.sleep(1)
+          }
+          synchronized(written) { written += buffer.copyOfRange(offset, offset + length) }
+        }
+      }
+      override fun close() {}
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil {
+        synchronized(written) {
+          written.any { bytes -> String(bytes, Charsets.ISO_8859_1).contains("pong") }
+        }
+      }
+      assertTrue(readAttempted.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aWriteThatOutlivesTheDeadSessionClosesTheSocket() {
+    val clock = SteppableClock()
+    val writeEntered = CountDownLatch(1)
+    val link = object : TlsLink {
+      @Volatile var closed = false
+      override val peerFingerprint = ""
+      override val input = object : InputStream() {
+        override fun read(): Int = 0
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = 0
+      }
+      override val output = object : OutputStream() {
+        override fun write(value: Int) {
+          write(byteArrayOf(value.toByte()))
+        }
+
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+          writeEntered.countDown()
+          while (!closed) Thread.sleep(5)
+          throw IOException("closed during write")
+        }
+      }
+      override fun close() {
+        closed = true
+      }
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
+      clock.advanceMs(MonitorLimits.DeadSessionMs)
+      waitUntil(2_000) { link.closed }
+      assertTrue(link.closed)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun silentPeerEndsAtTheDeadline() {
     val clock = SteppableClock()
     val link = ScriptedLink()
@@ -1116,7 +1217,7 @@ private class QueueStream : InputStream() {
   override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
     if (length == 0) return 0
     synchronized(queue) {
-      while (queue.isEmpty() && !closed && timeouts == 0) (queue as Object).wait(50)
+      if (queue.isEmpty() && !closed && timeouts == 0) (queue as Object).wait(50)
       if (queue.isNotEmpty()) {
         var count = 0
         while (count < length && queue.isNotEmpty()) {
@@ -1125,11 +1226,9 @@ private class QueueStream : InputStream() {
         }
         return count
       }
-      if (timeouts > 0 && !closed) {
-        timeouts -= 1
-        return 0
-      }
-      return -1
+      if (closed) return -1
+      if (timeouts > 0) timeouts -= 1
+      return 0
     }
   }
 }
