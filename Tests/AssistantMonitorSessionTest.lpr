@@ -709,6 +709,47 @@ Begin
   End;
 End;
 
+Procedure TestObservedResumeCarriesStatus;
+Var
+  Nonce, Seen: String;
+  Flags: TMonitorHostFlags;
+  Index: Integer;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeCommandAuth('auth-observed', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('observed resume starts live', Session.State = mssLive);
+  Flags := Default(TMonitorHostFlags);
+  Flags.PlanAgentRunning := True;
+  Flags.CanChangeMode := True;
+  Flags.CanSend := True;
+  Flags.CanSteer := True;
+  Flags.CanStop := True;
+  Session.SetHostFlags(Flags);
+  Session.SetRemoteApproval(True);
+  Session.NoteApprovalRequested('tool-obs', True);
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":3,"id":"resume-late","type":"resume","payload":{"epoch":"","cursor":0,' +
+    '"conversation_id":"conv-late","commands":[]}}');
+  Carrier.ClearSent;
+  Session.BeginMirrorEpoch('epoch-late', 'conv-late', '/work', 'Late');
+  Session.ObserveTurn(AckTurn);
+  Session.DrainOutbound;
+  Seen := '';
+  For Index := 0 To Carrier.SentCount - 1 Do
+    Seen := Seen + Carrier.SentJson(Index) + #10;
+  Check('observed baseline is a snapshot', Pos('"snapshot_begin"', Seen) > 0);
+  Check('observed baseline reports the plan run', Pos('"plan_running":true', Seen) > 0);
+  Check('observed baseline reports mode changes', Pos('"can_change_mode":true', Seen) > 0);
+  Check('observed baseline reports the approval', Pos('"tool_id":"tool-obs"', Seen) > 0);
+  Session.NoteApprovalClosed('tool-obs');
+  Session.SetRemoteApproval(False);
+  Flags := Default(TMonitorHostFlags);
+  Session.SetHostFlags(Flags);
+End;
+
 Procedure TestPlanFrameBeforeBulk;
 Var
   Before, Index: Integer;
@@ -1541,6 +1582,7 @@ Begin
       TestHmac;
       TestAckThroughCarrier;
       TestAckRules;
+      TestObservedResumeCarriesStatus;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
       TestWorkOnPlanDoesNotBlockSend;

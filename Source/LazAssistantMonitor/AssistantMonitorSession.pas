@@ -204,6 +204,8 @@ Type
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure HandleResume(Const Id: String; Const PayloadJson: TMonitorPayload);
+    { Caller holds the session lock. The same record for a resume and for the baseline pushed when the mirror is ready. }
+    Function HostSyncStatus: TMonitorSyncStatus;
     Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
     Procedure PublishCommandState(Const Id, State, Reason, DoneText: String);
 
@@ -1598,16 +1600,7 @@ Begin
   { A cached id is not the chat on the desktop. Serve the open mirror, or the phone stays blank. }
   If (Not Source.Found) And Assigned(FMirror) And (FConversationId <> '') Then
     FMirror.CaptureResume('', Source);
-  Status := Default(TMonitorSyncStatus);
-  Status.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
-  Status.Sending := FHostFlags.Sending;
-  Status.PlanRunning := FHostFlags.PlanAgentRunning;
-  Status.CanSend := FHostFlags.CanSend;
-  Status.CanSteer := FHostFlags.CanSteer;
-  Status.CanStop := FHostFlags.CanStop;
-  Status.CanChangeMode := FHostFlags.CanChangeMode;
-  Status.ApprovalActive := MonitorRemoteApprovalEnabled And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
-  Status.ApprovalToolId := FPendingApprovalId;
+  Status := HostSyncStatus;
   PublishRememberedState;
   { The tool id and the conversation id are escaped by the AssistantMonitorSync writers. }
   PublishState('status', MonitorResumeStatusValueJson(Status));
@@ -1644,6 +1637,20 @@ Begin
     End;
   If Length(ResumeMsg.Commands) > 0 Then
     QueueControl(CommandStatesFor(NewHostId, ResumeMsg.Commands));
+End;
+
+Function TMonitorSession.HostSyncStatus: TMonitorSyncStatus;
+Begin
+  Result := Default(TMonitorSyncStatus);
+  Result.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+  Result.Sending := FHostFlags.Sending;
+  Result.PlanRunning := FHostFlags.PlanAgentRunning;
+  Result.CanSend := FHostFlags.CanSend;
+  Result.CanSteer := FHostFlags.CanSteer;
+  Result.CanStop := FHostFlags.CanStop;
+  Result.CanChangeMode := FHostFlags.CanChangeMode;
+  Result.ApprovalActive := MonitorRemoteApprovalEnabled And (FPendingApprovalId <> '') And (FDisplayApprovalId = '');
+  Result.ApprovalToolId := FPendingApprovalId;
 End;
 
 Function TMonitorSession.ClosedToolSeen(Const ToolId: String): Boolean;
@@ -2479,10 +2486,9 @@ Begin
       Begin
         Source := Default(TMonitorResumeSource);
         FMirror.CaptureResume('', Source);
-        Status := Default(TMonitorSyncStatus);
-        Status.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
-        Status.Sending := FHostFlags.Sending;
-        Status.CanSend := FHostFlags.CanSend;
+        Status := HostSyncStatus;
+        PublishState('status', MonitorResumeStatusValueJson(Status));
+        PublishState('approval', MonitorApprovalValueJson(Status.ApprovalActive, Status.ApprovalToolId));
         Answer := MonitorSyncResumeAnswer(Source, FConversationId, '', 'observed', 0, Status);
         If Not Answer.NotReady Then
           Begin
