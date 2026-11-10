@@ -1,1 +1,1 @@
-{"v":3,"id":"h24","type":"state","payload":{"key":"session","value":{"model":"claude-opus-5-5","backend":"claude","signed_in":true,"effort":"high","skill":"","context_text":"12% of context","remote_approval":true,"approval_caption":"Ask before edits"}}}
+{"v":3,"id":"h24","type":"state","payload":{"key":"session","value":{"model":"claude-opus-5-5","backend":"claude","signed_in":true,"effort":"high","skill":"","context_text":"12% of context","remote_approval":true,"approval_caption":"Ask before edits","usage_caption":"5h 12%, 7d 30%","usage_hint":"Five-hour window 12% used"}}}

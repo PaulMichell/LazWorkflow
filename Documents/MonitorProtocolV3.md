@@ -301,7 +301,7 @@ behind bulk data.
 | Key | Value fields |
 |---|---|
 | `status` | `busy, sending, plan_running, phase, status_text, started_at, can_send, can_steer, can_stop, can_change_mode, error_text` |
-| `session` | `model, backend, signed_in, effort, skill, context_text, remote_approval, approval_caption` |
+| `session` | `model, backend, signed_in, effort, skill, context_text, remote_approval, approval_caption`; optional `usage_caption, usage_hint` |
 | `mode` | `mode, locked` |
 | `target` | `kind, display, root` |
 | `targets` | `current, choices` (`target_choice`) |
@@ -316,6 +316,10 @@ behind bulk data.
 
 Every key in the table is required. The host sends each one on change, and every key before content on resume. A
 content gap does not freeze the last value. `plan_choices` and `tasks` are required keys, not optional menus.
+
+`usage_caption` and `usage_hint` on `session` are the plan usage the desktop shows when its Credits label is clicked.
+The phone shows them when the model is touched. The host always sends both, empty when the connection has reported no
+usage, so a change of connection clears them. A host that predates them omits both, and the phone keeps what it had.
 
 `started_at` is ISO 8601 UTC, empty when there is nothing to time. It replaces `elapsed_ms`. The phone computes
 elapsed time from `started_at` and its own clock. A ticking clock is not a reason to send `status`.

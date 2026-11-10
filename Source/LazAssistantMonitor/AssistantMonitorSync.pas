@@ -549,10 +549,13 @@ End;
 
 Function MonitorSessionValueJson(Const View: TAssistantMonitorView): String;
 Begin
+  { The usage caption and hint are what the desktop's Credits click shows. They are always sent, empty when this
+    connection has no figure, so a change to a connection without one clears the phone's copy. }
   Result := '{"model":' + Quoted(View.Model) + ',"backend":' + Quoted(View.Backend) + ',"signed_in":' +
     MonitorBoolean(View.SignedIn) + ',"effort":' + Quoted(View.Effort) + ',"skill":' + Quoted(View.Skill) + ',"context_text":' +
     Quoted(View.ContextText) + ',"remote_approval":' + MonitorBoolean(View.RemoteApproval) + ',"approval_caption":' +
-    Quoted(View.ApprovalCaption) + '}';
+    Quoted(View.ApprovalCaption) + ',"usage_caption":' + Quoted(View.UsageCaption) + ',"usage_hint":' +
+    Quoted(View.UsageHint) + '}';
 End;
 
 Function MonitorModeValueJson(Const View: TAssistantMonitorView): String;

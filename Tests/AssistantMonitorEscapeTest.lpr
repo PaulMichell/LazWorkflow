@@ -165,6 +165,8 @@ Begin
   View.Backend := 'claude';
   View.ContextText := AwkwardText;
   View.ApprovalCaption := AwkwardText;
+  View.UsageCaption := AwkwardText;
+  View.UsageHint := AwkwardText;
   View.Mode := 'build';
   View.TargetKind := 'project';
   View.TargetDisplay := AwkwardText;
@@ -228,6 +230,9 @@ Begin
     Check('codec model round-trips', SameBytes(TextField(Value, 'model'), Awkward));
     Check('codec context text round-trips', SameBytes(TextField(Value, 'context_text'), Awkward));
     Check('codec approval caption round-trips', SameBytes(TextField(Value, 'approval_caption'), Awkward));
+    { The phone's Credits popup reads these. They must ride with the session state. }
+    Check('codec usage caption round-trips', SameBytes(TextField(Value, 'usage_caption'), Awkward));
+    Check('codec usage hint round-trips', SameBytes(TextField(Value, 'usage_hint'), Awkward));
   Finally
     Root.Free;
   End;

@@ -375,7 +375,10 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
       skill = value.textField("skill") ?: ui.view.skill,
       contextText = value.textField("context_text") ?: ui.view.contextText,
       remoteApproval = value.flagField("remote_approval") ?: ui.view.remoteApproval,
-      approvalCaption = value.textField("approval_caption") ?: ui.view.approvalCaption
+      approvalCaption = value.textField("approval_caption") ?: ui.view.approvalCaption,
+      // The desktop's Credits text. An empty value clears it; a host that predates the fields leaves it alone.
+      usageCaption = value.textField("usage_caption") ?: ui.view.usageCaption,
+      usageHint = value.textField("usage_hint") ?: ui.view.usageHint
     ))
     "mode" -> ui.copy(view = ui.view.copy(
       mode = value.textField("mode") ?: ui.view.mode,

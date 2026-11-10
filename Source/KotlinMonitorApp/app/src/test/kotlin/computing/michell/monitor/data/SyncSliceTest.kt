@@ -199,6 +199,22 @@ class SyncSliceTest {
   }
 
   @Test
+  fun theSessionStateCarriesTheDesktopsPlanUsage() {
+    val session = """{"model":"claude-opus-5-5","backend":"claude","signed_in":true,"effort":"","skill":"",""" +
+      """"context_text":"","remote_approval":false,"approval_caption":"Ask","usage_caption":"5h 12%","usage_hint":"Five-hour window"}"""
+    val reported = applyStateValue(MonitorUi(), "session", session)
+    assertEquals("5h 12%", reported.view.usageCaption)
+    assertEquals("Five-hour window", reported.view.usageHint)
+    // A host that predates the fields leaves the shown usage alone.
+    val older = applyStateValue(reported, "session", """{"model":"claude-opus-5-5"}""")
+    assertEquals("5h 12%", older.view.usageCaption)
+    // An empty value is a connection with no figure, and clears it.
+    val cleared = applyStateValue(reported, "session", """{"usage_caption":"","usage_hint":""}""")
+    assertEquals("", cleared.view.usageCaption)
+    assertEquals("", cleared.view.usageHint)
+  }
+
+  @Test
   fun theBatchClosesOnPendingBytesBefore128Events() = runBlocking {
     val store = CountingStore()
     val clock = SliceClock(0L)
