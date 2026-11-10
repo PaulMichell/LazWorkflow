@@ -118,7 +118,7 @@ Delete the stubs and the call sites. Do not replace them with new fetch logic in
 Acceptance: the package tests compile and pass. No remaining reference to those names under `app/src/main`.
 
 ### 2.3 Delete the epoch/cursor-only resume encoder
-Status: not started
+Status: complete
 
 Depends on 1.1. `encodeResume` in `Messages.kt` writes `epoch` and `cursor` and not the catalogue-3 fields. After 1.1 nothing sends it. `decodeResume` stays if a test or the host-error path still reads an old payload; do not remove a decoder an inbound frame can still hit. Delete `encodeResume` and any test that only round-trips that shape.
 
