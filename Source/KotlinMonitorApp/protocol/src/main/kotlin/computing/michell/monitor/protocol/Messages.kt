@@ -1973,6 +1973,7 @@ fun decodeCommandState(payloadJson: String): CommandStateMessage? {
   return CommandStateMessage(ref.value, state.value, reason.value)
 }
 
+/** An inbound resume, including an older epoch/cursor payload. Catalogue 3 is written only by encodeSyncResume. */
 fun decodeResume(payloadJson: String): WireResume? {
   val obj = parseObject(payloadJson) ?: return null
   return decodeResume(obj)
