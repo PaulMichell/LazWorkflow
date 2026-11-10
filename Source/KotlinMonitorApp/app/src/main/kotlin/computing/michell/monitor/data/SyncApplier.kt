@@ -14,8 +14,11 @@ import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.SyncFrame
 import computing.michell.monitor.protocol.prefixHash
 import computing.michell.monitor.protocol.utf8Length
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -296,6 +299,9 @@ class SyncApplier(
   private val fetches = HashMap<String, java.util.TreeMap<Int, String>>()
   private val fetchRevision = HashMap<String, Long>()
   private val committed = HashMap<String, AppliedCursor>()
+  /** Dispatcher of the last tick. Tests check that the flush job is not Main. */
+  var tickDispatcher: String = ""
+    private set
 
   /** The connection offers each decoded event. A full batch commits at once. */
   suspend fun offer(event: MonitorEvent, bytes: Int = estimatedEventBytes(event)): List<SyncEffect> = gate.withLock {
@@ -310,6 +316,7 @@ class SyncApplier(
 
   /** Closes a batch that has waited 50 ms from the first event, and arms the next resume. */
   suspend fun tick(): List<SyncEffect> = gate.withLock {
+    refuseMainDispatcher()
     val now = nowMs()
     val flushed = if (pending.isNotEmpty() && now - openedMs >= SyncBatchWindowMs) flush() else emptyList()
     deliver(flushed + acks.tick(now) + resume.tick(now))
@@ -328,12 +335,19 @@ class SyncApplier(
     deliver(listOf(resume.onGap(SyncGap(event.conversationId, stream, seq), nowMs()) ?: SyncEffect.Resume(event.conversationId, stream, seq)))
   }
 
-  fun start(scope: CoroutineScope): Job = scope.launch {
+  /** One flush job. The view-model scope is the main thread; the tick must not be. */
+  fun start(scope: CoroutineScope): Job = scope.launch(Dispatchers.IO) {
     while (isActive) {
       val wait = gate.withLock { nextWaitMs(nowMs()) }
       delay(wait.coerceAtLeast(1L))
       tick()
     }
+  }
+
+  private suspend fun refuseMainDispatcher() {
+    val dispatcher = coroutineContext[ContinuationInterceptor]?.toString().orEmpty()
+    tickDispatcher = dispatcher
+    check(!dispatcher.contains("Main")) { "SyncApplier.tick must not run on the main dispatcher" }
   }
 
   private fun nextWaitMs(now: Long): Long {

@@ -3,6 +3,7 @@ package computing.michell.monitor.data
 /* Sync applier: batch, skip, gap, and one commit (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.MonitorEvent
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +19,17 @@ class SyncApplierTest {
       listOf(SyncEffect.FetchReady, SyncEffect.CacheReady),
       applier.offerFrame(computing.michell.monitor.protocol.SyncFrame.ResumeOk("c1", "stream-a", 4L))
     )
+  }
+
+  @Test
+  fun tickIsNotEnteredOnTheMainDispatcher() = runBlocking {
+    val applier = SyncApplier("host-1", MemorySyncStore(), TestClock(0L))
+    val job = applier.start(this)
+    delay(200)
+    job.cancel()
+    assertTrue(applier.tickDispatcher.isNotEmpty())
+    assertFalse(applier.tickDispatcher.contains("Main"))
+    assertTrue(applier.tickDispatcher.contains("IO"))
   }
 
   @Test
