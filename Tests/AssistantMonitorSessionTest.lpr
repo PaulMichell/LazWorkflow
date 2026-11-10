@@ -750,6 +750,40 @@ Begin
   Session.SetHostFlags(Flags);
 End;
 
+Procedure TestIdlePollStillFills;
+Var
+  Nonce: String;
+  Flags: TMonitorHostFlags;
+  Later: TAssistantMonitorTurn;
+Begin
+  NewSocket;
+  DeliverHello(SavedClientId);
+  Nonce := NonceFromLast;
+  Carrier.ClearSent;
+  Carrier.DeliverJson(EncodeCommandAuth('auth-idle-fill', SavedClientId, MonitorAuthMac(SavedToken, Nonce)));
+  Check('idle fill starts live', Session.State = mssLive);
+  Flags := Default(TMonitorHostFlags);
+  Flags.CanSend := True;
+  Session.SetHostFlags(Flags);
+  Session.BeginMirrorEpoch('epoch-idle', 'conv-idle', '/work', 'Idle');
+  Session.ObserveTurn(AckTurn);
+  Carrier.ClearSent;
+  Carrier.DeliverJson('{"v":3,"id":"resume-idle","type":"resume","payload":{"epoch":"epoch-idle","cursor":0,' +
+    '"conversation_id":"conv-idle","commands":[]}}');
+  Session.DrainOutbound;
+  Session.PrepareOutboundCount;
+  Carrier.ClearSent;
+  Later := AckTurn;
+  Later.Id := 'ack-turn-2';
+  Later.TurnIndex := 1;
+  Later.Blocks[0].BlockId := 'ack-block-2';
+  Session.ObserveTurn(Later);
+  Session.DrainOutbound;
+  Check('an idle poll still fills the next turn', Carrier.SentCount > 0);
+  Flags := Default(TMonitorHostFlags);
+  Session.SetHostFlags(Flags);
+End;
+
 Procedure TestPlanFrameBeforeBulk;
 Var
   Before, Index: Integer;
@@ -1583,6 +1617,7 @@ Begin
       TestAckThroughCarrier;
       TestAckRules;
       TestObservedResumeCarriesStatus;
+      TestIdlePollStillFills;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
       TestWorkOnPlanDoesNotBlockSend;

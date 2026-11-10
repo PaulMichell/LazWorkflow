@@ -146,6 +146,10 @@ Type
     FQueuedLogSeq: Int64;
     LastFillHead, LastFillAck, LastFillQueued: Int64;
     LogFillSeen: Boolean;
+    { Bumped only under the session lock when the head, ack, or queued sequence may have moved.
+      The poll reads it without the lock and skips the fill when it still matches the settled value. }
+    FFillGeneration: LongInt;
+    FFillSettled: LongInt;
     { Set when a resume names this stream and log delivery can begin. }
     FLogResume: Boolean;
     { A resume got not_ready. The next observed turns are a baseline, not a second resume. }
@@ -244,6 +248,8 @@ Type
     Function LinkPulls: Boolean;
     Procedure QueueCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure FillLogLane;
+    { Caller holds the session lock. }
+    Procedure NoteFillChanged;
     { Pulls is the caller's one read of LinkPulls. }
     Procedure PullPlanSlice(Pulls: Boolean);
     Procedure PlanFetchReady;
@@ -564,6 +570,8 @@ Begin
   FPhoneAcked := 0;
   FQueuedLogSeq := 0;
   LogFillSeen := False;
+  FFillGeneration := 0;
+  FFillSettled := -1;
   FLogResume := False;
   FSendPending := False;
   FActiveCommandId := '';
@@ -773,6 +781,7 @@ Begin
     End;
   If Seq > FPhoneAcked Then
     FPhoneAcked := Seq;
+  NoteFillChanged;
   FApplyLogAck := True;
   FApplyLogAckStream := StreamId;
   FApplyLogAckSeq := Seq;
@@ -1637,6 +1646,7 @@ Begin
     End;
   If Length(ResumeMsg.Commands) > 0 Then
     QueueControl(CommandStatesFor(NewHostId, ResumeMsg.Commands));
+  NoteFillChanged;
 End;
 
 Function TMonitorSession.HostSyncStatus: TMonitorSyncStatus;
@@ -1979,6 +1989,7 @@ Begin
     If Assigned(FOutbox) Then
       FOutbox.Clear;
     LogFillSeen := False;
+    NoteFillChanged;
     FCloseRequested := False;
     FState := mssListening;
   Finally
@@ -2237,6 +2248,7 @@ Begin
     FTitle := Title;
     FCommittedCursor := 0;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
+    NoteFillChanged;
   Finally
     UnlockSession;
   End;
@@ -2275,6 +2287,7 @@ Begin
       Cursor := 0;
     FCommittedCursor := Cursor;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
+    NoteFillChanged;
   Finally
     UnlockSession;
   End;
@@ -2340,6 +2353,7 @@ Begin
       FPhoneAcked := Seq;
     If Assigned(FMirror) Then
       FMirror.NoteAck(FEpoch, Seq);
+    NoteFillChanged;
   Finally
     UnlockSession;
   End;
@@ -2347,8 +2361,14 @@ End;
 
 Procedure TMonitorSession.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Begin
-  If Assigned(FMirror) Then
-    FMirror.ObserveTurn(Turn);
+  LockSession;
+  Try
+    If Assigned(FMirror) Then
+      FMirror.ObserveTurn(Turn);
+    NoteFillChanged;
+  Finally
+    UnlockSession;
+  End;
   If Assigned(FOutbox) Then
     FOutbox.Notify;
 End;
@@ -2471,6 +2491,17 @@ Begin
     End;
 End;
 
+Procedure TMonitorSession.NoteFillChanged;
+Begin
+  InterlockedIncrement(FFillGeneration);
+End;
+
+{$IFDEF MONITOR_OUTBOX_METRICS}
+Var
+  MonitorSessionFillLocks: LongInt;
+  MonitorSessionFillSkips: LongInt;
+{$ENDIF}
+
 Procedure TMonitorSession.FillLogLane;
 Var
   CloseLink: Boolean;
@@ -2478,7 +2509,20 @@ Var
   Source: TMonitorResumeSource;
   Status: TMonitorSyncStatus;
   Answer: TMonitorSyncAnswer;
+
+  Procedure SettleIfCaughtUp;
+  Begin
+    If Not FAwaitingObservation Then
+      InterlockedExchange(FFillSettled, FFillGeneration);
+  End;
+
 Begin
+  If InterlockedExchangeAdd(FFillGeneration, 0) = InterlockedExchangeAdd(FFillSettled, 0) Then
+    Begin
+      {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorSessionFillSkips);{$ENDIF}
+      Exit;
+    End;
+  {$IFDEF MONITOR_OUTBOX_METRICS}InterlockedIncrement(MonitorSessionFillLocks);{$ENDIF}
   CloseLink := False;
   LockSession;
   Try
@@ -2499,10 +2543,16 @@ Begin
           End;
       End;
     If (Not FLogResume) Or Not Assigned(FMirror) Or Not Assigned(FOutbox) Or (FQueuedLogSeq >= FMirror.Head) Then
-      Exit;
+      Begin
+        SettleIfCaughtUp;
+        Exit;
+      End;
     If LogFillSeen And (LastFillHead = FMirror.Head) And (LastFillAck = FPhoneAcked) And
       (LastFillQueued = FQueuedLogSeq) Then
-      Exit;
+      Begin
+        SettleIfCaughtUp;
+        Exit;
+      End;
     Queued := FQueuedLogSeq;
     Acked := FPhoneAcked;
     LastFillHead := FMirror.Head;
@@ -2513,6 +2563,7 @@ Begin
     LogFillSeen := True;
     If CloseLink Then
       CloseToListening;
+    SettleIfCaughtUp;
   Finally
     UnlockSession;
   End;
@@ -2591,6 +2642,12 @@ Begin
   If Snapshot.HasLive Then
     FMirror.ObserveTurn(Snapshot.Live);
   FMirror.ObservePlan(Snapshot.PlanPath, Snapshot.PlanTitle, Snapshot.PlanRunning, Snapshot.PlanRows);
+  LockSession;
+  Try
+    NoteFillChanged;
+  Finally
+    UnlockSession;
+  End;
 End;
 
 Function TMonitorSession.CopyObservedSnapshot(Out Snapshot: TMonitorSnapshot): Boolean;
