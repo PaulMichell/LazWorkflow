@@ -2,18 +2,20 @@ package computing.michell.monitor.connection
 
 /* Reader, writer, and heartbeat for one monitor socket (c) 2026 Michell Computing.
 
-   The session thread is the only caller of the socket streams. It polls one
-   frame here, control before commands before acks. Ping is answered on the
-   control lane. 30 s with nothing received closes the link. */
+   One writer coroutine owns the socket output. It drains a bounded batch,
+   control before commands before acks, then waits. An offer wakes that wait.
+   The reader stays on the input stream, so a queued frame does not wait out
+   the read timeout. Ping is answered on the control lane. 30 s with nothing
+   received closes the link. */
 
 import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.MonitorLimits
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.selects.select
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.yield
 
 /** Unacknowledged event JSON the phone will hold before it closes and resumes. */
 const val InboundCreditBytes = 512 * 1024
@@ -21,6 +23,12 @@ const val InboundCreditBytes = 512 * 1024
 const val SyncFrameQueue = 64
 /** Events the credit window refused. A full queue recovers instead of growing. */
 const val RefusedEventQueue = 32
+/**
+ * Frames one wake may write before the writer yields. The yield is a
+ * cancellation point during a burst. Control is still taken ahead of a
+ * command on every frame, and the reader runs on its own call.
+ */
+const val OutboundDrainFrames = 8
 
 enum class HeartbeatStep {
   None,
@@ -52,12 +60,24 @@ class ConnectionWriter(
   private val control = Channel<ByteArray>(capacity)
   private val commands = Channel<ByteArray>(capacity)
   private val acks = Channel<ByteArray>(capacity)
+  /** Wakes [run] without taking a frame, so the next poll still prefers control. */
+  private val wake = Channel<Unit>(Channel.CONFLATED)
+  private val drained = Channel<Unit>(Channel.CONFLATED)
+  private val pendingLock = Any()
+  private var pending = 0
+  private var closed = false
+  private val wakes = AtomicLong(0)
 
-  fun offerControl(bytes: ByteArray): Boolean = control.trySend(bytes).isSuccess
+  /** Times [run] resumed from an empty queue. A burst is one wake, not one per frame. */
+  val wakeCount: Long get() = wakes.get()
 
-  fun offerCommand(bytes: ByteArray): Boolean = commands.trySend(bytes).isSuccess
+  internal fun pendingFrames(): Int = pendingCount()
 
-  fun offerAck(bytes: ByteArray): Boolean = acks.trySend(bytes).isSuccess
+  fun offerControl(bytes: ByteArray): Boolean = offer(control, bytes)
+
+  fun offerCommand(bytes: ByteArray): Boolean = offer(commands, bytes)
+
+  fun offerAck(bytes: ByteArray): Boolean = offer(acks, bytes)
 
   /** One frame, or null. Does not wait. Control beats a command, which beats an ack. */
   fun poll(): ByteArray? {
@@ -67,33 +87,87 @@ class ConnectionWriter(
   }
 
   fun close() {
+    synchronized(pendingLock) { closed = true }
     control.close()
     commands.close()
     acks.close()
+    wake.close()
+    drained.trySend(Unit)
   }
 
-  suspend fun run(): Boolean {
-    while (coroutineContext[Job]?.isActive != false) {
-      val ready = control.tryReceive().getOrNull()
-        ?: commands.tryReceive().getOrNull()
-        ?: acks.tryReceive().getOrNull()
-      val frame = ready ?: receiveNext() ?: return true
-      if (!write(frame)) return false
+  /** Returns when every accepted frame has been written, or the writer has closed. */
+  suspend fun awaitDrained() {
+    while (pendingCount() > 0 && !isClosed()) {
+      drained.receive()
     }
+  }
+
+  /**
+   * Writes until the queues stay empty. [writeFrame] replaces the constructor
+   * callback when the session owns the socket. A full queue is not a busy poll:
+   * the wait is the wake channel.
+   */
+  suspend fun run(writeFrame: suspend (ByteArray) -> Boolean = write): Boolean {
+    try {
+      while (coroutineContext[Job]?.isActive != false) {
+        var sent = 0
+        while (sent < OutboundDrainFrames) {
+          val ready = poll() ?: break
+          val ok = try {
+            writeFrame(ready)
+          } finally {
+            // Count the frame written or abandoned, so a bye flush cannot return early.
+            release()
+          }
+          if (!ok) return false
+          sent += 1
+        }
+        if (pendingCount() > 0) {
+          yield()
+          continue
+        }
+        val signaled = wake.receiveCatching()
+        if (signaled.isFailure) {
+          if (pendingCount() == 0) return true
+          continue
+        }
+        wakes.incrementAndGet()
+      }
+      return true
+    } finally {
+      drained.trySend(Unit)
+    }
+  }
+
+  private fun offer(lane: Channel<ByteArray>, bytes: ByteArray): Boolean {
+    synchronized(pendingLock) {
+      if (closed) return false
+      pending += 1
+    }
+    if (!lane.trySend(bytes).isSuccess) {
+      release()
+      return false
+    }
+    wake.trySend(Unit)
     return true
   }
 
-  private suspend fun receiveNext(): ByteArray? {
-    return try {
-      select {
-        control.onReceive { it }
-        commands.onReceive { it }
-        acks.onReceive { it }
-      }
-    } catch (error: ClosedReceiveChannelException) {
-      null
-    }
+  private fun release() {
+    val empty = synchronized(pendingLock) { releaseLocked() }
+    if (empty) drained.trySend(Unit)
   }
+
+  /** Caller holds [pendingLock]. */
+  private fun releaseLocked(): Boolean {
+    if (pending > 0) pending -= 1
+    val empty = pending == 0
+    if (empty) drained.trySend(Unit)
+    return empty
+  }
+
+  private fun pendingCount(): Int = synchronized(pendingLock) { pending }
+
+  private fun isClosed(): Boolean = synchronized(pendingLock) { closed }
 }
 
 enum class CreditOffer {

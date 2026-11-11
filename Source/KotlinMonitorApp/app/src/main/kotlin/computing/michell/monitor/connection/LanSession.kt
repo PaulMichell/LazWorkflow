@@ -9,9 +9,11 @@ package computing.michell.monitor.connection
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
-   proxy never reaches the desktop listener. The service coroutine, not an OS thread,
-   owns the socket write. SSLSocket does not confine that write, and close() from
-   any thread still unblocks a blocked read. An empty fingerprint
+   proxy never reaches the desktop listener. One writer coroutine owns the socket
+   write. The reader coroutine owns the blocking read. SSLSocket allows that pair;
+   it does not confine the write to an OS thread, and close() from any thread still
+   unblocks either call. A queued frame wakes the writer instead of waiting out the
+   read timeout. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
    is refused. A full credit window stops the read. The event is held, not
@@ -303,7 +305,9 @@ class SslSocketConnector : TlsConnector {
       val parameters = socket.sslParameters
       parameters.endpointIdentificationAlgorithm = null
       socket.sslParameters = parameters
-      // One second so the loop can ping and check a partial frame. A timeout is not a closed host.
+      // Steady-state read budget so a quiet peer still notices a partial frame and a dead
+      // session. A timeout is not a closed host. Do not shrink this into a poll: outbound
+      // frames wake the writer coroutine instead.
       socket.soTimeout = ReadTimeoutMs
       socket.startHandshake()
       return SocketLink(socket)
@@ -380,6 +384,7 @@ private class PhysicalConnection(
   inboundNanos: Long,
   eventBudget: Long
 ) {
+  // The session binds the real write when the writer coroutine starts. This refuses a stray run().
   val writer = ConnectionWriter { _ -> false }
   val chunks = ChunkAssembly()
   val events = AccountedEvents(eventBudget)
@@ -1450,6 +1455,8 @@ class LanSession(
             }
             adopted.complete(Unit)
           }
+          val lane = Any()
+          val writing = launch { serviceWriter(epoch, context, lane) }
           val serving = launch { serviceLink(epoch, context) }
           val watchdog = launch {
             while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
@@ -1485,13 +1492,17 @@ class LanSession(
             serving.join()
           } finally {
             adopting.cancel()
+            writing.cancel()
             watchdog.cancel()
             applying.cancel()
             framing.cancel()
             refusing.cancel()
             if (!adopted.isCompleted) adopted.cancel()
+            // A blocked write is not a suspension point. Closing the socket unblocks it
+            // before this scope waits for the writer.
+            closeOwned(current)
           }
-          listOf(adopting, watchdog, applying, framing, refusing).forEach { child ->
+          listOf(adopting, writing, watchdog, applying, framing, refusing).forEach { child ->
             try {
               child.join()
             } catch (error: CancellationException) {
@@ -1567,72 +1578,74 @@ class LanSession(
   }
   private fun clockMs(): Long = clock.nanoTime() / 1_000_000L
 
-  /** One coroutine owns the streams. Read, then at most one frame, then the heartbeat. */
-  private suspend fun serviceLink(epoch: Int, context: PhysicalConnection): ReadEnd {
-    // The lane is this coroutine. A later resume may be a different IO thread.
-    val lane = Any()
-    val current = context.socket
-    val outbound = context.writer
+  /**
+   * The only socket writer. Offers wake [ConnectionWriter.run]; this call does not
+   * read. Closing the socket unblocks a write that is not a suspension point.
+   */
+  private suspend fun serviceWriter(epoch: Int, context: PhysicalConnection, lane: Any) {
     writeLane = lane
     try {
-      val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
-      val reader = FrameAssembler()
-      while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch &&
-        activeGeneration == context.generation) {
-        if (replaceLink) {
-          replaceLink = false
-          return finishRead(epoch, context, ReadEnd.PeerClosed)
-        }
-        if (leftForBackground) {
-          val bye = outbound.poll()
-          if (bye != null && !writeBytes(bye, current, lane) && context.outcome == ReadEnd.Continue) {
-            return finishRead(epoch, context, ReadEnd.WriteFailed)
-          }
-          return finishRead(epoch, context, ReadEnd.Background)
-        }
-        if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
-        if (context.events.shouldPauseRead()) {
-          delay(50)
-          noteHeartbeat(epoch, context)
-          val paused = outbound.poll()
-          if (paused != null && !writeBytes(paused, current, lane) && context.outcome == ReadEnd.Continue) {
-            return finishRead(epoch, context, ReadEnd.WriteFailed)
-          }
-          continue
-        }
-        val count = readOnce(context, buffer)
-        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
-        if (count < 0) return finishRead(epoch, context, ReadEnd.PeerClosed)
-        // Partial-frame age is a duration on this clock, not civil time.
-        val now = clockMs()
-        if (count > 0) {
-          val batch = reader.offer(buffer, 0, count, now)
-          for (frame in batch.frames) {
-            noteInbound(context)
-            onFrame(frame, epoch, context)
-            if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
-          }
-          if (batch.status != FrameStatus.Ok) return finishRead(epoch, context, ReadEnd.PeerClosed)
-        }
-        if (reader.partialExpired(now)) return finishRead(epoch, context, ReadEnd.PeerClosed)
-        if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
-        if (epochCounter.get() != epoch || activeGeneration != context.generation) {
-          return finishRead(epoch, context, ReadEnd.PeerClosed)
-        }
-        noteHeartbeat(epoch, context)
-        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
-        val next = outbound.poll()
-        if (next != null && !writeBytes(next, current, lane) && context.outcome == ReadEnd.Continue) {
-          return finishRead(epoch, context, ReadEnd.WriteFailed)
-        }
-        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
+      val wrote = context.writer.run { frame ->
+        if (context.outcome != ReadEnd.Continue) return@run false
+        if (epochCounter.get() != epoch || activeGeneration != context.generation) return@run false
+        writeBytes(frame, context.socket, lane)
       }
-      return finishRead(epoch, context, ReadEnd.PeerClosed)
+      if (!wrote && context.outcome == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WriteFailed, context)
     } finally {
       if (writeLane === lane) writeLane = null
     }
-    return ReadEnd.PeerClosed
   }
+
+  /** The reader. Outbound frames are not polled here; the writer wakes on its queues. */
+  private suspend fun serviceLink(epoch: Int, context: PhysicalConnection): ReadEnd {
+    val outbound = context.writer
+    val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
+    val reader = FrameAssembler()
+    while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch &&
+      activeGeneration == context.generation) {
+      if (replaceLink) {
+        replaceLink = false
+        return finishRead(epoch, context, ReadEnd.PeerClosed)
+      }
+      if (leftForBackground) {
+        // The bye is already on the control lane. Wait until the writer has taken it.
+        withTimeoutOrNull(BackgroundByeMs) { outbound.awaitDrained() }
+        return finishRead(epoch, context, ReadEnd.Background)
+      }
+      if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+      if (context.events.shouldPauseRead()) {
+        delay(50)
+        noteHeartbeat(epoch, context)
+        continue
+      }
+      val count = readOnce(context, buffer)
+      if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
+      if (count < 0) return finishRead(epoch, context, ReadEnd.PeerClosed)
+      // Partial-frame age is a duration on this clock, not civil time.
+      val now = clockMs()
+      if (count > 0) {
+        val batch = reader.offer(buffer, 0, count, now)
+        for (frame in batch.frames) {
+          noteInbound(context)
+          onFrame(frame, epoch, context)
+          if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
+        }
+        if (batch.status != FrameStatus.Ok) return finishRead(epoch, context, ReadEnd.PeerClosed)
+      }
+      if (reader.partialExpired(now)) return finishRead(epoch, context, ReadEnd.PeerClosed)
+      if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+      if (epochCounter.get() != epoch || activeGeneration != context.generation) {
+        return finishRead(epoch, context, ReadEnd.PeerClosed)
+      }
+      noteHeartbeat(epoch, context)
+      if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
+    }
+    return finishRead(epoch, context, ReadEnd.PeerClosed)
+  }
+
+  internal fun outboundWakeCount(): Long = connection?.writer?.wakeCount ?: 0L
+
+  internal fun outboundPending(): Int = connection?.writer?.pendingFrames() ?: 0
 
   private fun readOnce(context: PhysicalConnection, buffer: ByteArray): Int {
     return try {

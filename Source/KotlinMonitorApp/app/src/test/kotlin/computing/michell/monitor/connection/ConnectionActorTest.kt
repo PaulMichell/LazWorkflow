@@ -4,7 +4,11 @@ package computing.michell.monitor.connection
 
 import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.MonitorLimits
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,6 +32,43 @@ class ConnectionActorTest {
     writer.close()
     writer.run()
     assertEquals(listOf("control", "command", "ack"), written)
+  }
+
+  @Test
+  fun anOfferWakesTheWriterAndALaterControlPreemptsTheBurst() = runBlocking {
+    val written = mutableListOf<String>()
+    val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+    val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+    var held = false
+    val writer = ConnectionWriter { bytes ->
+      val text = bytes.toString(Charsets.UTF_8)
+      if (!held && text.startsWith("command")) {
+        held = true
+        started.complete(Unit)
+        release.await()
+      }
+      synchronized(written) { written += text }
+      true
+    }
+    val job = launch { writer.run() }
+    try {
+      delay(50)
+      assertTrue(writer.offerCommand("command-0".toByteArray()))
+      withTimeout(1_000) { started.await() }
+      assertEquals(1L, writer.wakeCount)
+      repeat(4) { index -> assertTrue(writer.offerCommand("command-${index + 1}".toByteArray())) }
+      assertTrue(writer.offerControl("control".toByteArray()))
+      release.complete(Unit)
+      withTimeout(1_000) {
+        while (synchronized(written) { written.size } < 6) yield()
+      }
+      val order = synchronized(written) { written.toList() }
+      assertEquals("command-0", order[0])
+      assertEquals("control", order[1])
+    } finally {
+      writer.close()
+      job.cancel()
+    }
   }
 
   @Test
