@@ -472,6 +472,9 @@ class BaselineStage {
   private val turns = ArrayList<OutlineTurn>()
   private var openBlock: OpenBlockBody? = null
 
+  val isOpen: Boolean
+    get() = open
+
   fun begin(frame: SyncFrame.SnapshotBegin) {
     open = true
     failed = false

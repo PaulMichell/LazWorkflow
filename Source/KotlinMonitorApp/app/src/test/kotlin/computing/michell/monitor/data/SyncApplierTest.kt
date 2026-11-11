@@ -96,7 +96,9 @@ class SyncApplierTest {
     clock.now = 7_050L
     assertEquals(SyncEffect.Resume("c1", "stream-a", 2L), applier.tick().single())
     clock.now = 15_050L
-    assertEquals(SyncEffect.Reconnect, applier.tick().single())
+    val recovered = applier.tick()
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 2L, true), recovered.first { it is SyncEffect.Resume })
 
     val caught = SyncApplier("host-1", store, clock)
     caught.offer(turn(4))
@@ -111,23 +113,26 @@ class SyncApplierTest {
   }
 
   @Test
-  fun aGapWhileLiveResumesAndDoesNotReconnect() {
+  fun aLiveHeartbeatDoesNotRefreshButTheBudgetStillReplacesTheLink() {
     val policy = SyncResumePolicy()
     val first = policy.onGap(computing.michell.monitor.data.SyncGap("c1", "stream-a", 2L), 0L)
     assertEquals(SyncEffect.Resume("c1", "stream-a", 2L), first)
+    assertEquals(null, policy.onGap(computing.michell.monitor.data.SyncGap("c1", "stream-a", 2L), 1L))
     assertFalse(reconnectAllowed(linkLive = true, framesArriving = true))
+    assertTrue(reconnectAllowed(linkLive = true, framesArriving = true, forced = true))
     var now = 0L
     val admitted = mutableListOf<SyncEffect>()
     if (first != null) admitted += first
     repeat(6) {
       now += 8_000L
       for (effect in policy.tick(now)) {
-        if (effect == SyncEffect.Reconnect && !reconnectAllowed(true, true)) continue
+        val forced = effect == SyncEffect.Reconnect || (effect is SyncEffect.Resume && effect.hold)
+        if (!reconnectAllowed(true, true, forced)) continue
         admitted += effect
       }
     }
     assertTrue(admitted.any { effect -> effect is SyncEffect.Resume })
-    assertTrue(admitted.none { effect -> effect == SyncEffect.Reconnect })
+    assertTrue(admitted.any { effect -> effect == SyncEffect.Reconnect })
     assertTrue(reconnectAllowed(linkLive = false, framesArriving = false))
   }
 
@@ -245,6 +250,95 @@ class SyncApplierTest {
     assertEquals(listOf("c1", "c2"), commits)
   }
 
+  @Test
+  fun aWithheldBaselineRecoversFromTheCommittedCursorDespiteTheClock() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 4L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(baselineBegin("c1", "stream-a"), 1)
+    clock.now = SyncRecoveryBudgetMs - 1
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = SyncRecoveryBudgetMs
+    val recovered = applier.tick()
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 4L, true), recovered.first { it is SyncEffect.Resume })
+    assertEquals(4L, store.seq("c1"))
+  }
+
+  @Test
+  fun durableProgressRestartsTheBaselineBudget() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 0L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(baselineBegin("c1", "stream-a"), 1)
+    clock.now = 10_000L
+    applier.offer(turn(1))
+    clock.now = 10_050L
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = 10_050L + SyncRecoveryBudgetMs - 1
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = 10_050L + SyncRecoveryBudgetMs
+    assertTrue(applier.tick().any { it == SyncEffect.Reconnect })
+  }
+
+  @Test
+  fun aFailedRoomApplyRecoversFromTheCommittedCursor() = runBlocking {
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", object : SyncStore {
+      override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {
+        throw IllegalStateException("room")
+      }
+
+      override suspend fun cursorOf(hostId: String, conversationId: String): AppliedCursor {
+        return AppliedCursor("c1", "stream-a", 4L)
+      }
+    }, clock)
+    applier.offer(turn(5))
+    clock.now = 50L
+    assertTrue(applier.tick().isEmpty())
+    clock.now = 100L
+    assertTrue(applier.tick().isEmpty())
+    clock.now = 150L
+    val recovered = applier.tick()
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 4L, true), recovered.first { it is SyncEffect.Resume })
+  }
+
+  @Test
+  fun aFailedBaselineCommitRecoversFromTheCommittedCursor() = runBlocking {
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", object : SyncStore {
+      override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {
+        return SyncApplyResult(emptyList(), emptyList(), emptyList())
+      }
+
+      override suspend fun cursorOf(hostId: String, conversationId: String): AppliedCursor {
+        return AppliedCursor(conversationId, "stream-a", 4L)
+      }
+
+      override suspend fun commitBaseline(hostId: String, commit: BaselineCommit, nowMs: Long): BaselinePlan? {
+        throw IllegalStateException("room")
+      }
+    }, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(baselineBegin("c1", "stream-a"), 1)
+    val recovered = applier.offerFrame(SyncFrame.SnapshotEnd("c1", "stream-a", 9L), 1)
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 4L, true), recovered.first { it is SyncEffect.Resume })
+  }
+
+  private fun baselineBegin(conversationId: String, streamId: String): SyncFrame.SnapshotBegin {
+    return SyncFrame.SnapshotBegin(
+      conversationId, streamId, 1L, "Title", "/work", 0,
+      listOf(OutlineTurn("t1", 0, "old", emptyList())),
+      null, emptyList()
+    )
+  }
+
   private fun turn(seq: Long): MonitorEvent.TurnOpen {
     return MonitorEvent.TurnOpen("c1", "stream-a", seq, "t$seq", seq.toInt(), "Build", "Add $seq", "2026-10-29T09:20:00Z")
   }
@@ -263,6 +357,11 @@ private class MemorySyncStore : SyncStore {
 
   fun seed(id: String, streamId: String, seq: Long) {
     conversations[id] = ConversationRecord(id, "host-1", "/work", "Title", streamId, seq, 0L, false)
+  }
+
+  override suspend fun cursorOf(hostId: String, conversationId: String): AppliedCursor? {
+    val row = conversations[conversationId] ?: return null
+    return AppliedCursor(row.id, row.streamId, row.seq)
   }
 
   fun seq(id: String): Long = conversations.getValue(id).seq

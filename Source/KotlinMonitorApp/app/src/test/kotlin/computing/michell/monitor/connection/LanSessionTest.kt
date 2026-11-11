@@ -633,9 +633,12 @@ class LanSessionTest {
       assertFalse(session.resumeFromRoom("conversation-1", "stream-9", 50L))
       Thread.sleep(200)
       assertEquals(before, link.frames().size)
-      val payload = link.frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }.payloadJson
-      assertEquals(50L, decodeResume(payload)!!.cursor)
-      assertEquals("stream-9", decodeResume(payload)!!.epoch)
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-9", 60L))
+      waitUntil { link.frames().map { envelope(it) }.count { it.kind == MessageKind.Resume } >= 2 }
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-9", 40L))
+      waitUntil { link.frames().map { envelope(it) }.count { it.kind == MessageKind.Resume } >= 3 }
+      val cursors = link.frames().map { envelope(it) }.filter { it.kind == MessageKind.Resume }.map { decodeResume(it.payloadJson)!!.cursor }
+      assertEquals(listOf(50L, 60L, 40L), cursors)
     } finally {
       session.close()
     }
@@ -1523,6 +1526,62 @@ class LanSessionTest {
   }
 
   @Test
+  fun aResumeIsNotRememberedUntilTheWriterAcceptsIt() {
+    val link = ScriptedLink()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      session.resumeQueued = { false }
+      assertFalse(session.resumeFromRoom("c1", "stream-a", 4L))
+      Thread.sleep(150)
+      assertFalse(link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume })
+      session.resumeQueued = null
+      assertTrue(session.resumeFromRoom("c1", "stream-a", 4L))
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      assertFalse(session.resumeFromRoom("c1", "stream-a", 4L))
+    } finally {
+      session.resumeQueued = null
+      session.close()
+    }
+  }
+
+  @Test
+  fun pongsDoNotBlockForcedRecovery() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { links[0].frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+      links[0].push(frameOf(eventJson(1L, "Live")))
+      waitUntil { session.status.value.phase == LinkPhase.Live }
+      val seen = links[0].readEntries.get()
+      links[0].push(frameOf(encodeTicks(MessageKind.Pong, "host-pong", 1)))
+      waitUntil { links[0].readEntries.get() > seen }
+      assertTrue(session.framesArriving())
+      session.reconnect()
+      Thread.sleep(250)
+      assertEquals(1, opens.get())
+      session.forceReconnect()
+      waitUntil(8_000) { opens.get() >= 2 && links[1].readEntries.get() > 0 }
+      assertTrue(session.resumeFromRoom("c1", "stream-a", 4L))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      val payload = links[1].frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }.payloadJson
+      assertEquals(4L, decodeResume(payload)!!.cursor)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aCommandAcceptedOnOneGenerationIsStaleOnTheNext() {
     val socket = Any()
     val accepted = beginCatalogue("""{"v":3,"id":"stop-1","type":"stop","payload":{}}""", 1, socket)
@@ -1632,10 +1691,10 @@ class LanSessionTest {
       session.onWifiAvailable()
       waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first && links[1].readEntries.get() > 0 }
       links[1].push(frameOf(eventJson(3L, "New")))
-      waitUntil { seen.any { it.second == 3L } }
-      assertTrue(seen.none { it.second == 2L })
-      assertTrue(seen.none { it.second == 1L && it.first == session.linkEpoch })
-      assertTrue(seen.any { it.second == 3L && it.first == session.linkEpoch })
+      waitUntil { synchronized(seen) { seen.any { it.second == 3L } } }
+      assertTrue(synchronized(seen) { seen.none { it.second == 2L } })
+      assertTrue(synchronized(seen) { seen.none { it.second == 1L && it.first == session.linkEpoch } })
+      assertTrue(synchronized(seen) { seen.any { it.second == 3L && it.first == session.linkEpoch } })
     } finally {
       release.countDown()
       session.close()

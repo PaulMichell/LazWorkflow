@@ -31,6 +31,12 @@ const val SyncBatchWindowMs = 50L
 const val SyncBatchBytes = 64 * 1024
 const val SyncAckIntervalMs = 250L
 const val SyncApplyRetries = 3
+/**
+ * No committed cursor or baseline for this long replaces the socket.
+ * The gap policy waits 1s, 2s, 4s and 8s, which is the same 15s.
+ * Apply failures use [SyncApplyRetries] instead. A ping does not reset either budget.
+ */
+const val SyncRecoveryBudgetMs = 15_000L
 
 sealed class SyncEffect {
   data class Resume(val conversationId: String, val streamId: String, val seq: Long, val hold: Boolean = false) : SyncEffect()
@@ -295,6 +301,10 @@ class SyncApplier(
   private val resume = SyncResumePolicy()
   private val acks = AckPacer()
   private val baseline = BaselineStage()
+  /** When a baseline started and has not committed. Negative means none is waiting. */
+  private var baselineSinceMs = -1L
+  private var baselineConversation = ""
+  private var baselineStream = ""
   private val stateChunks = StateChunkAssembly()
   private val fetches = HashMap<String, java.util.TreeMap<Int, String>>()
   private val fetchRevision = HashMap<String, Long>()
@@ -349,7 +359,7 @@ class SyncApplier(
     refuseMainDispatcher()
     val now = nowMs()
     val flushed = if (pending.isNotEmpty() && now - openedMs >= SyncBatchWindowMs) flush() else emptyList()
-    deliver(flushed + acks.tick(now) + resume.tick(now))
+    deliver(flushed + acks.tick(now) + resume.tick(now) + baselineRecovery(now))
   }
 
   /** State, baseline, and block fetch. None of these is a content event. */
@@ -414,6 +424,7 @@ class SyncApplier(
       resume.noteApplied(applied.conversationId, applied.seq)
       acks.note(applied, now)?.let { effects += it }
     }
+    if (result.applied.isNotEmpty()) noteDurableProgress(now)
     for (fetch in result.fetches) {
       effects += SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId, true)
     }
@@ -427,11 +438,8 @@ class SyncApplier(
     failures = 0
     val effects = mutableListOf<SyncEffect>()
     for (id in batch.map { it.conversationId }.distinct()) {
-      val cursor = store.cursorOf(hostId, id) ?: committed[id]
       val sample = batch.first { it.conversationId == id }
-      val seq = cursor?.seq ?: 0L
-      val stream = cursor?.streamId?.ifEmpty { null } ?: sample.streamId
-      effects += SyncEffect.Resume(id, stream, seq, true)
+      effects += recover(id, sample.streamId, includeReconnect = false)
     }
     effects += SyncEffect.Reconnect
     return effects
@@ -454,11 +462,55 @@ class SyncApplier(
     clearPending()
     failures = 0
     baseline.abandon()
+    baselineSinceMs = -1L
+    baselineConversation = ""
+    baselineStream = ""
     stateChunks.reset()
     fetches.clear()
     fetchRevision.clear()
     resume.reset()
     acks.reset()
+  }
+
+  /** A committed cursor or baseline restarts the stall clock. A ping does not. */
+  private fun noteDurableProgress(now: Long) {
+    if (!baseline.isOpen) {
+      baselineSinceMs = -1L
+      return
+    }
+    baselineSinceMs = now
+  }
+
+  private suspend fun baselineRecovery(now: Long): List<SyncEffect> {
+    if (baselineSinceMs < 0L || now - baselineSinceMs < SyncRecoveryBudgetMs) return emptyList()
+    val conversationId = baselineConversation
+    val streamId = baselineStream
+    baselineSinceMs = -1L
+    baseline.abandon()
+    return recover(conversationId, streamId)
+  }
+
+  /** Resume from the last committed cursor, then replace the socket when asked. */
+  private suspend fun recover(conversationId: String, streamId: String, includeReconnect: Boolean = true): List<SyncEffect> {
+    val cursor = durableCursor(conversationId)
+    val seq = cursor?.seq ?: 0L
+    val stream = cursor?.streamId?.ifEmpty { null } ?: streamId
+    val effects = mutableListOf<SyncEffect>()
+    if (conversationId.isNotEmpty()) effects += SyncEffect.Resume(conversationId, stream, seq, true)
+    if (includeReconnect) effects += SyncEffect.Reconnect
+    return effects
+  }
+
+  private suspend fun durableCursor(conversationId: String): AppliedCursor? {
+    if (conversationId.isEmpty()) return null
+    val stored = try {
+      store.cursorOf(hostId, conversationId)
+    } catch (error: CancellationException) {
+      throw error
+    } catch (error: Exception) {
+      null
+    }
+    return stored ?: committed[conversationId]
   }
 
   private suspend fun applyFrame(frame: SyncFrame): List<SyncEffect> {
@@ -471,6 +523,11 @@ class SyncApplier(
       }
       is SyncFrame.SnapshotBegin -> {
         baseline.begin(frame)
+        if (baselineSinceMs < 0L) {
+          baselineSinceMs = nowMs()
+          baselineConversation = frame.conversationId
+          baselineStream = frame.streamId
+        }
         val effects = mutableListOf<SyncEffect>()
         for ((key, value) in frame.state) effects += applyState(key, value)
         effects
@@ -490,9 +547,14 @@ class SyncApplier(
         } catch (error: CancellationException) {
           throw error
         } catch (error: Exception) {
-          return emptyList()
-        } ?: return listOf(SyncEffect.CacheReady)
+          baselineSinceMs = -1L
+          return recover(commit.conversationId, commit.streamId)
+        } ?: run {
+          baselineSinceMs = -1L
+          return recover(commit.conversationId, commit.streamId)
+        }
         committed[plan.conversation.id] = AppliedCursor(plan.conversation.id, plan.conversation.streamId, plan.conversation.seq)
+        noteDurableProgress(nowMs())
         plan.fetches.map { fetch ->
           SyncEffect.FetchBlock(
             fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId,
@@ -594,13 +656,21 @@ fun estimatedEventBytes(event: MonitorEvent): Int {
   return utf8Length(text) + 128
 }
 
-/** A live socket that is still receiving is not closed to cure a gap. */
-fun reconnectAllowed(linkLive: Boolean, framesArriving: Boolean): Boolean {
+/**
+ * An opportunistic refresh must not replace a socket that is still receiving.
+ * Forced recovery ignores heartbeats and a paused read: those are not a committed cursor.
+ */
+fun reconnectAllowed(linkLive: Boolean, framesArriving: Boolean, forced: Boolean = false): Boolean {
+  if (forced) return true
   if (linkLive && framesArriving) return false
   return true
 }
 
-/** Four resumes, then reconnect. A later applied seq clears the wait. */
+/**
+ * Four resumes, then replace the link. A later applied seq clears the wait.
+ * An identical cursor is not written again; the replacement is the retry.
+ * The waits sum to [SyncRecoveryBudgetMs].
+ */
 class SyncResumePolicy {
   private val waits = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
   private val waiting = mutableMapOf<String, Wait>()
@@ -620,6 +690,7 @@ class SyncResumePolicy {
       if (nowMs < wait.nextMs) continue
       if (wait.sent >= waits.size) {
         waiting.remove(id)
+        effects += SyncEffect.Resume(id, wait.gap.streamId, wait.gap.seq, true)
         effects += SyncEffect.Reconnect
         continue
       }

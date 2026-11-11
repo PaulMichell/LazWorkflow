@@ -668,6 +668,8 @@ class LanSession(
   private var opening: TlsLink? = null
   /** Test injection at the decode boundary. Production leaves this null. */
   internal var frameProbe: ((MonitorFrame) -> Unit)? = null
+  /** Test injection for a resume the writer did not accept. Production leaves this null. */
+  internal var resumeQueued: (() -> Boolean)? = null
   @Volatile
   private var writeStartedNanos = 0L
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
@@ -1323,37 +1325,43 @@ class LanSession(
   override fun resumeFromRoom(conversationId: String, streamId: String, seq: Long): Boolean {
     if (!canWriteResume()) return false
     val epoch = epochCounter.get()
+    // The same triple is not written again on this socket. A later cursor, a gap,
+    // or a new socket may send. A failed offer is not remembered, so it can be tried again.
     if (sentResumeEpoch == epoch && sentResumeConversation == conversationId &&
       sentResumeStream == streamId && sentResumeSeq == seq) return false
-    // Room moving the cursor forward is not another resume. A gap is an earlier seq.
-    if (sentResumeEpoch == epoch && sentResumeConversation == conversationId &&
-      conversationId.isNotEmpty() && seq > sentResumeSeq) return false
-    writeResume(conversationId, streamId, seq)
-    return true
+    return writeResume(conversationId, streamId, seq)
   }
 
   private fun canWriteResume(): Boolean = link != null
 
-  private fun writeResume(conversationId: String, streamId: String, seq: Long) {
+  private fun writeResume(conversationId: String, streamId: String, seq: Long): Boolean {
     val json = encodeSyncResume(nextCommandId(), conversationId, streamId, seq)
     val outbound = writer
     val owned = link
-    if (outbound != null && owned != null && owned === link) {
+    val queued = resumeQueued?.invoke() ?: if (outbound != null && owned != null && owned === link) {
       val prepared = resumeWithOpenCommands(json)
       val frame = tryEncodeFrame(prepared)
-      if (frame.ok) outbound.offerControl(frame.bytes)
+      frame.ok && outbound.offerControl(frame.bytes)
     } else {
-      sendCatalogue(json)
+      false
     }
+    if (!queued) return false
     sentResumeEpoch = epochCounter.get()
     sentResumeConversation = conversationId
     sentResumeStream = streamId
     sentResumeSeq = seq
+    return true
   }
 
   override fun reconnect() {
     if (stopped) return
     if (!computing.michell.monitor.data.reconnectAllowed(statusState.value.phase == LinkPhase.Live, framesArriving())) return
+    forceReconnect()
+  }
+
+  /** The recovery budget expired. Heartbeats and a paused read do not hold the socket. */
+  fun forceReconnect() {
+    if (stopped) return
     policy.resume()
     startLoop()
   }

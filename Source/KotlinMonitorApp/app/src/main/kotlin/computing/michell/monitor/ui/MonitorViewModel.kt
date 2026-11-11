@@ -1457,15 +1457,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           computing.michell.monitor.protocol.encodeAck(session.nextCommandId(), effect.conversationId, effect.streamId, effect.seq)
         )
         is computing.michell.monitor.data.SyncEffect.Resume -> {
-          if (effect.hold) session.reconnect()
+          if (effect.hold) session.forceReconnect()
           session.resumeFromRoom(effect.conversationId, effect.streamId, effect.seq)
         }
-        computing.michell.monitor.data.SyncEffect.Reconnect -> {
-          if (computing.michell.monitor.data.reconnectAllowed(
-            link.value.phase == computing.michell.monitor.connection.LinkPhase.Live,
-            session.framesArriving()
-          )) session.reconnect()
-        }
+        computing.michell.monitor.data.SyncEffect.Reconnect -> session.forceReconnect()
         computing.michell.monitor.data.SyncEffect.FetchReady -> {
           // Resume replaces the host bulk queue, including body replies already requested.
           screenFetch.setConnected(false)
