@@ -289,6 +289,164 @@ class LanSessionTest {
   }
 
   @Test
+  fun monitoringDemandSticksUntilAResynchronisedIdlePicture() {
+    assertFalse(nextMonitoringDemand(false, false, false, false, false))
+    assertTrue(nextMonitoringDemand(false, true, false, false, false))
+    assertTrue(nextMonitoringDemand(false, false, true, false, false))
+    assertTrue(nextMonitoringDemand(false, false, false, true, true))
+    assertTrue(nextMonitoringDemand(true, false, false, false, false))
+    assertFalse(nextMonitoringDemand(true, false, false, false, true))
+  }
+
+  @Test
+  fun aRunningPlanRetriesAfterTwoMinutesWithoutATouch() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      ScriptedLink().also {
+        links.add(it)
+        opens.incrementAndGet()
+      }
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      session.noteMonitoring(planRunning = true, turnRunning = false, screenHold = false, resynchronised = false)
+      // Chrome cleared by the drop is not a resynchronised picture.
+      session.noteMonitoring(planRunning = false, turnRunning = false, screenHold = false, resynchronised = false)
+      clock.advanceMs(LanActiveWindowMs + 1)
+      links[0].closeInput()
+      waitUntil { opens.get() >= 2 }
+      assertTrue(session.status.value.banner != IdleOfflineBanner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun screenOffHoldRetriesAfterTwoMinutesWithoutATouch() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      ScriptedLink().also {
+        links.add(it)
+        opens.incrementAndGet()
+      }
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      session.leaveForeground(screenOff = true, holdLink = true)
+      assertTrue(session.holdingAcrossSleep)
+      clock.advanceMs(LanActiveWindowMs + 1)
+      links[0].closeInput()
+      waitUntil { opens.get() >= 2 }
+      assertTrue(session.holdingAcrossSleep)
+      assertTrue(session.status.value.banner != IdleOfflineBanner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun demandedSessionRetriesWhenTheWifiHintIsDown() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    lateinit var session: LanSession
+    session = LanSession(store, TlsConnector { _, _, _ ->
+      val count = opens.incrementAndGet()
+      if (count == 1) {
+        // Age the touch clock and report loss before the loop chooses to park.
+        session.onWifiLost()
+        clock.advanceMs(LanActiveWindowMs + 1)
+        throw ConnectException("Connection refused")
+      }
+      ScriptedLink()
+    }, clock)
+    try {
+      session.noteMonitoring(planRunning = false, turnRunning = true, screenHold = false, resynchronised = false)
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() >= 2 }
+      assertTrue(session.status.value.banner != IdleOfflineBanner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun resynchronisedIdleParksAgain() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    lateinit var session: LanSession
+    session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      session.noteMonitoring(planRunning = false, turnRunning = false, screenHold = false, resynchronised = true)
+      clock.advanceMs(LanActiveWindowMs)
+      throw ConnectException("Connection refused")
+    }, clock)
+    try {
+      session.noteMonitoring(planRunning = true, turnRunning = false, screenHold = false, resynchronised = false)
+      session.connect("10.0.0.8", 56122)
+      waitUntil { session.status.value.banner == IdleOfflineBanner }
+      Thread.sleep(1_500)
+      assertEquals(1, opens.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun explicitDisconnectStaysDownWhileAPlanIsDemanded() {
+    val store = pairedStore()
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink()
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      session.noteMonitoring(planRunning = true, turnRunning = true, screenHold = true, resynchronised = false)
+      session.disconnect()
+      clock.advanceMs(LanActiveWindowMs + 1)
+      Thread.sleep(1_500)
+      assertEquals(1, opens.get())
+      assertFalse(session.reconnectable)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun monitoringDemandDoesNotOverrideBackground() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink()
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      session.noteMonitoring(planRunning = true, turnRunning = false, screenHold = false, resynchronised = false)
+      session.leaveForeground()
+      Thread.sleep(1_500)
+      assertEquals(1, opens.get())
+      session.enterForeground()
+      waitUntil { opens.get() >= 2 }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aPausedOrUnarmedSessionIsNotReconnectable() {
     val store = pairedStore()
     val session = LanSession(store, TlsConnector { _, _, _ -> throw ConnectException("Connection refused") })

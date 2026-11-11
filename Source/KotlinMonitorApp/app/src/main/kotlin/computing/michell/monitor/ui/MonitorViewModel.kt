@@ -1486,6 +1486,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
             shownPlanRevision = computing.michell.monitor.data.planStateRevision(effect.valueJson)
             considerPlanFetch()
           }
+          if (effect.key == "status" || effect.key == "plan") publishMonitoring(resynchronised = true)
         }
         is computing.michell.monitor.data.SyncEffect.Note -> uiState.value = coordinator.noteSyncNote(effect.text)
         computing.michell.monitor.data.SyncEffect.CacheReady -> uiState.value = coordinator.noteCacheReadable()
@@ -1671,6 +1672,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun runPlan() {
+    session.noteMonitoring(planRunning = true, turnRunning = false, screenHold = false, resynchronised = false)
     session.sendCatalogue(coordinator.runPlanCommand(saveFirst = false))
   }
 
@@ -1881,6 +1883,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         is MonitorEffect.FileClosed -> {}
       }
     }
+    publishMonitoring(resynchronised = false)
+  }
+
+  /** Local chrome can raise demand. Only a resynchronised picture may clear it. */
+  private fun publishMonitoring(resynchronised: Boolean) {
+    val shown = uiState.value
+    session.noteMonitoring(
+      shown.planRunning || shown.view.planRunning,
+      shown.view.sending || shown.view.busy,
+      false,
+      resynchronised
+    )
   }
 
   private fun onDictationPartial(generation: Int, text: String) {

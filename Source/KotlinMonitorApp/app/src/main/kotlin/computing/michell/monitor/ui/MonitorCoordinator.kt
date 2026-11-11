@@ -485,6 +485,7 @@ class MonitorCoordinator(
       )
     )
     noteRunClock()
+    reportMonitoring(resynchronised = false)
     if (syncingGap() || offlineGap()) {
       held += HeldCommand(commandId, encoded.json, text, false)
       return listOf(MonitorEffect.RememberDraft(""), MonitorEffect.LeaveDictation)
@@ -541,8 +542,12 @@ class MonitorCoordinator(
           displayBlocks(content.current().live)
         )
         local = local.copy(view = merged, statusBusy = view.busy, planRunning = view.planRunning)
+        reportMonitoring(resynchronised = true)
       }
-      MessageKind.Plan -> applyPlan(message)
+      MessageKind.Plan -> {
+        applyPlan(message)
+        reportMonitoring(resynchronised = true)
+      }
       MessageKind.InsertResult -> decodeText(message.payloadJson)?.let { text ->
         if (local.draft.isEmpty()) local = local.copy(draft = text)
       }
@@ -556,6 +561,16 @@ class MonitorCoordinator(
 
   private fun resetMatch() {
     content.unsealHostPaint()
+  }
+
+  /** A host picture may clear demand. A local report only raises it. */
+  private fun reportMonitoring(resynchronised: Boolean) {
+    session.noteMonitoring(
+      local.planRunning || local.view.planRunning,
+      local.view.sending || local.view.busy,
+      false,
+      resynchronised
+    )
   }
 
   /** Snapshot pages do not carry rows. This frame is the phone's plan. */

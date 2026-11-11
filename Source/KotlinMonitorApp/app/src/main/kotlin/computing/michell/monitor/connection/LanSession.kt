@@ -22,9 +22,13 @@ package computing.michell.monitor.connection
    8 seconds with equal jitter, then 30 seconds while the app is in use. A
    touch, a key or a return to the foreground is use, and a link that is
    down tries at once on it. Two minutes without use is idle: the loop stops
-   trying until the next use. Leaving the app sends bye and waits to resume.
-   The backlight going off does not, while a plan or turn is running or the
-   monitor task is still resumed. That hold does not open a second socket.
+   trying until the next use. A monitoring demand — a running plan, a running
+   turn, or a screen-off hold — keeps the capped retry going through that idle
+   window. The demand sticks across a drop until a resynchronised picture says
+   execution ended. It does not fake a touch, and it does not override bye,
+   background, or an explicit disconnect. Leaving the app sends bye and waits
+   to resume. The backlight going off does not, while a plan or turn is running
+   or the monitor task is still resumed. That hold does not open a second socket.
    Connect still keeps a saved pin and does not clear it. */
 
 import computing.michell.monitor.protocol.ChunkAssembly
@@ -106,6 +110,23 @@ const val ByeBackground = "background"
 /** Screen-off keeps the socket when a plan or turn is running, or the task is still resumed. */
 fun holdLinkAcrossScreenOff(planRunning: Boolean, turnRunning: Boolean, taskResumed: Boolean): Boolean {
   return planRunning || turnRunning || taskResumed
+}
+
+/**
+ * A running plan, a running turn, or a screen-off hold needs the link.
+ * That need sticks across a drop. Only a resynchronised idle picture clears it.
+ * A false report that is not a resynchronised picture leaves the previous demand.
+ */
+fun nextMonitoringDemand(
+  demanded: Boolean,
+  planRunning: Boolean,
+  turnRunning: Boolean,
+  screenHold: Boolean,
+  resynchronised: Boolean
+): Boolean {
+  if (planRunning || turnRunning || screenHold) return true
+  if (resynchronised) return false
+  return demanded
 }
 const val LanBackoffCapMs = 10_000L
 /** The retry after the short ramp, while the app is in use. */
@@ -525,6 +546,11 @@ interface SessionPort {
   val reconnectable: Boolean get() = false
   /** A touch, a key or a send. A link that is down tries at once. */
   fun noteActivity() {}
+  /**
+   * The model reports a running plan, a running turn, or a screen-off hold.
+   * True sticks until a resynchronised idle picture. A drop must not clear it.
+   */
+  fun noteMonitoring(planRunning: Boolean, turnRunning: Boolean, screenHold: Boolean, resynchronised: Boolean) {}
 }
 
 class LanSession(
@@ -588,6 +614,8 @@ class LanSession(
   private var leftForBackground = false
   @Volatile
   private var lastActivityMs = clockMs()
+  @Volatile
+  private var monitoringDemand = false
   @Volatile
   private var lastAttemptMs = clockMs() - ActivityRetryGapMs
 
@@ -774,6 +802,7 @@ class LanSession(
   fun leaveForeground(screenOff: Boolean = false, holdLink: Boolean = false) {
     if (screenOff && holdLink) {
       holdingAcrossSleep = true
+      noteMonitoring(planRunning = false, turnRunning = false, screenHold = true, resynchronised = false)
       return
     }
     holdingAcrossSleep = false
@@ -838,6 +867,7 @@ class LanSession(
   fun disconnect() {
     stopped = true
     armed = false
+    monitoringDemand = false
     policy.pause()
     chunks.reset()
     epochCounter.incrementAndGet()
@@ -896,7 +926,9 @@ class LanSession(
       }
       // Confirmed loss is a hint. Park only when nothing is due to try. A touch sets
       // connectNow. An in-use retry, including the 30 second step, still runs below.
-      if (!lanAvailable && !connectNow && !leftForBackground && !replaceLink && (!waitBeforeConnect || appIdle())) {
+      // A monitoring demand is due to try even when the touch clock is idle.
+      if (!monitoringDemand && !lanAvailable && !connectNow && !leftForBackground && !replaceLink &&
+        (!waitBeforeConnect || appIdle())) {
         publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
         wakes.receive()
         if (stopped || epochCounter.get() != epoch) return
@@ -909,11 +941,12 @@ class LanSession(
         policy.resetBackoff()
       }
       if (waitBeforeConnect) {
-        if (!lanAvailable && !appIdle()) {
+        if (!lanAvailable && !retriesParked()) {
           publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
         }
-        if (appIdle()) {
-          // Nobody is using the app. Stop trying until a touch, a key, the foreground or Wi-Fi wakes the loop.
+        if (retriesParked()) {
+          // Nobody is using the app, and no plan, turn, or screen-off hold needs the link.
+          // Stop trying until a touch, a key, the foreground or Wi-Fi wakes the loop.
           publishCurrent(epoch, LinkPhase.Disconnected, IdleOfflineBanner, statusState.value.lastError)
           wakes.receive()
           if (stopped || epochCounter.get() != epoch) return
@@ -926,7 +959,7 @@ class LanSession(
           waitBeforeConnect = false
           continue
         }
-        if (appIdle()) continue
+        if (retriesParked()) continue
       }
       if (stopped || epochCounter.get() != epoch) return
       waitBeforeConnect = true
@@ -969,6 +1002,23 @@ class LanSession(
   }
 
   private fun appIdle(): Boolean = clockMs() - lastActivityMs >= LanActiveWindowMs
+
+  /** Idle parking applies only when the model is not asking the link to stay up. */
+  private fun retriesParked(): Boolean = !monitoringDemand && appIdle()
+
+  /**
+   * The model supplies demand. A true report, including a screen-off hold, sticks
+   * across a drop. Only a resynchronised idle picture clears it. This does not
+   * move the touch clock, and a stopped session is not started again.
+   */
+  override fun noteMonitoring(planRunning: Boolean, turnRunning: Boolean, screenHold: Boolean, resynchronised: Boolean) {
+    val next = nextMonitoringDemand(monitoringDemand, planRunning, turnRunning, screenHold, resynchronised)
+    if (next == monitoringDemand) return
+    monitoringDemand = next
+    if (!next) return
+    wakes.trySend(Unit)
+    if (mayReconnect() && loop?.isActive != true) startLoop()
+  }
 
   @OptIn(ExperimentalCoroutinesApi::class)
   private suspend fun waitBackoffOrWake(delayMs: Long): Boolean {
