@@ -178,10 +178,13 @@ private fun MonitorShell(model: MonitorViewModel) {
   val showSettings = ui.settingsOpen
   val context = LocalContext.current
   val statusNoticeText = statusNotice(ui.banner)
+  val holdNotice by model.holdNotice.collectAsState()
   // A missing window or a rejected sign-in is a toast. It is not a status chip.
-  LaunchedEffect(statusNoticeText) {
-    if (statusNoticeText.isEmpty()) return@LaunchedEffect
-    Toast.makeText(context, statusNoticeText, Toast.LENGTH_LONG).show()
+  // A refused screen-off hold is a separate toast, not an authentication failure.
+  LaunchedEffect(statusNoticeText, holdNotice) {
+    val text = if (holdNotice.isNotEmpty()) holdNotice else statusNoticeText
+    if (text.isEmpty()) return@LaunchedEffect
+    Toast.makeText(context, text, Toast.LENGTH_LONG).show()
   }
   val cacheListOpen by model.cacheListOpen.collectAsState()
   val stored by model.storedBoard.collectAsState()

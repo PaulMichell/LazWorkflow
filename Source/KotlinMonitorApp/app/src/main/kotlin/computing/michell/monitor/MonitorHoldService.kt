@@ -2,7 +2,9 @@ package computing.michell.monitor
 
 /* Keeps the monitor process and Wi-Fi radio awake while the screen is off (c) 2026 Michell Computing.
 
-   The TLS socket stays in LanSession. This service does not open another one. */
+   The TLS socket stays in LanSession. This service does not open another one.
+   A refused start is recorded. It is not swallowed, and it is not a CPU wake
+   lock: Doze was not measured on a device, so no partial wake lock is taken. */
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -21,13 +23,22 @@ class MonitorHoldService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    val notice = holdNotification()
-    if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(NotificationId, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-    } else {
-      startForeground(NotificationId, notice)
+    try {
+      val notice = holdNotification()
+      if (Build.VERSION.SDK_INT >= 29) {
+        startForeground(NotificationId, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+      } else {
+        startForeground(NotificationId, notice)
+      }
+    } catch (error: Exception) {
+      fail(error.message ?: "Foreground hold was not granted.")
+      return START_NOT_STICKY
     }
-    acquireRadio()
+    if (!acquireRadio()) {
+      fail("Wi-Fi lock was not acquired.")
+      return START_NOT_STICKY
+    }
+    note(HoldActivation.Active, "")
     return START_NOT_STICKY
   }
 
@@ -51,23 +62,35 @@ class MonitorHoldService : Service() {
       .build()
   }
 
-  private fun acquireRadio() {
-    if (radioLock?.isHeld == true) return
-    val wifi = applicationContext.getSystemService(WifiManager::class.java) ?: return
+  private fun acquireRadio(): Boolean {
+    if (radioLock?.isHeld == true) return true
+    val wifi = applicationContext.getSystemService(WifiManager::class.java) ?: return false
     val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
       else WifiManager.WIFI_MODE_FULL_HIGH_PERF
     val lock = try {
       wifi.createWifiLock(mode, LockName)
     } catch (error: Exception) {
-      return
+      return false
     }
     lock.setReferenceCounted(false)
-    try {
+    return try {
       lock.acquire()
       radioLock = lock
+      lock.isHeld
     } catch (error: Exception) {
-      // A missing lock must not drop the socket the session is already holding.
+      false
     }
+  }
+
+  private fun fail(detail: String) {
+    releaseRadio()
+    note(HoldActivation.Failed, detail)
+    try {
+      stopForeground(STOP_FOREGROUND_DETACH)
+    } catch (error: Exception) {
+      // Foreground was never entered.
+    }
+    stopSelf()
   }
 
   private fun releaseRadio() {
@@ -86,12 +109,26 @@ class MonitorHoldService : Service() {
     private const val ChannelId = "monitor-link"
     private const val LockName = "monitor-link"
 
-    fun start(context: Context) {
+    @Volatile
+    var activation: HoldActivation = HoldActivation.Inactive
+      private set
+
+    @Volatile
+    var detail: String = ""
+      private set
+
+    @Volatile
+    var listener: ((Boolean) -> Unit)? = null
+
+    fun start(context: Context): Boolean {
       val intent = Intent(context, MonitorHoldService::class.java)
-      try {
+      return try {
         context.startForegroundService(intent)
+        activation = HoldActivation.Starting
+        true
       } catch (error: Exception) {
-        // The session hold still stands if the process cannot promote the service.
+        note(HoldActivation.Failed, error.message ?: HoldNotGrantedNotice)
+        false
       }
     }
 
@@ -101,6 +138,13 @@ class MonitorHoldService : Service() {
       } catch (error: Exception) {
         // Already stopped.
       }
+      if (activation != HoldActivation.Failed) note(HoldActivation.Inactive, "")
+    }
+
+    private fun note(next: HoldActivation, text: String) {
+      activation = next
+      detail = text
+      listener?.invoke(next == HoldActivation.Active)
     }
   }
 }

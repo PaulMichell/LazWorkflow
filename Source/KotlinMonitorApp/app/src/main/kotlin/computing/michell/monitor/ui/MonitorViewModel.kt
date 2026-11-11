@@ -63,7 +63,9 @@ import computing.michell.monitor.dictation.DictationUnavailableMessage
 import computing.michell.monitor.dictation.reduceDictation
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
+import computing.michell.monitor.HoldNotGrantedNotice
 import computing.michell.monitor.MonitorHoldService
+import computing.michell.monitor.ScreenHold
 import computing.michell.monitor.connection.holdLinkAcrossScreenOff
 import computing.michell.monitor.connection.LanRouteBook
 import computing.michell.monitor.connection.LanSession
@@ -275,6 +277,7 @@ fun statusNotice(banner: String): String {
     "fingerprint" -> "The desktop certificate did not match."
     "busy" -> "The Project Assistant is busy."
     "disabled" -> "Remote monitor is turned off."
+    HoldNotGrantedNotice -> HoldNotGrantedNotice
     else -> text
   }
 }
@@ -771,6 +774,19 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val lanRoutes = LanRouteBook()
   private val session = LanSession(store, SslSocketConnector(lanRoutes), ledger = commandLedger,
     diagnostic = { android.util.Log.d("MonitorLink", it) })
+  private val screenHold = ScreenHold(
+    start = { MonitorHoldService.start(getApplication()) },
+    stop = { MonitorHoldService.stop(getApplication()) }
+  )
+  val holdNotice = MutableStateFlow("")
+  init {
+    MonitorHoldService.listener = { active ->
+      val decision = screenHold.onPlatformResult(active)
+      holdNotice.value = decision.notice
+      if (!active) session.clearScreenHold()
+      if (decision.closeLink) session.leaveForeground()
+    }
+  }
   private val lanWatch = WifiLanWatch(
     application,
     lanRoutes,
@@ -1124,27 +1140,34 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   /** The backlight went off. A running plan, a running turn, or a still-resumed task keeps the socket. */
   fun noteScreenOff(taskResumed: Boolean) {
     val shown = uiState.value
-    val hold = holdLinkAcrossScreenOff(
+    val demand = holdLinkAcrossScreenOff(
       shown.planRunning || shown.view.planRunning,
       shown.view.sending || shown.view.busy,
       taskResumed
     )
-    if (!hold) return
-    session.leaveForeground(screenOff = true, holdLink = true)
-    MonitorHoldService.start(getApplication())
+    val decision = screenHold.onScreenOff(demand)
+    holdNotice.value = decision.notice
+    if (decision.activation == computing.michell.monitor.HoldActivation.Starting ||
+      decision.activation == computing.michell.monitor.HoldActivation.Active) {
+      session.leaveForeground(screenOff = true, holdLink = true)
+    }
+    if (decision.closeLink) session.leaveForeground()
   }
 
   /** The backlight came back. The socket was not closed, so this is not a new link. */
   fun noteScreenOn() {
+    screenHold.onScreenOn()
+    holdNotice.value = ""
     session.clearScreenHold()
-    MonitorHoldService.stop(getApplication())
     enterForeground()
   }
 
-  /** The user left the app. A screen-off hold is not that. */
+  /** The user left the app. A granted screen-off hold is not that. */
   fun leaveForeground() {
-    if (session.holdingAcrossSleep) return
-    MonitorHoldService.stop(getApplication())
+    val decision = screenHold.onStop()
+    holdNotice.value = decision.notice
+    if (decision.activation == computing.michell.monitor.HoldActivation.Active ||
+      decision.activation == computing.michell.monitor.HoldActivation.Starting) return
     session.leaveForeground()
   }
 
@@ -1283,6 +1306,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     cacheSaveJob = null
     val effects = coordinator.onEvent(MonitorEvent.ForgetPairing(uiState.value)) ?: emptyList()
     applyUiEffects(effects)
+    screenHold.onDisconnect()
+    holdNotice.value = ""
     session.disconnect()
     store.clear()
     try {
@@ -1715,6 +1740,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   override fun onCleared() {
+    MonitorHoldService.listener = null
+    screenHold.onDisconnect()
     lanWatch.stop()
     if (hasStoredPlan(uiState.value.planPath, uiState.value.planTitle, uiState.value.planRows))
       rememberPlan(uiState.value, uiState.value, true)
@@ -1894,12 +1921,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   /** Local chrome can raise demand. Only a resynchronised picture may clear it. */
   private fun publishMonitoring(resynchronised: Boolean) {
     val shown = uiState.value
-    session.noteMonitoring(
-      shown.planRunning || shown.view.planRunning,
-      shown.view.sending || shown.view.busy,
-      false,
-      resynchronised
-    )
+    val plan = shown.planRunning || shown.view.planRunning
+    val turn = shown.view.sending || shown.view.busy
+    session.noteMonitoring(plan, turn, session.holdingAcrossSleep, resynchronised)
+    if (resynchronised && !plan && !turn) {
+      screenHold.onDemandEnded()
+      holdNotice.value = ""
+      session.clearScreenHold()
+    }
   }
 
   private fun onDictationPartial(generation: Int, text: String) {
