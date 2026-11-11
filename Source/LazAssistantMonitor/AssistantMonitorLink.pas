@@ -18,8 +18,9 @@ Unit AssistantMonitorLink;
   before a new write. A partial write keeps its unsent tail across WANT_WRITE.
   Heartbeat and partial-frame deadlines are the poll timeout. A later handshake
   does not share this thread, so it cannot delay frames already in flight.
-  A new controller asks this thread to queue bye with reason replaced, flush for
-  at most 500 ms, and close. The session then resets as on a socket close.
+  A later authenticated link asks this thread to queue bye, flush for at most
+  500 ms, and close. An unauthenticated candidate does not. A late close of this
+  thread cannot reset a controller that has already been adopted.
 
   Cross-thread fields (plan item 3.3 of Documents/Plan-20261105-130659.md):
   another link's thread calls StartReplace, Retain, Release, Held and
@@ -61,8 +62,15 @@ Type
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Virtual; Abstract;
     Function AcceptLink(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Virtual; Abstract;
     Function CloseRequested(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
-    { Retains the current controller, asks it to flush bye, and returns it. Nil if none. }
-    Function PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread; Virtual; Abstract;
+    { Adopts this link only when no controller holds the session. Does not retire another link. }
+    Function TryAdopt(Link: TMonitorLinkThread; Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Virtual; Abstract;
+    { False when the candidate bound is full. The live controller is not touched. }
+    Function ClaimCandidate(Link: TMonitorLinkThread; IsLoopback: Boolean): Boolean; Virtual; Abstract;
+    Procedure ReleaseCandidate(Link: TMonitorLinkThread); Virtual; Abstract;
+    Function OfferCandidate(Link: TMonitorLinkThread; Const Frame: TMonitorFrame; Out ReplyJson: String;
+      Out Authenticated, Rejected, SameClient: Boolean): Boolean; Virtual; Abstract;
+    { Makes this link the controller, then asks the previous one to leave. }
+    Procedure Takeover(Link: TMonitorLinkThread; SameClient: Boolean); Virtual; Abstract;
     Procedure AdoptController(Link: TMonitorLinkThread); Virtual; Abstract;
     { True when this link was still the controller and the session was reset. }
     Function ReleaseController(Link: TMonitorLinkThread): Boolean; Virtual; Abstract;
@@ -90,6 +98,9 @@ Type
     ReadAgain: Boolean;
     FrameTakenThisPass: Boolean;
     ControllerLink: Boolean;
+    CandidateLink: Boolean;
+    CandidateUntil: QWord;
+    AdmissionClosing: Boolean;
     Adopted: Boolean;
     DropLink: Boolean;
     { 0 not replacing, 1 claimed while ReplaceUntil is written, 2 replacing. Interlocked only. }
@@ -100,6 +111,7 @@ Type
     ByeSent: Boolean;
     { Written once before ReplaceFlag becomes 2. Read only after Replacing is True. }
     ReplaceUntil: QWord;
+    ReplaceReason: String;
     HandshakeStart: QWord;
     PartialSince: QWord;
     CloseSince: QWord;
@@ -127,6 +139,7 @@ Type
     Function BuildSsl: Boolean;
     Function Handshake: Boolean;
     Procedure BecomeController;
+    Procedure HandleCandidate(Const Frame: TMonitorFrame);
     Procedure SendReject(Const Reject: TMonitorFrame);
     Function PollWait(TimeoutMs: Integer; WantWrite: Boolean): Boolean;
     Function NextTimeout: Integer;
@@ -157,7 +170,7 @@ Type
     Function Finished: Boolean;
     Function WakeOpen: Boolean;
     { Called from the new controller's thread, never from this link's own thread. }
-    Procedure StartReplace;
+    Procedure StartReplace(Const Reason: String = 'replaced');
     Function WaitRetired(TimeoutMs: Integer): Boolean;
   Protected
     Procedure Execute; Override;
@@ -268,7 +281,11 @@ Begin
   WriteWantsWrite := False;
   ReadAgain := False;
   ControllerLink := False;
+  CandidateLink := False;
+  CandidateUntil := 0;
+  AdmissionClosing := False;
   Adopted := False;
+  ReplaceReason := 'replaced';
   DropLink := False;
   ReplaceFlag := ReplaceIdle;
   ByeState := 0;
@@ -539,15 +556,19 @@ Begin
   Result := InterlockedExchangeAdd(ByeState, 0) <> 0;
 End;
 
-Procedure TMonitorLinkThread.StartReplace;
+Procedure TMonitorLinkThread.StartReplace(Const Reason: String);
 Begin
   {$IFDEF DEBUG}
   Assert(GetCurrentThreadId <> ThreadID, 'StartReplace was called on the link''s own thread');
   {$ENDIF}
-  { Only the caller that claims the flag writes the deadline. The exchange that publishes the flag is a full
-    barrier, so a thread that sees Replacing also sees ReplaceUntil. }
+  { Only the caller that claims the flag writes the deadline and the reason. The exchange that publishes the
+    flag is a full barrier, so a thread that sees Replacing also sees both. }
   If InterlockedCompareExchange(ReplaceFlag, ReplaceClaimed, ReplaceIdle) = ReplaceIdle Then
     Begin
+      If Reason = '' Then
+        ReplaceReason := 'replaced'
+      Else
+        ReplaceReason := Reason;
       ReplaceUntil := GetTickCount64 + MonitorReplaceFlushMs;
       InterlockedExchange(ReplaceFlag, ReplacePublished);
     End;
@@ -571,7 +592,9 @@ Var
 Begin
   If InterlockedCompareExchange(ByeState, 1, 0) <> 0 Then
     Exit;
-  Json := EncodeCommandBye('replaced', 'replaced');
+  If ReplaceReason = '' Then
+    ReplaceReason := 'replaced';
+  Json := EncodeCommandBye(ReplaceReason, ReplaceReason);
   If Not EncodeFrame(Json, Bytes) Then
     Exit;
   If Assigned(Outbox) Then
@@ -713,9 +736,36 @@ Begin
     End;
 End;
 
+Procedure TMonitorLinkThread.HandleCandidate(Const Frame: TMonitorFrame);
+Var
+  Reply: String;
+  Authenticated, Rejected, SameClient: Boolean;
+  Bytes: RawByteString;
+Begin
+  If Not Assigned(Host) Then
+    Exit;
+  If Not Host.OfferCandidate(Self, Frame, Reply, Authenticated, Rejected, SameClient) Then
+    Begin
+      DropLink := True;
+      DropReason := 'admission failed';
+      Exit;
+    End;
+  If (Reply <> '') And EncodeFrame(Reply, Bytes) And Assigned(Outbox) Then
+    Outbox.AddControl(Bytes);
+  If Authenticated Then
+    Begin
+      Host.Takeover(Self, SameClient);
+      CandidateLink := False;
+      Adopted := True;
+      ControllerLink := True;
+      Exit;
+    End;
+  If Rejected Then
+    AdmissionClosing := True;
+End;
+
 Procedure TMonitorLinkThread.BecomeController;
 Var
-  Previous: TMonitorLinkThread;
   Reject: TMonitorFrame;
   Peer: TInetSockAddr;
   PeerLength: TSockLen;
@@ -723,30 +773,32 @@ Var
 Begin
   If Not Assigned(Host) Then
     Exit;
-  Previous := Host.PrepareReplace(Self);
-  Try
-    If Assigned(Previous) And Not Previous.WaitRetired(MonitorReplaceFlushMs + 200) Then
-      Host.ReleaseController(Previous);
-  Finally
-    If Assigned(Previous) Then
-      Previous.Release;
-  End;
-  If Terminated Or DropLink Then
-    Exit;
   Peer := Default(TInetSockAddr);
   PeerLength := SizeOf(Peer);
   IsLoopback := (fpGetPeerName(SocketHandle, @Peer, @PeerLength) = 0) And
     (Peer.sin_family = AF_INET) And ((NToHL(Peer.sin_addr.s_addr) Shr 24) = 127);
-  If Not Host.AcceptLink(Reject, IsLoopback) Then
+  { No live controller: adopt this socket. A failure that names a reject is terminal.
+    A failure with an empty reject means another controller already holds the session. }
+  If Host.TryAdopt(Self, Reject, IsLoopback) Then
     Begin
-      If Reject.Json <> '' Then
-        SendReject(Reject);
+      Adopted := True;
+      ControllerLink := True;
+      Exit;
+    End;
+  If Reject.Json <> '' Then
+    Begin
+      SendReject(Reject);
       DropReason := 'handshake rejected';
       Exit;
     End;
-  Host.AdoptController(Self);
-  Adopted := True;
-  ControllerLink := True;
+  If Not Host.ClaimCandidate(Self, IsLoopback) Then
+    Begin
+      DropReason := 'candidate bound';
+      MonitorLog(2, 'candidate bound bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+      Exit;
+    End;
+  CandidateLink := True;
+  CandidateUntil := GetTickCount64 + MonitorAdmissionMs;
 End;
 
 Function TMonitorLinkThread.PollWait(TimeoutMs: Integer; WantWrite: Boolean): Boolean;
@@ -830,6 +882,8 @@ Begin
   If ReadAgain Then
     Exit(0);
   NowMs := GetTickCount64;
+  If CandidateLink And (CandidateUntil <> 0) Then
+    Exit(RemainingMs(NowMs, CandidateUntil));
   If Not ControllerLink Then
     Exit(RemainingMs(NowMs, HandshakeStart + MonitorPartialFrameMs));
   Result := MonitorHeartbeatMs;
@@ -921,7 +975,9 @@ Begin
       If Ok Then
         Begin
           Inc(Consumed);
-          If ControllerLink And Assigned(Host) Then
+          If CandidateLink Then
+            HandleCandidate(Frame)
+          Else If ControllerLink And Assigned(Host) Then
             Try
               Host.DeliverFrame(Self, Frame);
             Except
@@ -1080,6 +1136,13 @@ Begin
   If DropLink Then
     Exit;
   NowMs := GetTickCount64;
+  If CandidateLink And (CandidateUntil <> 0) And (NowMs >= CandidateUntil) Then
+    Begin
+      DropLink := True;
+      DropReason := 'admission timeout';
+      MonitorLog(2, 'admission timeout bind=' + BindAddress + ' port=' + IntToStr(BoundPort));
+      Exit;
+    End;
   If (PartialSince <> 0) And (NowMs >= PartialSince + MonitorPartialFrameMs) Then
     Begin
       DropLink := True;
@@ -1135,7 +1198,7 @@ Begin
   If Not Handshake Then
     Exit;
   BecomeController;
-  If Not ControllerLink Then
+  If Not ControllerLink And Not CandidateLink Then
     Exit;
   While Not Terminated And Not DropLink Do
     Begin
@@ -1175,6 +1238,12 @@ Begin
       If ControllerLink And Assigned(Host) Then
         Host.NoteTime(Self, GetTickCount64);
       ServiceOnce;
+      If AdmissionClosing And (Unsent = '') And Not WriteOwed And Not ReadOwed Then
+        Begin
+          DropLink := True;
+          DropReason := 'admission rejected';
+          Break;
+        End;
       If ControllerLink And Assigned(Host) Then
         Host.NotePartialFrame(Self, PartialSince <> 0);
       { Reads and timers can queue frames after the readiness snapshot. Wait for
@@ -1207,6 +1276,8 @@ Begin
     { Free the accepted stream before the session reset, so the simultaneous cap
       does not keep a finished socket until the accept idle. }
     ReleaseAccepted;
+    If CandidateLink And Assigned(Host) Then
+      Host.ReleaseCandidate(Self);
     If Adopted And Assigned(Host) Then
       Host.ReleaseController(Self);
     SignalRetired;

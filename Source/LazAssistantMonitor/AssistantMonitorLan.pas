@@ -11,8 +11,9 @@ Unit AssistantMonitorLan;
   hands each accepted socket to a link thread and does not read or write it.
   AcceptIdleTimeOut stays 250 ms and is not on any send or receive path.
   TLS, the wake handle, and the frame loop live in AssistantMonitorLink.
-  A second socket that finishes TLS replaces the controller. The spare
-  rejected busy path is gone.
+  A second socket that finishes TLS is a candidate. It replaces the controller
+  only after hello/auth or pair succeeds. An idle or rejected candidate leaves
+  the live controller alone. The spare rejected busy path is gone.
 
   Listen path is ssockets.TInetServer. The client handler is a plain
   TSocketHandler, so accept does not call SSL_accept. OpenSSL load is
@@ -39,7 +40,9 @@ Uses
 
 Const
   MonitorAcceptIdleMs = 250;
-  MonitorSimultaneousCap = 2;
+  { One controller plus two pre-authentication candidates. A further socket is not accepted. }
+  MonitorCandidateBound = 2;
+  MonitorSimultaneousCap = 3;
 
 Type
   TMonitorListenThread = Class;
@@ -51,6 +54,8 @@ Type
     FLock: TRTLCriticalSection;
     FThread: TMonitorListenThread;
     FController: TMonitorLinkThread;
+    FCandidates: Array Of TMonitorLinkThread;
+    FCandidateGates: Array Of TMonitorCandidateGate;
     FHandler: TMonitorFrameHandler;
     FSession: TMonitorSession;
     FState: TMonitorCarrierState;
@@ -96,7 +101,12 @@ Type
     Procedure NoteTime(Link: TMonitorLinkThread; NowMs: QWord); Override;
     Function AcceptLink(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Override;
     Function CloseRequested(Link: TMonitorLinkThread): Boolean; Override;
-    Function PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread; Override;
+    Function TryAdopt(Link: TMonitorLinkThread; Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean; Override;
+    Function ClaimCandidate(Link: TMonitorLinkThread; IsLoopback: Boolean): Boolean; Override;
+    Procedure ReleaseCandidate(Link: TMonitorLinkThread); Override;
+    Function OfferCandidate(Link: TMonitorLinkThread; Const Frame: TMonitorFrame; Out ReplyJson: String;
+      Out Authenticated, Rejected, SameClient: Boolean): Boolean; Override;
+    Procedure Takeover(Link: TMonitorLinkThread; SameClient: Boolean); Override;
     Procedure AdoptController(Link: TMonitorLinkThread); Override;
     Function ReleaseController(Link: TMonitorLinkThread): Boolean; Override;
     { Valid from a successful Start until Stop returns. Stop joins the thread. Do not WaitFor as well. }
@@ -258,6 +268,8 @@ Begin
   InitCriticalSection(FLock);
   FThread := Nil;
   FController := Nil;
+  SetLength(FCandidates, 0);
+  SetLength(FCandidateGates, 0);
   FHandler := Nil;
   FSession := Nil;
   FState := mcsIdle;
@@ -746,21 +758,174 @@ Begin
   Result := Assigned(Session) And Session.CloseRequested;
 End;
 
-Function TMonitorLanCarrier.PrepareReplace(Link: TMonitorLinkThread): TMonitorLinkThread;
+Function TMonitorLanCarrier.TryAdopt(Link: TMonitorLinkThread; Out RejectFrame: TMonitorFrame; IsLoopback: Boolean): Boolean;
 Begin
-  Result := Nil;
+  RejectFrame.Version := MonitorFrameVersion;
+  RejectFrame.Flags := 0;
+  RejectFrame.Json := '';
   LockCarrier;
   Try
-    If FController = Link Then
-      Exit;
-    Result := FController;
-    If Assigned(Result) Then
-      Result.Retain;
+    Result := Not Assigned(FController);
   Finally
     UnlockCarrier;
   End;
-  If Assigned(Result) Then
-    Result.StartReplace;
+  If Not Result Then
+    Exit;
+  If Not AcceptLink(RejectFrame, IsLoopback) Then
+    Exit(False);
+  { AcceptHandshake moved listening to accepted. Adopt before any other link can. }
+  LockCarrier;
+  Try
+    If Assigned(FController) Then
+      Result := False
+    Else
+      Begin
+        FController := Link;
+        Result := True;
+      End;
+  Finally
+    UnlockCarrier;
+  End;
+  If Not Result Then
+    Exit;
+  NoteConnected;
+  If Assigned(FSession) Then
+    FSession.SetOutboundWake(@WakeController);
+End;
+
+Function TMonitorLanCarrier.ClaimCandidate(Link: TMonitorLinkThread; IsLoopback: Boolean): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  If Not Assigned(Link) Then
+    Exit;
+  LockCarrier;
+  Try
+    If Length(FCandidates) >= MonitorCandidateBound Then
+      Exit;
+    Index := Length(FCandidates);
+    SetLength(FCandidates, Index + 1);
+    SetLength(FCandidateGates, Index + 1);
+    FCandidates[Index] := Link;
+    FCandidateGates[Index] := Default(TMonitorCandidateGate);
+    FCandidateGates[Index].Loopback := IsLoopback;
+    Result := True;
+  Finally
+    UnlockCarrier;
+  End;
+End;
+
+Procedure TMonitorLanCarrier.ReleaseCandidate(Link: TMonitorLinkThread);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(Link) Then
+    Exit;
+  LockCarrier;
+  Try
+    For Index := 0 To High(FCandidates) Do
+      If FCandidates[Index] = Link Then
+        Begin
+          FCandidates[Index] := FCandidates[High(FCandidates)];
+          FCandidateGates[Index] := FCandidateGates[High(FCandidateGates)];
+          SetLength(FCandidates, Length(FCandidates) - 1);
+          SetLength(FCandidateGates, Length(FCandidateGates) - 1);
+          Break;
+        End;
+  Finally
+    UnlockCarrier;
+  End;
+End;
+
+Function TMonitorLanCarrier.OfferCandidate(Link: TMonitorLinkThread; Const Frame: TMonitorFrame; Out ReplyJson: String;
+  Out Authenticated, Rejected, SameClient: Boolean): Boolean;
+Var
+  Index, Found: Integer;
+  Gate: TMonitorCandidateGate;
+  Step: TMonitorAdmitStep;
+  Session: TMonitorSession;
+Begin
+  ReplyJson := '';
+  Authenticated := False;
+  Rejected := False;
+  SameClient := False;
+  Result := False;
+  Step := adRejected;
+  Session := CopySession;
+  If Not Assigned(Session) Then
+    Exit;
+  LockCarrier;
+  Try
+    Found := -1;
+    For Index := 0 To High(FCandidates) Do
+      If FCandidates[Index] = Link Then
+        Found := Index;
+    If Found < 0 Then
+      Exit;
+    Gate := FCandidateGates[Found];
+  Finally
+    UnlockCarrier;
+  End;
+  Step := Session.OfferCandidateFrame(Gate, Frame, ReplyJson, SameClient);
+  LockCarrier;
+  Try
+    For Index := 0 To High(FCandidates) Do
+      If FCandidates[Index] = Link Then
+        FCandidateGates[Index] := Gate;
+  Finally
+    UnlockCarrier;
+  End;
+  Authenticated := Step = adAuthenticated;
+  Rejected := Step = adRejected;
+  Result := True;
+End;
+
+Procedure TMonitorLanCarrier.Takeover(Link: TMonitorLinkThread; SameClient: Boolean);
+Var
+  Previous: TMonitorLinkThread;
+  Reason, ClientId, ClientName: String;
+  Index: Integer;
+  Session: TMonitorSession;
+Begin
+  Previous := Nil;
+  ClientId := '';
+  ClientName := '';
+  LockCarrier;
+  Try
+    For Index := 0 To High(FCandidates) Do
+      If FCandidates[Index] = Link Then
+        Begin
+          ClientId := FCandidateGates[Index].ClientId;
+          ClientName := FCandidateGates[Index].ClientName;
+          Break;
+        End;
+    Previous := FController;
+    If Previous = Link Then
+      Previous := Nil
+    Else If Assigned(Previous) Then
+      Previous.Retain;
+    FController := Link;
+  Finally
+    UnlockCarrier;
+  End;
+  ReleaseCandidate(Link);
+  If SameClient Then
+    Reason := 'reconnected'
+  Else
+    Reason := 'replaced';
+  If Assigned(Previous) Then
+    Begin
+      Previous.StartReplace(Reason);
+      Previous.Release;
+    End;
+  NoteConnected;
+  Session := CopySession;
+  If Assigned(Session) Then
+    Begin
+      Session.NoteAuthorisedTakeover(ClientId, ClientName);
+      Session.SetOutboundWake(@WakeController);
+    End;
 End;
 
 Procedure TMonitorLanCarrier.AdoptController(Link: TMonitorLinkThread);

@@ -45,6 +45,8 @@ Const
   MonitorHeartbeatMs = 10000;
   MonitorDeadSessionMs = 30000;
   MonitorPartialFrameMs = 10000;
+  { An idle TLS candidate holds a slot only this long. It does not retire the controller. }
+  MonitorAdmissionMs = 10000;
   { Closed approval ids remembered for this IDE session. Older ids are forgotten. }
   MonitorClosedToolMemory = 64;
   MonitorCrockfordAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -54,6 +56,25 @@ Const
 Function MintMonitorEpoch: String;
 
 Type
+  TMonitorAdmitStep = (
+    adContinue,
+    adRejected,
+    adAuthenticated
+  );
+
+  { Per-candidate handshake. Not the live controller's nonce or cursor. }
+  TMonitorCandidateGate = Record
+    Open: Boolean;
+    ExpectPair: Boolean;
+    ClientId: String;
+    ClientName: String;
+    ClientVersion: Integer;
+    NonceHex: String;
+    NonceUntil: QWord;
+    NonceUsed: Boolean;
+    Loopback: Boolean;
+  End;
+
   TMonitorSessionState = (
     mssStopped,
     mssListening,
@@ -268,6 +289,11 @@ Type
     Procedure StopListening;
     { False fills RejectFrame for the spare socket. The controller is unchanged. }
     Function AcceptHandshake(Out RejectFrame: TMonitorFrame; IsLoopback: Boolean = False): Boolean;
+    { A candidate's hello, pair, auth, and ping. Does not change the live controller or its cursor. }
+    Function OfferCandidateFrame(Var Gate: TMonitorCandidateGate; Const Frame: TMonitorFrame; Out ReplyJson: String;
+      Out SameClient: Boolean): TMonitorAdmitStep;
+    { The candidate is now the controller. Keeps the epoch, cursor, and plan. }
+    Procedure NoteAuthorisedTakeover(Const ClientId, ClientName: String);
     Procedure NoteSocketClosed;
     Procedure NotePartialFrame(Open: Boolean);
     Procedure NoteTime(NowMs: QWord);
@@ -1976,6 +2002,254 @@ Begin
       LogLine(2, 'rejected reason=disabled bind=' + FBindAddress + ' port=' + IntToStr(FPort))
     Else
       LogLine(2, 'rejected reason=busy bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Function TMonitorSession.OfferCandidateFrame(Var Gate: TMonitorCandidateGate; Const Frame: TMonitorFrame; Out ReplyJson: String;
+  Out SameClient: Boolean): TMonitorAdmitStep;
+Var
+  Message: TMonitorMessage;
+  ErrorText, Expected, SavedError: String;
+  Hello: TMonitorHello;
+  HelloOk: TMonitorHelloOk;
+  Pair: TMonitorPair;
+  Auth: TMonitorAuth;
+  Ticks: TMonitorTicks;
+  Index: Integer;
+  NonceHex: AnsiString;
+  IdBytes, TokenBytes: TBytes;
+  CodeArmed: Boolean;
+Begin
+  ReplyJson := '';
+  SameClient := False;
+  Result := adRejected;
+  LockSession;
+  Try
+    If FState = mssStopped Then
+      Begin
+        ReplyJson := EncodeCommandRejected(NewHostId, 'disabled', MonitorCatalogueVersion, Gate.ClientVersion);
+        Exit;
+      End;
+    If Not TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText) Then
+      Begin
+        If ErrorText = 'Unsupported catalogue version.' Then
+          ReplyJson := EncodeCommandRejectedVersion(Message.Version, NewHostId, 'protocol', MonitorCatalogueVersion, Message.Version)
+        Else
+          ReplyJson := EncodeCommandRejected(NewHostId, 'protocol', MonitorCatalogueVersion, Gate.ClientVersion);
+        Exit;
+      End;
+    If Message.Kind = mmkPing Then
+      Begin
+        If Not DecodeCommandTicks(Message.PayloadJson, Ticks) Then
+          Ticks.Ticks := 0;
+        ReplyJson := EncodeCommandTicks(mmkPong, NewHostId, Ticks.Ticks);
+        Result := adContinue;
+        Exit;
+      End;
+    If Message.Kind = mmkBye Then
+      Exit;
+    If Message.Kind = mmkHello Then
+      Begin
+        If Not DecodeCommandHello(Message.PayloadJson, Hello) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'protocol', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Gate.Open := True;
+        Gate.ClientName := Hello.ClientName;
+        Gate.ClientVersion := StrToIntDef(Hello.ClientVersion, 0);
+        Gate.ExpectPair := Not Hello.HasClientId;
+        Gate.NonceUsed := False;
+        Gate.NonceHex := '';
+        Gate.ClientId := '';
+        If Not Hello.HasClientId Then
+          Begin
+            Result := adContinue;
+            Exit;
+          End;
+        If IsRevoked(Hello.ClientId) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'revoked', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Index := FindClient(Hello.ClientId);
+        If Index < 0 Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Gate.ClientId := Hello.ClientId;
+        SetLength(IdBytes, 0);
+        IdBytes := RandomBytes(MonitorNonceBytes);
+        If Length(IdBytes) <> MonitorNonceBytes Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        NonceHex := BytesToHexStr(IdBytes);
+        Gate.NonceHex := LowerCase(String(NonceHex));
+        Gate.NonceUntil := ClockMs + MonitorNonceTtlMs;
+        HelloOk.Nonce := Gate.NonceHex;
+        HelloOk.ServerName := MonitorServerName;
+        HelloOk.Epoch := FEpoch;
+        HelloOk.Cursor := FCommittedCursor;
+        HelloOk.ConversationId := FConversationId;
+        HelloOk.ProjectRoot := FProjectRoot;
+        HelloOk.Title := FTitle;
+        HelloOk.HostId := FInstallationHostId;
+        ReplyJson := EncodeCommandHelloOk(NewHostId, HelloOk);
+        Result := adContinue;
+        Exit;
+      End;
+    If Message.Kind = mmkPair Then
+      Begin
+        If Not Gate.ExpectPair Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        If Not DecodeCommandPair(Message.PayloadJson, Pair) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'protocol', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        CodeArmed := PairCodeActive;
+        If (Not FPairCodeRequired) And ((Not CodeArmed) Or (Trim(Pair.Code) = '')) Then
+          Begin
+            If (FHostFingerprint <> '') And (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
+              Begin
+                ReplyJson := EncodeCommandRejected(NewHostId, 'fingerprint', MonitorCatalogueVersion, Gate.ClientVersion);
+                Exit;
+              End;
+          End
+        Else If Not CodeArmed Then
+          Begin
+            If FCodeExpired Then
+              Begin
+                FCodeExpired := False;
+                ReplyJson := EncodeCommandRejected(NewHostId, 'expired', MonitorCatalogueVersion, Gate.ClientVersion);
+                Exit;
+              End;
+            If FPairGate Or Not Gate.Loopback Then
+              Begin
+                ReplyJson := EncodeCommandRejected(NewHostId, 'pair_code', MonitorCatalogueVersion, Gate.ClientVersion);
+                Exit;
+              End;
+          End
+        Else
+          Begin
+            If (FHostFingerprint <> '') And (NormalizeHex(Pair.Fingerprint) <> NormalizeHex(FHostFingerprint)) Then
+              Begin
+                ReplyJson := EncodeCommandRejected(NewHostId, 'fingerprint', MonitorCatalogueVersion, Gate.ClientVersion);
+                Exit;
+              End;
+            If Not ConstantTimeEqual(UpperCase(Trim(Pair.Code)), FPairCode) Then
+              Begin
+                Inc(FPairFailures);
+                ReplyJson := EncodeCommandRejected(NewHostId, 'pair_code', MonitorCatalogueVersion, Gate.ClientVersion);
+                If FPairFailures >= MonitorPairFailureLimit Then
+                  Begin
+                    DiscardPairCode(False);
+                    Exit;
+                  End;
+                Result := adContinue;
+                Exit;
+              End;
+          End;
+        IdBytes := RandomBytes(MonitorClientIdBytes);
+        TokenBytes := RandomBytes(MonitorSessionTokenBytes);
+        If (Length(IdBytes) <> MonitorClientIdBytes) Or (Length(TokenBytes) <> MonitorSessionTokenBytes) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Index := Length(FClients);
+        SetLength(FClients, Index + 1);
+        FClients[Index].Id := String(BytesToHexStr(IdBytes));
+        FClients[Index].Name := Gate.ClientName;
+        FClients[Index].Token := String(BytesEncodeBase64(TokenBytes, True, False, False));
+        FClients[Index].Fingerprint := Pair.Fingerprint;
+        FClients[Index].PairedAt := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"', LocalTimeToUniversal(Now));
+        If Not PersistClients(ErrorText) Then
+          Begin
+            SetLength(FClients, Index);
+            SavedError := ErrorText;
+            FLastError := SavedError;
+            ReplyJson := EncodeCommandRejected(NewHostId, 'protocol', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Gate.ClientId := FClients[Index].Id;
+        Gate.ClientName := FClients[Index].Name;
+        DiscardPairCode(False);
+        FPairGate := False;
+        SameClient := (FConnectionClientId <> '') And (FConnectionClientId = Gate.ClientId);
+        ReplyJson := EncodeCommandPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token);
+        Result := adAuthenticated;
+        LogLine(1, 'candidate pair client=' + Gate.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+        Exit;
+      End;
+    If Message.Kind = mmkAuth Then
+      Begin
+        If Not DecodeCommandAuth(Message.PayloadJson, Auth) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'protocol', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        If (Gate.NonceHex = '') Or Gate.NonceUsed Or (ClockMs >= Gate.NonceUntil) Or (Auth.ClientId <> Gate.ClientId) Then
+          Begin
+            Gate.NonceUsed := True;
+            If (Gate.NonceHex <> '') And (ClockMs >= Gate.NonceUntil) Then
+              ReplyJson := EncodeCommandRejected(NewHostId, 'expired', MonitorCatalogueVersion, Gate.ClientVersion)
+            Else
+              ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Gate.NonceUsed := True;
+        Index := FindClient(Auth.ClientId);
+        If Index < 0 Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            Exit;
+          End;
+        Expected := MonitorAuthMac(FClients[Index].Token, Gate.NonceHex);
+        If (Expected = '') Or (Not ConstantTimeEqual(LowerCase(Auth.Hmac), Expected)) Then
+          Begin
+            ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+            LogLine(2, 'candidate auth rejected client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+            Exit;
+          End;
+        Gate.ClientName := FClients[Index].Name;
+        SameClient := (FConnectionClientId <> '') And (FConnectionClientId = Auth.ClientId);
+        Result := adAuthenticated;
+        LogLine(1, 'candidate auth client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+        Exit;
+      End;
+    ReplyJson := EncodeCommandRejected(NewHostId, 'auth', MonitorCatalogueVersion, Gate.ClientVersion);
+  Finally
+    UnlockSession;
+  End;
+End;
+
+Procedure TMonitorSession.NoteAuthorisedTakeover(Const ClientId, ClientName: String);
+Begin
+  LockSession;
+  Try
+    If ClientId <> '' Then
+      FConnectionClientId := ClientId;
+    If ClientName <> '' Then
+      FClientName := ClientName;
+    If FEpoch = '' Then
+      Begin
+        FEpoch := MintMonitorEpoch;
+        FCommittedCursor := 0;
+      End;
+    If (FState = mssListening) Or (FState = mssAccepted) Then
+      FState := mssLive;
+    FCloseRequested := False;
+    AdoptRunningHost;
+    LogLine(1, 'authorised takeover client=' + FConnectionClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
   Finally
     UnlockSession;
   End;

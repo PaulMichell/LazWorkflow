@@ -9,7 +9,7 @@ Program AssistantMonitorSocketTest;
 
   The partial-record check is an incomplete TLS application-data record after
   the handshake. A second handshake must not stall the link already up.
-  A second controller replaces the first with bye reason replaced.
+  TLS alone does not replace the controller. An authenticated link does.
   The kernel port is fpGetSockName. TInetServer.Port is not the connect port. }
 
 {$IFDEF FPC}
@@ -633,23 +633,17 @@ Begin
     Check('second tls connection', Spare.Open(Port, 3000, ErrorText));
     If ErrorText <> '' Then
       WriteLn('detail second ', ErrorText);
-    Check('first link replaced', First.ReadMessage(After(3000), Message, ErrorText) And ByeReason(Message, Reason) And
-      (Reason = 'replaced'));
-    If Reason <> 'replaced' Then
-      WriteLn('detail replaced reason=', Reason, ' type=', Message.TypeName);
-    Check('second reaches accepted', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
-    Check('second ping', Spare.WriteJson(EncodeCommandTicks(mmkPing, 'ping-spare', 11), After(3000)));
-    Check('second pong', Spare.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 11));
+    Check('idle candidate does not replace', Not First.ReadMessage(After(400), Message, ErrorText));
+    Check('controller remains accepted', (Session.State = mssAccepted) And (Lan.State = mcsConnected));
+    Check('controller ping during candidate', First.WriteJson(EncodeCommandTicks(mmkPing, 'ping-still', 11), After(3000)));
+    Check('controller pong during candidate', First.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And
+      (Ticks = 11));
     If ErrorText <> '' Then
-      WriteLn('detail second pong ', ErrorText);
-    Check('replaced link closed', Not First.ReadMessage(After(1000), Message, ErrorText) And (Pos('closed', ErrorText) > 0));
-    If ErrorText <> '' Then
-      WriteLn('detail replaced close ', ErrorText);
-    FreeAndNil(First);
-
-    Check('bye write', Spare.WriteJson(EncodeCommandBye('bye1', 'client'), After(3000)));
-    Check('listening after bye', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
+      WriteLn('detail candidate ', ErrorText);
     FreeAndNil(Spare);
+    Check('bye write', First.WriteJson(EncodeCommandBye('bye1', 'client'), After(3000)));
+    Check('listening after bye', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));
+    FreeAndNil(First);
 
     Again := TLoopClient.Create;
     Check('reconnect after bye', Again.Open(Port, 3000, ErrorText));
@@ -685,15 +679,8 @@ Begin
     If ErrorText <> '' Then
       WriteLn('detail probe ', ErrorText, ' elapsed=', IntToStr(Elapsed));
     Check('partial record does not stall', Elapsed < 1800);
-    Check('partial link replaced', Partial.ReadMessage(After(3000), Message, ErrorText) And ByeReason(Message, Reason) And
-      (Reason = 'replaced'));
-    If Reason <> 'replaced' Then
-      WriteLn('detail partial replaced reason=', Reason, ' type=', Message.TypeName, ' ', ErrorText);
-    Check('probe is controller', WaitSession(mssAccepted, 2000) And WaitCarrier(mcsConnected, 2000));
-    Check('probe ping', Probe.WriteJson(EncodeCommandTicks(mmkPing, 'ping-probe', 3), After(3000)));
-    Check('probe pong', Probe.ReadMessage(After(3000), Message, ErrorText) And PongTicks(Message, Ticks) And (Ticks = 3));
-    If ErrorText <> '' Then
-      WriteLn('detail probe pong ', ErrorText);
+    Check('unauthenticated probe does not replace', Not Partial.ReadMessage(After(400), Message, ErrorText));
+    Check('probe is not the controller', (Session.State = mssAccepted) And (Lan.State = mcsConnected));
     FreeAndNil(Probe);
     FreeAndNil(Partial);
     Check('listening after partial', WaitCarrier(mcsListening, 3000) And WaitSession(mssListening, 3000));

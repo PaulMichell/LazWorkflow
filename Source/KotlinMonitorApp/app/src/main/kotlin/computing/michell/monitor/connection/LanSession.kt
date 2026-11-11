@@ -1733,6 +1733,9 @@ class LanSession(
         if (bye?.reason == "replaced") {
           noteReadEnd(epoch, ReadEnd.Rejected, context)
           publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason)
+        } else if (bye?.reason == "reconnected") {
+          // Same client took a new socket. Retry; do not treat it as paired elsewhere.
+          noteReadEnd(epoch, ReadEnd.PeerClosed, context)
         } else if (bye?.reason == "disabled" || bye?.reason == "revoked") {
           noteReadEnd(epoch, ReadEnd.Disabled, context)
           publishCurrent(epoch, LinkPhase.Paused, HostClosedBanner, bye.reason)

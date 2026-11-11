@@ -91,6 +91,8 @@ Var
   Lan: TMonitorLanCarrier;
   LanRef: IMonitorCarrier;
   Session: TMonitorSession;
+  PairedClientId: String;
+  PairedToken: String;
   Answerer: TResumeAnswerer;
   ErrorText: String;
   BulkSerial: Integer;
@@ -606,9 +608,12 @@ End;
 Function Pair(Client: TLoopClient): Boolean;
 Var
   Message: TMonitorMessage;
+  PairOk: TMonitorPairOk;
   ErrorText: String;
 Begin
   Result := False;
+  PairedClientId := '';
+  PairedToken := '';
   If Not Client.WriteJson(EncodeCommandHello('hello1', 'LinkTest', '1', ''), After(3000)) Then
     Exit;
   { No pairing code is armed, so the open-LAN pair is admitted. }
@@ -623,7 +628,11 @@ Begin
   Until Message.Kind <> mmkPing;
   If Message.Kind <> mmkPairOk Then
     WriteLn('detail pair type=', Message.TypeName);
-  Result := (Message.Kind = mmkPairOk) And WaitSession(mssLive, 3000);
+  If Not DecodeCommandPairOk(Message.PayloadJson, PairOk) Then
+    Exit;
+  PairedClientId := PairOk.ClientId;
+  PairedToken := PairOk.SessionToken;
+  Result := (Message.Kind = mmkPairOk) And (PairedClientId <> '') And (PairedToken <> '') And WaitSession(mssLive, 3000);
 End;
 
 Procedure MeasureThroughput(Client: TLoopClient);
@@ -1364,44 +1373,149 @@ Begin
   WriteLn('metric resume_baseline frames=', Frames, ' expected=', LinkResumeFrames, ' begin_ms=', ClockDelta(BeginAt, Sent),
     ' page_ms=', ClockDelta(PageAt, Sent), ' end_ms=', ClockDelta(EndAt, Sent), ' clock=GetTickCount64');
 End;
-Procedure MeasureReplace(Client: TLoopClient);
+Function ReceivedBye(Client: TLoopClient; Ms: Integer; Out Reason: String): Boolean;
 Var
-  Second: TLoopClient;
   Message: TMonitorMessage;
   Bye: TMonitorBye;
   ErrorText: String;
-  SawBye, SawBusy: Boolean;
+  Deadline: QWord;
 Begin
-  Second := TLoopClient.Create;
+  Result := False;
+  Reason := '';
+  Deadline := GetTickCount64 + QWord(Ms);
+  While Client.ReadMessage(Deadline, Message, ErrorText) Do
+    If (Message.Kind = mmkBye) And DecodeCommandBye(Message.PayloadJson, Bye) Then
+      Begin
+        Reason := Bye.Reason;
+        Exit(True);
+      End;
+End;
+
+Function ExpectPong(Client: TLoopClient; Const Id: String; Ticks: Int64): Boolean;
+Var
+  Message: TMonitorMessage;
+  Seen: TMonitorTicks;
+  ErrorText: String;
+Begin
+  Result := False;
+  If Not Client.WriteJson(EncodeCommandTicks(mmkPing, Id, Ticks), After(3000)) Then
+    Exit;
+  While Client.ReadMessage(After(3000), Message, ErrorText) Do
+    If (Message.Kind = mmkPong) And DecodeCommandTicks(Message.PayloadJson, Seen) And (Seen.Ticks = Ticks) Then
+      Exit(True);
+End;
+
+Function ReadUntilKind(Client: TLoopClient; Kind: TMonitorMessageKind; Deadline: QWord; Out Message: TMonitorMessage): Boolean;
+Var
+  ErrorText: String;
+Begin
+  Result := False;
+  Message := Default(TMonitorMessage);
+  While GetTickCount64 < Deadline Do
+    Begin
+      If Not Client.ReadMessage(Deadline, Message, ErrorText) Then
+        Exit;
+      If Message.Kind = Kind Then
+        Exit(True);
+    End;
+End;
+
+Procedure MeasureAdmission(Var Client: TLoopClient);
+Var
+  Idle, Bad, Good, Extra: TLoopClient;
+  Message: TMonitorMessage;
+  HelloOk: TMonitorHelloOk;
+  Bye: TMonitorBye;
+  ErrorText, Epoch, Reason: String;
+  SawBye, SawBusy, SawReject: Boolean;
+Begin
+  Idle := Nil;
+  Bad := Nil;
+  Good := Nil;
+  Extra := Nil;
+  Session.BeginMirrorEpoch('epoch-admit', 'conv-admit', '/tmp/admit', 'Admit');
+  Epoch := Session.MirrorEpoch;
+  DrainClient(Client, 200);
   Try
-    Check('9.1 second socket connects', Second.Open(Lan.BoundPort, 3000, ErrorText));
+    Idle := TLoopClient.Create;
+    Check('4.1 idle candidate connects', Idle.Open(Lan.BoundPort, 3000, ErrorText));
     If ErrorText <> '' Then
-      WriteLn('detail replace ', ErrorText);
+      WriteLn('detail idle ', ErrorText);
+    Check('4.1 idle candidate does not replace', Not ReceivedBye(Client, 400, Reason));
+    Check('4.1 idle candidate leaves the phone live', (Session.State = mssLive) And (Session.MirrorEpoch = Epoch) And
+      (Lan.State = mcsConnected));
+    Check('4.1 phone still answers while a candidate is idle', ExpectPong(Client, 'ping-idle', 4));
+    FreeAndNil(Idle);
+
+    Bad := TLoopClient.Create;
+    Check('4.1 invalid candidate connects', Bad.Open(Lan.BoundPort, 3000, ErrorText));
+    Check('4.1 invalid hello is written', Bad.WriteJson(EncodeCommandHello('bad-hello', 'LinkTest', '1', 'not-a-client'),
+      After(3000)));
+    SawReject := False;
+    While Bad.ReadMessage(After(2000), Message, ErrorText) Do
+      If Message.Kind = mmkRejected Then
+        Begin
+          SawReject := True;
+          Break;
+        End;
+    Check('4.1 invalid auth is rejected', SawReject);
+    Check('4.1 invalid auth does not replace', Not ReceivedBye(Client, 400, Reason));
+    Check('4.1 phone remains after invalid auth', (Session.State = mssLive) And (Session.MirrorEpoch = Epoch));
+    FreeAndNil(Bad);
+
+    Bad := TLoopClient.Create;
+    Good := TLoopClient.Create;
+    Check('4.1 racing candidates connect', Bad.Open(Lan.BoundPort, 3000, ErrorText) And Good.Open(Lan.BoundPort, 3000, ErrorText));
+    If ErrorText <> '' Then
+      WriteLn('detail race ', ErrorText);
+    Check('4.1 both hellos are written', Bad.WriteJson(EncodeCommandHello('race-bad', 'LinkTest', '1', PairedClientId),
+      After(3000)) And Good.WriteJson(EncodeCommandHello('race-good', 'LinkTest', '1', PairedClientId), After(3000)));
+    Check('4.1 bad hello_ok', ReadUntilKind(Bad, mmkHelloOk, After(3000), Message) And
+      DecodeCommandHelloOk(Message.PayloadJson, HelloOk));
+    Check('4.1 bad auth is written', Bad.WriteJson(EncodeCommandAuth('race-bad-auth', PairedClientId, '00'), After(3000)));
+    Check('4.1 good hello_ok', ReadUntilKind(Good, mmkHelloOk, After(3000), Message) And
+      DecodeCommandHelloOk(Message.PayloadJson, HelloOk) And (HelloOk.Nonce <> ''));
+    Check('4.1 good auth is written', Good.WriteJson(EncodeCommandAuth('race-good-auth', PairedClientId,
+      MonitorAuthMac(PairedToken, HelloOk.Nonce)), After(3000)));
+    SawReject := False;
+    While Bad.ReadMessage(After(2000), Message, ErrorText) Do
+      If Message.Kind = mmkRejected Then
+        SawReject := True;
+    Check('4.1 racing invalid auth is rejected', SawReject);
     SawBye := False;
     SawBusy := False;
-    While Not SawBye Do
+    Reason := '';
+    While Client.ReadMessage(After(3000), Message, ErrorText) Do
       Begin
-        If Not Client.ReadMessage(After(2000), Message, ErrorText) Then
-          Break;
         If Message.Kind = mmkBye Then
           Begin
-            SawBye := DecodeCommandBye(Message.PayloadJson, Bye) And (Bye.Reason = 'replaced');
-            If Not SawBye Then
-              WriteLn('detail bye reason=', Message.Reason, ' payload=', String(Message.PayloadJson));
+            SawBye := DecodeCommandBye(Message.PayloadJson, Bye);
+            Reason := Bye.Reason;
+            Break;
           End
         Else If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
           SawBusy := True;
       End;
-    While Second.ReadMessage(After(200), Message, ErrorText) Do
-      If (Message.Kind = mmkRejected) And (Message.Reason = 'busy') Then
-        SawBusy := True;
-    Check('9.1 the old link receives bye replaced', SawBye);
-    Check('9.1 the new link reaches accepted', WaitSession(mssAccepted, 3000));
-    Check('9.1 a second socket is not rejected busy', Not SawBusy);
-    WriteLn('metric replace bye=', BoolToStr(SawBye, True), ' busy=', BoolToStr(SawBusy, True), ' state=',
-      Ord(Session.State));
+    Check('4.1 same-client takeover is reconnected, not paired elsewhere', SawBye And (Reason = 'reconnected'));
+    If Reason <> 'reconnected' Then
+      WriteLn('detail takeover reason=', Reason, ' bye=', BoolToStr(SawBye, True));
+    Check('4.1 takeover is not a busy reject', Not SawBusy);
+    Check('4.1 one controller keeps the epoch', (Session.State In [mssLive, mssBusy]) And (Session.MirrorEpoch = Epoch) And
+      (Lan.State = mcsConnected));
+    Check('4.1 authorised socket answers', ExpectPong(Good, 'ping-owner', 8));
+    FreeAndNil(Client);
+    Check('4.1 late old-link close does not reset the session', (Session.MirrorEpoch = Epoch) And
+      (Session.State In [mssLive, mssBusy]) And (Lan.State = mcsConnected));
+    Check('4.1 winner still answers after the old close', ExpectPong(Good, 'ping-late', 9));
+    Extra := TLoopClient.Create;
+    Check('4.1 a later idle socket does not steal the winner', Extra.Open(Lan.BoundPort, 3000, ErrorText) And
+      Not ReceivedBye(Good, 400, Reason) And (Session.MirrorEpoch = Epoch));
+    WriteLn('metric admission epoch=', Epoch, ' reason=', Reason, ' state=', Ord(Session.State));
   Finally
-    Second.Free;
+    FreeAndNil(Extra);
+    FreeAndNil(Good);
+    FreeAndNil(Bad);
+    FreeAndNil(Idle);
   End;
 End;
 
@@ -1446,7 +1560,7 @@ Begin
     MeasureCreditPing(Client);
     MeasureTailResume(Client, Head);
     MeasureBaselineResume(Client);
-    MeasureReplace(Client);
+    MeasureAdmission(Client);
   Finally
     Client.Free;
   End;

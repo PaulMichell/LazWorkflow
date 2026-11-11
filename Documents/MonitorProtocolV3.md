@@ -112,11 +112,13 @@ phone                                      host
   settings. The phone stores it with the pairing and keys its database on `(host_id, conversation_id)`. It does not
   change when the certificate is renewed, so a new certificate does not orphan cached conversations. This is the
   "hostFingerprint" of plan item 5.2.
-- **One controller.** A new link that authenticates replaces the old one. The old link gets `bye {reason:
-  "replaced"}`, is flushed for at most 500 ms, and closes. The host no longer answers `rejected {reason: "busy"}`, but
-  the reason stays in the closed set so a catalogue 3 phone can still read it.
-- `bye` may be sent by either side, then the sender closes. Reasons: `disabled`, `revoked`, `replaced`, `background`,
-  `user`, `protocol`.
+- **One controller.** A new link that authenticates replaces the old one. TLS alone does not. An idle or rejected
+  candidate leaves the live controller untouched. A different client gets `bye {reason: "replaced"}` on the old link.
+  The same client reconnecting gets `bye {reason: "reconnected"}` so the phone retries instead of pausing as paired
+  elsewhere. The bye is flushed for at most 500 ms, then the old link closes. The host no longer answers
+  `rejected {reason: "busy"}`, but the reason stays in the closed set so a catalogue 3 phone can still read it.
+- `bye` may be sent by either side, then the sender closes. Reasons: `disabled`, `revoked`, `replaced`, `reconnected`,
+  `background`, `user`, `protocol`.
 
 ## 4. Identity
 
@@ -399,7 +401,8 @@ resume. `insert_task` puts the inserted text on `command_state.text` when `state
   state[, reason][, text]}` with the recorded state.
 - `host_busy` is a reason for `error`, used only when the host refuses the command because of its real state (for
   example, a send while a reply is running). It is never a timeout, and it is never the answer to a second link. A
-  second controller replaces the first with `bye {reason: "replaced"}` (section 3). The `busy` reject is not sent.
+  an authenticated link replaces the first with `bye {reason: "replaced"}`, or `reconnected` when it is the same
+client (section 3). TLS handshake alone does not. The `busy` reject is not sent.
   The reason stays in the closed set so an older frame can still be read.
 
 ### 7.3 After an ambiguous disconnect
@@ -521,7 +524,7 @@ constant.
 | `refresh` (`plan_choices`, `menu_choices`) | not needed: menus are state keys, sent on change and on resume |
 | `approval_requested` | `state` key `approval` |
 | `queued`, `accepted`, `done`, `insert_result` | `command_state`. `insert_task` text is `command_state.text` when `state` is `done`. |
-| `rejected {reason: "busy"}` | not sent. A second controller gets `bye {reason: "replaced"}`. |
+| `rejected {reason: "busy"}` | not sent. An authenticated replacement gets `bye {reason: "replaced"}`, or `reconnected` for the same client. TLS alone does not replace. |
 | `image_get {turn_index, image_id}` | `image_get {conversation_id, image_id}` |
 | `hello_ok` epoch, cursor and conversation fields | `host_id` in `hello_ok`. The epoch string is `stream_id`. Same value. The rest is in the resume answer. |
 | plan body inside a plan frame | `plan_get` / `plan_data`. Never refused for size. |
