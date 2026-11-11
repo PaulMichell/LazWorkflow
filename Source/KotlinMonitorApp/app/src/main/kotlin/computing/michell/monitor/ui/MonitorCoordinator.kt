@@ -786,7 +786,8 @@ class MonitorCoordinator(
     // A replaced connection cannot report a send failure against the current screen.
     if (result.linkEpoch != session.linkEpoch || result.outcome == CatalogueWrite.Stale) return emptyList()
     if (held.any { command -> command.commandId == result.commandId }) return emptyList()
-    if (result.outcome == CatalogueWrite.Written) {
+    if (result.outcome == CatalogueWrite.Queued) return emptyList()
+    if (result.outcome == CatalogueWrite.Written || result.outcome == CatalogueWrite.Acknowledged) {
       if (result.commandId == submittedId) {
         submittedText = ""
         submittedId = ""

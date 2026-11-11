@@ -13,7 +13,7 @@ interface CommandLedger {
   fun openIds(): List<String>
   suspend fun remember(json: String)
   suspend fun applyHost(states: List<HostCommandState>): ReplayPlan
-  /** The socket accepted the bytes. A missing ledger ignores this. */
+  /** The socket write returned. Queue admission must not call this. A missing ledger ignores it. */
   suspend fun noteWritten(commandId: String) {}
 }
 

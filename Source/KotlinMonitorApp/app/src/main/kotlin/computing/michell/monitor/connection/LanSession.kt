@@ -169,7 +169,9 @@ data class LinkStatus(
   val phase: LinkPhase = LinkPhase.Idle,
   val banner: String = "",
   val draft: String = "",
-  val lastError: String = ""
+  val lastError: String = "",
+  /** Kept when the banner becomes Reconnecting. Not a session token or a prompt. */
+  val failureReason: String = ""
 )
 
 /**
@@ -679,7 +681,12 @@ internal fun isEssentialDelivery(kind: MessageKind): Boolean {
 }
 
 enum class CatalogueWrite {
+  /** The writer accepted the frame. The socket has not taken the bytes yet. */
+  Queued,
+  /** The owned socket write returned. Not a host acknowledgement. */
   Written,
+  /** The host reported a durable command state. */
+  Acknowledged,
   Failed,
   Stale
 }
@@ -719,9 +726,9 @@ fun stepCatalogue(accepted: AcceptedCatalogue, currentEpoch: Int, currentSocket:
   return CatalogueStep.Write(accepted)
 }
 
+/** Socket write, not queue admission. Admission uses [catalogueFromAdmission]. */
 fun catalogueFromWrite(accepted: AcceptedCatalogue, wrote: Boolean): CatalogueResult {
-  val outcome = if (wrote) CatalogueWrite.Written else CatalogueWrite.Failed
-  return CatalogueResult(accepted.commandId, accepted.linkEpoch, outcome)
+  return catalogueFromSocketWrite(accepted, wrote)
 }
 
 fun catalogueCommandId(json: String): String {
@@ -833,8 +840,27 @@ class LanSession(
   private var monitoringDemand = false
   @Volatile
   private var lastAttemptMs = clockMs() - ActivityRetryGapMs
+  @Volatile
+  private var attemptCount = 0
+  @Volatile
+  private var nextRetryAtMs = -1L
+  @Volatile
+  private var openingNow = false
+  @Volatile
+  private var transitionReason = ""
+  @Volatile
+  private var workerExit = ""
+  @Volatile
+  private var terminalKind = ""
+  @Volatile
+  private var lastCommittedProgressMs = -1L
+  private val queuedCommands = ArrayDeque<QueuedCommand>()
+  private val queuedLock = Any()
+  private val incidentState = MutableStateFlow(IncidentSnapshot())
 
   val status: StateFlow<LinkStatus> = statusState.asStateFlow()
+  /** Latest correlated incident. Export reads a fresh capture, not only this cache. */
+  val incident: StateFlow<IncidentSnapshot> = incidentState.asStateFlow()
   private val undeliveredState = MutableStateFlow("")
   val undeliveredPrompt: StateFlow<String> = undeliveredState.asStateFlow()
   private var retryJson = ""
@@ -864,15 +890,17 @@ class LanSession(
         is CatalogueStep.Done -> step.result
         is CatalogueStep.Write -> {
           val socket = step.accepted.socket as? TlsLink
-          val wrote = if (socket == null) false else offerCommand(step.accepted.json, socket)
-          if (wrote) ledger.noteWritten(step.accepted.commandId)
-          catalogueFromWrite(step.accepted, wrote)
+          val admitted = socket != null && offerCommand(step.accepted.json, socket)
+          // Admission is Queued and is reported by offerCommand. A miss is Failed, not Written.
+          if (admitted) null else catalogueFromAdmission(step.accepted, false)
         }
       }
-      if (result.outcome != CatalogueWrite.Written) {
-        diagnostic("outbound ${tryDecodeEnvelope(outboundJson).message.kind}: ${result.outcome}, generation=${result.linkEpoch}")
+      if (result != null) {
+        if (result.outcome != CatalogueWrite.Queued && result.outcome != CatalogueWrite.Written) {
+          trace("outbound ${tryDecodeEnvelope(outboundJson).message.kind}: ${result.outcome}, generation=${result.linkEpoch}")
+        }
+        emitResult(result)
       }
-      commandResultsChannel.send(result)
     }
   }
 
@@ -915,6 +943,10 @@ class LanSession(
     if (activeGeneration != context.generation || link !== context.socket) return
     val plan = ledger.applyHost(states)
     if (activeGeneration != context.generation || link !== context.socket) return
+    for (state in states) {
+      val acknowledged = catalogueFromHostState(state.ref, context.generation, state.state) ?: continue
+      emitResult(acknowledged)
+    }
     for (json in plan.resendJson) {
       if (!offerCommand(json, context.socket)) break
     }
@@ -953,6 +985,10 @@ class LanSession(
     lastActivityMs = clockMs()
     armed = true
     terminal = false
+    terminalKind = ""
+    attemptCount = 0
+    workerExit = ""
+    nextRetryAtMs = -1L
     policy.resume()
     stopped = false
     startLoop()
@@ -1087,7 +1123,8 @@ class LanSession(
    */
   fun replaceFingerprint(fingerprint: String) {
     if (normalizeFingerprint(fingerprint).length != 64) {
-      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.")
+      markTerminal("pin", "TLS pin mismatch.")
+      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.", "pin")
       return
     }
     store.save(store.load().copy(fingerprint = fingerprint))
@@ -1101,8 +1138,9 @@ class LanSession(
     store.save(store.load().copy(fingerprint = ""))
   }
 
-  /** User tapped Connect after a refused or disabled listener paused backoff. */
+  /** User tapped Connect after a refused or disabled listener paused backoff. A terminal failure stays. */
   fun resume() {
+    if (blocksAutomaticRecovery(terminal, terminalKind)) return
     lastActivityMs = clockMs()
     policy.resume()
     resumes.trySend(Unit)
@@ -1113,11 +1151,13 @@ class LanSession(
     stopped = true
     armed = false
     monitoringDemand = false
+    terminal = false
+    terminalKind = ""
     policy.pause()
     epochCounter.incrementAndGet()
     loop?.cancel()
     closeLink()
-    publish(LinkPhase.Disconnected, HostClosedBanner, "")
+    publish(LinkPhase.Disconnected, HostClosedBanner, "", "disconnect", clearFailure = true)
   }
 
   fun close() {
@@ -1164,14 +1204,14 @@ class LanSession(
     while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
       if (policy.paused) {
         val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
-        publish(LinkPhase.Paused, shown, statusState.value.lastError)
+        publish(LinkPhase.Paused, shown, statusState.value.lastError, "paused")
         resumes.receive()
         if (stopped || epochCounter.get() != epoch) return
         waitBeforeConnect = false
         continue
       }
       if (!inForeground) {
-        publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, statusState.value.lastError)
+        publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, "", "background")
         wakes.receive()
         continue
       }
@@ -1180,7 +1220,7 @@ class LanSession(
       // A monitoring demand is due to try even when the touch clock is idle.
       if (!monitoringDemand && !lanAvailable && !connectNow && !leftForBackground && !replaceLink &&
         (!waitBeforeConnect || appIdle())) {
-        publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
+        publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, "", "wifi")
         wakes.receive()
         if (stopped || epochCounter.get() != epoch) return
         continue
@@ -1193,17 +1233,21 @@ class LanSession(
       }
       if (waitBeforeConnect) {
         if (!lanAvailable && !retriesParked()) {
-          publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, statusState.value.lastError)
+          publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, "", "wifi")
         }
         if (retriesParked()) {
           // Nobody is using the app, and no plan, turn, or screen-off hold needs the link.
           // Stop trying until a touch, a key, the foreground or Wi-Fi wakes the loop.
-          publishCurrent(epoch, LinkPhase.Disconnected, IdleOfflineBanner, statusState.value.lastError)
+          publishCurrent(epoch, LinkPhase.Disconnected, IdleOfflineBanner, "", "idle")
           wakes.receive()
           if (stopped || epochCounter.get() != epoch) return
           continue
         }
-        val woke = waitBackoffOrWake(policy.nextDelayMs())
+        val delayMs = policy.nextDelayMs()
+        nextRetryAtMs = clockMs() + delayMs
+        publishIncident("retry", true)
+        val woke = waitBackoffOrWake(delayMs)
+        nextRetryAtMs = -1L
         if (stopped || epochCounter.get() != epoch) return
         if (woke) {
           policy.resetBackoff()
@@ -1227,7 +1271,7 @@ class LanSession(
         AttemptResult.Refused -> {
           // A refused port may be the listener starting. Keep the backoff instead of waiting for a tap.
         }
-        AttemptResult.Failed -> publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, statusState.value.lastError)
+        AttemptResult.Failed -> publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, "", "open-failed")
         AttemptResult.Opened -> {
           policy.resume()
           val end = try {
@@ -1244,13 +1288,14 @@ class LanSession(
           if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
             policy.pause()
             val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
-            publishCurrent(epoch, LinkPhase.Disconnected, shown, statusState.value.lastError)
+            publishCurrent(epoch, LinkPhase.Paused, shown, "", "user-action")
           } else if (end == ReadEnd.Background || leftForBackground) {
             waitBeforeConnect = false
             policy.resetBackoff()
-            publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, statusState.value.lastError)
+            publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, "", "background")
           } else {
-            publishCurrent(epoch, LinkPhase.Disconnected, ReconnectingBanner, statusState.value.lastError)
+            val reason = if (statusState.value.failureReason.isEmpty()) workerExit else ""
+            publishCurrent(epoch, LinkPhase.Disconnected, ReconnectingBanner, reason, "retry")
           }
         }
       }
@@ -1315,7 +1360,9 @@ class LanSession(
 
   private suspend fun openBounded(address: String, port: Int, fingerprint: String): TlsLink {
     var held: TlsLink? = null
+    openingNow = true
     try {
+      publishIncident("opening", true)
       return withTimeout(OpenBudgetMs) {
         withContext(Dispatchers.IO) {
           val socket = connector.open(address, port, fingerprint, lanRoute)
@@ -1331,6 +1378,8 @@ class LanSession(
     } catch (error: CancellationException) {
       abandonOpening(held)
       throw error
+    } finally {
+      openingNow = false
     }
   }
 
@@ -1379,7 +1428,7 @@ class LanSession(
     link = opened
     activeGeneration = generation
     writeStartedNanos = 0L
-    diagnostic("socket generation $generation, loop ${epochCounter.get()}")
+    trace("socket generation $generation, loop ${epochCounter.get()}")
     return context
   }
 
@@ -1389,12 +1438,14 @@ class LanSession(
     val record = store.load()
     val pinned = normalizeFingerprint(record.fingerprint)
     if (record.fingerprint.isNotEmpty() && pinned.length != 64) {
-      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.")
+      markTerminal("pin", "TLS pin mismatch.")
+      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.", "pin")
       return AttemptResult.Pinned
     }
     if (epochCounter.get() != epoch) return AttemptResult.Superseded
     lastAttemptMs = clockMs()
-    publishCurrent(epoch, LinkPhase.Connecting, "", "")
+    attemptCount += 1
+    publishCurrent(epoch, LinkPhase.Connecting, "", "", "opening")
     val opened = try {
       openBounded(record.address, record.port, record.fingerprint)
     } catch (error: CancellationException) {
@@ -1402,15 +1453,18 @@ class LanSession(
     } catch (error: Exception) {
       if (epochCounter.get() != epoch) return AttemptResult.Superseded
       if (isPinFailure(error)) {
-        publish(LinkPhase.Disconnected, "TLS pin mismatch.", error.message ?: "TLS pin mismatch.")
+        val detail = error.message ?: "TLS pin mismatch."
+        markTerminal("pin", detail)
+        publish(LinkPhase.Disconnected, "TLS pin mismatch.", detail, "pin")
         return AttemptResult.Pinned
       }
       if (isRefused(error)) {
-        publish(LinkPhase.Disconnected, ConnectionRefusedBanner, error.message ?: ConnectionRefusedBanner)
+        val detail = error.message ?: ConnectionRefusedBanner
+        publish(LinkPhase.Disconnected, ConnectionRefusedBanner, detail, "refused")
         return AttemptResult.Refused
       }
       val detail = error.message ?: "Connection failed."
-      publish(LinkPhase.Disconnected, detail, detail)
+      publish(LinkPhase.Disconnected, detail, detail, "open-failed")
       return AttemptResult.Failed
     }
     if (epochCounter.get() != epoch || stopped) {
@@ -1513,16 +1567,47 @@ class LanSession(
   }
 
   override fun reconnect() {
-    if (stopped) return
+    if (stopped || blocksAutomaticRecovery(terminal, terminalKind)) return
     if (!computing.michell.monitor.data.reconnectAllowed(statusState.value.phase == LinkPhase.Live, framesArriving())) return
     forceReconnect()
   }
 
-  /** The recovery budget expired. Heartbeats and a paused read do not hold the socket. */
+  /** The recovery budget expired. Heartbeats and a paused read do not hold the socket. A terminal failure stays. */
   fun forceReconnect() {
-    if (stopped) return
+    if (stopped || blocksAutomaticRecovery(terminal, terminalKind)) return
     policy.resume()
     startLoop()
+  }
+
+  /**
+   * Restarts a failed transient session. Does not clear pairing, the session token, or Room.
+   * Pin, authentication, and revocation failures are not this action.
+   */
+  fun restartTransient(): Boolean {
+    if (!transientRestartAllowed(stopped, terminal, policy.paused, armed, store.load().address, statusState.value.phase)) {
+      return false
+    }
+    lastActivityMs = clockMs()
+    connectNow = true
+    nextRetryAtMs = -1L
+    policy.resetBackoff()
+    wakes.trySend(Unit)
+    if (loop?.isActive != true) startLoop()
+    publishIncident("reconnect", true)
+    return true
+  }
+
+  /** A committed cursor or baseline. A ping does not call this. */
+  fun noteCommittedProgress() {
+    lastCommittedProgressMs = clockMs()
+    publishIncident("", false)
+  }
+
+  fun exportIncident(): String {
+    val text = redactDiagnostic(formatIncident(captureIncident("export")), secretValues())
+    diagnostic(text)
+    incidentState.value = captureIncident("export")
+    return text
   }
 
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
@@ -1566,7 +1651,7 @@ class LanSession(
           val framing = launch {
             adopted.await()
             for (frame in context.syncFrames) {
-              diagnostic("sync frame ${frame::class.simpleName}")
+              trace("sync frame ${frame::class.simpleName}")
               val target = applier ?: continue
               withContext(NonCancellable) { target.offerFrame(frame, context.generation) }
             }
@@ -1616,6 +1701,7 @@ class LanSession(
       if (retiring != null) {
         withContext(NonCancellable) { retiring.retireConnection(context.generation) }
       }
+      failQueued(context.generation)
       context.abandon()
       if (writer === context.writer) writer = null
       if (connection === context) {
@@ -1678,7 +1764,9 @@ class LanSession(
       val wrote = context.writer.run { frame ->
         if (context.outcome != ReadEnd.Continue) return@run false
         if (epochCounter.get() != epoch || activeGeneration != context.generation) return@run false
-        writeBytes(frame, context.socket, lane)
+        val ok = writeBytes(frame, context.socket, lane)
+        if (ok) noteSocketWrite(frame)
+        ok
       }
       if (!wrote && context.outcome == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WriteFailed, context)
     } finally {
@@ -1827,13 +1915,16 @@ class LanSession(
         val bye = decodeBye(message.payloadJson)
         if (bye?.reason == "replaced") {
           noteReadEnd(epoch, ReadEnd.Rejected, context)
-          publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason)
+          publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason, "replaced")
         } else if (bye?.reason == "reconnected") {
           // Same client took a new socket. Retry; do not treat it as paired elsewhere.
           noteReadEnd(epoch, ReadEnd.PeerClosed, context)
         } else if (bye?.reason == "disabled" || bye?.reason == "revoked") {
           noteReadEnd(epoch, ReadEnd.Disabled, context)
-          publishCurrent(epoch, LinkPhase.Paused, HostClosedBanner, bye.reason)
+          markTerminal(bye.reason, bye.reason)
+          // Disabled keeps the host-closed banner. Revocation stays a distinct reason.
+          val shown = if (bye.reason == "revoked") bye.reason else HostClosedBanner
+          publishCurrent(epoch, LinkPhase.Paused, shown, bye.reason, bye.reason)
         }
       }
       MessageKind.Rejected -> {
@@ -1843,10 +1934,13 @@ class LanSession(
         // retry with an empty, single-use pairing code.
         if (reason == "busy") {
           noteReadEnd(epoch, ReadEnd.Retry, context)
-          publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason)
+          publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, "busy", "busy")
         } else {
           noteReadEnd(epoch, ReadEnd.Rejected, context)
-          publishCurrent(epoch, LinkPhase.Paused, reason.ifEmpty { HostClosedBanner }, reason)
+          val kind = terminalKindOf(reason)
+          if (kind.isNotEmpty()) markTerminal(kind, reason.ifEmpty { kind })
+          val shown = reason.ifEmpty { HostClosedBanner }
+          publishCurrent(epoch, LinkPhase.Paused, shown, reason, kind.ifEmpty { "rejected" })
         }
       }
       else -> publishCurrent(epoch, if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live ||
@@ -1878,7 +1972,10 @@ class LanSession(
     if (activeGeneration != context.generation) return false
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
-    return outbound.offerCommand(frame.bytes)
+    if (!outbound.offerCommand(frame.bytes)) return false
+    val commandId = catalogueCommandId(json)
+    if (commandId.isNotEmpty()) trackQueued(commandId, context.generation, frame.bytes)
+    return true
   }
 
   private fun writeJson(json: String, owned: TlsLink? = link): Boolean {
@@ -1920,7 +2017,10 @@ class LanSession(
   private fun noteReadEnd(epoch: Int, end: ReadEnd, context: PhysicalConnection) {
     if (end == ReadEnd.Continue) return
     if (epochCounter.get() != epoch || activeGeneration != context.generation) return
-    if (context.closeOutcome(end)) closeOwned(context.socket)
+    if (context.closeOutcome(end)) {
+      workerExit = end.name
+      closeOwned(context.socket)
+    }
   }
 
   private fun finishRead(epoch: Int, context: PhysicalConnection, end: ReadEnd): ReadEnd {
@@ -1950,19 +2050,30 @@ class LanSession(
     return quiet / 1_000_000L < MonitorLimits.DeadSessionMs
   }
 
-  private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String) {
+  private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String, transition: String = "") {
     if (epochCounter.get() != epoch) return
-    publish(phase, banner, error)
+    publish(phase, banner, error, transition)
   }
 
-  private fun publish(phase: LinkPhase, banner: String, error: String) {
-    statusState.update { current ->
-      current.copy(phase = phase, banner = banner, draft = promptDraft, lastError = if (error.isEmpty()) current.lastError else error)
-    }
+  private fun publish(phase: LinkPhase, banner: String, error: String, transition: String = "", clearFailure: Boolean = false) {
+    val current = statusState.value
+    val failure = if (clearFailure) "" else nextFailureReason(current.failureReason, phase, banner, error)
+    val nextError = if (error.isEmpty()) current.lastError else error
+    val changed = current.phase != phase || current.banner != banner || current.failureReason != failure ||
+      current.lastError != nextError
+    statusState.value = current.copy(
+      phase = phase,
+      banner = banner,
+      draft = promptDraft,
+      lastError = nextError,
+      failureReason = failure
+    )
+    if (changed || transition.isNotEmpty()) publishIncident(transition, changed || transition.isNotEmpty())
   }
 
   private fun closeLink() {
     val context = connection
+    val generation = context?.generation ?: 0
     connection = null
     activeGeneration = 0
     writer = null
@@ -1973,6 +2084,7 @@ class LanSession(
     sentResumeConversation = ""
     sentResumeStream = ""
     sentResumeSeq = -1L
+    if (generation != 0) failQueued(generation)
     context?.abandon()
     closeOwned(owned)
   }
@@ -1991,7 +2103,105 @@ class LanSession(
     val id = "m" + ids.getAndIncrement().toString()
     return if (id.length <= 64) id else id.substring(0, 64)
   }
+
+  private fun markTerminal(kind: String, reason: String) {
+    terminal = true
+    terminalKind = kind
+    if (reason.isNotEmpty()) {
+      val current = statusState.value
+      statusState.value = current.copy(failureReason = reason, lastError = reason)
+    }
+  }
+
+  private fun trackQueued(commandId: String, epoch: Int, bytes: ByteArray) {
+    synchronized(queuedLock) { queuedCommands.add(QueuedCommand(commandId, epoch, bytes)) }
+    emitResult(CatalogueResult(commandId, epoch, CatalogueWrite.Queued))
+  }
+
+  private fun noteSocketWrite(bytes: ByteArray) {
+    val found = synchronized(queuedLock) {
+      val index = queuedCommands.indexOfFirst { it.bytes === bytes }
+      if (index < 0) return
+      queuedCommands.removeAt(index)
+    }
+    scope.launch {
+      ledger.noteWritten(found.commandId)
+      emitResult(CatalogueResult(found.commandId, found.epoch, CatalogueWrite.Written))
+    }
+  }
+
+  private fun failQueued(epoch: Int) {
+    val dropped = synchronized(queuedLock) {
+      val mine = queuedCommands.filter { it.epoch == epoch }
+      queuedCommands.removeAll { it.epoch == epoch }
+      mine
+    }
+    for (row in dropped) emitResult(CatalogueResult(row.commandId, row.epoch, CatalogueWrite.Failed))
+  }
+
+  private fun emitResult(result: CatalogueResult) {
+    if (commandResultsChannel.trySend(result).isSuccess) return
+    scope.launch { commandResultsChannel.send(result) }
+  }
+
+  private fun trace(text: String) {
+    val clean = redactDiagnostic(text, secretValues())
+    if (clean.isNotEmpty()) diagnostic(clean)
+  }
+
+  private fun secretValues(): List<String> {
+    val record = store.load()
+    return listOf(record.sessionToken, pairCode, promptDraft)
+  }
+
+  private fun captureIncident(transition: String): IncidentSnapshot {
+    val now = clockMs()
+    val context = connection
+    val receivedAge = if (context == null) -1L else now - context.lastReceivedMs
+    val progressAge = if (lastCommittedProgressMs < 0L) -1L else now - lastCommittedProgressMs
+    val outbound = context?.writer?.pendingByteCount() ?: 0L
+    val inbound = context?.events?.pressureBytes ?: 0L
+    val shown = statusState.value
+    return IncidentSnapshot(
+      loopGeneration = epochCounter.get(),
+      socketGeneration = activeGeneration,
+      phase = shown.phase.name,
+      banner = shown.banner,
+      transitionReason = transition.ifEmpty { transitionReason },
+      failureReason = shown.failureReason,
+      attemptCount = attemptCount,
+      nextRetryAtMs = nextRetryAtMs,
+      nowMs = now,
+      monitoringDemand = monitoringDemand,
+      networkIdentity = lanRoute?.identity ?: "",
+      lastReceivedFrameAgeMs = receivedAge,
+      lastCommittedProgressAgeMs = progressAge,
+      queueBytes = outbound + inbound,
+      outboundBytes = outbound,
+      inboundBytes = inbound,
+      workerExit = workerExit,
+      terminalKind = terminalKind,
+      opening = openingNow,
+      ioBlocked = openingNow || writeStuck(),
+      framesArriving = framesArriving(),
+      stopped = stopped,
+      paused = policy.paused,
+      armed = armed,
+      reconnectable = reconnectable,
+      socketAgeMs = if (context == null) -1L else now - context.openedAtMs
+    )
+  }
+
+  private fun publishIncident(transition: String, log: Boolean) {
+    if (transition.isNotEmpty()) transitionReason = transition
+    val previous = incidentState.value.posture
+    val snapshot = captureIncident(transitionReason)
+    incidentState.value = snapshot
+    if (log || snapshot.posture != previous) trace(formatIncident(snapshot))
+  }
 }
+
+private class QueuedCommand(val commandId: String, val epoch: Int, val bytes: ByteArray)
 
 private fun isPinFailure(error: Throwable): Boolean {
   var current: Throwable? = error

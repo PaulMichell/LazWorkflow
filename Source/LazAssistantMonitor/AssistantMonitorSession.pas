@@ -1367,6 +1367,7 @@ Begin
   AdoptRunningHost;
   QueueControl(EncodeCommandPairOk(NewHostId, FClients[Index].Id, FClients[Index].Token));
   LogLine(1, 'pair success client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+  LogLine(1, 'authenticated controller client=' + FClients[Index].Id + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
 Procedure TMonitorSession.HandleAuth(Const PayloadJson: TMonitorPayload);
@@ -1418,6 +1419,7 @@ Begin
   FState := mssLive;
   AdoptRunningHost;
   LogLine(1, 'auth success client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
+  LogLine(1, 'authenticated controller client=' + Auth.ClientId + ' bind=' + FBindAddress + ' port=' + IntToStr(FPort));
 End;
 
 Procedure TMonitorSession.HandlePing(Const PayloadJson: TMonitorPayload);

@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.R
+import computing.michell.monitor.connection.HostClosedBanner
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.protocol.MonitorLimits
@@ -64,9 +65,14 @@ fun SettingsScreen(
   onConversationCap: (String) -> Unit,
   onImageBudget: (String) -> Unit,
   onCached: () -> Unit,
-  onBack: () -> Unit
+  onBack: () -> Unit,
+  failureReason: String = "",
+  diagnosticText: String = "",
+  reconnectEnabled: Boolean = false,
+  onReconnect: () -> Unit = {},
+  onCopyDiagnostics: () -> Unit = {}
 ) {
-  val shownError = settingsErrorText(errorText)
+  val shownError = settingsErrorText(errorText, failureReason)
   Column(modifier = Modifier.fillMaxSize()) {
     SettingsBar(canLeave, onBack)
     Column(
@@ -107,9 +113,25 @@ fun SettingsScreen(
         singleLine = true
       )
       Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) { Text("Connect") }
+      if (reconnectEnabled) {
+        Button(onClick = onReconnect, modifier = Modifier.fillMaxWidth()) { Text("Reconnect") }
+        Text(
+          "Restarts a failed connection. Pairing and saved conversations stay.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
       if (shownError.isNotEmpty()) {
         Text(shownError, color = MaterialTheme.colorScheme.error)
       }
+      HorizontalDivider()
+      Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+      Text(
+        diagnosticText.ifEmpty { "No incident captured yet." },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+      Button(onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth()) { Text("Copy diagnostics") }
       HorizontalDivider()
       Text("View", style = MaterialTheme.typography.titleMedium)
       SwitchRow("Show thinking", showThinking, onThinking)
@@ -153,8 +175,13 @@ fun settingsLinkCaption(phase: LinkPhase, disconnected: Boolean): String {
   return "Not connected"
 }
 
-/** Progress banners belong on the status line, not in the error slot under Connect. */
-fun settingsErrorText(banner: String): String {
+/**
+ * Progress banners belong on the status line, not in the error slot under Connect.
+ * A retry keeps the original failure in [failureReason] so the banner does not hide it.
+ */
+fun settingsErrorText(banner: String, failureReason: String = ""): String {
+  val kept = failureReason.isNotEmpty() && failureReason != banner && failureReason != ReconnectingBanner
+  if (kept && (banner == ReconnectingBanner || banner == HostClosedBanner)) return failureReason
   if (banner.isEmpty() || banner == ConnectingBanner || banner == ReconnectingBanner) return ""
   return banner
 }

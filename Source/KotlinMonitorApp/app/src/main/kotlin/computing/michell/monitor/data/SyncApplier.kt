@@ -292,6 +292,8 @@ class SyncApplier(
   private val nowMs: () -> Long,
   private val onEffect: (SyncEffect) -> Unit = {}
 ) {
+  /** A committed cursor or baseline. A ping does not call this. Not a constructor parameter: trailing lambdas are effects. */
+  var onCommitted: () -> Unit = {}
   private val gate = Mutex()
   private val pending = ArrayDeque<MonitorEvent>()
   private val pendingSizes = ArrayDeque<Int>()
@@ -474,6 +476,7 @@ class SyncApplier(
 
   /** A committed cursor or baseline restarts the stall clock. A ping does not. */
   private fun noteDurableProgress(now: Long) {
+    onCommitted()
     if (!baseline.isOpen) {
       baselineSinceMs = -1L
       return

@@ -571,6 +571,8 @@ Begin
         ReplaceReason := Reason;
       ReplaceUntil := GetTickCount64 + MonitorReplaceFlushMs;
       InterlockedExchange(ReplaceFlag, ReplacePublished);
+      MonitorLog(1, 'old-controller retirement reason=' + ReplaceReason + ' bind=' + BindAddress + ' port=' +
+        IntToStr(BoundPort) + ' socket=' + IntToStr(SocketHandle));
     End;
   QueueReplaceBye;
   Wake;
@@ -754,6 +756,8 @@ Begin
     Outbox.AddControl(Bytes);
   If Authenticated Then
     Begin
+      MonitorLog(1, 'authenticated controller bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' socket=' +
+        IntToStr(SocketHandle));
       Host.Takeover(Self, SameClient);
       CandidateLink := False;
       Adopted := True;
@@ -783,6 +787,8 @@ Begin
     Begin
       Adopted := True;
       ControllerLink := True;
+      MonitorLog(1, 'TLS candidate bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' socket=' +
+        IntToStr(SocketHandle) + ' role=adopted');
       Exit;
     End;
   If Reject.Json <> '' Then
@@ -799,6 +805,8 @@ Begin
     End;
   CandidateLink := True;
   CandidateUntil := GetTickCount64 + MonitorAdmissionMs;
+  MonitorLog(1, 'TLS candidate bind=' + BindAddress + ' port=' + IntToStr(BoundPort) + ' socket=' +
+    IntToStr(SocketHandle) + ' role=waiting');
 End;
 
 Function TMonitorLinkThread.PollWait(TimeoutMs: Integer; WantWrite: Boolean): Boolean;

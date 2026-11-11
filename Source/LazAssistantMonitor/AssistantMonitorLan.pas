@@ -916,6 +916,7 @@ Begin
     Reason := 'replaced';
   If Assigned(Previous) Then
     Begin
+      MonitorLog(1, 'takeover reason=' + Reason + ' bind=' + FBindAddress + ' port=' + IntToStr(FBoundPort));
       Previous.StartReplace(Reason);
       Previous.Release;
     End;

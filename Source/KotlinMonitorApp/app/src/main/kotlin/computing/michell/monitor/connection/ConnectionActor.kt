@@ -65,6 +65,7 @@ class ConnectionWriter(
   private val drained = Channel<Unit>(Channel.CONFLATED)
   private val pendingLock = Any()
   private var pending = 0
+  private var pendingBytes = 0L
   private var closed = false
   private val wakes = AtomicLong(0)
 
@@ -72,6 +73,9 @@ class ConnectionWriter(
   val wakeCount: Long get() = wakes.get()
 
   internal fun pendingFrames(): Int = pendingCount()
+
+  /** Bytes still sitting in the outbound lanes. A frame already handed to the socket is not included. */
+  fun pendingByteCount(): Long = synchronized(pendingLock) { pendingBytes }
 
   fun offerControl(bytes: ByteArray): Boolean = offer(control, bytes)
 
@@ -117,7 +121,7 @@ class ConnectionWriter(
             writeFrame(ready)
           } finally {
             // Count the frame written or abandoned, so a bye flush cannot return early.
-            release()
+            release(ready.size)
           }
           if (!ok) return false
           sent += 1
@@ -143,23 +147,25 @@ class ConnectionWriter(
     synchronized(pendingLock) {
       if (closed) return false
       pending += 1
+      pendingBytes += bytes.size.toLong()
     }
     if (!lane.trySend(bytes).isSuccess) {
-      release()
+      release(bytes.size)
       return false
     }
     wake.trySend(Unit)
     return true
   }
 
-  private fun release() {
-    val empty = synchronized(pendingLock) { releaseLocked() }
+  private fun release(bytes: Int) {
+    val empty = synchronized(pendingLock) { releaseLocked(bytes) }
     if (empty) drained.trySend(Unit)
   }
 
   /** Caller holds [pendingLock]. */
-  private fun releaseLocked(): Boolean {
+  private fun releaseLocked(bytes: Int): Boolean {
     if (pending > 0) pending -= 1
+    pendingBytes = (pendingBytes - bytes.toLong()).coerceAtLeast(0L)
     val empty = pending == 0
     if (empty) drained.trySend(Unit)
     return empty
@@ -183,6 +189,9 @@ class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong(
   private val held = ArrayDeque<CountedEvent>()
 
   val queuedBytes: Long get() = synchronized(gate) { queued }
+
+  /** Queued events plus events held for credit. Both are still in memory. */
+  val pressureBytes: Long get() = synchronized(gate) { queued + held.sumOf { it.bytes.toLong() } }
 
   /**
    * A full window holds the event. It is not queued, so it is not acked.

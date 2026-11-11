@@ -3,6 +3,7 @@ package computing.michell.monitor
 /* Screen-off hold is a recorded result, not an assumption (c) 2026 Michell Computing. */
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

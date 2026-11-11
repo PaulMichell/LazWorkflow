@@ -817,6 +817,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val storedBoardState = MutableStateFlow(BoardContent())
   val storedBoard: StateFlow<BoardContent> = storedBoardState.asStateFlow()
   val link: StateFlow<computing.michell.monitor.connection.LinkStatus> = session.status
+  val incident: StateFlow<computing.michell.monitor.connection.IncidentSnapshot> = session.incident
   private val cacheListOpenState = MutableStateFlow(false)
   val cacheListOpen: StateFlow<Boolean> = cacheListOpenState.asStateFlow()
   private val cacheRowsState = MutableStateFlow<List<ConversationRecord>>(emptyList())
@@ -1283,10 +1284,18 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun showSettings() {
+    session.exportIncident()
     coordinator.setSettingsOpen(true)
     leaveDictation()
     uiState.value = coordinator.state
   }
+
+  /** Restarts a failed transient session. Does not clear pairing or Room. */
+  fun restartTransient() {
+    session.restartTransient()
+  }
+
+  fun exportIncident(): String = session.exportIncident()
 
   fun closeSettings() {
     coordinator.setSettingsOpen(false)
@@ -1480,6 +1489,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       { System.currentTimeMillis() },
       ::onSyncEffect
     )
+    created.onCommitted = { session.noteCommittedProgress() }
     syncApplier = created
     session.attachApplier(created)
     created.start(viewModelScope)
