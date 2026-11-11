@@ -883,6 +883,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val screenFetch = computing.michell.monitor.data.ScreenFetch(initiallyConnected = false)
 
   init {
+    session.refreshLanRoute = { lanWatch.refresh() }
     val record = store.load()
     pairAddress.value = record.address
     pairPort.value = record.port.toString()
@@ -1134,6 +1135,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun enterForeground() {
     // A return from the background reconnects, and hello resumes from the Room cursor.
+    // The session samples Wi-Fi first, so a bind forgotten in the background is not reused.
     // An already-open socket is delivering the plan. Do not ask the host to start again.
     session.enterForeground()
   }

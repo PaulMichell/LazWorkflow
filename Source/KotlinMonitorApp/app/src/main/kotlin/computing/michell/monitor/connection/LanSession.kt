@@ -808,6 +808,8 @@ class LanSession(
   internal var frameProbe: ((MonitorFrame) -> Unit)? = null
   /** Test injection for a resume the writer did not accept. Production leaves this null. */
   internal var resumeQueued: (() -> Boolean)? = null
+  /** Re-samples the current Wi-Fi bind. The view model sets this. Tests may too. */
+  internal var refreshLanRoute: (() -> Unit)? = null
   @Volatile
   private var writeStartedNanos = 0L
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
@@ -828,6 +830,8 @@ class LanSession(
   private var lanAvailable = true
   @Volatile
   private var lanRoute: LanRoute? = null
+  /** Immediate retries after a forgotten bind. Stops a refresh that cannot restore it. */
+  private var staleRouteSkips = 0
   @Volatile
   private var connectNow = false
   @Volatile
@@ -1001,6 +1005,10 @@ class LanSession(
    */
   /** True when this call is the return from the background. A hello will resume. */
   fun enterForeground(): Boolean {
+    // A frozen background loss can forget the bind and leave this route set.
+    // Sample the radio before the reconnect, or the open toasts and never lands.
+    refreshLanRoute?.invoke()
+    staleRouteSkips = 0
     val returning = !inForeground
     inForeground = true
     leftForBackground = false
@@ -1073,6 +1081,20 @@ class LanSession(
     scope.launch { closeForBackground(epoch) }
     wakes.trySend(Unit)
   }
+  /**
+   * The open refused the saved route because its bind is gone. Drop that route,
+   * sample the radio again, and try at once. Do not publish the exception: it is
+   * not a host failure, and leaving the route set made every retry fail the same way.
+   */
+  private fun recoverStaleRoute(): Boolean {
+    lanRoute = null
+    refreshLanRoute?.invoke()
+    if (staleRouteSkips >= 2) return false
+    staleRouteSkips += 1
+    connectNow = true
+    return true
+  }
+
   /** Wi-Fi is up. Reset the LAN backoff and connect at once if the link is down. */
   fun onWifiAvailable() {
     lanAvailable = true
@@ -1463,10 +1485,16 @@ class LanSession(
         publish(LinkPhase.Disconnected, ConnectionRefusedBanner, detail, "refused")
         return AttemptResult.Refused
       }
+      if (isStaleLanRoute(error)) {
+        if (recoverStaleRoute()) return AttemptResult.Deferred
+        publish(LinkPhase.Disconnected, WaitingForWifiBanner, "", "stale-route")
+        return AttemptResult.Failed
+      }
       val detail = error.message ?: "Connection failed."
       publish(LinkPhase.Disconnected, detail, detail, "open-failed")
       return AttemptResult.Failed
     }
+    staleRouteSkips = 0
     if (epochCounter.get() != epoch || stopped) {
       abandonOpening(opened)
       return AttemptResult.Superseded
@@ -2218,6 +2246,15 @@ private fun isReadTimeout(error: Throwable): Boolean {
     if (current is SocketTimeoutException) return true
     val text = current.message?.lowercase() ?: ""
     if (text.contains("timed out") || text.contains("timeout")) return true
+    current = current.cause
+  }
+  return false
+}
+
+private fun isStaleLanRoute(error: Throwable): Boolean {
+  var current: Throwable? = error
+  while (current != null) {
+    if (current is LanRouteUnavailable) return true
     current = current.cause
   }
   return false

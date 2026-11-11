@@ -51,6 +51,22 @@ class LanRouteTest {
   }
 
   @Test
+  fun aForgottenBindIsNotAHostFailure() {
+    val book = LanRouteBook()
+    book.remember("wifi") { }
+    book.forget("wifi")
+    val socket = Socket()
+    try {
+      book.bind(socket, LanRoute("wifi"))
+      fail("a forgotten bind must not pretend the socket was bound")
+    } catch (error: LanRouteUnavailable) {
+      assertEquals("The Wi-Fi network is no longer available.", error.message)
+    } finally {
+      socket.close()
+    }
+  }
+
+  @Test
   fun aLostIdentityDoesNotClearAReplacement() {
     var state: LanRoute? = LanRoute("wifi-a")
     state = applyRouteUp(state, LanRoute("wifi-b")).first

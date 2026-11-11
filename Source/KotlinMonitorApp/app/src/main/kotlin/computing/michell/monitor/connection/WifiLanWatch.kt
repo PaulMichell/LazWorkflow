@@ -43,6 +43,22 @@ fun selectLanRoute(networks: List<RouteFacts>): LanRoute? {
   return LanRoute(wifi.identity)
 }
 
+/**
+ * A callback said [lost] is gone. [selected] is the Wi-Fi still listed after that
+ * callback. A still-listed identity keeps its bind. A gone identity is forgotten,
+ * and any remaining Wi-Fi is the route to report.
+ */
+data class CallbackLoss(val forget: String?, val selected: LanRoute?)
+
+fun callbackLoss(lost: String, selected: LanRoute?): CallbackLoss {
+  if (selected == null) return CallbackLoss(lost, null)
+  if (selected.identity == lost) return CallbackLoss(null, selected)
+  return CallbackLoss(lost, selected)
+}
+
+/** The saved route's bind was dropped. This is not a desktop or sign-in failure. */
+class LanRouteUnavailable(message: String = "The Wi-Fi network is no longer available.") : java.io.IOException(message)
+
 /** Binds an outbound socket to the selected Wi-Fi network. Null means no bind. */
 fun interface LanSocketBinder {
   fun bind(socket: Socket, route: LanRoute?)
@@ -75,7 +91,7 @@ class LanRouteBook : LanSocketBinder {
 
   override fun bind(socket: Socket, route: LanRoute?) {
     if (route == null) return
-    val action = binds[route.identity] ?: throw java.io.IOException("The Wi-Fi network is no longer available.")
+    val action = binds[route.identity] ?: throw LanRouteUnavailable()
     action(socket)
   }
 }
@@ -174,9 +190,27 @@ class WifiLanWatch(
 
     override fun onLost(network: Network) {
       val identity = identityOf(network)
-      routes.forget(identity)
+      // Re-sample before forgetting. A background callback can report a loss while
+      // the radio is still up. Forgetting first left the session dialling a bind
+      // that no longer exists, and every retry failed the same way.
+      val selected = manager?.let { currentWifiRoute(it) }
+      val step = callbackLoss(identity, selected)
+      if (step.forget != null) routes.forget(step.forget)
       gate.onLost(LanRoute(identity))
+      if (step.selected != null) onRoute(step.selected)
     }
+  }
+
+  /**
+   * Restore the bind for the Wi-Fi that is up now. Call this before a foreground
+   * reconnect. A loss while the process was frozen can already have forgotten it.
+   */
+  fun refresh(): LanRoute? {
+    if (!registered) return null
+    val connectivity = manager ?: return null
+    val current = currentWifiRoute(connectivity) ?: return null
+    onRoute(current)
+    return current
   }
 
   fun start() {

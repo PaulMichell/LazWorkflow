@@ -53,4 +53,25 @@ class WifiLanWatchTest {
     scheduled!!()
     assertEquals(1, down)
   }
+
+  @Test
+  fun aStillListedIdentityKeepsItsBind() {
+    val step = callbackLoss("wifi-a", LanRoute("wifi-a"))
+    assertNull(step.forget)
+    assertEquals(LanRoute("wifi-a"), step.selected)
+  }
+
+  @Test
+  fun aGoneIdentityIsForgottenAndTheRemainingWifiIsSelected() {
+    val step = callbackLoss("wifi-a", LanRoute("wifi-b"))
+    assertEquals("wifi-a", step.forget)
+    assertEquals(LanRoute("wifi-b"), step.selected)
+  }
+
+  @Test
+  fun noListedWifiForgetsTheLostIdentity() {
+    val step = callbackLoss("wifi-a", null)
+    assertEquals("wifi-a", step.forget)
+    assertNull(step.selected)
+  }
 }

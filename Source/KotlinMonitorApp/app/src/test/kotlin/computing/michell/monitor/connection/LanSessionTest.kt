@@ -48,10 +48,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import javax.security.auth.x500.X500Principal
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -544,6 +546,42 @@ class LanSessionTest {
       session.enterForeground()
       waitUntil { opens.get() >= 2 }
       assertEquals(pin, store.load().fingerprint)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun foregroundReturnDropsAForgottenWifiBindAndReconnects() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(LanRoute("unset"))
+    val session = LanSession(store, object : TlsConnector {
+      override fun open(address: String, port: Int, fingerprint: String): TlsLink =
+        open(address, port, fingerprint, null)
+
+      override fun open(address: String, port: Int, fingerprint: String, route: LanRoute?): TlsLink {
+        seen.set(route)
+        if (route?.identity == "forgotten") throw LanRouteUnavailable()
+        opens.incrementAndGet()
+        return ScriptedLink()
+      }
+    })
+    session.refreshLanRoute = { session.onWifiRouteLost(LanRoute("forgotten")) }
+    try {
+      session.onWifiRoute(LanRoute("forgotten"))
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() >= 1 }
+      assertNull(seen.get())
+      assertFalse(session.status.value.banner.contains("no longer available"))
+      session.leaveForeground()
+      Thread.sleep(200)
+      session.onWifiRoute(LanRoute("forgotten"))
+      session.enterForeground()
+      waitUntil { opens.get() >= 2 }
+      assertNull(session.currentLanRoute())
+      assertNull(seen.get())
+      assertFalse(session.status.value.banner.contains("no longer available"))
     } finally {
       session.close()
     }
