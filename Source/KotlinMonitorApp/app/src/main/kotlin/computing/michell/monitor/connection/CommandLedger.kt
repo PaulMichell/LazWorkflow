@@ -13,6 +13,8 @@ interface CommandLedger {
   fun openIds(): List<String>
   suspend fun remember(json: String)
   suspend fun applyHost(states: List<HostCommandState>): ReplayPlan
+  /** The socket accepted the bytes. A missing ledger ignores this. */
+  suspend fun noteWritten(commandId: String) {}
 }
 
 object NoCommandLedger : CommandLedger {
@@ -35,7 +37,22 @@ class MemoryCommandLedger : CommandLedger {
     val row = StoredCommand(decoded.message.id, decoded.message.kind.wireName, json, OutboxOpen)
     synchronized(gate) {
       val index = rows.indexOfFirst { it.commandId == row.commandId }
-      if (index >= 0) rows[index] = row else rows += row
+      if (index >= 0) {
+        val existing = rows[index]
+        if (existing.state == OutboxOpen) rows[index] = row
+      } else {
+        rows += row
+      }
+    }
+  }
+
+  override suspend fun noteWritten(commandId: String) {
+    if (commandId.isEmpty()) return
+    synchronized(gate) {
+      val index = rows.indexOfFirst { it.commandId == commandId }
+      if (index < 0) return
+      val row = rows[index]
+      if (row.state == OutboxOpen) rows[index] = row.copy(state = OutboxQueued)
     }
   }
 

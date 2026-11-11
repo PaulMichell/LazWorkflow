@@ -10,6 +10,7 @@ import computing.michell.monitor.connection.HostCommandState
 import computing.michell.monitor.connection.OutboxAccepted
 import computing.michell.monitor.connection.OutboxDone
 import computing.michell.monitor.connection.OutboxOpen
+import computing.michell.monitor.connection.OutboxQueued
 import computing.michell.monitor.connection.OutboxRejected
 import computing.michell.monitor.connection.ReplayAction
 import computing.michell.monitor.connection.ReplayPlan
@@ -50,6 +51,14 @@ class RoomCommandLedger(private val repository: ConversationRepository) : Comman
     val existing = synchronized(gate) { rows.firstOrNull { it.commandId == decoded.message.id } }
     val state = if (existing == null || existing.state == OutboxOpen) OutboxOpen else existing.state
     repository.saveOutbox(OutboxRecord(decoded.message.id, decoded.message.kind.wireName, json, state, System.currentTimeMillis()))
+    refresh()
+  }
+
+  override suspend fun noteWritten(commandId: String) {
+    if (commandId.isEmpty()) return
+    val row = synchronized(gate) { rows.firstOrNull { it.commandId == commandId } } ?: return
+    if (row.state != OutboxOpen) return
+    repository.setOutboxState(commandId, OutboxQueued)
     refresh()
   }
 

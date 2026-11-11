@@ -513,11 +513,29 @@ class BaselineStage {
     if (turns.isEmpty()) return null
     return BaselineCommit(conversationId, streamId, frame.seq, title, projectRoot, turns.toList(), openBlock)
   }
+
+  /** Drops a baseline the socket did not finish. Room is not touched. */
+  fun abandon() {
+    open = false
+    failed = true
+    conversationId = ""
+    streamId = ""
+    title = ""
+    projectRoot = ""
+    pageCount = 0
+    pages = 0
+    turns.clear()
+    openBlock = null
+  }
 }
 
 class StateChunkAssembly {
   private class Open(val count: Int, val parts: MutableMap<Int, String>)
   private val open = HashMap<String, Open>()
+
+  fun reset() {
+    open.clear()
+  }
 
   fun accept(chunk: SyncFrame.StateChunk): SyncFrame.State? {
     val current = open[chunk.key]

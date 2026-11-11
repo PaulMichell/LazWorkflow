@@ -833,11 +833,11 @@ class LanSessionTest {
       link
     })
     session.attachLinkApplier(object : LinkApplier {
-      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent) {}
-      override suspend fun offerFrame(frame: computing.michell.monitor.protocol.SyncFrame) {
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {}
+      override suspend fun offerFrame(frame: computing.michell.monitor.protocol.SyncFrame, generation: Int) {
         throw IllegalStateException("applier")
       }
-      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent) {}
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {}
     })
     try {
       session.connect("10.0.0.8", 56122)
@@ -1521,6 +1521,286 @@ class LanSessionTest {
       session.close()
     }
   }
+
+  @Test
+  fun aCommandAcceptedOnOneGenerationIsStaleOnTheNext() {
+    val socket = Any()
+    val accepted = beginCatalogue("""{"v":3,"id":"stop-1","type":"stop","payload":{}}""", 1, socket)
+    val moved = stepCatalogue(accepted, 2, socket)
+    assertTrue(moved is CatalogueStep.Done)
+    assertEquals(CatalogueWrite.Stale, (moved as CatalogueStep.Done).result.outcome)
+    val replaced = stepCatalogue(accepted, 1, Any())
+    assertTrue(replaced is CatalogueStep.Done)
+    assertEquals(CatalogueWrite.Stale, (replaced as CatalogueStep.Done).result.outcome)
+    assertTrue(stepCatalogue(accepted, 1, socket) is CatalogueStep.Write)
+  }
+
+  @Test
+  fun automaticReconnectUsesANewGeneration() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      val first = session.linkEpoch
+      assertTrue(first > 0)
+      links[0].closeInput()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first }
+      assertTrue(session.reconnectable)
+      assertFalse(session.reconnectPaused)
+      assertTrue(links[0].closed)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aPartialChunkDoesNotCompleteOnTheNextSocket() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    val seen = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val collector = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+      session.messages.collect { seen += it.id }
+    }
+    val ping = encodeTicks(MessageKind.Ping, "assembled-ping", 7)
+    val cut = ping.length / 2
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      val before = links[0].readEntries.get()
+      links[0].push(frameOf(chunkJson("item-1", 1, 2, ping.substring(0, cut))))
+      waitUntil { links[0].readEntries.get() > before }
+      links[0].closeInput()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && links[1].readEntries.get() > 0 }
+      links[1].push(frameOf(chunkJson("item-1", 2, 2, ping.substring(cut))))
+      val after = links[1].readEntries.get()
+      links[1].push(frameOf(encodeTicks(MessageKind.Pong, "live-pong", 1)))
+      waitUntil { links[1].readEntries.get() > after }
+      waitUntil { seen.contains("live-pong") }
+      assertFalse(seen.contains("assembled-ping"))
+    } finally {
+      collector.cancel()
+      session.close()
+    }
+  }
+
+  @Test
+  fun queuedWorkDoesNotReachTheNextSocket() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val seen = java.util.Collections.synchronizedList(mutableListOf<Pair<Int, Long>>())
+    session.attachLinkApplier(object : LinkApplier {
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {
+        seen += generation to event.seq
+        if (event.seq == 1L) {
+          entered.countDown()
+          assertTrue(release.await(3, TimeUnit.SECONDS))
+        }
+      }
+      override suspend fun offerFrame(frame: computing.michell.monitor.protocol.SyncFrame, generation: Int) {}
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {}
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      val first = session.linkEpoch
+      links[0].push(frameOf(eventJson(1L, "Held")))
+      assertTrue(entered.await(2, TimeUnit.SECONDS))
+      val queued = links[0].readEntries.get()
+      links[0].push(frameOf(eventJson(2L, "Queued")))
+      waitUntil { links[0].readEntries.get() > queued }
+      links[0].closeInput()
+      Thread.sleep(250)
+      assertEquals(1, opens.get())
+      release.countDown()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first && links[1].readEntries.get() > 0 }
+      links[1].push(frameOf(eventJson(3L, "New")))
+      waitUntil { seen.any { it.second == 3L } }
+      assertTrue(seen.none { it.second == 2L })
+      assertTrue(seen.none { it.second == 1L && it.first == session.linkEpoch })
+      assertTrue(seen.any { it.second == 3L && it.first == session.linkEpoch })
+    } finally {
+      release.countDown()
+      session.close()
+    }
+  }
+
+  @Test
+  fun aPartialBaselineIsNotCommittedAfterAutomaticReconnect() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val commits = AtomicInteger(0)
+    val ready = AtomicInteger(0)
+    val store = object : computing.michell.monitor.data.SyncStore {
+      override suspend fun apply(
+        hostId: String,
+        events: List<computing.michell.monitor.protocol.MonitorEvent>,
+        nowMs: Long
+      ): computing.michell.monitor.data.SyncApplyResult {
+        return computing.michell.monitor.data.SyncApplyResult(emptyList(), emptyList(), emptyList())
+      }
+
+      override suspend fun commitBaseline(
+        hostId: String,
+        commit: computing.michell.monitor.data.BaselineCommit,
+        nowMs: Long
+      ): computing.michell.monitor.data.BaselinePlan? {
+        commits.incrementAndGet()
+        return null
+      }
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    session.attachApplier(computing.michell.monitor.data.SyncApplier("host-1", store, { 0L }, {
+      if (it == computing.michell.monitor.data.SyncEffect.CacheReady) ready.incrementAndGet()
+    }))
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      val first = session.linkEpoch
+      val before = ready.get()
+      links[0].push(frameOf(snapshotBeginJson("c1", "s1", "Old")))
+      waitUntil { ready.get() > before }
+      links[0].closeInput()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first && links[1].readEntries.get() > 0 }
+      val after = ready.get()
+      links[1].push(frameOf(snapshotEndJson("c1", "s1")))
+      waitUntil { ready.get() > after }
+      assertEquals(0, commits.get())
+      val again = ready.get()
+      links[1].push(frameOf(snapshotBeginJson("c2", "s2", "New")))
+      links[1].push(frameOf(snapshotEndJson("c2", "s2")))
+      waitUntil { commits.get() == 1 || ready.get() > again + 1 }
+      assertEquals(1, commits.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aDelayedCommandResultIsNotWrittenOnTheNextSocket() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val ledger = object : CommandLedger {
+      private val inner = MemoryCommandLedger()
+      override fun openIds(): List<String> = inner.openIds()
+      override suspend fun remember(json: String) {
+        entered.countDown()
+        assertTrue(release.await(3, TimeUnit.SECONDS))
+        inner.remember(json)
+      }
+      override suspend fun noteWritten(commandId: String) = inner.noteWritten(commandId)
+      override suspend fun applyHost(states: List<HostCommandState>): ReplayPlan = inner.applyHost(states)
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, ledger = ledger)
+    val results = java.util.Collections.synchronizedList(mutableListOf<CatalogueResult>())
+    val collector = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+      session.commandResults.collect { results += it }
+    }
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      val first = session.linkEpoch
+      session.sendCatalogue(encodeEmpty(MessageKind.Stop, "stop-late"))
+      assertTrue(entered.await(2, TimeUnit.SECONDS))
+      links[0].closeInput()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first }
+      release.countDown()
+      waitUntil { results.isNotEmpty() }
+      assertEquals(CatalogueWrite.Stale, results.single().outcome)
+      assertEquals(first, results.single().linkEpoch)
+      assertFalse(links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Stop })
+    } finally {
+      release.countDown()
+      collector.cancel()
+      session.close()
+    }
+  }
+
+  @Test
+  fun anAcceptedCommandIsNotReplayedOnTheNextSocket() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val inner = MemoryCommandLedger()
+    val accepted = CountDownLatch(1)
+    val ledger = object : CommandLedger {
+      override fun openIds(): List<String> = inner.openIds()
+      override suspend fun remember(json: String) = inner.remember(json)
+      override suspend fun noteWritten(commandId: String) = inner.noteWritten(commandId)
+      override suspend fun applyHost(states: List<HostCommandState>): ReplayPlan {
+        val plan = inner.applyHost(states)
+        if (states.any { it.ref == "stop-kept" && it.state == OutboxAccepted }) accepted.countDown()
+        return plan
+      }
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, ledger = ledger)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      session.sendCatalogue(encodeEmpty(MessageKind.Stop, "stop-kept"))
+      waitUntil { links[0].frames().any { frame -> envelope(frame).kind == MessageKind.Stop } }
+      links[0].push(frameOf(encodeCommandStates("h1", listOf(CommandStateMessage("stop-kept", "accepted", "")))))
+      assertTrue(accepted.await(2, TimeUnit.SECONDS))
+      val first = session.linkEpoch
+      links[0].closeInput()
+      session.onWifiAvailable()
+      waitUntil(8_000) { opens.get() >= 2 && session.linkEpoch > first && links[1].readEntries.get() > 0 }
+      assertTrue(session.resumeFromRoom("c1", "s1", 0L))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      assertFalse(links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Stop })
+      val resume = links[1].frames().map { envelope(it) }.last { it.kind == MessageKind.Resume }
+      assertTrue(resume.payloadJson.contains("stop-kept"))
+      assertTrue(ledger.openIds().contains("stop-kept"))
+    } finally {
+      session.close()
+    }
+  }
+}
+
+private fun chunkJson(itemId: String, part: Int, partCount: Int, data: String): String {
+  val encoded = data.replace("\\", "\\\\").replace("\"", "\\\"")
+  return """{"v":3,"id":"chunk-$itemId-$part","type":"chunk","payload":{"item_type":"message","item_id":"$itemId","part":$part,"part_count":$partCount,"data":"$encoded"}}"""
+}
+
+private fun eventJson(seq: Long, title: String): String {
+  return """{"v":3,"id":"e$seq","type":"event","payload":{"conversation_id":"c1","stream_id":"s1","seq":$seq,"event":"title_changed","data":{"title":"$title"}}}"""
+}
+
+private fun snapshotBeginJson(conversationId: String, streamId: String, title: String): String {
+  return """{"v":3,"id":"begin-$conversationId","type":"snapshot_begin","payload":{"conversation_id":"$conversationId","stream_id":"$streamId","seq":1,"page_count":0,"title":"$title","turns":[{"turn_id":"t-$conversationId","turn_index":0,"prompt_preview":"$title","blocks":[]}],"state":{"status":{"phase":"idle"}}}}"""
+}
+
+private fun snapshotEndJson(conversationId: String, streamId: String): String {
+  return """{"v":3,"id":"end-$conversationId","type":"snapshot_end","payload":{"conversation_id":"$conversationId","stream_id":"$streamId","seq":1}}"""
 }
 
 private fun inboundMessage(kind: MessageKind, id: String): MonitorMessage {

@@ -299,12 +299,42 @@ class SyncApplier(
   private val fetches = HashMap<String, java.util.TreeMap<Int, String>>()
   private val fetchRevision = HashMap<String, Long>()
   private val committed = HashMap<String, AppliedCursor>()
+  /** Physical connection currently allowed to apply. Zero means none. */
+  private var generation = 0
   /** Dispatcher of the last tick. Tests check that the flush job is not Main. */
   var tickDispatcher: String = ""
     private set
 
+  /**
+   * Binds this applier to one physical connection.
+   * The caller joins any commit already inside the gate before the next
+   * baseline is offered, and this lock waits for a tick that is still
+   * committing. Uncommitted batches, a partial baseline, state chunks and
+   * fetch assembly are dropped. Room rows, the command ledger and the
+   * committed cursor cache stay. The next baseline therefore starts empty,
+   * after the previous transaction has finished.
+   */
+  suspend fun adoptConnection(generation: Int) = gate.withLock {
+    if (generation == 0 || generation == this.generation) return
+    this.generation = generation
+    discardTransient()
+  }
+
+  /**
+   * The socket that owned [generation] is gone. A newer connection that has
+   * already adopted is left alone. Otherwise transient assembly is dropped
+   * and no generation may apply until the next adopt.
+   */
+  suspend fun retireConnection(generation: Int) = gate.withLock {
+    if (generation == 0) return
+    if (this.generation != 0 && this.generation != generation) return
+    discardTransient()
+    if (this.generation == generation) this.generation = 0
+  }
+
   /** The connection offers each decoded event. A full batch commits at once. */
-  suspend fun offer(event: MonitorEvent, bytes: Int = estimatedEventBytes(event)): List<SyncEffect> = gate.withLock {
+  suspend fun offer(event: MonitorEvent, bytes: Int = estimatedEventBytes(event), generation: Int = -1): List<SyncEffect> = gate.withLock {
+    if (!accepts(generation)) return emptyList()
     val size = if (bytes > 0) bytes else estimatedEventBytes(event)
     if (pending.isEmpty()) openedMs = nowMs()
     pending.add(event)
@@ -323,12 +353,14 @@ class SyncApplier(
   }
 
   /** State, baseline, and block fetch. None of these is a content event. */
-  suspend fun offerFrame(frame: SyncFrame): List<SyncEffect> = gate.withLock {
+  suspend fun offerFrame(frame: SyncFrame, generation: Int = -1): List<SyncEffect> = gate.withLock {
+    if (!accepts(generation)) return emptyList()
     deliver(applyFrame(frame))
   }
 
   /** The inbound budget refused this event. Resume from the last durable cursor. */
-  suspend fun noteRefused(event: MonitorEvent): List<SyncEffect> = gate.withLock {
+  suspend fun noteRefused(event: MonitorEvent, generation: Int = -1): List<SyncEffect> = gate.withLock {
+    if (!accepts(generation)) return emptyList()
     val cursor = store.cursorOf(hostId, event.conversationId) ?: committed[event.conversationId]
     val seq = cursor?.seq ?: 0L
     val stream = cursor?.streamId?.ifEmpty { null } ?: event.streamId
@@ -410,6 +442,23 @@ class SyncApplier(
     pendingSizes.clear()
     pendingBytes = 0
     openedMs = 0L
+  }
+
+  /** Untagged callers are tests. A live generation must match, and zero never applies. */
+  private fun accepts(generation: Int): Boolean {
+    if (generation < 0) return true
+    return generation != 0 && generation == this.generation
+  }
+
+  private fun discardTransient() {
+    clearPending()
+    failures = 0
+    baseline.abandon()
+    stateChunks.reset()
+    fetches.clear()
+    fetchRevision.clear()
+    resume.reset()
+    acks.reset()
   }
 
   private suspend fun applyFrame(frame: SyncFrame): List<SyncEffect> {
@@ -586,6 +635,10 @@ class SyncResumePolicy {
     val wait = waiting[conversationId] ?: return
     if (seq > wait.gap.seq) waiting.remove(conversationId)
   }
+
+  fun reset() {
+    waiting.clear()
+  }
 }
 
 private class AckPacer {
@@ -624,6 +677,11 @@ private class AckPacer {
       if (left < soonest) soonest = left
     }
     return soonest
+  }
+
+  fun reset() {
+    lastMs.clear()
+    held.clear()
   }
 }
 

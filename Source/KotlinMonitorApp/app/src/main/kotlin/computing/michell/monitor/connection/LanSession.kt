@@ -4,7 +4,8 @@ package computing.michell.monitor.connection
 
    Size note: exceeds the 1000 line preference. The socket, pin rules, and
    reconnect loop are one session. Wi-Fi registration lives in WifiLanWatch.
-   Reviewed 2026-10-30.
+   A physical connection is a context inside that session, not a second service.
+   Reviewed 2026-11-11.
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
@@ -28,7 +29,13 @@ package computing.michell.monitor.connection
    turn, or a screen-off hold — keeps the capped retry going through that idle
    window. The demand sticks across a drop until a resynchronised picture says
    execution ended. It does not fake a touch, and it does not override bye,
-   background, or an explicit disconnect. Leaving the app sends bye and waits
+   background, or an explicit disconnect. The reconnect loop is one epoch.
+   Each successful open is a later generation: its writer, assemblers,
+   transient queues, last I/O and close outcome die with that socket. A
+   completion tagged with an older generation is stale. Room and the command
+   ledger stay. An in-flight Room commit finishes before the next baseline
+   is applied; anything still uncommitted is dropped and the durable cursor
+   is what the next resume asks for. Leaving the app sends bye and waits
    to resume. The backlight going off does not, while a plan or turn is running
    or the monitor task is still resumed. That hold does not open a second socket.
    Connect still keeps a saved pin and does not clear it. */
@@ -63,6 +70,7 @@ import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.Closeable
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.io.InputStream
 import java.io.OutputStream
@@ -100,6 +108,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout as selectOnTimeout
 import kotlinx.coroutines.selects.select
@@ -349,9 +358,57 @@ private enum class ReadEnd {
 private class OpenTimedOut : Exception("Connection opening timed out.")
 
 internal interface LinkApplier {
-  suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent)
-  suspend fun offerFrame(frame: SyncFrame)
-  suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent)
+  suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int)
+  suspend fun offerFrame(frame: SyncFrame, generation: Int)
+  suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int)
+  /** The next baseline waits until this returns. In-flight commits already finished. */
+  suspend fun adoptConnection(generation: Int) {}
+  /** Ignore a newer generation. Drop this socket's uncommitted assembly. */
+  suspend fun retireConnection(generation: Int) {}
+}
+
+/**
+ * One open socket. The reconnect loop may own several of these in turn.
+ * Downstream work is tagged with [generation]. A later socket does not
+ * inherit the writer, assemblers, queues, clocks or close outcome.
+ */
+private class PhysicalConnection(
+  val generation: Int,
+  val socket: TlsLink,
+  val openedAtMs: Long,
+  inboundNanos: Long
+) {
+  val writer = ConnectionWriter { _ -> false }
+  val chunks = ChunkAssembly()
+  val events = AccountedEvents()
+  val syncFrames = Channel<SyncFrame>(Channel.UNLIMITED)
+  val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
+  @Volatile var lastSentMs: Long = openedAtMs
+  @Volatile var lastReceivedMs: Long = openedAtMs
+  @Volatile var lastInboundNanos: Long = inboundNanos
+  @Volatile var outcome: ReadEnd = ReadEnd.Continue
+  private val outcomeLock = Any()
+
+  /** True when this call recorded the first terminal outcome. */
+  fun closeOutcome(end: ReadEnd): Boolean {
+    if (end == ReadEnd.Continue) return false
+    return synchronized(outcomeLock) {
+      if (outcome != ReadEnd.Continue) {
+        false
+      } else {
+        outcome = end
+        true
+      }
+    }
+  }
+
+  fun abandon() {
+    chunks.reset()
+    events.close()
+    syncFrames.close()
+    refusedEvents.close()
+    writer.close()
+  }
 }
 
 /** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
@@ -587,11 +644,16 @@ class LanSession(
   private val resumes = Channel<Unit>(Channel.CONFLATED)
   private val wakes = Channel<Unit>(Channel.CONFLATED)
   private val ids = AtomicInteger(1)
+  /** Reconnect-loop lifetime. Automatic attempts share it. startLoop and disconnect move it. */
   private val epochCounter = AtomicInteger(0)
+  /** Physical sockets. Each successful open takes the next value. */
+  private val connectionCounter = AtomicInteger(0)
+  @Volatile
+  private var activeGeneration = 0
+  private var connection: PhysicalConnection? = null
   private val commandResultsChannel = Channel<CatalogueResult>(Channel.BUFFERED)
   private val policy = ReconnectPolicy()
   private val session = computing.michell.monitor.protocol.SessionState()
-  private val chunks = ChunkAssembly()
   private val statusState = MutableStateFlow(LinkStatus())
   internal val inbound = InboundDelivery(clock)
   private var loop: Job? = null
@@ -608,19 +670,12 @@ class LanSession(
   internal var frameProbe: ((MonitorFrame) -> Unit)? = null
   @Volatile
   private var writeStartedNanos = 0L
-  internal val events = AccountedEvents()
-  private val syncFrames = Channel<SyncFrame>(Channel.UNLIMITED)
-  private val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
   private var applier: LinkApplier? = null
   private var sentResumeEpoch = -1
   private var sentResumeConversation = ""
   private var sentResumeStream = ""
   private var sentResumeSeq = -1L
-  @Volatile
-  private var lastSentMs = 0L
-  @Volatile
-  private var lastReceivedMs = 0L
   private var pairCode = ""
   private var stopped = false
   @Volatile
@@ -650,8 +705,9 @@ class LanSession(
   private var retryJson = ""
   val messages: Flow<computing.michell.monitor.protocol.MonitorMessage> = inbound.messages
   override val commandResults: Flow<CatalogueResult> = commandResultsChannel.receiveAsFlow()
+  /** Generation of the open socket. Zero while no physical connection is current. */
   override val linkEpoch: Int
-    get() = epochCounter.get()
+    get() = activeGeneration
   val reconnectPaused: Boolean
     get() = policy.paused
 
@@ -665,20 +721,21 @@ class LanSession(
 
   override fun sendCatalogue(json: String) {
     if (json.isEmpty()) return
-    val accepted = beginCatalogue(json, epochCounter.get(), if (stopped) null else link)
+    val accepted = beginCatalogue(json, activeGeneration, if (stopped) null else link)
     scope.launch {
       val outboundJson = prepareOutbound(json)
-      val step = stepCatalogue(accepted.copy(json = outboundJson), epochCounter.get(), link)
+      val step = stepCatalogue(accepted.copy(json = outboundJson), activeGeneration, link)
       val result = when (step) {
         is CatalogueStep.Done -> step.result
         is CatalogueStep.Write -> {
           val socket = step.accepted.socket as? TlsLink
           val wrote = if (socket == null) false else offerCommand(step.accepted.json, socket)
+          if (wrote) ledger.noteWritten(step.accepted.commandId)
           catalogueFromWrite(step.accepted, wrote)
         }
       }
       if (result.outcome != CatalogueWrite.Written) {
-        diagnostic("outbound ${tryDecodeEnvelope(outboundJson).message.kind}: ${result.outcome}, epoch=${result.linkEpoch}")
+        diagnostic("outbound ${tryDecodeEnvelope(outboundJson).message.kind}: ${result.outcome}, generation=${result.linkEpoch}")
       }
       commandResultsChannel.send(result)
     }
@@ -719,10 +776,12 @@ class LanSession(
     return if (next.isEmpty()) json else next
   }
 
-  private suspend fun applyHostStates(states: List<HostCommandState>, owned: TlsLink) {
+  private suspend fun applyHostStates(states: List<HostCommandState>, context: PhysicalConnection) {
+    if (activeGeneration != context.generation || link !== context.socket) return
     val plan = ledger.applyHost(states)
+    if (activeGeneration != context.generation || link !== context.socket) return
     for (json in plan.resendJson) {
-      if (!offerCommand(json, owned)) break
+      if (!offerCommand(json, context.socket)) break
     }
     if (plan.retryText.isNotEmpty()) {
       retryJson = plan.retryJson
@@ -894,7 +953,6 @@ class LanSession(
     armed = false
     monitoringDemand = false
     policy.pause()
-    chunks.reset()
     epochCounter.incrementAndGet()
     loop?.cancel()
     closeLink()
@@ -909,7 +967,6 @@ class LanSession(
   private fun startLoop() {
     // The previous loop must finish closing its own socket before this one opens.
     // A stuck predecessor must not hold a user reconnect forever.
-    chunks.reset()
     val epoch = epochCounter.incrementAndGet()
     val previous = loop
     previous?.cancel()
@@ -1068,17 +1125,18 @@ class LanSession(
   }
 
   private suspend fun closeForBackground(epoch: Int) {
-    val current = link ?: return
+    val context = connection ?: return
+    val current = context.socket
     if (epochCounter.get() != epoch || !leftForBackground) return
     if (writer == null && writeLane == null) {
       closeWithBye(current)
-      noteReadEnd(epoch, ReadEnd.Background, current)
+      noteReadEnd(epoch, ReadEnd.Background, context)
       return
     }
     withTimeoutOrNull(1_500L) {
-      while (readEnd == ReadEnd.Continue && link === current && epochCounter.get() == epoch) delay(20)
+      while (context.outcome == ReadEnd.Continue && link === current && epochCounter.get() == epoch) delay(20)
     }
-    noteReadEnd(epoch, ReadEnd.Background, current)
+    noteReadEnd(epoch, ReadEnd.Background, context)
   }
 
   private suspend fun closeWithBye(target: TlsLink) {
@@ -1151,6 +1209,19 @@ class LanSession(
     }
   }
 
+  /** A successful open. The loop epoch is unchanged; this generation is new. */
+  private fun installConnection(opened: TlsLink): PhysicalConnection {
+    val generation = connectionCounter.incrementAndGet()
+    val context = PhysicalConnection(generation, opened, clockMs(), clock.nanoTime())
+    connection = context
+    writer = context.writer
+    link = opened
+    activeGeneration = generation
+    writeStartedNanos = 0L
+    diagnostic("socket generation $generation, loop ${epochCounter.get()}")
+    return context
+  }
+
   private suspend fun attempt(epoch: Int): AttemptResult {
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
     if (!inForeground) return AttemptResult.Deferred
@@ -1190,13 +1261,13 @@ class LanSession(
       closeWithBye(opened)
       return AttemptResult.Deferred
     }
-    link = opened
+    if (stopped || epochCounter.get() != epoch) {
+      closeOwned(opened)
+      return AttemptResult.Superseded
+    }
     // The endpoint answered, so a stale loss hint must not banner the next drop.
     lanAvailable = true
-    if (!inForeground || stopped || epochCounter.get() != epoch) {
-      if (!inForeground && epochCounter.get() == epoch) closeWithBye(opened) else closeOwned(opened)
-      return if (epochCounter.get() == epoch && !stopped) AttemptResult.Deferred else AttemptResult.Superseded
-    }
+    installConnection(opened)
     session.onHandshakeComplete()
     val helloId = newId()
     val openPair = !record.paired
@@ -1226,14 +1297,20 @@ class LanSession(
 
   fun attachApplier(next: computing.michell.monitor.data.SyncApplier) {
     attachLinkApplier(object : LinkApplier {
-      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent) {
-        next.offer(event)
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {
+        next.offer(event, generation = generation)
       }
-      override suspend fun offerFrame(frame: SyncFrame) {
-        next.offerFrame(frame)
+      override suspend fun offerFrame(frame: SyncFrame, generation: Int) {
+        next.offerFrame(frame, generation)
       }
-      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent) {
-        next.noteRefused(event)
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {
+        next.noteRefused(event, generation)
+      }
+      override suspend fun adoptConnection(generation: Int) {
+        next.adoptConnection(generation)
+      }
+      override suspend fun retireConnection(generation: Int) {
+        next.retireConnection(generation)
       }
     })
   }
@@ -1282,87 +1359,115 @@ class LanSession(
   }
 
   private suspend fun readUntilClose(epoch: Int): ReadEnd {
-    val current = link ?: return ReadEnd.PeerClosed
-    if (epochCounter.get() != epoch) return ReadEnd.PeerClosed
-    synchronized(readEndLock) { readEnd = ReadEnd.Continue }
-    val openedAt = clockMs()
-    lastInboundNanos = clock.nanoTime()
-    lastReceivedMs = openedAt
-    lastSentMs = openedAt
-    // serviceLink polls and writes. This callback must not become a second writer.
-    val outbound = ConnectionWriter { _ -> false }
-    writer = outbound
-    for (frame in stagedOpening) outbound.offerControl(frame)
+    val context = connection ?: return ReadEnd.PeerClosed
+    val current = context.socket
+    if (epochCounter.get() != epoch || activeGeneration != context.generation || link !== current) return ReadEnd.PeerClosed
+    for (frame in stagedOpening) context.writer.offerControl(frame)
     stagedOpening = emptyList()
-    val listener = { noteClock(epoch, current, outbound) }
+    val listener = { noteClock(epoch, context) }
     clock.addListener(listener)
+    val adopted = CompletableDeferred<Unit>()
     try {
       try {
         coroutineScope {
-          val serving = launch { serviceLink(epoch, current, outbound) }
+          // Adopt before any queued frame is applied. Serving may already be reading.
+          val adopting = launch {
+            val target = awaitApplier()
+            if (target != null && epochCounter.get() == epoch && activeGeneration == context.generation) {
+              target.adoptConnection(context.generation)
+            }
+            adopted.complete(Unit)
+          }
+          val serving = launch { serviceLink(epoch, context) }
           val watchdog = launch {
             while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
               delay(1_000L)
-              if (writeStuck() || inboundIsDead()) noteReadEnd(epoch, ReadEnd.Dead, current)
+              if (writeStuck() || inboundIsDead(context)) noteReadEnd(epoch, ReadEnd.Dead, context)
             }
           }
           val applying = launch {
+            adopted.await()
             while (coroutineContext[Job]?.isActive != false) {
-              val event = events.receive()
-              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
-              applier?.offer(event)
+              val event = context.events.receive()
+              val target = applier ?: continue
+              // A Room commit already started must finish. The next baseline waits for this join.
+              withContext(NonCancellable) { target.offer(event, context.generation) }
             }
           }
           val framing = launch {
-            for (frame in syncFrames) {
-              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+            adopted.await()
+            for (frame in context.syncFrames) {
               diagnostic("sync frame ${frame::class.simpleName}")
-              applier?.offerFrame(frame)
+              val target = applier ?: continue
+              withContext(NonCancellable) { target.offerFrame(frame, context.generation) }
             }
           }
           val refusing = launch {
-            for (event in refusedEvents) {
-              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
-              applier?.noteRefused(event)
+            adopted.await()
+            for (event in context.refusedEvents) {
+              val target = applier ?: continue
+              withContext(NonCancellable) { target.noteRefused(event, context.generation) }
             }
           }
           try {
             serving.join()
           } finally {
+            adopting.cancel()
             watchdog.cancel()
             applying.cancel()
             framing.cancel()
             refusing.cancel()
+            if (!adopted.isCompleted) adopted.cancel()
           }
-          listOf(watchdog, applying, framing, refusing).forEach { child ->
+          listOf(adopting, watchdog, applying, framing, refusing).forEach { child ->
             try {
               child.join()
             } catch (error: CancellationException) {
               // The socket owner finished. The other lanes are stopped with it.
+              // NonCancellable commits have already returned.
             }
           }
         }
       } catch (error: CancellationException) {
         if (coroutineContext[Job]?.isActive == false) throw error
-        if (readEnd == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, current)
+        if (context.outcome == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, context)
       } catch (error: Exception) {
-        if (readEnd == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, current)
+        if (context.outcome == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, context)
       }
-      return readEnd
+      return context.outcome
     } finally {
       clock.removeListener(listener)
-      outbound.close()
-      writer = null
+      // Children have joined, so a commit that held the applier lock has finished.
+      // Drop what that generation did not commit before another socket can adopt.
+      val retiring = applier
+      if (retiring != null) {
+        withContext(NonCancellable) { retiring.retireConnection(context.generation) }
+      }
+      context.abandon()
+      if (writer === context.writer) writer = null
+      if (connection === context) {
+        connection = null
+        if (activeGeneration == context.generation) activeGeneration = 0
+      }
       closeOwned(current)
     }
   }
 
-  private fun noteClock(epoch: Int, current: TlsLink, outbound: ConnectionWriter) {
+  private suspend fun awaitApplier(): LinkApplier? {
+    applier?.let { return it }
+    while (coroutineContext[Job]?.isActive != false) {
+      applierReady.receive()
+      applier?.let { return it }
+    }
+    return null
+  }
+
+  private fun noteClock(epoch: Int, context: PhysicalConnection) {
     if (writeStuck()) {
-      noteReadEnd(epoch, ReadEnd.Dead, current)
+      noteReadEnd(epoch, ReadEnd.Dead, context)
       return
     }
-    noteHeartbeat(epoch, current, outbound)
+    noteHeartbeat(epoch, context)
   }
 
   private fun writeStuck(): Boolean {
@@ -1372,15 +1477,15 @@ class LanSession(
     return elapsed / 1_000_000L >= MonitorLimits.DeadSessionMs
   }
 
-  private fun noteHeartbeat(epoch: Int, current: TlsLink, outbound: ConnectionWriter) {
-    if (epochCounter.get() != epoch) return
+  private fun noteHeartbeat(epoch: Int, context: PhysicalConnection) {
+    if (epochCounter.get() != epoch || activeGeneration != context.generation) return
     val now = clockMs()
-    when (heartbeatStep(lastSentMs, lastReceivedMs, now)) {
-      HeartbeatStep.Close -> noteReadEnd(epoch, ReadEnd.Dead, current)
+    when (heartbeatStep(context.lastSentMs, context.lastReceivedMs, now)) {
+      HeartbeatStep.Close -> noteReadEnd(epoch, ReadEnd.Dead, context)
       HeartbeatStep.Ping -> {
         val ping = encodeTicks(MessageKind.Ping, newId(), now)
         val frame = tryEncodeFrame(ping)
-        if (frame.ok && outbound.offerControl(frame.bytes)) lastSentMs = now
+        if (frame.ok && context.writer.offerControl(frame.bytes)) context.lastSentMs = now
       }
       HeartbeatStep.None -> {}
     }
@@ -1388,76 +1493,81 @@ class LanSession(
   private fun clockMs(): Long = clock.nanoTime() / 1_000_000L
 
   /** One coroutine owns the streams. Read, then at most one frame, then the heartbeat. */
-  private suspend fun serviceLink(epoch: Int, current: TlsLink, outbound: ConnectionWriter): ReadEnd {
+  private suspend fun serviceLink(epoch: Int, context: PhysicalConnection): ReadEnd {
     // The lane is this coroutine. A later resume may be a different IO thread.
     val lane = Any()
+    val current = context.socket
+    val outbound = context.writer
     writeLane = lane
     try {
       val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
       val reader = FrameAssembler()
-      while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
+      while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch &&
+        activeGeneration == context.generation) {
         if (replaceLink) {
           replaceLink = false
-          return finishRead(epoch, current, ReadEnd.PeerClosed)
+          return finishRead(epoch, context, ReadEnd.PeerClosed)
         }
         if (leftForBackground) {
           val bye = outbound.poll()
-          if (bye != null && !writeBytes(bye, current, lane) && readEnd == ReadEnd.Continue) {
-            return finishRead(epoch, current, ReadEnd.WriteFailed)
+          if (bye != null && !writeBytes(bye, current, lane) && context.outcome == ReadEnd.Continue) {
+            return finishRead(epoch, context, ReadEnd.WriteFailed)
           }
-          return finishRead(epoch, current, ReadEnd.Background)
+          return finishRead(epoch, context, ReadEnd.Background)
         }
-        if (inboundIsDead() || writeStuck()) return finishRead(epoch, current, ReadEnd.Dead)
-        if (events.shouldPauseRead()) {
+        if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+        if (context.events.shouldPauseRead()) {
           delay(50)
-          noteHeartbeat(epoch, current, outbound)
+          noteHeartbeat(epoch, context)
           val paused = outbound.poll()
-          if (paused != null && !writeBytes(paused, current, lane) && readEnd == ReadEnd.Continue) {
-            return finishRead(epoch, current, ReadEnd.WriteFailed)
+          if (paused != null && !writeBytes(paused, current, lane) && context.outcome == ReadEnd.Continue) {
+            return finishRead(epoch, context, ReadEnd.WriteFailed)
           }
           continue
         }
-        val count = readOnce(current, buffer)
-        if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
-        if (count < 0) return finishRead(epoch, current, ReadEnd.PeerClosed)
+        val count = readOnce(context, buffer)
+        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
+        if (count < 0) return finishRead(epoch, context, ReadEnd.PeerClosed)
         // Partial-frame age is a duration on this clock, not civil time.
         val now = clockMs()
         if (count > 0) {
           val batch = reader.offer(buffer, 0, count, now)
           for (frame in batch.frames) {
-            noteInbound()
-            onFrame(frame, epoch, current, outbound)
-            if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
+            noteInbound(context)
+            onFrame(frame, epoch, context)
+            if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
           }
-          if (batch.status != FrameStatus.Ok) return finishRead(epoch, current, ReadEnd.PeerClosed)
+          if (batch.status != FrameStatus.Ok) return finishRead(epoch, context, ReadEnd.PeerClosed)
         }
-        if (reader.partialExpired(now)) return finishRead(epoch, current, ReadEnd.PeerClosed)
-        if (inboundIsDead() || writeStuck()) return finishRead(epoch, current, ReadEnd.Dead)
-        if (epochCounter.get() != epoch) return finishRead(epoch, current, ReadEnd.PeerClosed)
-        noteHeartbeat(epoch, current, outbound)
-        if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
+        if (reader.partialExpired(now)) return finishRead(epoch, context, ReadEnd.PeerClosed)
+        if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+        if (epochCounter.get() != epoch || activeGeneration != context.generation) {
+          return finishRead(epoch, context, ReadEnd.PeerClosed)
+        }
+        noteHeartbeat(epoch, context)
+        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
         val next = outbound.poll()
-        if (next != null && !writeBytes(next, current, lane) && readEnd == ReadEnd.Continue) {
-          return finishRead(epoch, current, ReadEnd.WriteFailed)
+        if (next != null && !writeBytes(next, current, lane) && context.outcome == ReadEnd.Continue) {
+          return finishRead(epoch, context, ReadEnd.WriteFailed)
         }
-        if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
+        if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
       }
-      return finishRead(epoch, current, ReadEnd.PeerClosed)
+      return finishRead(epoch, context, ReadEnd.PeerClosed)
     } finally {
       if (writeLane === lane) writeLane = null
     }
     return ReadEnd.PeerClosed
   }
 
-  private fun readOnce(current: TlsLink, buffer: ByteArray): Int {
+  private fun readOnce(context: PhysicalConnection, buffer: ByteArray): Int {
     return try {
-      current.input.read(buffer)
+      context.socket.input.read(buffer)
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
       if (isReadTimeout(error)) 0
       else {
-        if (readEnd == ReadEnd.Continue) {
+        if (context.outcome == ReadEnd.Continue) {
           val detail = error.message ?: "Read failed."
           publishCurrent(epochCounter.get(), LinkPhase.Disconnected, detail, detail)
         }
@@ -1466,20 +1576,16 @@ class LanSession(
     }
   }
 
-  private val readEndLock = Any()
-  @Volatile
-  private var readEnd = ReadEnd.Continue
-  @Volatile
-  private var lastInboundNanos = 0L
-
-  private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink, outbound: ConnectionWriter) {
-    if (epochCounter.get() != epoch) return
+  private suspend fun onFrame(frame: MonitorFrame, epoch: Int, context: PhysicalConnection) {
+    if (epochCounter.get() != epoch || activeGeneration != context.generation) return
+    val owned = context.socket
+    val outbound = context.writer
     frameProbe?.invoke(frame)
     val sync = decodeSyncEnvelope(frame.json)
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
-      when (events.offer(sync.event, sync.wireBytes)) {
-        CreditOffer.Rejected -> refusedEvents.trySend(sync.event)
+      when (context.events.offer(sync.event, sync.wireBytes)) {
+        CreditOffer.Rejected -> context.refusedEvents.trySend(sync.event)
         CreditOffer.Queued, CreditOffer.Held -> {}
       }
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
@@ -1487,14 +1593,14 @@ class LanSession(
     }
     if (sync != null && sync !is SyncFrame.RevisionChanged) {
       session.noteSyncTraffic()
-      syncFrames.trySend(sync)
+      context.syncFrames.trySend(sync)
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
       return
     }
-    if (sync is SyncFrame.RevisionChanged) syncFrames.trySend(sync)
+    if (sync is SyncFrame.RevisionChanged) context.syncFrames.trySend(sync)
     val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
-    val message = chunks.accept(envelope.message) ?: return
+    val message = context.chunks.accept(envelope.message) ?: return
     session.apply(message)
     when (message.kind) {
       MessageKind.PairOk -> {
@@ -1520,23 +1626,23 @@ class LanSession(
       }
       MessageKind.CommandStates -> {
         val states = decodeCommandStates(message.payloadJson) ?: return
-        applyHostStates(states.map { HostCommandState(it.ref, it.state, it.reason) }, owned)
+        applyHostStates(states.map { HostCommandState(it.ref, it.state, it.reason) }, context)
       }
       MessageKind.CommandState -> {
         val one = decodeCommandState(message.payloadJson) ?: return
-        applyHostStates(listOf(HostCommandState(one.ref, one.state, one.reason)), owned)
+        applyHostStates(listOf(HostCommandState(one.ref, one.state, one.reason)), context)
       }
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L
-        if (!offerControl(encodeTicks(MessageKind.Pong, newId(), ticks), owned, outbound)) noteReadEnd(epoch, ReadEnd.WriteFailed, owned)
+        if (!offerControl(encodeTicks(MessageKind.Pong, newId(), ticks), owned, outbound)) noteReadEnd(epoch, ReadEnd.WriteFailed, context)
       }
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
         if (bye?.reason == "replaced") {
-          noteReadEnd(epoch, ReadEnd.Rejected, owned)
+          noteReadEnd(epoch, ReadEnd.Rejected, context)
           publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason)
         } else if (bye?.reason == "disabled" || bye?.reason == "revoked") {
-          noteReadEnd(epoch, ReadEnd.Disabled, owned)
+          noteReadEnd(epoch, ReadEnd.Disabled, context)
           publishCurrent(epoch, LinkPhase.Paused, HostClosedBanner, bye.reason)
         }
       }
@@ -1546,10 +1652,10 @@ class LanSession(
         // Authentication failure must not silently discard a saved pairing and
         // retry with an empty, single-use pairing code.
         if (reason == "busy") {
-          noteReadEnd(epoch, ReadEnd.Retry, owned)
+          noteReadEnd(epoch, ReadEnd.Retry, context)
           publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason)
         } else {
-          noteReadEnd(epoch, ReadEnd.Rejected, owned)
+          noteReadEnd(epoch, ReadEnd.Rejected, context)
           publishCurrent(epoch, LinkPhase.Paused, reason.ifEmpty { HostClosedBanner }, reason)
         }
       }
@@ -1557,20 +1663,26 @@ class LanSession(
         session.phase == computing.michell.monitor.protocol.SessionPhase.Busy) LinkPhase.Live else LinkPhase.Connecting, "", "")
     }
     // Queue authentication before exposing hello: its collector can immediately send resume.
+    // A frame from a socket that has already been replaced must not reach the screen.
+    if (activeGeneration != context.generation || link !== context.socket) return
     inbound.publish(message)
   }
 
   private fun offerControl(json: String, owned: TlsLink, outbound: ConnectionWriter): Boolean {
-    if (owned !== link) return false
+    val context = connection
+    if (context == null || owned !== link || owned !== context.socket || outbound !== context.writer) return false
+    if (activeGeneration != context.generation) return false
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
     return outbound.offerControl(frame.bytes)
   }
 
   private fun offerCommand(json: String, owned: TlsLink): Boolean {
+    val context = connection
     val outbound = writer
     // Setup and teardown have no writer. Do not touch the socket from this caller.
-    if (outbound == null || owned !== link) return false
+    if (context == null || outbound == null || owned !== link || owned !== context.socket) return false
+    if (activeGeneration != context.generation) return false
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
     return outbound.offerCommand(frame.bytes)
@@ -1595,11 +1707,14 @@ class LanSession(
   private fun writeSocket(bytes: ByteArray, owned: TlsLink, allowed: () -> Boolean): Boolean {
     synchronized(writeLock) {
       if (!allowed()) return false
+      val context = connection
+      if (context != null && context.socket !== owned) return false
       writeStartedNanos = clock.nanoTime()
       return try {
         owned.output.write(bytes)
         owned.output.flush()
-        lastSentMs = clockMs()
+        val sent = clockMs()
+        if (context != null && context.socket === owned) context.lastSentMs = sent
         true
       } catch (error: Exception) {
         false
@@ -1609,42 +1724,35 @@ class LanSession(
     }
   }
 
-  private fun noteReadEnd(epoch: Int, end: ReadEnd, owned: TlsLink?) {
+  private fun noteReadEnd(epoch: Int, end: ReadEnd, context: PhysicalConnection) {
     if (end == ReadEnd.Continue) return
-    if (epochCounter.get() != epoch) return
-    val closeNow = synchronized(readEndLock) {
-      if (readEnd != ReadEnd.Continue) {
-        false
-      } else {
-        readEnd = end
-        true
-      }
-    }
-    if (closeNow) closeOwned(owned)
+    if (epochCounter.get() != epoch || activeGeneration != context.generation) return
+    if (context.closeOutcome(end)) closeOwned(context.socket)
   }
 
-  private fun finishRead(epoch: Int, owned: TlsLink, end: ReadEnd): ReadEnd {
-    noteReadEnd(epoch, end, owned)
-    return readEnd
+  private fun finishRead(epoch: Int, context: PhysicalConnection, end: ReadEnd): ReadEnd {
+    noteReadEnd(epoch, end, context)
+    return context.outcome
   }
 
-  private fun noteInbound() {
-    lastInboundNanos = clock.nanoTime()
-    lastReceivedMs = clockMs()
+  private fun noteInbound(context: PhysicalConnection) {
+    context.lastInboundNanos = clock.nanoTime()
+    context.lastReceivedMs = clockMs()
   }
 
-  private fun inboundIsDead(): Boolean {
-    if (events.shouldPauseRead()) return false
-    val delta = clock.nanoTime() - lastInboundNanos
+  private fun inboundIsDead(context: PhysicalConnection): Boolean {
+    if (context.events.shouldPauseRead()) return false
+    val delta = clock.nanoTime() - context.lastInboundNanos
     if (delta <= 0L) return false
     return delta / 1_000_000L >= MonitorLimits.DeadSessionMs
   }
 
   /** Bytes are still coming, or we stopped reading so they can sit in TCP. */
   fun framesArriving(): Boolean {
+    val context = connection ?: return false
     if (link == null) return false
-    if (events.shouldPauseRead()) return true
-    val quiet = clock.nanoTime() - lastInboundNanos
+    if (context.events.shouldPauseRead()) return true
+    val quiet = clock.nanoTime() - context.lastInboundNanos
     if (quiet <= 0L) return true
     return quiet / 1_000_000L < MonitorLimits.DeadSessionMs
   }
@@ -1661,12 +1769,19 @@ class LanSession(
   }
 
   private fun closeLink() {
-    closeOwned(link)
+    val context = connection
+    connection = null
+    activeGeneration = 0
+    writer = null
+    writeStartedNanos = 0L
+    val owned = link
     link = null
     sentResumeEpoch = -1
     sentResumeConversation = ""
     sentResumeStream = ""
     sentResumeSeq = -1L
+    context?.abandon()
+    closeOwned(owned)
   }
 
   private fun closeOwned(owned: TlsLink?) {

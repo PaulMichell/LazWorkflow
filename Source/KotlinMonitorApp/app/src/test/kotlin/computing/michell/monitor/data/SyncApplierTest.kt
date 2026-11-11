@@ -3,7 +3,11 @@ package computing.michell.monitor.data
 /* Sync applier: batch, skip, gap, and one commit (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.protocol.MonitorEvent
+import computing.michell.monitor.protocol.OutlineTurn
+import computing.michell.monitor.protocol.SyncFrame
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -180,6 +184,65 @@ class SyncApplierTest {
     clock.now = 50L
     applier.tick()
     assertEquals(listOf("work"), store.turns.map { it.turnId })
+  }
+
+  @Test
+  fun aLaterGenerationWaitsForTheCommitThenDropsPartialAssembly() = runBlocking {
+    val commits = mutableListOf<String>()
+    val states = mutableListOf<String>()
+    val release = CompletableDeferred<Unit>()
+    val entered = CompletableDeferred<Unit>()
+    val backing = MemorySyncStore()
+    backing.seed("c1", "stream-a", 4L)
+    val store = object : SyncStore {
+      override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {
+        return backing.apply(hostId, events, nowMs)
+      }
+
+      override suspend fun commitBaseline(hostId: String, commit: BaselineCommit, nowMs: Long): BaselinePlan? {
+        entered.complete(Unit)
+        release.await()
+        commits += commit.conversationId
+        return null
+      }
+
+      override suspend fun saveState(hostId: String, key: String, valueJson: String, nowMs: Long) {
+        states += key
+      }
+    }
+    val applier = SyncApplier("host-1", store, TestClock(0L))
+    val begin = SyncFrame.SnapshotBegin(
+      "c1", "stream-a", 9L, "Old", "/work", 0,
+      listOf(OutlineTurn("t1", 0, "old", emptyList())),
+      null, emptyList()
+    )
+    applier.adoptConnection(1)
+    applier.offerFrame(SyncFrame.StateChunk("plan", 1, 2, "{\"phase\":"), 1)
+    applier.offerFrame(begin, 1)
+    val committing = launch { applier.offerFrame(SyncFrame.SnapshotEnd("c1", "stream-a", 9L), 1) }
+    entered.await()
+    val adopted = launch { applier.adoptConnection(2) }
+    delay(50)
+    assertFalse(adopted.isCompleted)
+    release.complete(Unit)
+    committing.join()
+    adopted.join()
+    assertEquals(listOf("c1"), commits)
+    assertEquals(4L, backing.seq("c1"))
+    applier.offerFrame(SyncFrame.StateChunk("plan", 2, 2, "\"old\"}"), 2)
+    applier.offerFrame(SyncFrame.State("late", "{\"phase\":\"stale\"}"), 1)
+    applier.offerFrame(SyncFrame.State("live", "{\"phase\":\"now\"}"), 2)
+    assertEquals(listOf("live"), states)
+    applier.offerFrame(
+      SyncFrame.SnapshotBegin(
+        "c2", "stream-b", 1L, "New", "/work", 0,
+        listOf(OutlineTurn("t2", 0, "new", emptyList())),
+        null, emptyList()
+      ),
+      2
+    )
+    applier.offerFrame(SyncFrame.SnapshotEnd("c2", "stream-b", 1L), 2)
+    assertEquals(listOf("c1", "c2"), commits)
   }
 
   private fun turn(seq: Long): MonitorEvent.TurnOpen {
