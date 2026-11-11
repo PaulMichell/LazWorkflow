@@ -65,7 +65,9 @@ import computing.michell.monitor.connection.ReconnectingBanner
 import computing.michell.monitor.connection.HostStore
 import computing.michell.monitor.MonitorHoldService
 import computing.michell.monitor.connection.holdLinkAcrossScreenOff
+import computing.michell.monitor.connection.LanRouteBook
 import computing.michell.monitor.connection.LanSession
+import computing.michell.monitor.connection.SslSocketConnector
 import computing.michell.monitor.connection.LinkPhase
 import computing.michell.monitor.connection.WaitingForWifiBanner
 import computing.michell.monitor.connection.IdleOfflineBanner
@@ -766,9 +768,17 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val commandLedger = RoomCommandLedger(conversations)
   val conversationCapText = MutableStateFlow(displayPrefs.getInt(ConversationCapKey, DefaultConversationCap).toString())
   val imageBudgetText = MutableStateFlow(displayPrefs.getInt(ImageBudgetKey, DefaultImageBudgetMiB).toString())
-  private val session = LanSession(store, ledger = commandLedger,
+  private val lanRoutes = LanRouteBook()
+  private val session = LanSession(store, SslSocketConnector(lanRoutes), ledger = commandLedger,
     diagnostic = { android.util.Log.d("MonitorLink", it) })
-  private val lanWatch = WifiLanWatch(application, session::onWifiAvailable, session::onWifiLost)
+  private val lanWatch = WifiLanWatch(
+    application,
+    lanRoutes,
+    session::onWifiRoute,
+    session::onWifiRouteLost,
+    onAbsent = session::onWifiLost,
+    onUnbound = session::onWifiAvailable
+  )
   private val cacheGate = Any()
   private var cacheWriteSerial = 0
   private var cacheSaveJob: Job? = null

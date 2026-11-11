@@ -14,9 +14,11 @@ class WifiLanWatchTest {
     val gate = WifiLossGate(
       onUp = {},
       onDown = { down += 1 },
+      onAbsent = {},
       wifiPresent = { true },
       confirmLater = { scheduled = it }
     )
+    gate.activate()
     val network = "wlan0"
     gate.onAvailable(network)
     gate.onLost(network)
@@ -32,9 +34,11 @@ class WifiLanWatchTest {
     val gate = WifiLossGate(
       onUp = {},
       onDown = { down += 1 },
+      onAbsent = {},
       wifiPresent = { present },
       confirmLater = { scheduled = it }
     )
+    gate.activate()
     val network = "wlan0"
     gate.onAvailable(network)
     gate.onLost(network)

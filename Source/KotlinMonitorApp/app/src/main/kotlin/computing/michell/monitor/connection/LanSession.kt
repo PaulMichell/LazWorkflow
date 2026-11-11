@@ -274,6 +274,47 @@ interface TlsLink : Closeable {
 
 fun interface TlsConnector {
   fun open(address: String, port: Int, fingerprint: String): TlsLink
+  /** A null route keeps the process default. A LAN route is bound before connect. */
+  fun open(address: String, port: Int, fingerprint: String, route: LanRoute?): TlsLink =
+    open(address, port, fingerprint)
+}
+
+internal data class OpeningDeadlines(
+  val connectMs: Int,
+  val handshakeMs: Int,
+  val sessionSetupMs: Int,
+  val steadyReadMs: Int
+)
+
+internal val MonitorOpeningDeadlines = OpeningDeadlines(
+  connectMs = ConnectTimeoutMs,
+  handshakeMs = HandshakeTimeoutMs,
+  sessionSetupMs = SessionSetupMs,
+  steadyReadMs = ReadTimeoutMs
+)
+
+/**
+ * TCP connect, TLS handshake, and the later steady read each have their own
+ * budget. The handshake must not inherit the one-second read timeout.
+ * A failure closes the socket.
+ */
+internal fun openWithDeadlines(
+  deadlines: OpeningDeadlines = MonitorOpeningDeadlines,
+  bind: () -> Unit = {},
+  connect: (Int) -> Unit = {},
+  handshake: (Int) -> Unit,
+  restore: (Int) -> Unit = {},
+  close: () -> Unit = {}
+) {
+  try {
+    bind()
+    connect(deadlines.connectMs)
+    handshake(deadlines.handshakeMs)
+    restore(deadlines.steadyReadMs)
+  } catch (error: Exception) {
+    close()
+    throw error
+  }
 }
 
 /** Empty selects endpoint-only trust. A 64-hex pin is pinned. Any other nonempty value is refused. */
@@ -284,8 +325,13 @@ internal fun trustManagerForFingerprint(fingerprint: String): X509TrustManager {
   return TrustAllManager()
 }
 
-class SslSocketConnector : TlsConnector {
-  override fun open(address: String, port: Int, fingerprint: String): TlsLink {
+class SslSocketConnector(
+  private val binder: LanSocketBinder = LanSocketBinder.None
+) : TlsConnector {
+  override fun open(address: String, port: Int, fingerprint: String): TlsLink =
+    open(address, port, fingerprint, null)
+
+  override fun open(address: String, port: Int, fingerprint: String, route: LanRoute?): TlsLink {
     val manager = trustManagerForFingerprint(fingerprint)
     val context = SSLContext.getInstance("TLS")
     context.init(null, arrayOf(manager), SecureRandom())
@@ -295,22 +341,37 @@ class SslSocketConnector : TlsConnector {
     try {
       plain.keepAlive = true
       plain.tcpNoDelay = true
-      plain.connect(InetSocketAddress(address, port), ConnectTimeoutMs)
-      val socket = context.socketFactory.createSocket(plain, address, port, true) as SSLSocket
-      socket.keepAlive = true
-      socket.tcpNoDelay = true
-      wrapped = socket
-      val protocols = socket.supportedProtocols.filter { it == "TLSv1.3" || it == "TLSv1.2" }
-      if (protocols.isNotEmpty()) socket.enabledProtocols = protocols.toTypedArray()
-      val parameters = socket.sslParameters
-      parameters.endpointIdentificationAlgorithm = null
-      socket.sslParameters = parameters
-      // Steady-state read budget so a quiet peer still notices a partial frame and a dead
-      // session. A timeout is not a closed host. Do not shrink this into a poll: outbound
-      // frames wake the writer coroutine instead.
-      socket.soTimeout = ReadTimeoutMs
-      socket.startHandshake()
-      return SocketLink(socket)
+      openWithDeadlines(
+        MonitorOpeningDeadlines,
+        bind = { binder.bind(plain, route) },
+        connect = { timeout -> plain.connect(InetSocketAddress(address, port), timeout) },
+        handshake = { timeout ->
+          val socket = context.socketFactory.createSocket(plain, address, port, true) as SSLSocket
+          socket.keepAlive = true
+          socket.tcpNoDelay = true
+          wrapped = socket
+          val protocols = socket.supportedProtocols.filter { it == "TLSv1.3" || it == "TLSv1.2" }
+          if (protocols.isNotEmpty()) socket.enabledProtocols = protocols.toTypedArray()
+          val parameters = socket.sslParameters
+          parameters.endpointIdentificationAlgorithm = null
+          socket.sslParameters = parameters
+          // Handshake budget, not the steady-state read timeout.
+          socket.soTimeout = timeout
+          socket.startHandshake()
+        },
+        restore = { timeout -> wrapped?.soTimeout = timeout },
+        close = {
+          try {
+            wrapped?.close()
+          } catch (ignored: Exception) {
+          }
+          try {
+            plain.close()
+          } catch (ignored: Exception) {
+          }
+        }
+      )
+      return SocketLink(wrapped ?: throw java.io.IOException("TLS handshake did not open a socket."))
     } catch (error: Exception) {
       try {
         wrapped?.close()
@@ -393,6 +454,7 @@ private class PhysicalConnection(
   @Volatile var lastSentMs: Long = openedAtMs
   @Volatile var lastReceivedMs: Long = openedAtMs
   @Volatile var lastInboundNanos: Long = inboundNanos
+  @Volatile var setupComplete: Boolean = false
   @Volatile var outcome: ReadEnd = ReadEnd.Continue
   private val outcomeLock = Any()
 
@@ -758,6 +820,8 @@ class LanSession(
   @Volatile
   private var lanAvailable = true
   @Volatile
+  private var lanRoute: LanRoute? = null
+  @Volatile
   private var connectNow = false
   @Volatile
   private var replaceLink = false
@@ -983,13 +1047,39 @@ class LanSession(
   }
 
   /**
+   * The observed Wi-Fi network. A different identity is a roam or replacement:
+   * the live socket is dropped so the next open binds to the new network.
+   * A repeated report of the same identity does not reconnect.
+   */
+  fun onWifiRoute(route: LanRoute) {
+    val previous = lanRoute
+    lanRoute = route
+    lanAvailable = true
+    if (previous == route) return
+    connectNow = true
+    if (previous != null && link != null) replaceLink = true
+    if (!policy.paused) policy.resetBackoff()
+    wakes.trySend(Unit)
+    if (mayReconnect() && loop?.isActive != true) startLoop()
+  }
+
+  /**
    * Confirmed Wi-Fi loss. A hint for the banner, not a latch. A touch, the in-use
    * retry, and a failed attempt still open the saved endpoint. This does not close
    * a live socket, and it does not wake the loop: a wake is a connect signal.
    */
   fun onWifiLost() {
+    lanRoute = null
     lanAvailable = false
   }
+
+  /** A loss of some other network, including a stale callback, leaves the current route. */
+  fun onWifiRouteLost(route: LanRoute) {
+    if (lanRoute != route) return
+    onWifiLost()
+  }
+
+  internal fun currentLanRoute(): LanRoute? = lanRoute
 
   /**
    * Replaces the saved pin when the value normalises to 64 hex characters.
@@ -1228,7 +1318,7 @@ class LanSession(
     try {
       return withTimeout(OpenBudgetMs) {
         withContext(Dispatchers.IO) {
-          val socket = connector.open(address, port, fingerprint)
+          val socket = connector.open(address, port, fingerprint, lanRoute)
           held = socket
           rememberOpening(socket)
           ensureActive()
@@ -1612,6 +1702,9 @@ class LanSession(
         withTimeoutOrNull(BackgroundByeMs) { outbound.awaitDrained() }
         return finishRead(epoch, context, ReadEnd.Background)
       }
+      if (!context.setupComplete && clockMs() - context.openedAtMs >= SessionSetupMs) {
+        return finishRead(epoch, context, ReadEnd.Dead)
+      }
       if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
       if (context.events.shouldPauseRead()) {
         delay(50)
@@ -1669,6 +1762,8 @@ class LanSession(
     val owned = context.socket
     val outbound = context.writer
     frameProbe?.invoke(frame)
+    // Any accepted frame ends the opening budget, including a sync event.
+    context.setupComplete = true
     val sync = decodeSyncEnvelope(frame.json)
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
@@ -1929,9 +2024,11 @@ private fun isRefused(error: Throwable): Boolean {
   return false
 }
 
-private const val ConnectTimeoutMs = 10_000
-private const val ReadTimeoutMs = 1_000
+internal const val ConnectTimeoutMs = 10_000
+internal const val HandshakeTimeoutMs = 10_000
+internal const val SessionSetupMs = 15_000
+internal const val ReadTimeoutMs = 1_000
 private const val BackgroundByeMs = 500L
-private const val OpenBudgetMs = 15_000L
+private const val OpenBudgetMs = 25_000L
 private const val PredecessorJoinMs = 2_000L
 private const val HexDigits = "0123456789abcdef"
