@@ -1244,6 +1244,43 @@ class LanSessionTest {
   }
 
   @Test
+  fun unicodeBytesAndAnEssentialFrameStayWithinTheBudget() = runBlocking {
+    val accented = "é"
+    assertEquals(1, accented.length)
+    assertEquals(2, computing.michell.monitor.protocol.utf8Length(accented))
+    val delivery = InboundDelivery(SteppableClock(), byteBudget = 3)
+    assertEquals(DeliveryResult.Dropped, delivery.publish(inboundMessage(MessageKind.Error, "wide", accented + accented)))
+    assertEquals(0L, delivery.queuedBytes())
+    assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "bulk", "{}")))
+    assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.HelloOk, "hello", "{}")))
+    assertEquals(2L, delivery.queuedBytes())
+    val received = mutableListOf<String>()
+    val collector = launch { delivery.messages.collect { received += it.id } }
+    try {
+      withTimeout(2_000) { while (received.isEmpty()) yield() }
+      assertEquals(listOf("hello"), received.toList())
+    } finally {
+      collector.cancel()
+    }
+  }
+
+  @Test
+  fun aCoalescedReplacementDoesNotGrowPastTheBudget() = runBlocking {
+    val delivery = InboundDelivery(SteppableClock(), byteBudget = 8)
+    assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Status, "small", "{}")))
+    assertEquals(DeliveryResult.Dropped, delivery.publish(inboundMessage(MessageKind.Status, "wide", "ééééé")))
+    assertEquals(2L, delivery.queuedBytes())
+    val received = mutableListOf<String>()
+    val collector = launch { delivery.messages.collect { received += it.id } }
+    try {
+      withTimeout(2_000) { while (received.isEmpty()) yield() }
+      assertEquals(listOf("small"), received.toList())
+    } finally {
+      collector.cancel()
+    }
+  }
+
+  @Test
   fun aFullCreditWindowFailsWithoutWaiting() = runBlocking {
     val delivery = InboundDelivery(SteppableClock(), byteBudget = 3)
     assertEquals(DeliveryResult.Queued, delivery.publish(inboundMessage(MessageKind.Error, "held")))
@@ -1582,6 +1619,64 @@ class LanSessionTest {
   }
 
   @Test
+  fun aCreditPauseDoesNotCloseOnHeartbeatSilence() {
+    val small = eventJson(1L, "A")
+    val second = eventJson(2L, "B")
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val clock = SteppableClock()
+    val seen = AtomicInteger(0)
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, clock = clock, eventBudget = small.length + 20L)
+    session.frameProbe = { seen.incrementAndGet() }
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(small))
+      links[0].push(frameOf(second))
+      waitUntil { seen.get() >= 2 }
+      clock.advanceMs(MonitorLimits.DeadSessionMs)
+      Thread.sleep(200)
+      assertFalse(links[0].closed)
+      assertEquals(1, opens.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun anOversizedEventIsRefusedWithoutReplacingTheSocket() {
+    val huge = eventJson(9L, "x".repeat(400))
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val refused = CountDownLatch(1)
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, eventBudget = 80L)
+    session.attachLinkApplier(object : LinkApplier {
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {}
+      override suspend fun offerFrame(frame: computing.michell.monitor.protocol.SyncFrame, generation: Int) {}
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {
+        if (event.seq == 9L) refused.countDown()
+      }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(huge))
+      assertTrue(refused.await(3, TimeUnit.SECONDS))
+      Thread.sleep(200)
+      assertEquals(1, opens.get())
+      assertFalse(links[0].closed)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aCommandAcceptedOnOneGenerationIsStaleOnTheNext() {
     val socket = Any()
     val accepted = beginCatalogue("""{"v":3,"id":"stop-1","type":"stop","payload":{}}""", 1, socket)
@@ -1862,8 +1957,8 @@ private fun snapshotEndJson(conversationId: String, streamId: String): String {
   return """{"v":3,"id":"end-$conversationId","type":"snapshot_end","payload":{"conversation_id":"$conversationId","stream_id":"$streamId","seq":1}}"""
 }
 
-private fun inboundMessage(kind: MessageKind, id: String): MonitorMessage {
-  return MonitorMessage(1, id, kind, kind.wireName, "{}", "", true, "{}")
+private fun inboundMessage(kind: MessageKind, id: String, wire: String = "{}"): MonitorMessage {
+  return MonitorMessage(1, id, kind, kind.wireName, wire, "", true, wire)
 }
 
 private class RecordingConnector : TlsConnector {

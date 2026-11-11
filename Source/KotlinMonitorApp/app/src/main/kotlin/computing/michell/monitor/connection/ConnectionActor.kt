@@ -17,6 +17,10 @@ import kotlinx.coroutines.Job
 
 /** Unacknowledged event JSON the phone will hold before it closes and resumes. */
 const val InboundCreditBytes = 512 * 1024
+/** Snapshot and state frames waiting for the applier. A full queue recovers instead of growing. */
+const val SyncFrameQueue = 64
+/** Events the credit window refused. A full queue recovers instead of growing. */
+const val RefusedEventQueue = 32
 
 enum class HeartbeatStep {
   None,
@@ -31,10 +35,23 @@ fun heartbeatStep(lastSentMs: Long, lastReceivedMs: Long, nowMs: Long): Heartbea
   return HeartbeatStep.None
 }
 
-class ConnectionWriter(private val write: suspend (ByteArray) -> Boolean) {
-  private val control = Channel<ByteArray>(Channel.UNLIMITED)
-  private val commands = Channel<ByteArray>(Channel.UNLIMITED)
-  private val acks = Channel<ByteArray>(Channel.UNLIMITED)
+/**
+ * A credit pause stopped the read, so silence is not a dead peer.
+ * The control ping is still due. Close stays with the write watchdog.
+ */
+fun heartbeatWhileCreditPaused(step: HeartbeatStep, lastSentMs: Long, nowMs: Long): HeartbeatStep {
+  if (step != HeartbeatStep.Close) return step
+  if (nowMs - lastSentMs >= MonitorLimits.HeartbeatSilenceMs) return HeartbeatStep.Ping
+  return HeartbeatStep.None
+}
+
+class ConnectionWriter(
+  capacity: Int = MonitorLimits.OutboundQueue,
+  private val write: suspend (ByteArray) -> Boolean
+) {
+  private val control = Channel<ByteArray>(capacity)
+  private val commands = Channel<ByteArray>(capacity)
+  private val acks = Channel<ByteArray>(capacity)
 
   fun offerControl(bytes: ByteArray): Boolean = control.trySend(bytes).isSuccess
 
@@ -93,9 +110,12 @@ class AccountedEvents(private val budgetBytes: Long = InboundCreditBytes.toLong(
 
   val queuedBytes: Long get() = synchronized(gate) { queued }
 
-  /** A full window holds the event. It is not queued, so it is not acked. */
+  /**
+   * A full window holds the event. It is not queued, so it is not acked.
+   * An event larger than the whole budget is rejected. Holding it would pause reads forever.
+   */
   fun offer(event: MonitorEvent, bytes: Int): CreditOffer {
-    if (bytes < 0) return CreditOffer.Rejected
+    if (bytes < 0 || bytes > budgetBytes) return CreditOffer.Rejected
     val counted = CountedEvent(event, bytes)
     synchronized(gate) {
       if (held.isNotEmpty() || queued + bytes > budgetBytes) {

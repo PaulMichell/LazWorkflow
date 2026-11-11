@@ -66,6 +66,7 @@ import computing.michell.monitor.protocol.encodePair
 import computing.michell.monitor.protocol.encodeTicks
 import computing.michell.monitor.protocol.SyncFrame
 import computing.michell.monitor.protocol.tryDecodeEnvelope
+import computing.michell.monitor.protocol.utf8Length
 import computing.michell.monitor.protocol.tryEncodeFrame
 import java.io.Closeable
 import kotlin.coroutines.coroutineContext
@@ -376,13 +377,14 @@ private class PhysicalConnection(
   val generation: Int,
   val socket: TlsLink,
   val openedAtMs: Long,
-  inboundNanos: Long
+  inboundNanos: Long,
+  eventBudget: Long
 ) {
   val writer = ConnectionWriter { _ -> false }
   val chunks = ChunkAssembly()
-  val events = AccountedEvents()
-  val syncFrames = Channel<SyncFrame>(Channel.UNLIMITED)
-  val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
+  val events = AccountedEvents(eventBudget)
+  val syncFrames = Channel<SyncFrame>(SyncFrameQueue)
+  val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(RefusedEventQueue)
   @Volatile var lastSentMs: Long = openedAtMs
   @Volatile var lastReceivedMs: Long = openedAtMs
   @Volatile var lastInboundNanos: Long = inboundNanos
@@ -475,6 +477,8 @@ class InboundDelivery(
 
   internal fun isWaiting(): Boolean = false
 
+  internal fun queuedBytes(): Long = synchronized(gate) { queuedBytes }
+
   suspend fun publish(message: MonitorMessage): DeliveryResult {
     // Never wait. A page larger than the budget used to block the reader, the host
     // then could not read a send, and the reconnect came back stuck on Syncing.
@@ -484,24 +488,73 @@ class InboundDelivery(
   private fun offer(message: MonitorMessage): Boolean {
     val stored = synchronized(gate) {
       val incoming = messageBytes(message)
+      if (incoming < 0) return@synchronized false
       if (message.kind in CoalescedKinds) {
         val index = pending.indexOfFirst { it.kind == message.kind }
-        if (index >= 0) {
-          queuedBytes = queuedBytes - messageBytes(pending[index]) + incoming
-          pending[index] = message
-          return@synchronized true
-        }
+        if (index >= 0) return@synchronized replaceCoalesced(index, message, incoming)
       }
-      if (queuedBytes + incoming > byteBudget) return@synchronized false
-      // A plan must not wait behind pages or images. The page can show the cached copy,
-      // and this frame is the replacement.
-      val slot = if (message.kind == MessageKind.Plan) planInsertAt() else pending.size
-      pending.add(slot, message)
-      queuedBytes += incoming
-      true
+      if (queuedBytes + incoming <= byteBudget) {
+        enqueue(message, incoming)
+        return@synchronized true
+      }
+      if (!isEssentialDelivery(message.kind)) return@synchronized false
+      evictNonEssential(incoming)
+      if (queuedBytes + incoming <= byteBudget || incoming > byteBudget) {
+        if (incoming > byteBudget) dropOversized()
+        enqueue(message, incoming)
+        return@synchronized true
+      }
+      false
     }
     if (stored) available.trySend(Unit)
     return stored
+  }
+
+  /** Latest coalesced value. A replacement that does not fit is kept only when it is essential. */
+  private fun replaceCoalesced(index: Int, message: MonitorMessage, incoming: Int): Boolean {
+    val old = messageBytes(pending[index])
+    val without = queuedBytes - old
+    if (without + incoming <= byteBudget) {
+      pending[index] = message
+      queuedBytes = without + incoming
+      return true
+    }
+    if (!isEssentialDelivery(message.kind)) return false
+    pending[index] = message
+    queuedBytes = without + incoming
+    evictNonEssential(0, index)
+    if (incoming > byteBudget) dropOversized(index)
+    return true
+  }
+
+  private fun enqueue(message: MonitorMessage, incoming: Int) {
+    val slot = if (message.kind == MessageKind.Plan) planInsertAt() else pending.size
+    pending.add(slot, message)
+    queuedBytes += incoming
+  }
+
+  /** Drops bulk from the tail until [incoming] fits, or nothing bulk remains. */
+  private fun evictNonEssential(incoming: Int, keep: Int = -1) {
+    var index = pending.size - 1
+    while (index >= 0 && queuedBytes + incoming > byteBudget) {
+      if (index != keep && !isEssentialDelivery(pending[index].kind)) {
+        queuedBytes -= messageBytes(pending[index])
+        pending.removeAt(index)
+      }
+      index -= 1
+    }
+  }
+
+  /** At most one message may exceed the budget. It is the latest oversized essential. */
+  private fun dropOversized(keep: Int = -1) {
+    var index = pending.size - 1
+    while (index >= 0) {
+      if (index != keep && messageBytes(pending[index]) > byteBudget) {
+        queuedBytes -= messageBytes(pending[index])
+        pending.removeAt(index)
+      }
+      index -= 1
+    }
   }
 
   private fun planInsertAt(): Int {
@@ -524,10 +577,12 @@ class InboundDelivery(
     }
   }
 
-private fun messageBytes(message: MonitorMessage): Int {
-  val counted = message.wireJson.length
-  return if (counted > 0) counted else message.payloadJson.length
-}
+  private fun messageBytes(message: MonitorMessage): Int {
+    val text = if (message.wireJson.isNotEmpty()) message.wireJson else message.payloadJson
+    val counted = utf8Length(text)
+    if (counted < 0 || counted == Int.MAX_VALUE) return -1
+    return counted
+  }
 
   companion object {
     // Transcript, TurnData, ImageData, ImageUnavailable, ApprovalRequested,
@@ -546,6 +601,14 @@ private fun messageBytes(message: MonitorMessage): Int {
       MessageKind.Chunk
     )
   }
+}
+
+/** Handshake, approval, and the latest plan must not disappear behind bulk pages. */
+internal fun isEssentialDelivery(kind: MessageKind): Boolean {
+  return kind == MessageKind.HelloOk || kind == MessageKind.PairOk || kind == MessageKind.Bye ||
+    kind == MessageKind.Rejected || kind == MessageKind.ApprovalRequested || kind == MessageKind.ApprovalClosed ||
+    kind == MessageKind.Ping || kind == MessageKind.Pong || kind == MessageKind.CommandState ||
+    kind == MessageKind.CommandStates || kind == MessageKind.Plan
 }
 
 enum class CatalogueWrite {
@@ -634,7 +697,8 @@ class LanSession(
   private val connector: TlsConnector = SslSocketConnector(),
   private val clock: MonotonicClock = SystemMonotonicClock,
   private val ledger: CommandLedger = NoCommandLedger,
-  private val diagnostic: (String) -> Unit = {}
+  private val diagnostic: (String) -> Unit = {},
+  private val eventBudget: Long = InboundCreditBytes.toLong()
 ) : SessionPort {
   private val job = SupervisorJob()
   private val scope = CoroutineScope(job + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
@@ -1214,7 +1278,7 @@ class LanSession(
   /** A successful open. The loop epoch is unchanged; this generation is new. */
   private fun installConnection(opened: TlsLink): PhysicalConnection {
     val generation = connectionCounter.incrementAndGet()
-    val context = PhysicalConnection(generation, opened, clockMs(), clock.nanoTime())
+    val context = PhysicalConnection(generation, opened, clockMs(), clock.nanoTime(), eventBudget)
     connection = context
     writer = context.writer
     link = opened
@@ -1488,12 +1552,15 @@ class LanSession(
   private fun noteHeartbeat(epoch: Int, context: PhysicalConnection) {
     if (epochCounter.get() != epoch || activeGeneration != context.generation) return
     val now = clockMs()
-    when (heartbeatStep(context.lastSentMs, context.lastReceivedMs, now)) {
+    val step = heartbeatStep(context.lastSentMs, context.lastReceivedMs, now)
+    val due = if (context.events.shouldPauseRead()) heartbeatWhileCreditPaused(step, context.lastSentMs, now) else step
+    when (due) {
       HeartbeatStep.Close -> noteReadEnd(epoch, ReadEnd.Dead, context)
       HeartbeatStep.Ping -> {
         val ping = encodeTicks(MessageKind.Ping, newId(), now)
         val frame = tryEncodeFrame(ping)
         if (frame.ok && context.writer.offerControl(frame.bytes)) context.lastSentMs = now
+        else noteReadEnd(epoch, ReadEnd.WriteFailed, context)
       }
       HeartbeatStep.None -> {}
     }
@@ -1593,7 +1660,9 @@ class LanSession(
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
       when (context.events.offer(sync.event, sync.wireBytes)) {
-        CreditOffer.Rejected -> context.refusedEvents.trySend(sync.event)
+        CreditOffer.Rejected -> {
+          if (!context.refusedEvents.trySend(sync.event).isSuccess) noteReadEnd(epoch, ReadEnd.Retry, context)
+        }
         CreditOffer.Queued, CreditOffer.Held -> {}
       }
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
@@ -1601,11 +1670,13 @@ class LanSession(
     }
     if (sync != null && sync !is SyncFrame.RevisionChanged) {
       session.noteSyncTraffic()
-      context.syncFrames.trySend(sync)
+      if (!context.syncFrames.trySend(sync).isSuccess) noteReadEnd(epoch, ReadEnd.Retry, context)
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
       return
     }
-    if (sync is SyncFrame.RevisionChanged) context.syncFrames.trySend(sync)
+    if (sync is SyncFrame.RevisionChanged && !context.syncFrames.trySend(sync).isSuccess) {
+      noteReadEnd(epoch, ReadEnd.Retry, context)
+    }
     val envelope = tryDecodeEnvelope(frame)
     if (!envelope.ok) return
     val message = context.chunks.accept(envelope.message) ?: return
@@ -1670,10 +1741,13 @@ class LanSession(
       else -> publishCurrent(epoch, if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live ||
         session.phase == computing.michell.monitor.protocol.SessionPhase.Busy) LinkPhase.Live else LinkPhase.Connecting, "", "")
     }
-    // Queue authentication before exposing hello: its collector can immediately send resume.
-    // A frame from a socket that has already been replaced must not reach the screen.
+    // Auth is written here, before the screen sees hello. The screen still owns the Room resume.
+    // A dropped essential frame is not left half-applied: the link recovers and hello runs again.
     if (activeGeneration != context.generation || link !== context.socket) return
-    inbound.publish(message)
+    val delivered = inbound.publish(message)
+    if (delivered == DeliveryResult.Dropped && isEssentialDelivery(message.kind)) {
+      noteReadEnd(epoch, ReadEnd.Retry, context)
+    }
   }
 
   private fun offerControl(json: String, owned: TlsLink, outbound: ConnectionWriter): Boolean {

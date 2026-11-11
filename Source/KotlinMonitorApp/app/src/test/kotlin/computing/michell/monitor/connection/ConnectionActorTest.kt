@@ -6,6 +6,7 @@ import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.MonitorLimits
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,6 +44,34 @@ class ConnectionActorTest {
     assertEquals(second, events.receive())
     assertTrue(events.heldEvents().isEmpty())
     assertEquals(held, events.receive())
+  }
+
+  @Test
+  fun anEventLargerThanTheBudgetIsRejectedAndDoesNotPauseForever() = runBlocking {
+    val events = AccountedEvents(budgetBytes = 100)
+    assertEquals(CreditOffer.Rejected, events.offer(event(1), 101))
+    assertFalse(events.shouldPauseRead())
+    assertEquals(CreditOffer.Queued, events.offer(event(2), 40))
+    assertEquals(event(2), events.receive())
+  }
+
+  @Test
+  fun aFullWriterLaneRejectsTheNextControlFrame() {
+    val writer = ConnectionWriter(capacity = 2) { true }
+    assertTrue(writer.offerControl("one".toByteArray()))
+    assertTrue(writer.offerControl("two".toByteArray()))
+    assertFalse(writer.offerControl("three".toByteArray()))
+    writer.close()
+  }
+
+  @Test
+  fun aCreditPauseDoesNotTreatSilenceAsADeadPeer() {
+    assertEquals(HeartbeatStep.None, heartbeatWhileCreditPaused(HeartbeatStep.None, 0L, 1_000L))
+    assertEquals(HeartbeatStep.Ping, heartbeatWhileCreditPaused(HeartbeatStep.Close, 0L, MonitorLimits.HeartbeatSilenceMs))
+    assertEquals(
+      HeartbeatStep.None,
+      heartbeatWhileCreditPaused(HeartbeatStep.Close, 0L, MonitorLimits.HeartbeatSilenceMs - 1)
+    )
   }
 
   @Test
