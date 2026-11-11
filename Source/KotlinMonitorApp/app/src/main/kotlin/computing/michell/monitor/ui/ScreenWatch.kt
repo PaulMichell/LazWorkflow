@@ -15,6 +15,7 @@ import computing.michell.monitor.data.documentFromRows
 import computing.michell.monitor.protocol.WireTurn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -84,7 +85,9 @@ class ScreenAssembler {
       if (flight != null && flight.length == length && flight.job.isActive) continue
       if (decodedLength[image.id] == length && (flight == null || !flight.job.isActive)) continue
       flight?.job?.cancel()
-      val job = scope.launch {
+      // Register before the body runs. An eager launch can finish, and miss decodedLength,
+      // before this map has the job. The next snapshot would decode the same file again.
+      val job = scope.launch(start = CoroutineStart.LAZY) {
         try {
           decode(image)
           val current = flights[image.id]
@@ -99,6 +102,7 @@ class ScreenAssembler {
         }
       }
       flights[image.id] = ImageFlight(job, length)
+      job.start()
     }
     for (id in flights.keys.toList()) {
       if (id in present) continue
