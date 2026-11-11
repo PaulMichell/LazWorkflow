@@ -85,7 +85,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -325,7 +329,11 @@ private enum class AttemptResult {
   Superseded
 }
 
-/** Continue is the only non-terminal value. Retry keeps the busy/auth reconnect path. */
+/**
+ * Continue is the only non-terminal value.
+ * PeerClosed, Dead, WriteFailed, Retry and WorkerFailed back off and try again.
+ * Rejected and Disabled pause until the user resumes. Background waits for the foreground.
+ */
 private enum class ReadEnd {
   Continue,
   PeerClosed,
@@ -334,7 +342,16 @@ private enum class ReadEnd {
   Disabled,
   WriteFailed,
   Retry,
+  WorkerFailed,
   Background
+}
+
+private class OpenTimedOut : Exception("Connection opening timed out.")
+
+internal interface LinkApplier {
+  suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent)
+  suspend fun offerFrame(frame: SyncFrame)
+  suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent)
 }
 
 /** Monotonic nanoseconds. Ping writes are not inbound activity and do not move this clock. */
@@ -585,13 +602,17 @@ class LanSession(
   @Volatile
   private var writeLane: Any? = null
   private val writeLock = Any()
+  private val openingLock = Any()
+  private var opening: TlsLink? = null
+  /** Test injection at the decode boundary. Production leaves this null. */
+  internal var frameProbe: ((MonitorFrame) -> Unit)? = null
   @Volatile
   private var writeStartedNanos = 0L
   internal val events = AccountedEvents()
   private val syncFrames = Channel<SyncFrame>(Channel.UNLIMITED)
   private val refusedEvents = Channel<computing.michell.monitor.protocol.MonitorEvent>(Channel.UNLIMITED)
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
-  private var applier: computing.michell.monitor.data.SyncApplier? = null
+  private var applier: LinkApplier? = null
   private var sentResumeEpoch = -1
   private var sentResumeConversation = ""
   private var sentResumeStream = ""
@@ -887,21 +908,29 @@ class LanSession(
 
   private fun startLoop() {
     // The previous loop must finish closing its own socket before this one opens.
+    // A stuck predecessor must not hold a user reconnect forever.
     chunks.reset()
     val epoch = epochCounter.incrementAndGet()
     val previous = loop
     previous?.cancel()
     closeLink()
+    closeOpening()
     loop = scope.launch {
       try {
-        previous?.join()
+        withTimeoutOrNull(PredecessorJoinMs) { previous?.join() }
       } catch (error: CancellationException) {
         throw error
       } catch (error: Exception) {
         // The predecessor failed. This generation still owns the next attempt.
       }
       if (epochCounter.get() != epoch || stopped) return@launch
-      runLoop()
+      try {
+        runLoop()
+      } catch (error: CancellationException) {
+        throw error
+      } finally {
+        if (epochCounter.get() == epoch) closeLink()
+      }
     }
   }
 
@@ -983,7 +1012,12 @@ class LanSession(
         AttemptResult.Failed -> publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, statusState.value.lastError)
         AttemptResult.Opened -> {
           policy.resume()
-          val end = readUntilClose(epoch)
+          val end = try {
+            readUntilClose(epoch)
+          } catch (error: CancellationException) {
+            if (epochCounter.get() == epoch) closeLink()
+            throw error
+          }
           if (epochCounter.get() != epoch) return
           closeLink()
           session.onSocketClosed()
@@ -1060,6 +1094,63 @@ class LanSession(
     }
   }
 
+  private suspend fun openBounded(address: String, port: Int, fingerprint: String): TlsLink {
+    var held: TlsLink? = null
+    try {
+      return withTimeout(OpenBudgetMs) {
+        withContext(Dispatchers.IO) {
+          val socket = connector.open(address, port, fingerprint)
+          held = socket
+          rememberOpening(socket)
+          ensureActive()
+          socket
+        }
+      }
+    } catch (error: TimeoutCancellationException) {
+      abandonOpening(held)
+      throw OpenTimedOut()
+    } catch (error: CancellationException) {
+      abandonOpening(held)
+      throw error
+    }
+  }
+
+  private fun rememberOpening(socket: TlsLink) {
+    synchronized(openingLock) { opening = socket }
+  }
+
+  private fun claimOpening(socket: TlsLink) {
+    synchronized(openingLock) {
+      if (opening === socket) opening = null
+    }
+  }
+
+  private fun closeOpening() {
+    val socket = synchronized(openingLock) {
+      val current = opening
+      opening = null
+      current
+    }
+    closeQuiet(socket)
+  }
+
+  private fun abandonOpening(socket: TlsLink?) {
+    if (socket == null) return
+    synchronized(openingLock) {
+      if (opening === socket) opening = null
+    }
+    closeQuiet(socket)
+  }
+
+  private fun closeQuiet(socket: TlsLink?) {
+    if (socket == null) return
+    try {
+      socket.close()
+    } catch (error: Exception) {
+      // The peer may already have closed the socket.
+    }
+  }
+
   private suspend fun attempt(epoch: Int): AttemptResult {
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
     if (!inForeground) return AttemptResult.Deferred
@@ -1073,9 +1164,9 @@ class LanSession(
     lastAttemptMs = clockMs()
     publishCurrent(epoch, LinkPhase.Connecting, "", "")
     val opened = try {
-      withContext(Dispatchers.IO) {
-        connector.open(record.address, record.port, record.fingerprint)
-      }
+      openBounded(record.address, record.port, record.fingerprint)
+    } catch (error: CancellationException) {
+      throw error
     } catch (error: Exception) {
       if (epochCounter.get() != epoch) return AttemptResult.Superseded
       if (isPinFailure(error)) {
@@ -1091,9 +1182,10 @@ class LanSession(
       return AttemptResult.Failed
     }
     if (epochCounter.get() != epoch || stopped) {
-      closeOwned(opened)
+      abandonOpening(opened)
       return AttemptResult.Superseded
     }
+    claimOpening(opened)
     if (!inForeground) {
       closeWithBye(opened)
       return AttemptResult.Deferred
@@ -1133,6 +1225,20 @@ class LanSession(
   }
 
   fun attachApplier(next: computing.michell.monitor.data.SyncApplier) {
+    attachLinkApplier(object : LinkApplier {
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent) {
+        next.offer(event)
+      }
+      override suspend fun offerFrame(frame: SyncFrame) {
+        next.offerFrame(frame)
+      }
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent) {
+        next.noteRefused(event)
+      }
+    })
+  }
+
+  internal fun attachLinkApplier(next: LinkApplier) {
     applier = next
     applierReady.trySend(Unit)
   }
@@ -1188,53 +1294,66 @@ class LanSession(
     writer = outbound
     for (frame in stagedOpening) outbound.offerControl(frame)
     stagedOpening = emptyList()
-    val supervisor = SupervisorJob(coroutineContext[Job])
-    val actor = CoroutineScope(supervisor + Dispatchers.IO)
     val listener = { noteClock(epoch, current, outbound) }
     clock.addListener(listener)
     try {
-      val serving = actor.launch { serviceLink(epoch, current, outbound) }
-      val watchdog = actor.launch {
-        while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
-          delay(1_000L)
-          if (writeStuck() || inboundIsDead()) noteReadEnd(epoch, ReadEnd.Dead, current)
+      try {
+        coroutineScope {
+          val serving = launch { serviceLink(epoch, current, outbound) }
+          val watchdog = launch {
+            while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
+              delay(1_000L)
+              if (writeStuck() || inboundIsDead()) noteReadEnd(epoch, ReadEnd.Dead, current)
+            }
+          }
+          val applying = launch {
+            while (coroutineContext[Job]?.isActive != false) {
+              val event = events.receive()
+              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+              applier?.offer(event)
+            }
+          }
+          val framing = launch {
+            for (frame in syncFrames) {
+              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+              diagnostic("sync frame ${frame::class.simpleName}")
+              applier?.offerFrame(frame)
+            }
+          }
+          val refusing = launch {
+            for (event in refusedEvents) {
+              while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
+              applier?.noteRefused(event)
+            }
+          }
+          try {
+            serving.join()
+          } finally {
+            watchdog.cancel()
+            applying.cancel()
+            framing.cancel()
+            refusing.cancel()
+          }
+          listOf(watchdog, applying, framing, refusing).forEach { child ->
+            try {
+              child.join()
+            } catch (error: CancellationException) {
+              // The socket owner finished. The other lanes are stopped with it.
+            }
+          }
         }
-      }
-      val applying = actor.launch {
-        while (coroutineContext[Job]?.isActive != false) {
-          val event = events.receive()
-          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
-          applier?.offer(event)
-        }
-      }
-      val framing = actor.launch {
-        for (frame in syncFrames) {
-          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
-          diagnostic("sync frame ${frame::class.simpleName}")
-          applier?.offerFrame(frame)
-        }
-      }
-      val refusing = actor.launch {
-        for (event in refusedEvents) {
-          while (applier == null && coroutineContext[Job]?.isActive != false) applierReady.receive()
-          applier?.noteRefused(event)
-        }
-      }
-      serving.join()
-      supervisor.cancel()
-      for (child in listOf(watchdog, applying, framing, refusing)) {
-        try {
-          child.join()
-        } catch (error: CancellationException) {
-          // The socket owner finished. The other lanes are stopped with it.
-        }
+      } catch (error: CancellationException) {
+        if (coroutineContext[Job]?.isActive == false) throw error
+        if (readEnd == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, current)
+      } catch (error: Exception) {
+        if (readEnd == ReadEnd.Continue) noteReadEnd(epoch, ReadEnd.WorkerFailed, current)
       }
       return readEnd
     } finally {
       clock.removeListener(listener)
       outbound.close()
       writer = null
-      supervisor.cancel()
+      closeOwned(current)
     }
   }
 
@@ -1355,6 +1474,7 @@ class LanSession(
 
   private suspend fun onFrame(frame: MonitorFrame, epoch: Int, owned: TlsLink, outbound: ConnectionWriter) {
     if (epochCounter.get() != epoch) return
+    frameProbe?.invoke(frame)
     val sync = decodeSyncEnvelope(frame.json)
     if (sync is SyncFrame.Event) {
       session.noteSyncTraffic()
@@ -1599,4 +1719,6 @@ private fun isRefused(error: Throwable): Boolean {
 private const val ConnectTimeoutMs = 10_000
 private const val ReadTimeoutMs = 1_000
 private const val BackgroundByeMs = 500L
+private const val OpenBudgetMs = 15_000L
+private const val PredecessorJoinMs = 2_000L
 private const val HexDigits = "0123456789abcdef"

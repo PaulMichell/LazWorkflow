@@ -772,6 +772,136 @@ class LanSessionTest {
   }
 
   @Test
+  fun childFailureClosesTheSocketAndRetries() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.frameProbe = { throw IllegalStateException("decoder") }
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(encodeTicks(MessageKind.Ping, "probe", 1)))
+      waitUntil { opens.get() >= 2 && links[0].closed }
+      assertTrue(session.reconnectable)
+      assertFalse(session.reconnectPaused)
+      val status = session.status.value
+      assertTrue(status.phase != LinkPhase.Disconnected || status.banner == ReconnectingBanner ||
+        status.banner == ConnectionRefusedBanner || status.banner == HostClosedBanner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun ledgerFailureClosesTheSocketAndRetries() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, ledger = object : CommandLedger {
+      override fun openIds(): List<String> = emptyList()
+      override suspend fun remember(json: String) {}
+      override suspend fun applyHost(states: List<HostCommandState>): ReplayPlan {
+        throw IllegalStateException("ledger")
+      }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(encodeCommandStates("h1", listOf(CommandStateMessage("stop-1", "unknown", "")))))
+      waitUntil { links[0].closed && opens.get() >= 2 }
+      assertTrue(session.reconnectable)
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun applierFailureClosesTheSocketAndRetries() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      link
+    })
+    session.attachLinkApplier(object : LinkApplier {
+      override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent) {}
+      override suspend fun offerFrame(frame: computing.michell.monitor.protocol.SyncFrame) {
+        throw IllegalStateException("applier")
+      }
+      override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent) {}
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      link.push(frameOf(
+        """{"v":3,"type":"resume_ok","payload":{"conversation_id":"c","stream_id":"s","from_seq":1}}"""
+      ))
+      waitUntil { link.closed }
+      assertTrue(session.reconnectable)
+      assertFalse(session.reconnectPaused)
+      val status = session.status.value
+      assertTrue(status.phase == LinkPhase.Connecting || status.banner == ReconnectingBanner ||
+        status.banner == ConnectionRefusedBanner || status.banner == HostClosedBanner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun reconnectDoesNotWaitForAStuckOpenAndCancelClosesTheSocket() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val closes = AtomicInteger(0)
+    val release = CountDownLatch(1)
+    val entered = CountDownLatch(1)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      val count = opens.incrementAndGet()
+      if (count == 1) {
+        entered.countDown()
+        assertTrue(release.await(5, TimeUnit.SECONDS))
+      }
+      val inner = ScriptedLink()
+      val once = AtomicBoolean(false)
+      object : TlsLink {
+        override val input: InputStream get() = inner.input
+        override val output: OutputStream get() = inner.output
+        override fun close() {
+          if (once.compareAndSet(false, true)) closes.incrementAndGet()
+          inner.close()
+        }
+      }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      assertTrue(entered.await(2, TimeUnit.SECONDS))
+      session.connect("10.0.0.8", 56122)
+      waitUntil(4_000) { opens.get() >= 2 }
+      release.countDown()
+      waitUntil { closes.get() >= 1 }
+      repeat(4) {
+        session.disconnect()
+        session.connect("10.0.0.8", 56122)
+        waitUntil { opens.get() >= closes.get() + 1 }
+        session.disconnect()
+        waitUntil { closes.get() == opens.get() }
+      }
+      assertEquals(opens.get(), closes.get())
+    } finally {
+      release.countDown()
+      session.close()
+    }
+  }
+
+  @Test
   fun hostPingIsAnsweredWithPong() {
     val store = pairedStore()
     val link = ScriptedLink()
