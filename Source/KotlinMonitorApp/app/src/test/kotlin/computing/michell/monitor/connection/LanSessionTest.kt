@@ -1938,6 +1938,117 @@ class LanSessionTest {
       session.close()
     }
   }
+
+  @Test
+  fun restartTransientRefusesPinAuthAndRevocationWithoutClearingPairing() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val pinned = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      throw PinMismatchException("aa")
+    })
+    try {
+      pinned.connect("10.0.0.8", 56122)
+      waitUntil { pinned.status.value.banner == "TLS pin mismatch." }
+      assertFalse(pinned.restartTransient())
+      pinned.forceReconnect()
+      Thread.sleep(300)
+      assertEquals(1, opens.get())
+      assertEquals("client-1", store.load().clientId)
+      assertEquals("token-1", store.load().sessionToken)
+    } finally {
+      pinned.close()
+    }
+    for (reason in listOf("auth", "revoked")) {
+      val link = ScriptedLink()
+      val again = AtomicInteger(0)
+      val session = LanSession(store, TlsConnector { _, _, _ ->
+        again.incrementAndGet()
+        link
+      })
+      try {
+        session.connect("10.0.0.8", 56122)
+        waitUntil { link.frames().isNotEmpty() }
+        link.push(frameOf(encodeRejected("host-rejected", reason, 1, 1)))
+        waitUntil(2_000) { link.closed && session.status.value.phase == LinkPhase.Paused }
+        assertFalse(session.restartTransient())
+        session.forceReconnect()
+        Thread.sleep(300)
+        assertEquals(1, again.get())
+        assertEquals(reason, session.status.value.failureReason)
+        assertEquals("token-1", store.load().sessionToken)
+        assertEquals("client-1", store.load().clientId)
+      } finally {
+        session.close()
+      }
+    }
+  }
+
+  @Test
+  fun restartTransientRetriesARefusedPortWithoutClearingPairing() {
+    val store = pairedStore()
+    val pin = store.load().fingerprint
+    val opens = AtomicInteger(0)
+    val session = LanSession(store, TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      throw ConnectException("Connection refused")
+    })
+    try {
+      session.updateDraft("do not log this prompt body")
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      assertTrue(session.restartTransient())
+      waitUntil(2_000) { opens.get() >= 2 }
+      assertEquals(pin, store.load().fingerprint)
+      assertEquals("token-1", store.load().sessionToken)
+      assertEquals("client-1", store.load().clientId)
+      waitUntil { session.status.value.banner == ReconnectingBanner || session.status.value.failureReason.isNotEmpty() }
+      assertTrue(session.status.value.failureReason.isNotEmpty())
+      assertFalse(session.status.value.failureReason == ReconnectingBanner)
+      val exported = session.exportIncident()
+      assertTrue(exported.contains("posture="))
+      assertFalse(exported.contains("token-1"))
+      assertFalse(exported.contains("do not log this prompt body"))
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun sendCatalogueNamesQueueAdmissionBeforeTheSocketWrite() {
+    val link = ScriptedLink()
+    val wrote = AtomicInteger(0)
+    val ledger = object : CommandLedger {
+      private val inner = MemoryCommandLedger()
+      override fun openIds(): List<String> = inner.openIds()
+      override suspend fun remember(json: String) = inner.remember(json)
+      override suspend fun noteWritten(commandId: String) {
+        assertTrue(link.frames().any { frame -> envelope(frame).kind == MessageKind.Stop })
+        wrote.incrementAndGet()
+        inner.noteWritten(commandId)
+      }
+      override suspend fun applyHost(states: List<HostCommandState>): ReplayPlan = inner.applyHost(states)
+    }
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ -> link }, ledger = ledger)
+    val results = java.util.Collections.synchronizedList(mutableListOf<CatalogueResult>())
+    val collector = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+      session.commandResults.collect { results += it }
+    }
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.readEntries.get() > 0 }
+      session.sendCatalogue(encodeEmpty(MessageKind.Stop, "stop-stage"))
+      waitUntil { results.any { it.outcome == CatalogueWrite.Written } }
+      val outcomes = results.map { it.outcome }
+      assertEquals(CatalogueWrite.Queued, outcomes.first())
+      assertTrue(outcomes.indexOf(CatalogueWrite.Queued) < outcomes.indexOf(CatalogueWrite.Written))
+      waitUntil { wrote.get() == 1 }
+      assertEquals(1, wrote.get())
+    } finally {
+      collector.cancel()
+      session.close()
+    }
+  }
 }
 
 private fun chunkJson(itemId: String, part: Int, partCount: Int, data: String): String {

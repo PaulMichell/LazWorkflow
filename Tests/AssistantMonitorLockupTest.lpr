@@ -1,16 +1,21 @@
 Program AssistantMonitorLockupTest;
 
-{ Host halves of the phone lock-up (c) 2026 Michell Computing.
+{ Host recovery after a refused bulk frame and a main-thread publish stall
+  (c) 2026 Michell Computing.
 
-  Plan item 2.2 of Documents/Plan-20261029-035918.md. These checks pin the current
-  faults and pass on today's code. Item 3.2 changes this behaviour; these checks
-  then fail and are rewritten to assert the fix.
+  A bulk frame the outbox cannot hold is not a stuck host. The phone is told to
+  ask again, frames already queued are still delivered, and another small frame
+  can be queued afterwards. That is the recovery, not a pinned fault.
 
-  - A bulk frame the outbox cannot hold is refused. The phone gets a retryable
-    overloaded error. It is not counted in FramesDropped.
-  - Plan item 3.1 of Documents/Plan-20261105-130659.md: a finished remote approval
-    wait disarms its event before destroying it. Run this binary under -gh or
-    valgrind to confirm that a later cancel or decision touches no freed block.
+  A publish burst on this thread stands in for a compilation or tool stall. Time
+  notes, which the link worker sends through NoteTime, keep running. They do not
+  wait on a UI timer, and they are not blocked by state publication. Heartbeat
+  and dead-session limits stay 10 seconds and 30 seconds. Raising them is not
+  the fix.
+
+  A finished remote approval wait disarms its event before it is destroyed. Run
+  this binary under -gh or valgrind to confirm a later cancel or decision touches
+  no freed block.
 
   No sockets and no Interfaces unit. The runner writes this binary with a
   temporary -FU and -FE, never under Source/. }
@@ -31,6 +36,13 @@ Const
   ApprovalToolId = 'tool-after-wait';
 
 Type
+  { Stands in for the link worker. NoteTime is what RunLink calls, not a UI timer. }
+  TTimeNote = Class(TThread)
+  Public
+    Session: TMonitorSession;
+    Procedure Execute; Override;
+  End;
+
   { Runs one remote approval wait off the main thread, as a tool call does. }
   TApprovalWaiter = Class(TThread)
   Protected
@@ -45,9 +57,19 @@ Type
 
 Var
   FailCount: Integer;
+  TimeNotes: Integer;
   Carrier: TMonitorMemoryCarrier;
   CarrierRef: IMonitorCarrier;
   Session: TMonitorSession;
+
+Procedure TTimeNote.Execute;
+Begin
+  While Not Terminated Do
+    Begin
+      Session.NoteTime(GetTickCount64);
+      InterlockedIncrement(TimeNotes);
+    End;
+End;
 
 Function TApprovalWaiter.Aborting: Boolean;
 Begin
@@ -133,6 +155,40 @@ Begin
   Check('the refused page is not sent', CountSentKind(mmkSnapshotPage) = 0);
   Check('the phone is told to ask again', CountSentKind(mmkError) = 1);
   Check('the refusal is overloaded', OverloadedSent);
+  Check('the session can queue again after the refusal', Session.TryQueueHostJson(BulkFrame(3)));
+  Session.DrainOutbound;
+  Check('the later bulk frame is delivered', CountSentKind(mmkChunk) = 3);
+End;
+
+{ A publish burst must not stall the link worker's time notes, and must not be
+  papered over by a longer heartbeat. }
+Procedure TestPublishStallDoesNotBlockTimeNotes;
+Var
+  Worker: TTimeNote;
+  Started: QWord;
+  Seen: Integer;
+Begin
+  Check('heartbeat silence stays 10 seconds', MonitorHeartbeatMs = 10000);
+  Check('dead session stays 30 seconds', MonitorDeadSessionMs = 30000);
+  TimeNotes := 0;
+  Worker := TTimeNote.Create(True);
+  Worker.Session := Session;
+  Worker.Start;
+  Try
+    Started := GetTickCount64;
+    Seen := 0;
+    While GetTickCount64 - Started < 200 Do
+      Begin
+        Session.PublishState('status', '{"busy":true,"sending":true}', True);
+        If TimeNotes > Seen Then
+          Seen := TimeNotes;
+      End;
+    Check('time notes ran during the publish stall', Seen > 0);
+  Finally
+    Worker.Terminate;
+    Worker.WaitFor;
+    Worker.Free;
+  End;
 End;
 
 
@@ -202,6 +258,7 @@ Begin
       Session.AttachCarrier(CarrierRef);
       Session.BeginMirrorEpoch(MintMonitorEpoch, 'lockup', '/work', 'Lockup');
       TestCatchupRefusedIsAnError;
+      TestPublishStallDoesNotBlockTimeNotes;
       TestDisarmKeepsNewerEvent;
       TestApprovalWaitDisarms;
     Except
