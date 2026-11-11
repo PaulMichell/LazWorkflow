@@ -28,9 +28,12 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ConnectException
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -717,6 +720,58 @@ class LanSessionTest {
   }
 
   @Test
+  fun commandStateSurvivesADispatcherHopAndCloseClearsTheWriter() {
+    val store = pairedStore()
+    val inner = MemoryCommandLedger()
+    val hopper = Executors.newSingleThreadExecutor()
+    val dispatcher = hopper.asCoroutineDispatcher()
+    val migrated = AtomicBoolean(false)
+    val inside = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val ledger = object : CommandLedger {
+      override fun openIds(): List<String> = inner.openIds()
+      override suspend fun remember(json: String) = inner.remember(json)
+      override suspend fun applyHost(states: List<HostCommandState>): ReplayPlan {
+        val caller = Thread.currentThread()
+        withContext(dispatcher) {
+          if (Thread.currentThread() != caller) migrated.set(true)
+          inside.countDown()
+          assertTrue(release.await(2, TimeUnit.SECONDS))
+        }
+        return inner.applyHost(states)
+      }
+    }
+    val stop = encodeEmpty(MessageKind.Stop, "stop-1")
+    runBlocking { inner.remember(stop) }
+    val link = ScriptedLink()
+    val session = LanSession(store, TlsConnector { _, _, _ -> link }, ledger = ledger)
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeCommandStates("h1", listOf(CommandStateMessage("stop-1", "unknown", "")))))
+      assertTrue(inside.await(2, TimeUnit.SECONDS))
+      session.sendCatalogue(encodeEmpty(MessageKind.Ping, "ping-during-hop"))
+      release.countDown()
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Stop } }
+      waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Ping } }
+      assertTrue(migrated.get())
+      assertFalse(link.overlapped)
+      assertFalse(link.closed)
+      val written = link.frames().size
+      session.close()
+      session.sendCatalogue(encodeEmpty(MessageKind.Stop, "after-close"))
+      Thread.sleep(200)
+      assertEquals(written, link.frames().size)
+      assertTrue(link.closed)
+    } finally {
+      release.countDown()
+      session.close()
+      dispatcher.close()
+      hopper.shutdown()
+    }
+  }
+
+  @Test
   fun hostPingIsAnsweredWithPong() {
     val store = pairedStore()
     val link = ScriptedLink()
@@ -1388,6 +1443,18 @@ private class ScriptedLink(
   private val chunks = mutableListOf<ByteArray>()
   private val inbound = QueueStream()
   val readEntries = AtomicInteger(0)
+  private val writeDepth = AtomicInteger(0)
+  var overlapped = false
+    private set
+
+  private fun enterWrite() {
+    if (writeDepth.incrementAndGet() > 1) overlapped = true
+  }
+
+  private fun leaveWrite() {
+    writeDepth.decrementAndGet()
+  }
+
   override val input: InputStream = object : InputStream() {
     override fun read(): Int = inbound.read()
 
@@ -1398,15 +1465,25 @@ private class ScriptedLink(
   }
   override val output: OutputStream = object : OutputStream() {
     override fun write(value: Int) {
-      val slice = byteArrayOf(value.toByte())
-      rejectWrite(slice)
-      synchronized(chunks) { chunks += slice }
+      enterWrite()
+      try {
+        val slice = byteArrayOf(value.toByte())
+        rejectWrite(slice)
+        synchronized(chunks) { chunks += slice }
+      } finally {
+        leaveWrite()
+      }
     }
 
     override fun write(buffer: ByteArray, offset: Int, length: Int) {
-      val slice = buffer.copyOfRange(offset, offset + length)
-      rejectWrite(slice)
-      synchronized(chunks) { chunks += slice }
+      enterWrite()
+      try {
+        val slice = buffer.copyOfRange(offset, offset + length)
+        rejectWrite(slice)
+        synchronized(chunks) { chunks += slice }
+      } finally {
+        leaveWrite()
+      }
     }
   }
 

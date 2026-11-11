@@ -8,7 +8,9 @@ package computing.michell.monitor.connection
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
-   proxy never reaches the desktop listener. Reads and writes run on Dispatchers.IO. An empty fingerprint
+   proxy never reaches the desktop listener. The service coroutine, not an OS thread,
+   owns the socket write. SSLSocket does not confine that write, and close() from
+   any thread still unblocks a blocked read. An empty fingerprint
    trusts the server certificate so the phone can connect by endpoint only.
    Connect keeps a saved pin. A nonempty pin that is not 64 hex characters
    is refused. A full credit window stops the read. The event is held, not
@@ -579,8 +581,10 @@ class LanSession(
   private var link: TlsLink? = null
   private var writer: ConnectionWriter? = null
   private var stagedOpening: List<ByteArray> = emptyList()
+  /** Identity of the service coroutine's write lane. Not an OS thread. */
   @Volatile
-  private var socketOwner: Thread? = null
+  private var writeLane: Any? = null
+  private val writeLock = Any()
   @Volatile
   private var writeStartedNanos = 0L
   internal val events = AccountedEvents()
@@ -1032,7 +1036,7 @@ class LanSession(
   private suspend fun closeForBackground(epoch: Int) {
     val current = link ?: return
     if (epochCounter.get() != epoch || !leftForBackground) return
-    if (writer == null || socketOwner == null) {
+    if (writer == null && writeLane == null) {
       closeWithBye(current)
       noteReadEnd(epoch, ReadEnd.Background, current)
       return
@@ -1151,7 +1155,7 @@ class LanSession(
     val json = encodeSyncResume(nextCommandId(), conversationId, streamId, seq)
     val outbound = writer
     val owned = link
-    if (outbound != null && owned != null && socketOwner == Thread.currentThread()) {
+    if (outbound != null && owned != null && owned === link) {
       val prepared = resumeWithOpenCommands(json)
       val frame = tryEncodeFrame(prepared)
       if (frame.ok) outbound.offerControl(frame.bytes)
@@ -1179,7 +1183,8 @@ class LanSession(
     lastInboundNanos = clock.nanoTime()
     lastReceivedMs = openedAt
     lastSentMs = openedAt
-    val outbound = ConnectionWriter { bytes -> writeBytes(bytes, current) }
+    // serviceLink polls and writes. This callback must not become a second writer.
+    val outbound = ConnectionWriter { _ -> false }
     writer = outbound
     for (frame in stagedOpening) outbound.offerControl(frame)
     stagedOpening = emptyList()
@@ -1265,7 +1270,9 @@ class LanSession(
 
   /** One coroutine owns the streams. Read, then at most one frame, then the heartbeat. */
   private suspend fun serviceLink(epoch: Int, current: TlsLink, outbound: ConnectionWriter): ReadEnd {
-    socketOwner = Thread.currentThread()
+    // The lane is this coroutine. A later resume may be a different IO thread.
+    val lane = Any()
+    writeLane = lane
     try {
       val buffer = ByteArray(FrameAssembler.ReadChunkBytes)
       val reader = FrameAssembler()
@@ -1276,7 +1283,7 @@ class LanSession(
         }
         if (leftForBackground) {
           val bye = outbound.poll()
-          if (bye != null && !writeBytes(bye, current) && readEnd == ReadEnd.Continue) {
+          if (bye != null && !writeBytes(bye, current, lane) && readEnd == ReadEnd.Continue) {
             return finishRead(epoch, current, ReadEnd.WriteFailed)
           }
           return finishRead(epoch, current, ReadEnd.Background)
@@ -1286,7 +1293,7 @@ class LanSession(
           delay(50)
           noteHeartbeat(epoch, current, outbound)
           val paused = outbound.poll()
-          if (paused != null && !writeBytes(paused, current) && readEnd == ReadEnd.Continue) {
+          if (paused != null && !writeBytes(paused, current, lane) && readEnd == ReadEnd.Continue) {
             return finishRead(epoch, current, ReadEnd.WriteFailed)
           }
           continue
@@ -1311,14 +1318,14 @@ class LanSession(
         noteHeartbeat(epoch, current, outbound)
         if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
         val next = outbound.poll()
-        if (next != null && !writeBytes(next, current) && readEnd == ReadEnd.Continue) {
+        if (next != null && !writeBytes(next, current, lane) && readEnd == ReadEnd.Continue) {
           return finishRead(epoch, current, ReadEnd.WriteFailed)
         }
         if (readEnd != ReadEnd.Continue) return finishRead(epoch, current, readEnd)
       }
       return finishRead(epoch, current, ReadEnd.PeerClosed)
     } finally {
-      if (socketOwner == Thread.currentThread()) socketOwner = null
+      if (writeLane === lane) writeLane = null
     }
     return ReadEnd.PeerClosed
   }
@@ -1442,10 +1449,8 @@ class LanSession(
 
   private fun offerCommand(json: String, owned: TlsLink): Boolean {
     val outbound = writer
-    if (outbound == null || owned !== link) {
-      if (socketOwner != null) return false
-      return writeJson(json, owned)
-    }
+    // Setup and teardown have no writer. Do not touch the socket from this caller.
+    if (outbound == null || owned !== link) return false
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
     return outbound.offerCommand(frame.bytes)
@@ -1455,22 +1460,32 @@ class LanSession(
     val frame = tryEncodeFrame(json)
     if (!frame.ok) return false
     val target = owned ?: return false
-    return writeBytes(frame.bytes, target)
+    return writeBeforeOwner(frame.bytes, target)
   }
 
-  private fun writeBytes(bytes: ByteArray, owned: TlsLink): Boolean {
-    val owner = socketOwner
-    if (owner != null && Thread.currentThread() != owner) return false
-    writeStartedNanos = clock.nanoTime()
-    return try {
-      owned.output.write(bytes)
-      owned.output.flush()
-      lastSentMs = clockMs()
-      true
-    } catch (error: Exception) {
-      false
-    } finally {
-      writeStartedNanos = 0L
+  /** A bye before the service coroutine starts. Refuses once that coroutine owns the lane. */
+  private fun writeBeforeOwner(bytes: ByteArray, owned: TlsLink): Boolean {
+    return writeSocket(bytes, owned) { writeLane == null }
+  }
+
+  private fun writeBytes(bytes: ByteArray, owned: TlsLink, lane: Any): Boolean {
+    return writeSocket(bytes, owned) { writeLane === lane }
+  }
+
+  private fun writeSocket(bytes: ByteArray, owned: TlsLink, allowed: () -> Boolean): Boolean {
+    synchronized(writeLock) {
+      if (!allowed()) return false
+      writeStartedNanos = clock.nanoTime()
+      return try {
+        owned.output.write(bytes)
+        owned.output.flush()
+        lastSentMs = clockMs()
+        true
+      } catch (error: Exception) {
+        false
+      } finally {
+        writeStartedNanos = 0L
+      }
     }
   }
 
