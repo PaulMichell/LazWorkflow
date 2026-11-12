@@ -91,7 +91,7 @@ Acceptance: heartbeats continue and no cursor commits. A touch, and separately t
 ## 5. Keep the incident that restart destroys
 
 ### 5.1 Persist a short incident ring
-Status: not started
+Status: complete
 
 Append a bounded ring, about the last 20 posture changes, when phase, posture, or failure reason changes. Store it in app files, not only in `IncidentSnapshot` and logcat. Include loop generation, socket generation, reason, failure, route identity, pause, terminal kind, and whether a monitoring demand was set. Never store a session token, pairing code, authentication MAC, or prompt.
 
