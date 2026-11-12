@@ -53,7 +53,7 @@ Status: complete
 Acceptance: pause the policy as a transient reject would, then call `enterForeground`, `noteActivity`, and `restartTransient` on separate sessions. Each starts a new attempt. After `disconnect()` or `revoked`, all three do nothing. Extend `ConnectionDiagnosticTest` for the button rule.
 
 ### 2.3 Do not park on this session's own replacement
-Status: not started
+Status: complete
 
 `replaced` must retry when this session is opening or holding the replacement, or when the saved client id is the one still in `HostStore`. Show "Paired elsewhere" and pause only when a different client took the desktop and this session did not open that socket. `reconnected` already retries; keep that.
 
