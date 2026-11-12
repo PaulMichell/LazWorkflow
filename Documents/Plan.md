@@ -160,10 +160,13 @@ Not recorded, so this item stays in progress:
 - Pings flowing while sync is withheld. The only heartbeat-without-progress line lasted under a second during the Wi-Fi reopen, then sync resumed. That is not the sustained withhold case.
 - A revoked or disabled listener. The live listener was left enabled so this session was not dropped. Reconnect-does-not-bypass was not exercised.
 
-Blocked: 2026-11-12. These two cases cannot be recorded from the phone, and a host harness is not accepted.
+Note: 2026-11-12 03:38 UTC. Disabled listener was recorded on process `9653`. Remote Monitor Disable sent `disabled`. The phone paused in the same process, `terminal=disabled`, and did not open a socket by itself. Settings then showed Connect. Tapping it cleared the terminal flag, started loop 2, and retried `ECONNREFUSED`. Reconnect bypasses a disabled listener. The listener was enabled again; the phone resumed sync. No code was changed. Incident ring from Settings:
 
-Withheld sync while pings continue is a desktop pump condition. The phone has no control that stops host sync and leaves heartbeats running. The listener is the running IDE, pid 44106, bound to `192.168.0.7:56122`.
+```
+posture=live | phase=Live | reason=opening | failure=none | loop=1 | socket=13 | network=145409523503117 | paused=false | terminal=none | demand=true
+posture=awaiting user action | phase=Paused | reason=disabled | failure=disabled | loop=1 | socket=13 | network=145409523503117 | paused=false | terminal=disabled | demand=true
+posture=retrying | phase=Connecting | reason=opening | failure=disabled | loop=2 | socket=0 | network=145409523503117 | paused=false | terminal=none | demand=true
+posture=retrying | phase=Disconnected | reason=refused | failure=ECONNREFUSED 192.168.0.7:56122 | loop=2 | socket=0 | network=145409523503117 | paused=false | terminal=none | demand=true
+```
 
-A revoked or disabled listener requires Disable or Revoke on the Remote Monitor form. That form is not open. The IDE menu bar is a 92-pixel strip, and there is no safe automated control for those actions. Disabling the live listener would also drop this session. Reconnect-does-not-bypass was not exercised.
-
-Do not mark this item complete until those two device cases are recorded.
+Withheld sync while pings continue is still not recorded. This item stays in progress. Do not change code again until that case is recorded or this disabled bypass is fixed from the ring above.
