@@ -69,6 +69,15 @@ class WifiLanWatchTest {
   }
 
   @Test
+  fun deskWifiWithoutInternetIsTheLanRoute() {
+    val route = selectLanRoute(listOf(
+      RouteFacts("vpn", wifi = true, vpn = true, internet = true),
+      RouteFacts("desk", wifi = true, vpn = false, internet = false)
+    ))
+    assertEquals(LanRoute("desk"), route)
+  }
+
+  @Test
   fun noListedWifiForgetsTheLostIdentity() {
     val step = callbackLoss("wifi-a", null)
     assertEquals("wifi-a", step.forget)

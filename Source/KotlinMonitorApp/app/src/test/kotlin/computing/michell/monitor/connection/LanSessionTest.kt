@@ -552,7 +552,7 @@ class LanSessionTest {
   }
 
   @Test
-  fun foregroundReturnDropsAForgottenWifiBindAndReconnects() {
+  fun aForgottenBindDoesNotOpenUnbound() {
     val store = pairedStore()
     val opens = AtomicInteger(0)
     val seen = AtomicReference<LanRoute?>(LanRoute("unset"))
@@ -571,16 +571,44 @@ class LanSessionTest {
     try {
       session.onWifiRoute(LanRoute("forgotten"))
       session.connect("10.0.0.8", 56122)
-      waitUntil { opens.get() >= 1 }
-      assertNull(seen.get())
-      assertFalse(session.status.value.banner.contains("no longer available"))
-      session.leaveForeground()
-      Thread.sleep(200)
-      session.onWifiRoute(LanRoute("forgotten"))
-      session.enterForeground()
-      waitUntil { opens.get() >= 2 }
+      waitUntil { session.status.value.banner == WaitingForWifiBanner }
+      Thread.sleep(300)
+      // The forgotten bind is gone and no radio came back. Do not open unbound.
+      assertEquals(0, opens.get())
       assertNull(session.currentLanRoute())
-      assertNull(seen.get())
+      assertFalse(session.status.value.banner.contains("no longer available"))
+      session.enterForeground()
+      Thread.sleep(300)
+      assertEquals(0, opens.get())
+      assertFalse(session.status.value.banner.contains("no longer available"))
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun forgottenBindIsResampledBeforeTheNextOpenWithoutLeavingTheForeground() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = LanSession(store, object : TlsConnector {
+      override fun open(address: String, port: Int, fingerprint: String): TlsLink =
+        open(address, port, fingerprint, null)
+
+      override fun open(address: String, port: Int, fingerprint: String, route: LanRoute?): TlsLink {
+        seen.set(route)
+        if (route?.identity == "forgotten") throw LanRouteUnavailable()
+        opens.incrementAndGet()
+        return ScriptedLink()
+      }
+    })
+    session.refreshLanRoute = { session.onWifiRoute(LanRoute("desk")) }
+    try {
+      session.onWifiRoute(LanRoute("forgotten"))
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() >= 1 }
+      assertEquals(LanRoute("desk"), seen.get())
+      assertEquals(LanRoute("desk"), session.currentLanRoute())
       assertFalse(session.status.value.banner.contains("no longer available"))
     } finally {
       session.close()

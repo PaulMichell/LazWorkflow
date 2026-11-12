@@ -403,6 +403,7 @@ private enum class AttemptResult {
   Refused,
   Failed,
   Deferred,
+  Waiting,
   Superseded
 }
 
@@ -830,6 +831,9 @@ class LanSession(
   private var lanAvailable = true
   @Volatile
   private var lanRoute: LanRoute? = null
+  /** Once a desk route has been chosen, a missing bind must not fall through to mobile data. */
+  @Volatile
+  private var lanRouteRequired = false
   /** Immediate retries after a forgotten bind. Stops a refresh that cannot restore it. */
   private var staleRouteSkips = 0
   @Volatile
@@ -1097,8 +1101,14 @@ class LanSession(
    * not a host failure, and leaving the route set made every retry fail the same way.
    */
   private fun recoverStaleRoute(): Boolean {
+    lanRouteRequired = true
     lanRoute = null
     refreshLanRoute?.invoke()
+    if (lanRoute != null) {
+      staleRouteSkips = 0
+      connectNow = true
+      return true
+    }
     if (staleRouteSkips >= 2) return false
     staleRouteSkips += 1
     connectNow = true
@@ -1121,6 +1131,7 @@ class LanSession(
    */
   fun onWifiRoute(route: LanRoute) {
     val previous = lanRoute
+    lanRouteRequired = true
     lanRoute = route
     lanAvailable = true
     if (previous == route) return
@@ -1140,6 +1151,7 @@ class LanSession(
    * a live socket, and it does not wake the loop: a wake is a connect signal.
    */
   fun onWifiLost() {
+    if (lanRoute != null) lanRouteRequired = true
     lanRoute = null
     lanAvailable = false
   }
@@ -1307,6 +1319,7 @@ class LanSession(
         AttemptResult.Refused -> {
           // A refused port may be the listener starting. Keep the backoff instead of waiting for a tap.
         }
+        AttemptResult.Waiting -> publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, "", "wifi")
         AttemptResult.Failed -> publishCurrent(epoch, LinkPhase.Disconnected, HostClosedBanner, "", "open-failed")
         AttemptResult.Opened -> {
           policy.resume()
@@ -1490,6 +1503,15 @@ class LanSession(
       return AttemptResult.Pinned
     }
     if (epochCounter.get() != epoch) return AttemptResult.Superseded
+    // A touch-triggered retry stays in the foreground. Sample before the open, not only on return.
+    refreshLanRoute?.invoke()
+    if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
+    if (!inForeground) return AttemptResult.Deferred
+    if (lanRouteRequired && lanRoute == null) {
+      lanAvailable = false
+      publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, "", "wifi")
+      return AttemptResult.Waiting
+    }
     lastAttemptMs = clockMs()
     attemptCount += 1
     publishCurrent(epoch, LinkPhase.Connecting, "", "", "opening")
@@ -1511,9 +1533,10 @@ class LanSession(
         return AttemptResult.Refused
       }
       if (isStaleLanRoute(error)) {
+        // The exception is not a host failure and must not become a toast.
         if (recoverStaleRoute()) return AttemptResult.Deferred
         publish(LinkPhase.Disconnected, WaitingForWifiBanner, "", "stale-route")
-        return AttemptResult.Failed
+        return AttemptResult.Waiting
       }
       val detail = error.message ?: "Connection failed."
       publish(LinkPhase.Disconnected, detail, detail, "open-failed")
