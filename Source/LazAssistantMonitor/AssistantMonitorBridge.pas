@@ -109,6 +109,8 @@ Type
     FSentModel: String;
     FSentStatusText: String;
     FPumping: Boolean;
+    FPumpAgain: Boolean;
+    FDiffPending: Boolean;
     { Epoch and conversation already copied to the connected phone. Cleared when it drops. }
     FDeliveredScreen: String;
     EmptyScreenKey: String;
@@ -1119,7 +1121,7 @@ Begin
   If Assigned(FCoalesceTimer) Then
     FCoalesceTimer.Enabled := False;
   Seen := AssistantMirrorCounter;
-  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
+  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Or FDiffPending Then
     PumpMirror(Seen);
   LockBridge;
   Try
@@ -1127,7 +1129,7 @@ Begin
   Finally
     UnlockBridge;
   End;
-  If AssistantMirrorCounter <> FPumpedMirror Then
+  If FDiffPending Or (AssistantMirrorCounter <> FPumpedMirror) Then
     NoteMirrorWake;
 End;
 
@@ -1155,7 +1157,7 @@ Begin
   RetryDeferredResumes;
   Seen := AssistantMirrorCounter;
   { Backstop only. A missed wake, or a phone that connected after the last tick. }
-  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Then
+  If (Seen <> FPumpedMirror) Or (FSentEpoch = '') Or FDiffPending Then
     PumpMirror(Seen);
   DeliverOpenScreen;
 End;
@@ -1177,10 +1179,16 @@ Var
   Sent: TAssistantMonitorBlockArray;
   Rows: TAssistantMonitorPlanRows;
   ErrorText, PlanStamp: String;
+  DiffDone: Boolean;
 Begin
   If FPumping Then
-    Exit;
+    Begin
+      { A wake during this pass is not dropped. The caller schedules the next tick. }
+      FPumpAgain := True;
+      Exit;
+    End;
   FPumping := True;
+  DiffDone := True;
   Try
     Form := OpenForm;
     LockBridge;
@@ -1193,23 +1201,7 @@ Begin
       Exit;
     Form.FillMonitorView(View);
     ApplyHostFlags(View);
-    { New has already minted the next id. Do not observe its note onto the closed mirror. }
-    If FormConversationMoved(Form, Session) Then
-      PublishEpoch;
-    Turn := Default(TAssistantMonitorTurn);
-    SetLength(Sent, 0);
-    { The mirror holds the last observation. Unchanged bodies are not copied again. }
-    If Not Session.CopyLiveBlocks(Sent) Then
-      SetLength(Sent, 0);
-    If Not Form.FillMonitorLiveChanges(Sent, Turn, ErrorText) Then
-      Turn := Default(TAssistantMonitorTurn);
-    If Turn.Id <> '' Then
-      Session.ObserveTurn(Turn);
-    If Session.MirrorEpoch = '' Then
-      PublishEpoch;
-    If Session.MirrorEpoch <> '' Then
-      FSentEpoch := Session.MirrorEpoch;
-    { Status is state. It does not allocate a content sequence. }
+    { Status goes out before the turn diff. A finished turn can leave Busy while the encode continues. }
     If FlagsChanged(View, FSentFlagsValid, FSentBusy, FSentSending, FSentPlanRunning, FSentCanSend, FSentCanSteer,
       FSentCanStop, FSentPhase, FSentModel, FSentStatusText) Then
       Begin
@@ -1225,6 +1217,26 @@ Begin
         FSentStatusText := View.StatusText;
         PushStatus(Form);
       End;
+    { New has already minted the next id. Do not observe its note onto the closed mirror. }
+    If FormConversationMoved(Form, Session) Then
+      PublishEpoch;
+    Turn := Default(TAssistantMonitorTurn);
+    SetLength(Sent, 0);
+    { The mirror holds the last observation. Unchanged bodies are not copied again. }
+    If Not Session.CopyLiveBlocks(Sent) Then
+      SetLength(Sent, 0);
+    If Not Form.FillMonitorLiveChanges(Sent, Turn, ErrorText) Then
+      Turn := Default(TAssistantMonitorTurn);
+    If Turn.Id <> '' Then
+      DiffDone := Session.ObserveTurnLimited(Turn, MonitorCreditWindowBytes);
+    If Not DiffDone Then
+      FDiffPending := True
+    Else
+      FDiffPending := False;
+    If Session.MirrorEpoch = '' Then
+      PublishEpoch;
+    If Session.MirrorEpoch <> '' Then
+      FSentEpoch := Session.MirrorEpoch;
     Form.FillMonitorPlan(Rows);
     Session.ObservePlan(View.PlanPath, View.PlanTitle, View.PlanRunning, Rows);
     PlanStamp := PlanRowsStamp(Rows, View.PlanPath, View.PlanTitle, Form.PlanDocumentRevision, View.PlanRunning);
@@ -1233,11 +1245,18 @@ Begin
         PublishPlanRows(Form);
         FPlanStamp := PlanStamp;
       End;
-    FPumpedMirror := Seen;
+    If DiffDone Then
+      FPumpedMirror := Seen;
     NoteOpenLogPosition;
   Finally
     FPumping := False;
   End;
+  If FPumpAgain Or FDiffPending Then
+    Begin
+      FPumpAgain := False;
+      If Not FPumpPending Then
+        NoteMirrorWake;
+    End;
 End;
 
 Procedure TAssistantMonitorBridge.PublishPlanRows(Form: TProjectAssistantForm);

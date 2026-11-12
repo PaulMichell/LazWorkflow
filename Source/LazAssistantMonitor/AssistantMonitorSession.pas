@@ -326,6 +326,8 @@ Type
     Procedure NoteMirrorAck(Seq: Int64);
     { IDE thread. Copies one turn into the model and appends the events that describe the change. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
+    { False when one pass stopped at the budget. The next call emits the suffix. }
+    Function ObserveTurnLimited(Const Turn: TAssistantMonitorTurn; BudgetBytes: Int64): Boolean;
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
     { IDE thread. The file timer already hashed the file. Does not read it. }
     Procedure NotePlanCachedRevision(Const Path, Revision: String);
@@ -2643,10 +2645,16 @@ End;
 
 Procedure TMonitorSession.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Begin
+  ObserveTurnLimited(Turn, -1);
+End;
+
+Function TMonitorSession.ObserveTurnLimited(Const Turn: TAssistantMonitorTurn; BudgetBytes: Int64): Boolean;
+Begin
+  Result := True;
   LockSession;
   Try
     If Assigned(FMirror) Then
-      FMirror.ObserveTurn(Turn);
+      Result := FMirror.ObserveTurnLimited(Turn, BudgetBytes);
     NoteFillChanged;
   Finally
     UnlockSession;

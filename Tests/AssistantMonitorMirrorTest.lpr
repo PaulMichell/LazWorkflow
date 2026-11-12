@@ -230,6 +230,79 @@ Begin
   End;
 End;
 
+Procedure TestBoundedLiveAppend;
+Var
+  Log: TMonitorMirror;
+  Turn: TAssistantMonitorTurn;
+  Events: TMonitorMirrorEventArray;
+  Data: TJSONData;
+  Index, First, Second, Appends: Integer;
+  Grown, Joined, Slice: String;
+  FirstBytes: Int64;
+  ReplaceSeen: Boolean;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Turn := SampleTurn('turn-bound', 'start', 1);
+    Turn.Live := True;
+    Turn.Blocks[0].Running := True;
+    Check('the opening observation finishes', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    First := Length(Events);
+    Grown := StringOfChar('a', MonitorCreditWindowBytes + MonitorAppendSliceBytes);
+    Turn.Blocks[0].Body := 'start' + Grown;
+    Check('one credit window does not finish the growth', Not Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    FirstBytes := 0;
+    ReplaceSeen := False;
+    For Index := First To High(Events) Do
+      Begin
+        If Events[Index].Kind = 'block_replace' Then
+          ReplaceSeen := True;
+        If Events[Index].Kind = 'block_append' Then
+          FirstBytes := FirstBytes + Length(Events[Index].Data) + Length(Events[Index].Kind);
+      End;
+    Check('the first pass emits appends, not a full replace', (FirstBytes > 0) And (Not ReplaceSeen));
+    Check('the first pass stays inside one credit window', FirstBytes <= MonitorCreditWindowBytes);
+    Second := Length(Events);
+    Check('the next tick emits the remainder', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    Joined := '';
+    Appends := 0;
+    ReplaceSeen := False;
+    For Index := First To High(Events) Do
+      If Events[Index].Kind = 'block_replace' Then
+        ReplaceSeen := True
+      Else If Events[Index].Kind = 'block_append' Then
+        Begin
+          Inc(Appends);
+          Data := Nil;
+          Try
+            Data := GetJSON(String(Events[Index].Data));
+            If Data Is TJSONObject Then
+              Begin
+                Slice := TJSONObject(Data).Get('text', '');
+                Joined := Joined + Slice;
+              End;
+          Finally
+            Data.Free;
+          End;
+          If Index >= Second Then
+            Check('the remainder is still an append', Events[Index].Kind = 'block_append');
+        End;
+    Check('a suffix is not rewritten as a replace', Not ReplaceSeen);
+    Check('the two passes join back to the growth', Joined = Grown);
+    Check('more than one slice was required', Appends > 1);
+    First := Length(Events);
+    Check('an unchanged body is not copied again', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    Check('the following tick adds no body event', Length(Events) = First);
+  Finally
+    Log.Free;
+  End;
+End;
+
 Procedure TestBodyEscape;
 Var
   Page: String;
@@ -870,6 +943,7 @@ Begin
   TestParkedConversationsAreBounded;
   TestBodyEscape;
   TestLargeAppend;
+  TestBoundedLiveAppend;
   TestLiveBlocks;
   TestObserveLeavesCallerAlone;
   TestTurnLifecycle;

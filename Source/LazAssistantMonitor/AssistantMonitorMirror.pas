@@ -30,7 +30,7 @@ Unit AssistantMonitorMirror;
   Size note: exceeds the 1000 line preference. What remains is the log, the
   materialised model, and the slice split. Page JSON writers with no caller are
   gone. Catalogue 3 events are the only retained protocol records.
-  Reviewed 2026-11-07: strings are escaped by AssistantProtocol.JsonEscapeText,
+  Reviewed 2026-11-12: strings are escaped by AssistantProtocol.JsonEscapeText,
   which escapes every control and writes one pass into a sized buffer, because
   those pages are built on the IDE thread. }
 
@@ -137,11 +137,16 @@ Type
     FPlanRunning: Boolean;
     FPlanRows: Array Of TAssistantMonitorPlanRow;
     FParked: Array Of TMonitorMirrorPark;
+    FObserveBudget: Int64;
+    FObserveUsed: Int64;
+    FObservePending: Boolean;
     Function DropOldestLocked: Boolean;
     Procedure NoteDropLocked(Seq: Int64);
     Procedure ParkCurrentLocked;
     Function UnparkLocked(Const ConversationId, StreamId: String): Boolean;
     Procedure AppendLocked(Seq: Int64; Const Kind: String; Const Data: RawByteString);
+    { False when this pass has spent its budget. The event is not stored. }
+    Function EmitLocked(Const Kind: String; Const Data: RawByteString): Boolean;
     Function IndexOfSeqLocked(Seq: Int64): Integer;
     Procedure CopyTurn(Const Source: TAssistantMonitorTurn; Var Dest: TAssistantMonitorTurn);
     Function FindTurnLocked(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn): Boolean;
@@ -167,6 +172,8 @@ Type
     Function CanReplay(Seq: Int64): Boolean;
     { Turn is read only. The stored copy carries the bumped block revisions. }
     Procedure ObserveTurn(Const Turn: TAssistantMonitorTurn);
+    { One pass. False when the turn still has a suffix. The live cursor is the emitted prefix. }
+    Function ObserveTurnLimited(Const Turn: TAssistantMonitorTurn; BudgetBytes: Int64): Boolean;
     Procedure ObservePlan(Const PlanPath, PlanTitle: String; PlanRunning: Boolean; Const Rows: Array Of TAssistantMonitorPlanRow);
     Function HasModel: Boolean;
     { Stored turns or the live turn. A plan alone is not the open conversation. }
@@ -343,6 +350,7 @@ Begin
   FAckedSeq := 0;
   FDroppedThrough := 0;
   FBytes := 0;
+  FObserveBudget := -1;
   SetLength(FEvents, 0);
   EventHead := 0;
   SetLength(FTurns, 0);
@@ -732,7 +740,7 @@ Begin
       Begin
         Retired.Blocks[Index].Running := False;
         Retired.Blocks[Index].Ok := False;
-        AppendLocked(FHead + 1, 'block_close', BlockCloseJson(Retired.Blocks[Index]));
+        EmitLocked('block_close', BlockCloseJson(Retired.Blocks[Index]));
         Outcome := 'stopped';
       End;
   { A negative index would put the turn above the whole transcript on the phone. }
@@ -743,7 +751,7 @@ Begin
         If FTurns[Index].TurnIndex >= Next Then
           Next := FTurns[Index].TurnIndex + 1;
       Retired.TurnIndex := Next;
-      AppendLocked(FHead + 1, 'turn_open', TurnOpenJson(Retired));
+      EmitLocked('turn_open', TurnOpenJson(Retired));
     End;
   Retired.Live := False;
   Index := StoredIndexLocked(Retired.Id);
@@ -753,12 +761,48 @@ Begin
       SetLength(FTurns, Index + 1);
     End;
   FTurns[Index] := Retired;
-  AppendLocked(FHead + 1, 'turn_close', TurnCloseJson(Retired, Outcome));
+  EmitLocked('turn_close', TurnCloseJson(Retired, Outcome));
+End;
+
+Function TMonitorMirror.EmitLocked(Const Kind: String; Const Data: RawByteString): Boolean;
+Var
+  Size: Integer;
+Begin
+  Result := False;
+  If FObservePending Then
+    Exit;
+  Size := Length(Data) + Length(Kind);
+  { The first event of a pass always goes out, so a budget never stalls on an empty cursor. }
+  If (FObserveBudget >= 0) And (FObserveUsed > 0) And (FObserveUsed + Size > FObserveBudget) Then
+    Begin
+      FObservePending := True;
+      Exit;
+    End;
+  AppendLocked(FHead + 1, Kind, Data);
+  If FObserveBudget >= 0 Then
+    Inc(FObserveUsed, Size);
+  If (FObserveBudget >= 0) And (FObserveUsed >= FObserveBudget) Then
+    FObservePending := True;
+  Result := True;
+End;
+
+Function TMonitorMirror.ObserveTurnLimited(Const Turn: TAssistantMonitorTurn; BudgetBytes: Int64): Boolean;
+Begin
+  FObserveBudget := BudgetBytes;
+  FObserveUsed := 0;
+  FObservePending := False;
+  Try
+    ObserveTurn(Turn);
+    Result := Not FObservePending;
+  Finally
+    FObserveBudget := -1;
+    FObservePending := False;
+  End;
 End;
 
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
-  Index, BlockIndex, Match, Kept: Integer;
+  Index, BlockIndex, Match, Kept, Emitted: Integer;
   Stored, Local: TAssistantMonitorTurn;
   Found, IdleCopy: Boolean;
   EventJson: String;
@@ -790,12 +834,15 @@ Var
 
   { Linear. The escaped size is summed per character and each slice is escaped once. Escaping every candidate
     prefix made a large append quadratic: 800 KiB took about 55 s on the IDE thread. }
-  Procedure EmitAppends(Const BlockId: String; Const Text: RawByteString; StartOffset: Integer);
+  { False when the pass budget stopped before Text was finished. Emitted is the UTF-8 prefix sent. }
+  Function EmitAppends(Const BlockId: String; Const Text: RawByteString; StartOffset: Integer; Out Emitted: Integer): Boolean;
   Var
     At, Taken, Step, Escaped, Room, Want: Integer;
     Slice: RawByteString;
     Prefix, Data: String;
   Begin
+    Emitted := 0;
+    Result := True;
     At := 1;
     While At <= Length(Text) Do
       Begin
@@ -829,12 +876,17 @@ Var
           If Taken = 0 Then
             Taken := Utf8Step(Text, At);
         Until False;
-        AppendLocked(FHead + 1, 'block_append', Data);
+        If Not EmitLocked('block_append', Data) Then
+          Begin
+            Result := False;
+            Exit;
+          End;
         Inc(At, Taken);
+        Emitted := At - 1;
       End;
   End;
 
-  Procedure EmitReplace(Const Block: TAssistantMonitorBlock);
+  Function EmitReplace(Const Block: TAssistantMonitorBlock): Boolean;
   Var
     Body: RawByteString;
     Data: String;
@@ -845,7 +897,7 @@ Var
         ',"body_bytes":' + IntToStr(Length(Body)) + '}'
     Else
       Data := '{"block_id":"' + JsonEscapeText(Block.BlockId) + '","body":"' + JsonEscapeText(Block.Body) + '"}';
-    AppendLocked(FHead + 1, 'block_replace', Data);
+    Result := EmitLocked('block_replace', Data);
   End;
 
 Begin
@@ -906,14 +958,19 @@ Begin
             End;
     { A recorded turn moves from the live index to its stored index. The phone orders turns by that index. }
     If (Not Found) Or (Stored.TurnIndex <> Local.TurnIndex) Then
-      AppendLocked(FHead + 1, 'turn_open', TurnOpenJson(Local));
+      EmitLocked('turn_open', TurnOpenJson(Local));
     For BlockIndex := 0 To High(Local.Blocks) Do
       Begin
+        If FObservePending Then
+          Begin
+            SetLength(Local.Blocks, BlockIndex);
+            Break;
+          End;
         Match := StoredBlock(Local.Blocks[BlockIndex].BlockId, BlockIndex);
         Found := Match >= 0;
         { A block that moved keeps its body on the phone. block_open only gives it the new ordinal. }
         If (Not Found) Or (Match <> BlockIndex) Then
-          AppendLocked(FHead + 1, 'block_open', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
+          EmitLocked('block_open', '{"block_id":"' + JsonEscapeText(Local.Blocks[BlockIndex].BlockId) +
             '","turn_id":"' + JsonEscapeText(Local.Id) + '","kind":"' + JsonEscapeText(Local.Blocks[BlockIndex].Kind) +
             '","ordinal":' + IntToStr(BlockIndex) + ',"title":"' + JsonEscapeText(Local.Blocks[BlockIndex].Title) + '"}');
         If Not Found Then
@@ -922,30 +979,49 @@ Begin
             If EventJson <> '' Then
               Begin
                 If Length(UTF8String(EventJson)) > MonitorAppendSliceBytes Then
-                  EmitReplace(Local.Blocks[BlockIndex])
-                Else
-                  EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0);
+                  Begin
+                    If Not EmitReplace(Local.Blocks[BlockIndex]) Then
+                      Begin
+                        SetLength(Local.Blocks, BlockIndex);
+                        Break;
+                      End;
+                  End
+                Else If Not EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), 0, Emitted) Then
+                  Local.Blocks[BlockIndex].Body := Copy(EventJson, 1, Emitted);
               End;
           End
         Else If Stored.Blocks[Match].Body <> Local.Blocks[BlockIndex].Body Then
           Begin
             Local.Blocks[BlockIndex].Revision := Stored.Blocks[Match].Revision + 1;
             If Stored.Blocks[Match].Body = '' Then
-              EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(Local.Blocks[BlockIndex].Body), 0)
+              Begin
+                If Not EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(Local.Blocks[BlockIndex].Body), 0, Emitted) Then
+                  Local.Blocks[BlockIndex].Body := Copy(Local.Blocks[BlockIndex].Body, 1, Emitted);
+              End
             Else If MonitorAppendSuffix(Stored.Blocks[Match].Body, Local.Blocks[BlockIndex].Body, EventJson, Index) Then
-              EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index)
-            Else
-              EmitReplace(Local.Blocks[BlockIndex]);
+              Begin
+                If Not EmitAppends(Local.Blocks[BlockIndex].BlockId, UTF8String(EventJson), Index, Emitted) Then
+                  Local.Blocks[BlockIndex].Body := Stored.Blocks[Match].Body + Copy(EventJson, 1, Emitted);
+              End
+            Else If Not EmitReplace(Local.Blocks[BlockIndex]) Then
+              Begin
+                Local.Blocks[BlockIndex].Body := Stored.Blocks[Match].Body;
+                Local.Blocks[BlockIndex].Revision := Stored.Blocks[Match].Revision;
+              End;
           End
         Else If Stored.Blocks[Match].Revision > Local.Blocks[BlockIndex].Revision Then
           { An unchanged body keeps the revision the phone was given, so a block fetch does not see it go back. }
           Local.Blocks[BlockIndex].Revision := Stored.Blocks[Match].Revision;
-        If Not Local.Blocks[BlockIndex].Running Then
+        If FObservePending Then
+          Local.Blocks[BlockIndex].Running := True
+        Else If Not Local.Blocks[BlockIndex].Running Then
           Begin
             If (Not Found) Or Stored.Blocks[Match].Running Then
-              AppendLocked(FHead + 1, 'block_close', BlockCloseJson(Local.Blocks[BlockIndex]));
+              If Not EmitLocked('block_close', BlockCloseJson(Local.Blocks[BlockIndex])) Then
+                Local.Blocks[BlockIndex].Running := True;
           End;
       End;
+    If Not FObservePending Then
     For Index := 0 To High(Local.Images) Do
       Begin
         Found := False;
@@ -953,13 +1029,19 @@ Begin
           If Stored.Images[BlockIndex].Id = Local.Images[Index].Id Then
             Found := True;
         If Not Found Then
-          AppendLocked(FHead + 1, 'image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
+          EmitLocked('image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
             JsonEscapeText(Local.Id) + '","name":"' + JsonEscapeText(Local.Images[Index].Name) + '","mime":"' +
             JsonEscapeText(Local.Images[Index].Mime) + '","width":' + IntToStr(Local.Images[Index].Width) +
             ',"height":' + IntToStr(Local.Images[Index].Height) + ',"bytes":0,"missing":' + MonitorBoolean(Local.Images[Index].Missing) + '}');
       End;
-    { Local is already unique, so it is stored without a second copy. }
-    If Local.Live Then
+    { A partial pass keeps the emitted prefix as the live cursor. The next tick appends the suffix. }
+    If FObservePending Then
+      Begin
+        Local.Live := True;
+        FLive := Local;
+        FHasLive := True;
+      End
+    Else If Local.Live Then
       Begin
         FLive := Local;
         FHasLive := True;
@@ -978,7 +1060,7 @@ Begin
           Begin
             SetLength(FTurns, Length(FTurns) + 1);
             FTurns[High(FTurns)] := Local;
-            AppendLocked(FHead + 1, 'turn_close', TurnCloseJson(Local, TurnOutcomeName(Local)));
+            EmitLocked('turn_close', TurnCloseJson(Local, TurnOutcomeName(Local)));
           End;
         { A retired turn was filed at the next index, and the desktop stores its next turn there too. The stored
           turn wins, so a later snapshot outline leaves the retired one out and the phone drops it. }
