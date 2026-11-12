@@ -71,7 +71,7 @@ Keep the existing `enterForeground` refresh. It is necessary for a process that 
 Acceptance: forget the bind, leave the session in the foreground, and recover on the next attempt with no `enterForeground` and no new process. The open uses the desk Wi-Fi even when that network has no internet. No toast contains the route exception. Extend `WifiLanWatchTest` and `LanSessionTest`.
 
 ### 3.2 A loss hint must not swallow a due retry
-Status: not started
+Status: complete
 
 `runLoop` parks on `wakes.receive()` when `!lanAvailable` and nothing is due. A spurious `onLost` that cleared the route then leaves the chip on Offline until a wake that `mayReconnect` accepts. Confirmed absence may still show `Waiting for Wi-Fi`. A due retry, a touch, a foreground return, and a monitoring demand must sample again and open. They must not wait for a callback that already fired.
 
