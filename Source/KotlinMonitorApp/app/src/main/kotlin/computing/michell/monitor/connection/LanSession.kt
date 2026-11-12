@@ -458,6 +458,10 @@ private class PhysicalConnection(
   @Volatile var lastReceivedMs: Long = openedAtMs
   @Volatile var lastInboundNanos: Long = inboundNanos
   @Volatile var setupComplete: Boolean = false
+  /** First time this socket was Live. Negative until then. The stall budget starts here. */
+  @Volatile var liveAtMs: Long = -1L
+  /** A committed cursor or baseline on this socket. Negative until then. A ping does not set this. */
+  @Volatile var committedAtMs: Long = -1L
   @Volatile var outcome: ReadEnd = ReadEnd.Continue
   private val outcomeLock = Any()
 
@@ -815,7 +819,7 @@ class LanSession(
   private var writeStartedNanos = 0L
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
   private var applier: LinkApplier? = null
-  private var sentResumeEpoch = -1
+  private var sentResumeGeneration = -1
   private var sentResumeConversation = ""
   private var sentResumeStream = ""
   private var sentResumeSeq = -1L
@@ -868,6 +872,8 @@ class LanSession(
   private var terminalKind = ""
   @Volatile
   private var lastCommittedProgressMs = -1L
+  /** Last touch that replaced a socket with no committed progress. Negative until then. */
+  private var lastStalledTouchMs = -1L
   private val queuedCommands = ArrayDeque<QueuedCommand>()
   private val queuedLock = Any()
   private val incidentState = MutableStateFlow(IncidentSnapshot())
@@ -1033,6 +1039,8 @@ class LanSession(
     }
     wakes.trySend(Unit)
     if ((released || mayReconnect()) && loop?.isActive != true) startLoop()
+    // A return must not leave a heartbeating socket that has never committed.
+    if (returning && lacksCommittedProgress()) replaceStalledLink()
     // Coming forward is use. An idle loop that stopped trying starts again now.
     // A latch released above has already started its attempt.
     if (!released) noteActivity()
@@ -1048,7 +1056,14 @@ class LanSession(
     val now = clockMs()
     lastActivityMs = now
     if (releaseRecoverableLatch()) return
-    if (link != null || !mayReconnect()) return
+    // An open socket that is applying stays. Heartbeats alone are not delivery.
+    if (link != null) {
+      if (!mayReconnect() || !lacksCommittedProgress()) return
+      if (lastStalledTouchMs >= 0L && now - lastStalledTouchMs < ActivityRetryGapMs) return
+      replaceStalledLink()
+      return
+    }
+    if (!mayReconnect()) return
     // A parked loss is not a retry in flight. The ten-second gap must not leave
     // this touch in a receive the callback will not signal again.
     val parkedForLoss = nextRetryAtMs < 0L && lossHint()
@@ -1057,6 +1072,29 @@ class LanSession(
     connectNow = true
     wakes.trySend(Unit)
     if (loop?.isActive != true) startLoop()
+  }
+
+  /**
+   * The open socket has authenticated and has not committed a cursor or baseline.
+   * A ping does not count. A transfer that is committing is not this.
+   */
+  private fun lacksCommittedProgress(): Boolean {
+    val context = connection ?: return false
+    if (link == null || context.committedAtMs >= 0L) return false
+    noteLive(context)
+    return context.liveAtMs >= 0L
+  }
+
+  /** Close a heartbeating socket that is not applying, and open the next one. */
+  private fun replaceStalledLink() {
+    if (link == null || stopped || !mayReconnect()) return
+    lastStalledTouchMs = clockMs()
+    connectNow = true
+    replaceLink = true
+    beginOwnReplacement()
+    nextRetryAtMs = -1L
+    if (!policy.paused) policy.resetBackoff()
+    startLoop()
   }
 
   /**
@@ -1643,10 +1681,12 @@ class LanSession(
 
   override fun resumeFromRoom(conversationId: String, streamId: String, seq: Long): Boolean {
     if (!canWriteResume()) return false
-    val epoch = epochCounter.get()
-    // The same triple is not written again on this socket. A later cursor, a gap,
-    // or a new socket may send. A failed offer is not remembered, so it can be tried again.
-    if (sentResumeEpoch == epoch && sentResumeConversation == conversationId &&
+    // The same triple is not written again on this socket generation. A later cursor,
+    // a gap, or a new socket may send the cursor the previous socket already queued.
+    // The reconnect-loop epoch is shared by automatic attempts, so it is not the key.
+    // A failed offer is not remembered, so it can be tried again.
+    val generation = activeGeneration
+    if (generation != 0 && sentResumeGeneration == generation && sentResumeConversation == conversationId &&
       sentResumeStream == streamId && sentResumeSeq == seq) return false
     return writeResume(conversationId, streamId, seq)
   }
@@ -1665,7 +1705,7 @@ class LanSession(
       false
     }
     if (!queued) return false
-    sentResumeEpoch = epochCounter.get()
+    sentResumeGeneration = activeGeneration
     sentResumeConversation = conversationId
     sentResumeStream = streamId
     sentResumeSeq = seq
@@ -1730,7 +1770,9 @@ class LanSession(
 
   /** A committed cursor or baseline. A ping does not call this. */
   fun noteCommittedProgress() {
-    lastCommittedProgressMs = clockMs()
+    val now = clockMs()
+    lastCommittedProgressMs = now
+    connection?.let { current -> if (current.committedAtMs < 0L) current.committedAtMs = now }
     publishIncident("", false)
   }
 
@@ -1767,7 +1809,7 @@ class LanSession(
           val watchdog = launch {
             while (coroutineContext[Job]?.isActive != false && epochCounter.get() == epoch) {
               delay(1_000L)
-              if (writeStuck() || inboundIsDead(context)) noteReadEnd(epoch, ReadEnd.Dead, context)
+              if (writeStuck() || inboundIsDead(context) || deliveryStalled(context)) noteReadEnd(epoch, ReadEnd.Dead, context)
             }
           }
           val applying = launch {
@@ -1853,11 +1895,28 @@ class LanSession(
   }
 
   private fun noteClock(epoch: Int, context: PhysicalConnection) {
-    if (writeStuck()) {
+    if (writeStuck() || deliveryStalled(context)) {
       noteReadEnd(epoch, ReadEnd.Dead, context)
       return
     }
     noteHeartbeat(epoch, context)
+  }
+
+  /** Live, and no committed cursor or baseline for the sync budget. A ping is not progress. */
+  private fun deliveryStalled(context: PhysicalConnection): Boolean {
+    if (context.committedAtMs >= 0L || context.events.shouldPauseRead()) return false
+    noteLive(context)
+    val started = context.liveAtMs
+    if (started < 0L) return false
+    return clockMs() - started >= computing.michell.monitor.data.SyncRecoveryBudgetMs
+  }
+
+  private fun noteLive(context: PhysicalConnection) {
+    if (context.liveAtMs >= 0L) return
+    val phase = session.phase
+    if (phase != computing.michell.monitor.protocol.SessionPhase.Live &&
+      phase != computing.michell.monitor.protocol.SessionPhase.Busy) return
+    context.liveAtMs = clockMs()
   }
 
   private fun writeStuck(): Boolean {
@@ -1924,7 +1983,7 @@ class LanSession(
       if (!context.setupComplete && clockMs() - context.openedAtMs >= SessionSetupMs) {
         return finishRead(epoch, context, ReadEnd.Dead)
       }
-      if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+      if (inboundIsDead(context) || writeStuck() || deliveryStalled(context)) return finishRead(epoch, context, ReadEnd.Dead)
       if (context.events.shouldPauseRead()) {
         delay(50)
         noteHeartbeat(epoch, context)
@@ -1945,7 +2004,7 @@ class LanSession(
         if (batch.status != FrameStatus.Ok) return finishRead(epoch, context, ReadEnd.PeerClosed)
       }
       if (reader.partialExpired(now)) return finishRead(epoch, context, ReadEnd.PeerClosed)
-      if (inboundIsDead(context) || writeStuck()) return finishRead(epoch, context, ReadEnd.Dead)
+      if (inboundIsDead(context) || writeStuck() || deliveryStalled(context)) return finishRead(epoch, context, ReadEnd.Dead)
       if (epochCounter.get() != epoch || activeGeneration != context.generation) {
         return finishRead(epoch, context, ReadEnd.PeerClosed)
       }
@@ -1993,6 +2052,7 @@ class LanSession(
         CreditOffer.Queued, CreditOffer.Held -> {}
       }
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
+      noteLive(context)
       return
     }
     if (sync != null && sync !is SyncFrame.RevisionChanged) {
@@ -2008,6 +2068,7 @@ class LanSession(
     if (!envelope.ok) return
     val message = context.chunks.accept(envelope.message) ?: return
     session.apply(message)
+    noteLive(context)
     when (message.kind) {
       MessageKind.PairOk -> {
         val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)
@@ -2218,7 +2279,7 @@ class LanSession(
     writeStartedNanos = 0L
     val owned = link
     link = null
-    sentResumeEpoch = -1
+    sentResumeGeneration = -1
     sentResumeConversation = ""
     sentResumeStream = ""
     sentResumeSeq = -1L

@@ -21,6 +21,7 @@ import computing.michell.monitor.protocol.encodeCommandStates
 import computing.michell.monitor.protocol.encodeHelloOk
 import computing.michell.monitor.protocol.tryEncodeSend
 import computing.michell.monitor.protocol.CommandStateMessage
+import computing.michell.monitor.protocol.SyncFrame
 import computing.michell.monitor.protocol.tryDecodeEnvelope
 import computing.michell.monitor.protocol.tryDecodeFrame
 import computing.michell.monitor.protocol.tryEncodeFrame
@@ -1826,6 +1827,117 @@ class LanSessionTest {
   }
 
   @Test
+  fun aTouchDropsASocketThatHeartbeatsWithoutACommit() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val applied = AtomicInteger(0)
+    val seenGeneration = AtomicInteger(0)
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    session.attachLinkApplier(recordingApplier(applied, seenGeneration))
+    try {
+      session.connect("10.0.0.8", 56122)
+      reachLive(session, links, 0)
+      val first = session.linkEpoch
+      session.noteActivity()
+      waitUntil(8_000) { links.size >= 2 && links[0].closed }
+      assertFalse(session.reconnectPaused)
+      assertTrue(session.linkEpoch != first)
+      reachLive(session, links, 1)
+      assertTrue(session.resumeFromRoom("c1", "s1", 4L))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      links[1].push(frameOf(eventJson(2L, "Updated")))
+      waitUntil { seenGeneration.get() == session.linkEpoch && applied.get() > 0 }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun theSyncBudgetDropsASocketThatHeartbeatsWithoutACommit() {
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      reachLive(session, links, 0)
+      links[0].push(frameOf(encodeTicks(MessageKind.Pong, "host-pong", 2)))
+      clock.advanceMs(computing.michell.monitor.data.SyncRecoveryBudgetMs - 1)
+      Thread.sleep(200)
+      assertFalse(links[0].closed)
+      assertEquals(1, opens.get())
+      clock.advanceMs(1)
+      waitUntil(8_000) { links.size >= 2 && links[0].closed }
+      assertFalse(session.reconnectPaused)
+      reachLive(session, links, 1)
+      assertTrue(session.resumeFromRoom("c1", "s1", 4L))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aTouchDoesNotDropASocketThatIsCommitting() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      reachLive(session, links, 0)
+      session.noteCommittedProgress()
+      session.noteActivity()
+      Thread.sleep(400)
+      assertEquals(1, opens.get())
+      assertFalse(links[0].closed)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aNewSocketResumesTheCursorThePreviousSocketQueued() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { links.isNotEmpty() && links[0].readEntries.get() > 0 }
+      links[0].push(frameOf(encodeHelloOk("host-1", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { links[0].frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+      val first = session.linkEpoch
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-9", 50L))
+      waitUntil { links[0].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+      assertFalse(session.resumeFromRoom("conversation-1", "stream-9", 50L))
+      links[0].closeInput()
+      waitUntil(8_000) { opens.get() >= 2 && links[1].readEntries.get() > 0 }
+      assertTrue(session.linkEpoch != first)
+      links[1].push(frameOf(encodeHelloOk("host-2", HelloOkMessage(
+        "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+      ))))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+      assertTrue(session.resumeFromRoom("conversation-1", "stream-9", 50L))
+      waitUntil { links[1].frames().any { frame -> envelope(frame).kind == MessageKind.Resume } }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aCreditPauseDoesNotCloseOnHeartbeatSilence() {
     val small = eventJson(1L, "A")
     val second = eventJson(2L, "B")
@@ -2336,6 +2448,29 @@ class LanSessionTest {
 private fun chunkJson(itemId: String, part: Int, partCount: Int, data: String): String {
   val encoded = data.replace("\\", "\\\\").replace("\"", "\\\"")
   return """{"v":3,"id":"chunk-$itemId-$part","type":"chunk","payload":{"item_type":"message","item_id":"$itemId","part":$part,"part_count":$partCount,"data":"$encoded"}}"""
+}
+
+private fun reachLive(session: LanSession, links: List<ScriptedLink>, index: Int) {
+  waitUntil { links.size > index && links[index].readEntries.get() > 0 }
+  val link = links[index]
+  link.push(frameOf(encodeHelloOk("host-live-$index", HelloOkMessage(
+    "00112233445566778899aabbccddeeff", "LazAssistantMonitor", "", 0, "", "", ""
+  ))))
+  waitUntil { link.frames().any { frame -> envelope(frame).kind == MessageKind.Auth } }
+  link.push(frameOf(eventJson(1L, "Live")))
+  waitUntil { session.status.value.phase == LinkPhase.Live }
+  link.push(frameOf(encodeTicks(MessageKind.Pong, "host-pong", 1)))
+}
+
+private fun recordingApplier(applied: AtomicInteger, seenGeneration: AtomicInteger): LinkApplier {
+  return object : LinkApplier {
+    override suspend fun offer(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {
+      seenGeneration.set(generation)
+      applied.incrementAndGet()
+    }
+    override suspend fun offerFrame(frame: SyncFrame, generation: Int) {}
+    override suspend fun noteRefused(event: computing.michell.monitor.protocol.MonitorEvent, generation: Int) {}
+  }
 }
 
 private fun eventJson(seq: Long, title: String): String {
