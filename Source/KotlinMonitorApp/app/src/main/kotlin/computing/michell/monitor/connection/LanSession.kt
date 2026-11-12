@@ -1958,14 +1958,15 @@ class LanSession(
       MessageKind.Rejected -> {
         pairCode = ""
         val reason = message.reason
-        // Authentication failure must not silently discard a saved pairing and
-        // retry with an empty, single-use pairing code.
-        if (reason == "busy") {
+        // A saved pairing is not discarded, and a truncated close is not an
+        // authentication failure. auth, expired, busy, an empty reason, and
+        // protocol back off. Revocation, disable, pin, and pair code still pause.
+        if (retriesTransientReject(store.load().paired, reason)) {
           noteReadEnd(epoch, ReadEnd.Retry, context)
-          publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, "busy", "busy")
+          publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason, reason.ifEmpty { "rejected" })
         } else {
           noteReadEnd(epoch, ReadEnd.Rejected, context)
-          val kind = terminalKindOf(reason)
+          val kind = if (isUserActionReject(reason)) terminalKindOf(reason) else ""
           if (kind.isNotEmpty()) markTerminal(kind, reason.ifEmpty { kind })
           val shown = reason.ifEmpty { HostClosedBanner }
           publishCurrent(epoch, LinkPhase.Paused, shown, reason, kind.ifEmpty { "rejected" })
@@ -2230,6 +2231,23 @@ class LanSession(
 }
 
 private class QueuedCommand(val commandId: String, val epoch: Int, val bytes: ByteArray)
+
+/** Revocation, disable, a bad pin, and a refused pair code need the user. */
+internal fun isUserActionReject(reason: String): Boolean {
+  return reason == "revoked" || reason == "disabled" || reason == "fingerprint" || reason == "pair_code"
+}
+
+/**
+ * A paired session can try these again. They are not stored as a terminal
+ * authentication failure, and an empty reason is a truncated close, not auth.
+ * busy retries even before pairing. An unpaired auth reject still pauses.
+ */
+internal fun retriesTransientReject(paired: Boolean, reason: String): Boolean {
+  if (isUserActionReject(reason)) return false
+  if (reason == "busy") return true
+  if (!paired) return false
+  return reason == "auth" || reason == "expired" || reason.isEmpty() || reason == "protocol"
+}
 
 private fun isPinFailure(error: Throwable): Boolean {
   var current: Throwable? = error

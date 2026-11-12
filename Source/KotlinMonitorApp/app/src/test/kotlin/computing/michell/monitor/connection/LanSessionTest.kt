@@ -1473,8 +1473,8 @@ class LanSessionTest {
   }
 
   @Test
-  fun savedAuthenticationRejectionKeepsCredentialsAndDoesNotPairAgain() {
-    for (reason in listOf("auth", "revoked")) {
+  fun userActionRejectKeepsCredentialsAndDoesNotRetry() {
+    for (reason in listOf("revoked", "disabled", "fingerprint", "pair_code")) {
       val store = pairedStore()
       val original = store.load()
       val link = ScriptedLink()
@@ -1485,14 +1485,26 @@ class LanSessionTest {
         waitUntil { link.frames().isNotEmpty() }
         link.push(frameOf(encodeRejected("host-rejected", reason, 1, 1)))
         waitUntil(2_000) { link.closed && session.status.value.phase == LinkPhase.Paused }
+        Thread.sleep(300)
         assertEquals(original, store.load())
         assertEquals(reason, session.status.value.lastError)
         assertEquals(1, opens.get())
+        assertTrue(session.reconnectPaused)
         assertFalse(link.frames().any { envelope(it).kind == MessageKind.Pair })
       } finally {
         session.close()
       }
     }
+  }
+
+  @Test
+  fun pairedTransientRejectRetriesWithoutResumeOrANewProcess() {
+    for (reason in listOf("auth", "expired", "protocol")) {
+      assertTransientRejectRetries(reason, frameOf(encodeRejected("host-rejected", reason, 1, 1)))
+    }
+    // A truncated close has no reason. It must not be stored as an authentication failure.
+    val truncated = """{"v":3,"id":"host-truncated","type":"rejected","payload":{"host_version":1,"client_version":1}}"""
+    assertTransientRejectRetries("", frameOf(truncated))
   }
 
   @Test
@@ -1978,7 +1990,7 @@ class LanSessionTest {
   }
 
   @Test
-  fun restartTransientRefusesPinAuthAndRevocationWithoutClearingPairing() {
+  fun restartTransientRefusesPinAndRevocationWithoutClearingPairing() {
     val store = pairedStore()
     val opens = AtomicInteger(0)
     val pinned = LanSession(store, TlsConnector { _, _, _ ->
@@ -1997,7 +2009,7 @@ class LanSessionTest {
     } finally {
       pinned.close()
     }
-    for (reason in listOf("auth", "revoked")) {
+    for (reason in listOf("revoked")) {
       val link = ScriptedLink()
       val again = AtomicInteger(0)
       val session = LanSession(store, TlsConnector { _, _, _ ->
@@ -2119,6 +2131,32 @@ private class RecordingConnector : TlsConnector {
   }
 
   fun fingerprints(): List<String> = synchronized(seen) { seen.toList() }
+}
+
+private fun assertTransientRejectRetries(reason: String, frame: ByteArray) {
+  val store = pairedStore()
+  val original = store.load()
+  val opens = AtomicInteger()
+  val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+  val session = LanSession(store, TlsConnector { _, _, _ ->
+    opens.incrementAndGet()
+    ScriptedLink().also { links.add(it) }
+  })
+  try {
+    session.connect("10.0.0.8", 56122)
+    waitUntil { links.isNotEmpty() && links[0].frames().isNotEmpty() }
+    links[0].push(frame)
+    // No resume() and no new process. The same loop opens again.
+    waitUntil(8_000) { opens.get() >= 2 }
+    assertFalse(session.reconnectPaused)
+    assertTrue(session.reconnectable)
+    assertEquals(original, store.load())
+    if (reason.isEmpty()) assertFalse(session.status.value.failureReason == "auth")
+    assertFalse(links.any { link -> link.frames().any { envelope(it).kind == MessageKind.Pair } })
+    assertFalse(session.status.value.phase == LinkPhase.Paused)
+  } finally {
+    session.close()
+  }
 }
 
 private fun pairedStore(): HostStore {
