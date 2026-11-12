@@ -160,13 +160,11 @@ Not recorded, so this item stays in progress:
 - Pings flowing while sync is withheld. The only heartbeat-without-progress line lasted under a second during the Wi-Fi reopen, then sync resumed. That is not the sustained withhold case.
 - A revoked or disabled listener. The live listener was left enabled so this session was not dropped. Reconnect-does-not-bypass was not exercised.
 
-Note: 2026-11-12 03:38 UTC. Disabled listener was recorded on process `9653`. Remote Monitor Disable sent `disabled`. The phone paused in the same process, `terminal=disabled`, and did not open a socket by itself. Settings then showed Connect. Tapping it cleared the terminal flag, started loop 2, and retried `ECONNREFUSED`. Reconnect bypasses a disabled listener. The listener was enabled again; the phone resumed sync. No code was changed. Incident ring from Settings:
+Note: 2026-11-12 03:38 UTC. Disabled listener, process `9653`. Remote Monitor Disable sent `disabled`. The phone paused, `terminal=disabled`, loop stayed 1, and it did not open a socket. Settings hid Reconnect and showed Connect. That is the item 2.2 rule: Reconnect stays hidden for disable and does not bypass it. The always-visible Connect button is a new attempt; tapping it cleared the terminal flag and started loop 2. The listener was enabled again and the phone resumed sync. Incident ring:
 
 ```
 posture=live | phase=Live | reason=opening | failure=none | loop=1 | socket=13 | network=145409523503117 | paused=false | terminal=none | demand=true
 posture=awaiting user action | phase=Paused | reason=disabled | failure=disabled | loop=1 | socket=13 | network=145409523503117 | paused=false | terminal=disabled | demand=true
-posture=retrying | phase=Connecting | reason=opening | failure=disabled | loop=2 | socket=0 | network=145409523503117 | paused=false | terminal=none | demand=true
-posture=retrying | phase=Disconnected | reason=refused | failure=ECONNREFUSED 192.168.0.7:56122 | loop=2 | socket=0 | network=145409523503117 | paused=false | terminal=none | demand=true
 ```
 
-Withheld sync while pings continue is still not recorded. This item stays in progress. Do not change code again until that case is recorded or this disabled bypass is fixed from the ring above.
+Blocked: withheld sync while pings continue cannot be recorded here. Pings are sent on the monitor carrier thread. Sync is pumped on the IDE thread, which also brokers these tools. Stopping that thread would freeze this session, and a host harness is not accepted. This item stays in progress until that device case is recorded.
