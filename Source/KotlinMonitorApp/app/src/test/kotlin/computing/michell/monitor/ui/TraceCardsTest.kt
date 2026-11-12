@@ -42,6 +42,14 @@ class TraceCardsTest {
   }
 
   @Test
+  fun noteHeaderMatchesTheDesktop() {
+    assertEquals("Note", noteCardTitle(""))
+    assertEquals("Note", noteCardTitle("   "))
+    assertEquals("Note", noteCardTitle("Note"))
+    assertEquals("screenshot.png", noteCardTitle("screenshot.png"))
+  }
+
+  @Test
   fun aRunningThoughtShowsBeforeItsBody() {
     val running = WireBlock("thinking", "think-1", "Thinking…", "", "", "", true, true, 0, emptyList())
     assertTrue(blockShown(running, true, false))

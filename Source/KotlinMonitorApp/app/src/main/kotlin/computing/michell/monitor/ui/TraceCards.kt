@@ -58,6 +58,13 @@ fun toolCardCaption(block: WireBlock): String {
   return toolCardCaption(block.title, block.toolName, block.running, block.ok, block.durationMs)
 }
 
+/** Desktop note header. An omitted title is still Note, drawn in bold above the body. */
+fun noteCardTitle(title: String): String {
+  val caption = title.trim()
+  if (caption.isEmpty()) return "Note"
+  return caption
+}
+
 /** A thought starts open when the user asked to see it. Tools stay closed. */
 fun cardStartsOpen(kind: String, showThinking: Boolean = false): Boolean {
   return kind == "thinking" && showThinking

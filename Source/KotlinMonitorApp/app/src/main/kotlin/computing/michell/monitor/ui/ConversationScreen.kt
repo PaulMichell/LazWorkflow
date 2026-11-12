@@ -552,13 +552,32 @@ private fun RoleBlock(
     "answer" -> BubbleBlock(block, hostGeneration, AnswerFill, AnswerEdge, Alignment.Start, 0.95f, bitmaps, reasons, fetchImages)
     "thinking" -> ThinkingCard(foldKey, block, showThinking)
     "tool", "subagent" -> ToolCard(foldKey, block, bitmaps, reasons, hostGeneration, fetchImages)
-    "note" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, Color.Unspecified, false, fetchImages)
+    "note" -> NoteBlock(block, hostGeneration, bitmaps, reasons, fetchImages)
     "worked" -> CaptionBlock(block, hostGeneration, bitmaps, reasons, QuietText, true, fetchImages)
     else -> {
       val caption = block.body.ifEmpty { block.title }
       if (rendersMarkdown(displayKind(block))) MarkdownText(caption) else Text(caption)
     }
     }
+  }
+}
+
+@Composable
+private fun NoteBlock(
+  block: WireBlock,
+  hostGeneration: Int,
+  bitmaps: Map<String, Bitmap>,
+  reasons: Map<String, String>,
+  fetchImages: Boolean
+) {
+  Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(
+      noteCardTitle(block.title),
+      color = if (block.ok) Color.Unspecified else FailedTitle,
+      fontWeight = FontWeight.Bold
+    )
+    if (block.body.isNotEmpty()) MarkdownText(block.body)
+    block.images.forEach { image -> ImageTile(image, hostGeneration, bitmaps, reasons, fetchImages) }
   }
 }
 
