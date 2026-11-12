@@ -44,7 +44,7 @@ In `LanSession.onFrame`, keep `revoked`, `disabled`, `fingerprint`, and `pair_co
 Acceptance: a fake host sends `rejected` with `auth` and with `expired` to a paired session. The loop attempts again with no call to `resume` and no new process. `revoked` and `disabled` still pause and do not retry. Cover this in `LanSessionTest`.
 
 ### 2.2 Let return, touch, and Reconnect clear that latch
-Status: not started
+Status: complete
 
 `enterForeground`, `noteActivity`, and `restartTransient` must clear a pause that item 2.1 would not have kept, then start an attempt. Explicit `disconnect()`, `revoked`, `disabled`, and a pin failure stay stopped. Reconnect must not clear pairing or Room.
 
