@@ -5,7 +5,7 @@ package computing.michell.monitor.connection
    Size note: exceeds the 1000 line preference. The socket, pin rules, and
    reconnect loop are one session. Wi-Fi registration lives in WifiLanWatch.
    A physical connection is a context inside that session, not a second service.
-   Reviewed 2026-11-11.
+   Reviewed 2026-11-12.
 
    The socket is javax.net.ssl.SSLSocket. There is no cleartext open and no
    HTTP client. The TCP socket is created with no proxy: the emulator SOCKS
@@ -1049,7 +1049,11 @@ class LanSession(
     lastActivityMs = now
     if (releaseRecoverableLatch()) return
     if (link != null || !mayReconnect()) return
-    if (now - lastAttemptMs < ActivityRetryGapMs) return
+    // A parked loss is not a retry in flight. The ten-second gap must not leave
+    // this touch in a receive the callback will not signal again.
+    val parkedForLoss = nextRetryAtMs < 0L && lossHint()
+    if (!parkedForLoss && now - lastAttemptMs < ActivityRetryGapMs) return
+    if (parkedForLoss) sampleLanRoute()
     connectNow = true
     wakes.trySend(Unit)
     if (loop?.isActive != true) startLoop()
@@ -1148,12 +1152,14 @@ class LanSession(
   /**
    * Confirmed Wi-Fi loss. A hint for the banner, not a latch. A touch, the in-use
    * retry, and a failed attempt still open the saved endpoint. This does not close
-   * a live socket, and it does not wake the loop: a wake is a connect signal.
+   * a live socket. The wake is not a connect signal: the loop samples, and a real
+   * absence still waits. It must not sit in a receive the callback already left.
    */
   fun onWifiLost() {
     if (lanRoute != null) lanRouteRequired = true
     lanRoute = null
     lanAvailable = false
+    wakes.trySend(Unit)
   }
 
   /** A loss of some other network, including a stale callback, leaves the current route. */
@@ -1263,14 +1269,18 @@ class LanSession(
         wakes.receive()
         continue
       }
-      // Confirmed loss is a hint. Park only when nothing is due to try. A touch sets
-      // connectNow. An in-use retry, including the 30 second step, still runs below.
-      // A monitoring demand is due to try even when the touch clock is idle.
-      if (!monitoringDemand && !lanAvailable && !connectNow && !leftForBackground && !replaceLink &&
-        (!waitBeforeConnect || appIdle())) {
+      // A loss hint is not a latch. Sample before parking: the callback that cleared
+      // the route may already have fired, and the radio may still be up. A due retry,
+      // a touch, a foreground return, and a monitoring demand must not sit in
+      // resumes.receive() or a wake that will not come again.
+      sampleLanRoute()
+      val demanded = monitoringDemand || connectNow || leftForBackground || replaceLink
+      val inUseRetryDue = !appIdle() && (waitBeforeConnect || attemptCount > 0)
+      if (!lanAvailable && !demanded && !inUseRetryDue && (!waitBeforeConnect || appIdle())) {
         publishCurrent(epoch, LinkPhase.Disconnected, WaitingForWifiBanner, "", "wifi")
         wakes.receive()
         if (stopped || epochCounter.get() != epoch) return
+        sampleLanRoute()
         continue
       }
       if (connectNow || leftForBackground || replaceLink) {
@@ -1298,9 +1308,19 @@ class LanSession(
         nextRetryAtMs = -1L
         if (stopped || epochCounter.get() != epoch) return
         if (woke) {
-          policy.resetBackoff()
-          waitBeforeConnect = false
-          continue
+          if (connectNow || leftForBackground || replaceLink || monitoringDemand || lanAvailable) {
+            policy.resetBackoff()
+            waitBeforeConnect = false
+            continue
+          }
+          // A loss hint's wake is not a callback still to come. Do not drop the
+          // retry this backoff was counting and then park on wakes.receive().
+          sampleLanRoute()
+          if (lanAvailable || connectNow || monitoringDemand) {
+            policy.resetBackoff()
+            waitBeforeConnect = false
+            continue
+          }
         }
         if (retriesParked()) continue
       }
@@ -1366,8 +1386,18 @@ class LanSession(
     if (next == monitoringDemand) return
     monitoringDemand = next
     if (!next) return
+    if (mayReconnect()) sampleLanRoute()
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
+  }
+
+  /** The watch has reported a loss, or a required bind is gone. Not a pause. */
+  private fun lossHint(): Boolean = !lanAvailable || (lanRouteRequired && lanRoute == null)
+
+  /** Re-read the radio. A loss hint is stale once this sample lists Wi-Fi. */
+  private fun sampleLanRoute() {
+    if (!lossHint()) return
+    refreshLanRoute?.invoke()
   }
 
   @OptIn(ExperimentalCoroutinesApi::class)

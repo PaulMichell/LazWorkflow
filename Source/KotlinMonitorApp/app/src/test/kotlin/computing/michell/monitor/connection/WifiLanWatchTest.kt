@@ -10,20 +10,49 @@ class WifiLanWatchTest {
   @Test
   fun onLostWhileWifiPresentDoesNotCallOnDown() {
     var down = 0
+    var still = 0
     var scheduled: (() -> Unit)? = null
     val gate = WifiLossGate(
       onUp = {},
       onDown = { down += 1 },
       onAbsent = {},
       wifiPresent = { true },
-      confirmLater = { scheduled = it }
+      confirmLater = { scheduled = it },
+      onStillPresent = { still += 1 }
     )
     gate.activate()
     val network = "wlan0"
     gate.onAvailable(network)
     gate.onLost(network)
     assertEquals(0, down)
+    assertEquals(1, still)
     assertNull(scheduled)
+  }
+
+  @Test
+  fun confirmThatStillListsWifiDoesNotCallOnDown() {
+    var down = 0
+    var still = 0
+    var present = false
+    var scheduled: (() -> Unit)? = null
+    val gate = WifiLossGate(
+      onUp = {},
+      onDown = { down += 1 },
+      onAbsent = {},
+      wifiPresent = { present },
+      confirmLater = { scheduled = it },
+      onStillPresent = { still += 1 }
+    )
+    gate.activate()
+    val network = "wlan0"
+    gate.onAvailable(network)
+    gate.onLost(network)
+    assertEquals(0, down)
+    assertEquals(0, still)
+    present = true
+    scheduled!!()
+    assertEquals(0, down)
+    assertEquals(1, still)
   }
 
   @Test

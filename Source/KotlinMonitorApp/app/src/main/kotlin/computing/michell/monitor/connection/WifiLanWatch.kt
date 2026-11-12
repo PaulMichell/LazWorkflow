@@ -106,7 +106,8 @@ internal class WifiLossGate(
   private val onDown: (Any) -> Unit,
   private val onAbsent: () -> Unit,
   private val wifiPresent: () -> Boolean,
-  private val confirmLater: (() -> Unit) -> Unit
+  private val confirmLater: (() -> Unit) -> Unit,
+  private val onStillPresent: () -> Unit = {}
 ) {
   private val tracked = HashSet<Any>()
   private val generation = AtomicInteger(0)
@@ -140,6 +141,7 @@ internal class WifiLossGate(
     // Another network, or allNetworks still listing Wi-Fi, is not a loss.
     if (!empty || wifiPresent()) {
       generation.incrementAndGet()
+      if (empty && wifiPresent()) onStillPresent()
       return
     }
     confirmAbsent(network)
@@ -152,7 +154,10 @@ internal class WifiLossGate(
     confirmLater {
       if (!active || stamp != generation.get()) return@confirmLater
       if (synchronized(tracked) { tracked.isNotEmpty() }) return@confirmLater
-      if (wifiPresent()) return@confirmLater
+      if (wifiPresent()) {
+        onStillPresent()
+        return@confirmLater
+      }
       if (lost == null) onAbsent() else onDown(lost)
     }
   }
@@ -174,10 +179,16 @@ class WifiLanWatch(
   private var registered = false
   private val gate = WifiLossGate(
     onUp = { network -> if (network is LanRoute) onRoute(network) },
-    onDown = { network -> if (network is LanRoute) onRouteLost(network) },
+    onDown = { network ->
+      if (network is LanRoute) {
+        routes.forget(network.identity)
+        onRouteLost(network)
+      }
+    },
     onAbsent = onAbsent,
     wifiPresent = { val connectivity = manager; connectivity != null && wifiPresent(connectivity) },
-    confirmLater = confirmLater
+    confirmLater = confirmLater,
+    onStillPresent = { reportStillPresent() }
   )
   private val callback = object : ConnectivityManager.NetworkCallback() {
     override fun onAvailable(network: Network) {
@@ -195,10 +206,23 @@ class WifiLanWatch(
       // that no longer exists, and every retry failed the same way.
       val selected = manager?.let { currentWifiRoute(it) }
       val step = callbackLoss(identity, selected)
-      if (step.forget != null) routes.forget(step.forget)
+      if (step.selected != null) {
+        if (step.forget != null) routes.forget(step.forget)
+        gate.onLost(LanRoute(identity))
+        onRoute(step.selected)
+        return
+      }
+      // This sample saw no Wi-Fi. Keep the bind until the confirm sample. A loss
+      // that still lists Wi-Fi must not clear the route the next retry binds.
       gate.onLost(LanRoute(identity))
-      if (step.selected != null) onRoute(step.selected)
     }
+  }
+
+  /** The confirm sample still lists Wi-Fi. Remember that bind and tell the session. */
+  private fun reportStillPresent() {
+    val connectivity = manager ?: return
+    val selected = currentWifiRoute(connectivity) ?: return
+    onRoute(selected)
   }
 
   /**

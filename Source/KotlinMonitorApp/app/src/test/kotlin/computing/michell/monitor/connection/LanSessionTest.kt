@@ -616,6 +616,135 @@ class LanSessionTest {
   }
 
   @Test
+  fun lossWhileTheSecondSampleListsWifiBindsOnTheNextAttempt() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = routeSession(store, opens, seen) { count ->
+      if (count == 1) throw ConnectException("Connection refused")
+      ScriptedLink()
+    }
+    session.refreshLanRoute = { session.onWifiRoute(LanRoute("desk")) }
+    try {
+      session.onWifiRoute(LanRoute("desk"))
+      session.onWifiLost()
+      session.connect("10.0.0.8", 56122)
+      waitUntil(3_000) { opens.get() >= 1 }
+      assertEquals(LanRoute("desk"), seen.get())
+      assertEquals(LanRoute("desk"), session.currentLanRoute())
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun confirmedAbsenceStillWaits() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = routeSession(store, opens, seen) { ScriptedLink() }
+    session.refreshLanRoute = { }
+    try {
+      session.onWifiRoute(LanRoute("desk"))
+      session.onWifiLost()
+      session.connect("10.0.0.8", 56122)
+      waitUntil { session.status.value.banner == WaitingForWifiBanner }
+      Thread.sleep(800)
+      assertEquals(0, opens.get())
+      assertNull(session.currentLanRoute())
+      assertFalse(session.reconnectPaused)
+      assertEquals(WaitingForWifiBanner, session.status.value.banner)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aLossHintMustNotSwallowTheInUseRetry() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = routeSession(store, opens, seen) { count ->
+      if (count == 1) throw ConnectException("Connection refused")
+      ScriptedLink()
+    }
+    var restore = true
+    session.refreshLanRoute = { if (restore) session.onWifiRoute(LanRoute("desk")) }
+    try {
+      session.onWifiRoute(LanRoute("desk"))
+      session.connect("10.0.0.8", 56122)
+      waitUntil { opens.get() == 1 }
+      restore = false
+      session.onWifiLost()
+      Thread.sleep(100)
+      // Already in the foreground: this wake is not a return, and the activity gap
+      // blocks the touch. It must not park the retry that was already due.
+      session.enterForeground()
+      Thread.sleep(200)
+      assertEquals(1, opens.get())
+      assertFalse(session.reconnectPaused)
+      restore = true
+      waitUntil(4_000) { opens.get() >= 2 }
+      assertEquals(LanRoute("desk"), seen.get())
+      assertEquals(LanRoute("desk"), session.currentLanRoute())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun touchAfterAbsenceSamplesAgain() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = routeSession(store, opens, seen) { ScriptedLink() }
+    var restore = false
+    session.refreshLanRoute = { if (restore) session.onWifiRoute(LanRoute("desk")) }
+    try {
+      session.onWifiRoute(LanRoute("desk"))
+      session.onWifiLost()
+      session.connect("10.0.0.8", 56122)
+      waitUntil { session.status.value.banner == WaitingForWifiBanner }
+      Thread.sleep(200)
+      assertEquals(0, opens.get())
+      assertFalse(session.reconnectPaused)
+      restore = true
+      val started = System.currentTimeMillis()
+      session.noteActivity()
+      waitUntil { opens.get() >= 1 }
+      assertTrue(System.currentTimeMillis() - started < 1_000)
+      assertEquals(LanRoute("desk"), seen.get())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun monitoringDemandAfterAbsenceSamplesAgain() {
+    val store = pairedStore()
+    val opens = AtomicInteger(0)
+    val seen = AtomicReference<LanRoute?>(null)
+    val session = routeSession(store, opens, seen) { ScriptedLink() }
+    var restore = false
+    session.refreshLanRoute = { if (restore) session.onWifiRoute(LanRoute("desk")) }
+    try {
+      session.onWifiRoute(LanRoute("desk"))
+      session.onWifiLost()
+      session.connect("10.0.0.8", 56122)
+      waitUntil { session.status.value.banner == WaitingForWifiBanner }
+      assertEquals(0, opens.get())
+      restore = true
+      session.noteMonitoring(planRunning = true, turnRunning = false, screenHold = false, resynchronised = false)
+      waitUntil { opens.get() >= 1 }
+      assertEquals(LanRoute("desk"), seen.get())
+      assertFalse(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun screenReturnReconnectsAfterAStaleWifiLoss() {
     val store = pairedStore()
     val opens = AtomicInteger(0)
@@ -2314,6 +2443,23 @@ private fun assertTransientRejectRetries(reason: String, frame: ByteArray) {
   } finally {
     session.close()
   }
+}
+
+private fun routeSession(
+  store: HostStore,
+  opens: AtomicInteger,
+  seen: AtomicReference<LanRoute?>,
+  nextLink: (Int) -> TlsLink
+): LanSession {
+  return LanSession(store, object : TlsConnector {
+    override fun open(address: String, port: Int, fingerprint: String): TlsLink =
+      open(address, port, fingerprint, null)
+
+    override fun open(address: String, port: Int, fingerprint: String, route: LanRoute?): TlsLink {
+      seen.set(route)
+      return nextLink(opens.incrementAndGet())
+    }
+  })
 }
 
 private fun pairedStore(): HostStore {
