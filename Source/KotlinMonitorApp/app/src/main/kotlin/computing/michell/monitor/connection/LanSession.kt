@@ -850,6 +850,12 @@ class LanSession(
   private var nextRetryAtMs = -1L
   @Volatile
   private var openingNow = false
+  /** This session has started the socket that replaces the current one. */
+  @Volatile
+  private var holdingReplacement = false
+  /** Client id this session was replacing with. Empty when it did not open that socket. */
+  @Volatile
+  private var replacementClientId = ""
   @Volatile
   private var transitionReason = ""
   @Volatile
@@ -1018,6 +1024,7 @@ class LanSession(
       lanAvailable = true
       connectNow = true
       replaceLink = true
+      beginOwnReplacement()
       if (!policy.paused) policy.resetBackoff()
     }
     wakes.trySend(Unit)
@@ -1118,7 +1125,10 @@ class LanSession(
     lanAvailable = true
     if (previous == route) return
     connectNow = true
-    if (previous != null && link != null) replaceLink = true
+    if (previous != null && link != null) {
+      replaceLink = true
+      beginOwnReplacement()
+    }
     if (!policy.paused) policy.resetBackoff()
     wakes.trySend(Unit)
     if (mayReconnect() && loop?.isActive != true) startLoop()
@@ -1178,6 +1188,7 @@ class LanSession(
     monitoringDemand = false
     terminal = false
     terminalKind = ""
+    clearOwnReplacement()
     policy.pause()
     epochCounter.incrementAndGet()
     loop?.cancel()
@@ -1445,7 +1456,18 @@ class LanSession(
   }
 
   /** A successful open. The loop epoch is unchanged; this generation is new. */
+  private fun beginOwnReplacement() {
+    holdingReplacement = true
+    replacementClientId = store.load().clientId
+  }
+
+  private fun clearOwnReplacement() {
+    holdingReplacement = false
+    replacementClientId = ""
+  }
+
   private fun installConnection(opened: TlsLink): PhysicalConnection {
+    clearOwnReplacement()
     val generation = connectionCounter.incrementAndGet()
     val context = PhysicalConnection(generation, opened, clockMs(), clock.nanoTime(), eventBudget)
     connection = context
@@ -1970,8 +1992,14 @@ class LanSession(
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
         if (bye?.reason == "replaced") {
-          noteReadEnd(epoch, ReadEnd.Rejected, context)
-          publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason, "replaced")
+          val saved = store.load().clientId
+          if (retriesReplacedBye(openingNow || replaceLink, holdingReplacement, saved, replacementClientId)) {
+            // This session opened the next socket. The desktop's replaced bye is our own takeover.
+            noteReadEnd(epoch, ReadEnd.PeerClosed, context)
+          } else {
+            noteReadEnd(epoch, ReadEnd.Rejected, context)
+            publishCurrent(epoch, LinkPhase.Paused, "Paired elsewhere", bye.reason, "replaced")
+          }
         } else if (bye?.reason == "reconnected") {
           // Same client took a new socket. Retry; do not treat it as paired elsewhere.
           noteReadEnd(epoch, ReadEnd.PeerClosed, context)
@@ -2259,6 +2287,21 @@ class LanSession(
 }
 
 private class QueuedCommand(val commandId: String, val epoch: Int, val bytes: ByteArray)
+
+/**
+ * A replaced bye is our own next socket when we are opening or holding it, or when
+ * the client id we started that replacement with is still the saved one.
+ * A different client, with no local reconnect, is not this.
+ */
+internal fun retriesReplacedBye(
+  openingNext: Boolean,
+  holdingReplacement: Boolean,
+  savedClientId: String,
+  replacementClientId: String
+): Boolean {
+  if (openingNext || holdingReplacement) return true
+  return replacementClientId.isNotEmpty() && replacementClientId == savedClientId
+}
 
 /** Revocation, disable, a bad pin, and a refused pair code need the user. */
 internal fun isUserActionReject(reason: String): Boolean {

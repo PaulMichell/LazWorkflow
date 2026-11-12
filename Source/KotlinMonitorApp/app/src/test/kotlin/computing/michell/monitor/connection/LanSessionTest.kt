@@ -2006,6 +2006,52 @@ class LanSessionTest {
   }
 
   @Test
+  fun replacedByeRetriesWhileThisSessionOpensTheNextSocket() {
+    val first = ScriptedLink()
+    val opens = AtomicInteger()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      val n = opens.incrementAndGet()
+      if (n == 1) first else ScriptedLink()
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { first.frames().isNotEmpty() && first.readEntries.get() > 0 }
+      // The reader is blocked in the first socket. Taking a new route holds the replacement.
+      session.onWifiRoute(LanRoute("wifi-a"))
+      session.onWifiRoute(LanRoute("wifi-b"))
+      first.push(frameOf(encodeBye("host-bye", "replaced")))
+      waitUntil(8_000) { opens.get() >= 2 }
+      assertFalse(session.reconnectPaused)
+      assertFalse(session.status.value.phase == LinkPhase.Paused)
+      assertFalse(session.status.value.banner == "Paired elsewhere")
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun replacedByeWithNoLocalReconnectStaysPairedElsewhere() {
+    val link = ScriptedLink()
+    val opens = AtomicInteger()
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      link
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      waitUntil { link.frames().isNotEmpty() }
+      link.push(frameOf(encodeBye("host-bye", "replaced")))
+      waitUntil(2_000) { link.closed && session.status.value.phase == LinkPhase.Paused }
+      Thread.sleep(1_500)
+      assertEquals("Paired elsewhere", session.status.value.banner)
+      assertEquals(1, opens.get())
+      assertTrue(session.reconnectPaused)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun disconnectAndRevocationIgnoreReturnTouchAndReconnect() {
     val actions = listOf<(LanSession) -> Unit>(
       { session -> session.enterForeground() },
