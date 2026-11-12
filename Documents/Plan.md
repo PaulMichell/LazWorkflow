@@ -129,7 +129,7 @@ Acceptance: a running block past 4096 bytes updates on the phone while a plan fe
 ## 7. Install and prove recovery on the phone
 
 ### 7.1 Build, install, and record recovery without a process kill
-Status: not started
+Status: in progress
 
 Build the `LazAssistantMonitor` package and the debug APK. Install that APK on the paired phone. Unit tests are not this item. The November 11 device soak stays in `Documents/Plan-20261111-131823.md` and is not repeated here.
 
@@ -142,3 +142,5 @@ Record these four cases on the device:
 - A revoked or disabled listener stays stopped. Reconnect does not bypass it.
 
 If a case still sticks, copy the incident ring from Settings into the plan note before changing code again. Do not mark this item complete from a host harness.
+
+Note: 2026-11-12. `LazAssistantMonitor` rebuilt cleanly and the debug APK is `Source/KotlinMonitorApp/app/build/outputs/apk/debug/app-debug.apk`. `adb devices -l` listed no phone after `adb start-server`. The APK was not installed. None of the device cases were recorded. This item stays in progress until a paired phone is attached.
