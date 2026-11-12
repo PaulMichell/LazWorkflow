@@ -111,7 +111,7 @@ Keep unchanged block bodies uncopied. A suffix stays an append. A full replace s
 Acceptance: a live turn that grows by more than one credit window during one pass still emits the remainder on the following tick. A status change during that pass is not delayed until the diff finishes. The IDE thread is not held for the whole diff. Cover the bound in the existing monitor mirror or bridge harness.
 
 ### 6.2 Catch up when commits trickle but the open turn is behind
-Status: not started
+Status: complete
 
 A committed batch is not proof the phone has the desktop head. Track the latest applied sequence for the open turn separately from "any commit". If that sequence is behind the announced head for the recovery budget, or no append or body for the open block has been applied in that budget while the desktop turn is still running, resume from the last durable cursor and show catching up.
 
