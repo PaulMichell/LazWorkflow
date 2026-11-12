@@ -74,21 +74,32 @@ fun blocksAutomaticRecovery(terminal: Boolean, kind: String): Boolean {
   return terminalKindOf(kind).isNotEmpty() || kind == "pin"
 }
 
+/** Revocation, disable, a pin mismatch, or a refused pair code. The user has to act. */
+fun isHardStop(kind: String): Boolean {
+  return kind == "revoked" || kind == "disabled" || kind == "pin" || kind == "fingerprint" || kind == "pair_code"
+}
+
+/** A saved pairing can try these again. They are not a reason to hide Reconnect. */
+fun isTransientTerminal(kind: String): Boolean {
+  return kind == "auth" || kind == "expired"
+}
+
 /**
  * A failed transient session can be opened again. Pairing and Room are not touched.
- * A live socket, a user disconnect, and a terminal failure are not this action.
+ * A live socket, a user disconnect, and a hard stop are not this action.
+ * A recoverable pause and an auth or expired flag are.
  */
 fun transientRestartAllowed(
   stopped: Boolean,
-  terminal: Boolean,
+  terminalKind: String,
   paused: Boolean,
   armed: Boolean,
   address: String,
   phase: LinkPhase
 ): Boolean {
-  if (stopped || terminal || paused || !armed) return false
-  if (address.isEmpty() || phase == LinkPhase.Live) return false
-  return true
+  if (stopped || !armed || address.isEmpty() || phase == LinkPhase.Live) return false
+  if (isHardStop(terminalKind)) return false
+  return paused || isTransientTerminal(terminalKind) || terminalKind.isEmpty()
 }
 
 /**

@@ -275,7 +275,7 @@ private fun MonitorShell(model: MonitorViewModel) {
           formatIncident(incident),
           transientRestartAllowed(
             incident.stopped,
-            incident.terminalKind.isNotEmpty(),
+            incident.terminalKind,
             incident.paused,
             incident.armed,
             address,

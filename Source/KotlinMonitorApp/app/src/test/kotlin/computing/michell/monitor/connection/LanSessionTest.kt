@@ -1990,6 +1990,35 @@ class LanSessionTest {
   }
 
   @Test
+  fun recoverablePauseRestartsOnReturnTouchAndReconnect() {
+    val frame = frameOf(
+      """{"v":3,"id":"host-later","type":"rejected","payload":{"reason":"later","host_version":1,"client_version":1}}"""
+    )
+    assertRecoverablePauseRetries(frame) { session -> session.enterForeground() }
+    assertRecoverablePauseRetries(frame) { session -> session.noteActivity() }
+    assertRecoverablePauseRetries(frame) { session -> assertTrue(session.restartTransient()) }
+    // An unpaired auth reject is the transient pause item 2.1 still keeps.
+    val unpaired = HostStore(MemoryStringMap())
+    unpaired.save(HostRecord("10.0.0.8", 56122, "ab".repeat(32), "", ""))
+    assertRecoverablePauseRetries(frameOf(encodeRejected("host-auth", "auth", 1, 1)), unpaired) { session ->
+      session.enterForeground()
+    }
+  }
+
+  @Test
+  fun disconnectAndRevocationIgnoreReturnTouchAndReconnect() {
+    val actions = listOf<(LanSession) -> Unit>(
+      { session -> session.enterForeground() },
+      { session -> session.noteActivity() },
+      { session -> assertFalse(session.restartTransient()) }
+    )
+    for (action in actions) {
+      assertStopIgnores(action, disconnect = true)
+      assertStopIgnores(action, disconnect = false)
+    }
+  }
+
+  @Test
   fun restartTransientRefusesPinAndRevocationWithoutClearingPairing() {
     val store = pairedStore()
     val opens = AtomicInteger(0)
@@ -2131,6 +2160,60 @@ private class RecordingConnector : TlsConnector {
   }
 
   fun fingerprints(): List<String> = synchronized(seen) { seen.toList() }
+}
+
+private fun assertRecoverablePauseRetries(
+  frame: ByteArray,
+  store: HostStore = pairedStore(),
+  action: (LanSession) -> Unit
+) {
+  val original = store.load()
+  val opens = AtomicInteger()
+  val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+  val session = LanSession(store, TlsConnector { _, _, _ ->
+    opens.incrementAndGet()
+    ScriptedLink().also { links.add(it) }
+  })
+  try {
+    session.connect(original.address, original.port)
+    waitUntil { links.isNotEmpty() && links[0].frames().isNotEmpty() }
+    links[0].push(frame)
+    waitUntil(2_000) { session.reconnectPaused }
+    assertEquals(1, opens.get())
+    action(session)
+    waitUntil(8_000) { opens.get() >= 2 }
+    assertEquals(original, store.load())
+  } finally {
+    session.close()
+  }
+}
+
+private fun assertStopIgnores(action: (LanSession) -> Unit, disconnect: Boolean) {
+  val store = pairedStore()
+  val original = store.load()
+  val opens = AtomicInteger()
+  val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+  val session = LanSession(store, TlsConnector { _, _, _ ->
+    opens.incrementAndGet()
+    ScriptedLink().also { links.add(it) }
+  })
+  try {
+    session.connect("10.0.0.8", 56122)
+    waitUntil { links.isNotEmpty() && links[0].frames().isNotEmpty() }
+    if (disconnect) {
+      session.disconnect()
+    } else {
+      links[0].push(frameOf(encodeRejected("host-revoked", "revoked", 1, 1)))
+      waitUntil(2_000) { session.reconnectPaused }
+    }
+    val seen = opens.get()
+    action(session)
+    Thread.sleep(1_500)
+    assertEquals(seen, opens.get())
+    assertEquals(original, store.load())
+  } finally {
+    session.close()
+  }
 }
 
 private fun assertTransientRejectRetries(reason: String, frame: ByteArray) {

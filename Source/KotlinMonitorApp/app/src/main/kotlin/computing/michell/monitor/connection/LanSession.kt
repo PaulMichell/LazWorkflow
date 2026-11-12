@@ -1012,6 +1012,7 @@ class LanSession(
     val returning = !inForeground
     inForeground = true
     leftForBackground = false
+    val released = releaseRecoverableLatch()
     if (returning) {
       // A screen-off Wi-Fi callback must not leave the open app waiting forever.
       lanAvailable = true
@@ -1020,9 +1021,10 @@ class LanSession(
       if (!policy.paused) policy.resetBackoff()
     }
     wakes.trySend(Unit)
-    if (mayReconnect() && loop?.isActive != true) startLoop()
+    if ((released || mayReconnect()) && loop?.isActive != true) startLoop()
     // Coming forward is use. An idle loop that stopped trying starts again now.
-    noteActivity()
+    // A latch released above has already started its attempt.
+    if (!released) noteActivity()
     return returning
   }
 
@@ -1034,6 +1036,7 @@ class LanSession(
   override fun noteActivity() {
     val now = clockMs()
     lastActivityMs = now
+    if (releaseRecoverableLatch()) return
     if (link != null || !mayReconnect()) return
     if (now - lastAttemptMs < ActivityRetryGapMs) return
     connectNow = true
@@ -1609,19 +1612,44 @@ class LanSession(
 
   /**
    * Restarts a failed transient session. Does not clear pairing, the session token, or Room.
-   * Pin, authentication, and revocation failures are not this action.
+   * A user disconnect, revocation, disable, and a pin failure are not this action.
+   * A recoverable pause and an auth or expired flag are.
    */
   fun restartTransient(): Boolean {
-    if (!transientRestartAllowed(stopped, terminal, policy.paused, armed, store.load().address, statusState.value.phase)) {
+    if (!transientRestartAllowed(stopped, terminalKind, policy.paused, armed, store.load().address, statusState.value.phase)) {
       return false
     }
-    lastActivityMs = clockMs()
+    if (!releaseRecoverableLatch()) {
+      lastActivityMs = clockMs()
+      connectNow = true
+      nextRetryAtMs = -1L
+      policy.resetBackoff()
+      wakes.trySend(Unit)
+      if (loop?.isActive != true) startLoop()
+    }
+    publishIncident("reconnect", true)
+    return true
+  }
+
+  /**
+   * A pause or auth/expired flag that is not a hard stop. Clears it and starts an attempt.
+   * Does not touch pairing or Room. A user disconnect and a hard stop stay stopped.
+   */
+  private fun releaseRecoverableLatch(): Boolean {
+    if (stopped || isHardStop(terminalKind)) return false
+    if (!policy.paused && !isTransientTerminal(terminalKind)) return false
+    if (isTransientTerminal(terminalKind)) {
+      terminal = false
+      terminalKind = ""
+    }
+    policy.resume()
     connectNow = true
+    lastActivityMs = clockMs()
     nextRetryAtMs = -1L
     policy.resetBackoff()
+    resumes.trySend(Unit)
     wakes.trySend(Unit)
     if (loop?.isActive != true) startLoop()
-    publishIncident("reconnect", true)
     return true
   }
 
