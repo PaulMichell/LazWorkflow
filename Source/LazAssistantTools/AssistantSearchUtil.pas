@@ -109,6 +109,25 @@ Begin
     EndLine := StartLine + EndLine - 1;
 End;
 
+{ SetExpression only stores the pattern. Compile raises ERegExpr now, not later in Exec. }
+Function CompileSearchExpression(Re: TRegExpr; Const Query: String): String;
+Begin
+  Result := '';
+  If Not Assigned(Re) Then
+    Begin
+      Result := 'Search text is unavailable.';
+      Exit;
+    End;
+  Try
+    Re.ModifierI := True;
+    Re.Expression := Query;
+    Re.Compile;
+  Except
+    On E: Exception Do
+      Result := 'Invalid regular expression: ' + E.Message;
+  End;
+End;
+
 Function SearchPatternError(Const Query: String; ExplicitRegex: Boolean): String;
 Var
   Re: TRegExpr;
@@ -118,13 +137,7 @@ Begin
     Exit;
   Re := TRegExpr.Create;
   Try
-    Try
-      Re.ModifierI := True;
-      Re.Expression := Query;
-    Except
-      On E: Exception Do
-        Result := 'Invalid regular expression: ' + E.Message;
-    End;
+    Result := CompileSearchExpression(Re, Query);
   Finally
     Re.Free;
   End;
@@ -151,17 +164,12 @@ Begin
   If UseRegex Or PatternLooksLikeRegex(Query) Then
     Begin
       Re := TRegExpr.Create;
-      Try
-        Re.ModifierI := True;
-        Re.Expression := Query;
-      Except
-        On E: Exception Do
-          Begin
-            ErrorText := 'Invalid regular expression: ' + E.Message;
-            FreeAndNil(Re);
-            Exit;
-          End;
-      End;
+      ErrorText := CompileSearchExpression(Re, Query);
+      If ErrorText <> '' Then
+        Begin
+          FreeAndNil(Re);
+          Exit;
+        End;
     End;
   Try
     LowerQuery := LowerCase(Query);
@@ -173,7 +181,15 @@ Begin
           Begin
             If Length(LineText) > MaxLineChars Then
               Continue;
-            Hit := Re.Exec(LineText);
+            Try
+              Hit := Re.Exec(LineText);
+            Except
+              On E: Exception Do
+                Begin
+                  ErrorText := 'Invalid regular expression: ' + E.Message;
+                  Exit;
+                End;
+            End;
           End
         Else
           Hit := Pos(LowerQuery, LowerCase(LineText)) > 0;

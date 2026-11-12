@@ -8,7 +8,7 @@ Program AssistantSearchUtilTest;
 {$ENDIF}
 
 Uses
-  SysUtils, AssistantSearchUtil;
+  Classes, SysUtils, AssistantSearchUtil;
 
 Var
   FailCount: Integer;
@@ -46,6 +46,36 @@ Begin
   Check('basename', FileMatchesSearchGlob('/tmp/ProjectManager.pas', 'ProjectManager.pas'));
 End;
 
+Procedure TestInvalidRegex;
+Var
+  Lines: TStringList;
+  Count: Integer;
+  Text, ErrorText: String;
+  Capped, Ok: Boolean;
+Begin
+  Check('leading star is invalid', Pos('Invalid regular expression:', SearchPatternError('**Note**|Note:', False)) = 1);
+  Check('plain text has no pattern error', SearchPatternError('Note header', False) = '');
+  Check('valid alternation compiles', SearchPatternError('Note|Header', False) = '');
+  Check('explicit invalid regex', Pos('Invalid regular expression:', SearchPatternError('**Note**', True)) = 1);
+  Lines := TStringList.Create;
+  Try
+    Lines.Add('Note header');
+    Count := 0;
+    Text := '';
+    Ok := MatchSearchLines('**Note**|Note:', 'Main.pas', Lines, False, False, 20, 512, Count, Text, Capped, ErrorText);
+    Check('invalid match is an error', (Not Ok) And (Pos('Invalid regular expression:', ErrorText) = 1) And (Count = 0));
+    Count := 0;
+    Text := '';
+    ErrorText := '';
+    Ok := MatchSearchLines('Note|Header', 'Main.pas', Lines, False, False, 20, 512, Count, Text, Capped, ErrorText);
+    Check('valid regex matches', Ok And (ErrorText = '') And (Count = 1) And (Pos('Main.pas:1:', Text) = 1));
+  Finally
+    Lines.Free;
+  End;
+  Ok := SearchTextMatches('**Note**|Note:', 'Main.pas', 'Note header', False, 20, Text, ErrorText);
+  Check('text search reports invalid regex', (Not Ok) And (Pos('Invalid regular expression:', ErrorText) = 1));
+End;
+
 Procedure TestReadRange;
 Var
   StartLine, EndLine: Integer;
@@ -81,6 +111,7 @@ Begin
   FailCount := 0;
   TestRegexDetect;
   TestGlob;
+  TestInvalidRegex;
   TestReadRange;
   If FailCount = 0 Then
     Begin
