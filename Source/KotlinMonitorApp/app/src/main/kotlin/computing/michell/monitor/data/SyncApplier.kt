@@ -55,6 +55,8 @@ sealed class SyncEffect {
     val requestId: String = "",
     val open: Boolean = false
   ) : SyncEffect()
+  /** The body is stored. The fetch slot is free before the board watch republishes. */
+  data class BlockApplied(val blockId: String, val complete: Boolean) : SyncEffect()
   data class PlanPiece(
     val path: String,
     val revision: String,
@@ -685,7 +687,7 @@ class SyncApplier(
       is FetchFinish.Again -> {
         mutableListOf<SyncEffect>(SyncEffect.FetchBlock(conversationId, frame.blockId, finished.offset, finished.prefixHash, finished.requestId))
       }
-      is FetchFinish.Applied -> mutableListOf()
+      is FetchFinish.Applied -> mutableListOf<SyncEffect>(SyncEffect.BlockApplied(frame.blockId, !finished.missingBody))
       FetchFinish.Ignore -> mutableListOf()
     }
     if (follow.consumeChanged()) effects += SyncEffect.OpenBehind(follow.openBehind)

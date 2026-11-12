@@ -1528,6 +1528,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           sendFetchGrants(screenFetch.setConnected(link.value.phase == computing.michell.monitor.connection.LinkPhase.Live))
         }
         is computing.michell.monitor.data.SyncEffect.FetchBlock -> acceptBlockFetch(effect)
+        is computing.michell.monitor.data.SyncEffect.BlockApplied -> {
+          sendFetchGrants(screenFetch.noteApplied(effect.blockId, effect.complete))
+        }
         is computing.michell.monitor.data.SyncEffect.PlanPiece -> acceptPlanPiece(effect)
         is computing.michell.monitor.data.SyncEffect.StateApplied -> {
           val next = if (effect.key == "approval") {
@@ -1557,13 +1560,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var shownPlanRevision = ""
 
   private fun acceptBlockFetch(effect: computing.michell.monitor.data.SyncEffect.FetchBlock) {
-    if (screenFetch.isFlying(effect.blockId)) {
-      sendBlockGet(effect)
-      return
-    }
-    sendFetchGrants(screenFetch.offerRepair(computing.michell.monitor.data.BlockFetch(
+    val grants = screenFetch.offerRepair(computing.michell.monitor.data.BlockFetch(
       effect.conversationId, effect.blockId, effect.offset, effect.prefixHash, effect.requestId
-    ), effect.open))
+    ), effect.open)
+    // The same request already owns the slot. A new revision comes back as a grant.
+    if (grants.isEmpty() && screenFetch.isFlying(effect.blockId)) return
+    sendFetchGrants(grants)
   }
 
   private fun sendFetchGrants(grants: List<computing.michell.monitor.data.FetchGrant>) {

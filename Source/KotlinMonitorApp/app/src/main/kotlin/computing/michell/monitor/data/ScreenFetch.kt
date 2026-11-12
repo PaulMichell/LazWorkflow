@@ -2,9 +2,10 @@ package computing.michell.monitor.data
 
 /* Which bodies to ask for, and no others (c) 2026 Michell Computing.
 
-   The open block goes first. A plan fetch may use the other slot. History
+   The running block owns one slot. A plan fetch may use the other. History
    fills only what is on screen, plus one turn of prefetch, and only when a
-   slot remains. A stored hash that already matches is not asked for again. */
+   slot remains. A newer revision drops the previous flight and asks again.
+   An applied body frees the slot before the board watch republishes. */
 
 import computing.michell.monitor.protocol.WireTurn
 
@@ -38,6 +39,8 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
 
   private val owed = LinkedHashMap<String, OwedBlock>()
   private val inFlight = LinkedHashSet<String>()
+  /** Applied, and not yet cleared by a board that no longer marks the block deferred. */
+  private val applied = HashSet<String>()
   private val knownTurns = HashSet<Int>()
   private var visible = emptySet<Int>()
   private var planPath = ""
@@ -48,11 +51,18 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   private var planHeld = false
 
   fun offerRepair(fetch: BlockFetch, open: Boolean): List<FetchGrant> {
-    val row = OwedBlock(fetch, owed[fetch.blockId]?.turnIndex ?: -1, open || owed[fetch.blockId]?.open == true)
+    val previous = owed[fetch.blockId]
+    val revised = previous != null && fetch.requestId.isNotEmpty() && previous.fetch.requestId != fetch.requestId
+    if (revised) {
+      applied.remove(fetch.blockId)
+      inFlight.remove(fetch.blockId)
+    }
+    val row = OwedBlock(fetch, previous?.turnIndex ?: -1, open || previous?.open == true)
     owed[fetch.blockId] = row
     // Baselines may announce thousands of repairs before Room publishes their turn indices.
     // These cannot be granted yet; avoid scanning the growing board for each announcement.
-    if (!row.open && row.turnIndex !in wantedTurns()) return emptyList()
+    // A revision of a flight already granted must be asked again.
+    if (!revised && !row.open && row.turnIndex !in wantedTurns()) return emptyList()
     return release()
   }
 
@@ -67,7 +77,12 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
         turn.blocks.lastOrNull { it.running }?.blockId ?: turn.blocks.lastOrNull()?.blockId
       } else null
       for (block in turn.blocks) {
-        if (!block.deferred || block.blockId.isEmpty()) continue
+        if (block.blockId.isEmpty()) continue
+        if (block.blockId in applied) {
+          if (!block.deferred) applied.remove(block.blockId)
+          continue
+        }
+        if (!block.deferred) continue
         still += block.blockId
         val previous = owed[block.blockId]
         val fetch = previous?.fetch?.takeIf { row -> row.conversationId.isNotEmpty() }
@@ -122,6 +137,20 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
     return release()
   }
 
+  /**
+   * The fetch completed. The slot is free even if the board still shows the block deferred.
+   * A complete body is not asked for again until the board clears that mark, or a new revision arrives.
+   */
+  fun noteApplied(blockId: String, complete: Boolean): List<FetchGrant> {
+    if (blockId.isEmpty()) return emptyList()
+    inFlight.remove(blockId)
+    if (complete) {
+      applied += blockId
+      owed.remove(blockId)
+    }
+    return release()
+  }
+
   fun notePlanDropped() {
     planFlying = false
     inFlight.remove(planKey())
@@ -130,10 +159,18 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   private fun planKey(): String = "plan:" + planPath
 
   private fun release(): List<FetchGrant> {
-    if (!connected || free() == 0) return emptyList()
+    if (!connected) return emptyList()
     val grants = ArrayList<FetchGrant>()
     val open = owed.values.firstOrNull { row -> row.open && row.fetch.blockId !in inFlight }
-    if (open != null && free() > 0) grants += take(open)
+    if (open != null) {
+      makeRoomForOpen()
+      if (free() > 0) grants += take(open)
+    }
+    if (planWanted && !planFlying && free() == 0 && openWaiting().not()) {
+      val history = inFlight.firstOrNull { key -> !key.startsWith("plan:") && owed[key]?.open != true }
+      if (history != null) inFlight.remove(history)
+    }
+    if (free() == 0) return grants
     if (planWanted && !planFlying && free() > 0 && openWaiting().not()) {
       planFlying = true
       inFlight += planKey()
@@ -159,6 +196,15 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   private fun take(row: OwedBlock): FetchGrant.Block {
     inFlight += row.fetch.blockId
     return FetchGrant.Block(row.fetch, row.open)
+  }
+
+  /** History yields first. The plan yields only if it is sitting in the running block's slot. */
+  private fun makeRoomForOpen() {
+    if (free() > 0) return
+    val history = inFlight.firstOrNull { key -> !key.startsWith("plan:") && owed[key]?.open != true }
+    val victim = history ?: inFlight.firstOrNull { key -> key.startsWith("plan:") } ?: return
+    inFlight.remove(victim)
+    if (victim == planKey()) planFlying = false
   }
 
   private fun free(): Int = (FetchCap - inFlight.size).coerceAtLeast(0)
