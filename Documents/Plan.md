@@ -102,7 +102,7 @@ Acceptance: force a drop, kill the process, relaunch, and read the previous post
 ## 6. Follow a running turn while the chip says Busy
 
 ### 6.1 Do not let one observation freeze the live pump
-Status: not started
+Status: complete
 
 `PumpMirror` must not drop the next observation because `FPumping` is still set, and it must not hold the IDE thread across a multi-megabyte diff. Bound the work of one pass. A pass that cannot emit the whole delta must leave a cursor and run again on the next tick. Push a status change even when the turn diff is still in progress, so a finished turn can leave Busy without waiting for the rest of the encode.
 
