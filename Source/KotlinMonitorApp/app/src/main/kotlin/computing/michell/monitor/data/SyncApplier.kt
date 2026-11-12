@@ -12,7 +12,11 @@ import androidx.room3.withWriteTransaction
 import computing.michell.monitor.protocol.EmptyPrefixHash
 import computing.michell.monitor.protocol.MonitorEvent
 import computing.michell.monitor.protocol.SyncFrame
+import computing.michell.monitor.protocol.flagField
+import computing.michell.monitor.protocol.jsonObject
+import computing.michell.monitor.protocol.longField
 import computing.michell.monitor.protocol.prefixHash
+import computing.michell.monitor.protocol.textField
 import computing.michell.monitor.protocol.utf8Length
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.coroutineContext
@@ -35,6 +39,7 @@ const val SyncApplyRetries = 3
  * No committed cursor or baseline for this long replaces the socket.
  * The gap policy waits 1s, 2s, 4s and 8s, which is the same 15s.
  * Apply failures use [SyncApplyRetries] instead. A ping does not reset either budget.
+ * A commit of an older event does not reset the open-turn clock. That clock is the announced head.
  */
 const val SyncRecoveryBudgetMs = 15_000L
 
@@ -61,6 +66,8 @@ sealed class SyncEffect {
   data class Ack(val conversationId: String, val streamId: String, val seq: Long) : SyncEffect()
   data class StateApplied(val key: String, val valueJson: String) : SyncEffect()
   data class Note(val text: String) : SyncEffect()
+  /** The open block is behind the announced head. The chip says Catching up, not Busy. */
+  data class OpenBehind(val behind: Boolean) : SyncEffect()
   data object CacheReady : SyncEffect()
 }
 
@@ -311,6 +318,8 @@ class SyncApplier(
   private val fetches = HashMap<String, java.util.TreeMap<Int, String>>()
   private val fetchRevision = HashMap<String, Long>()
   private val committed = HashMap<String, AppliedCursor>()
+  /** Open-turn sequence versus the announced head. Not reset by an older commit or a ping. */
+  private val follow = OpenTurnFollow()
   /** Physical connection currently allowed to apply. Zero means none. */
   private var generation = 0
   /** Dispatcher of the last tick. Tests check that the flush job is not Main. */
@@ -361,7 +370,9 @@ class SyncApplier(
     refuseMainDispatcher()
     val now = nowMs()
     val flushed = if (pending.isNotEmpty() && now - openedMs >= SyncBatchWindowMs) flush() else emptyList()
-    deliver(flushed + acks.tick(now) + resume.tick(now) + baselineRecovery(now))
+    val decision = follow.consider(now)
+    val recovery = if (decision.recover) openTurnRecovery(now) else emptyList()
+    deliver(flushed + acks.tick(now) + resume.tick(now) + baselineRecovery(now) + recovery + behindEffect(decision.changed))
   }
 
   /** State, baseline, and block fetch. None of these is a content event. */
@@ -426,12 +437,21 @@ class SyncApplier(
       resume.noteApplied(applied.conversationId, applied.seq)
       acks.note(applied, now)?.let { effects += it }
     }
-    if (result.applied.isNotEmpty()) noteDurableProgress(now)
+    if (result.applied.isNotEmpty()) {
+      noteDurableProgress(now)
+      val through = HashMap<String, Long>()
+      for (applied in result.applied) through[applied.conversationId] = applied.seq
+      for (event in batch) {
+        val seq = through[event.conversationId] ?: continue
+        if (event.seq <= seq) follow.noteApplied(event, now)
+      }
+    }
     for (fetch in result.fetches) {
       effects += SyncEffect.FetchBlock(fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId, true)
     }
     for (gap in result.gaps) resume.onGap(gap, now)?.let { effects += it }
     if (result.applied.isNotEmpty()) effects += SyncEffect.CacheReady
+    if (follow.consumeChanged()) effects += SyncEffect.OpenBehind(follow.openBehind)
     return effects
   }
 
@@ -472,9 +492,24 @@ class SyncApplier(
     fetchRevision.clear()
     resume.reset()
     acks.reset()
+    follow.suppressUntil(nowMs())
   }
 
-  /** A committed cursor or baseline restarts the stall clock. A ping does not. */
+  /** Resume from the durable cursor when the open turn has been behind the announced head for the budget. */
+  private suspend fun openTurnRecovery(now: Long): List<SyncEffect> {
+    val recovered = recover(follow.conversationId, follow.streamId)
+    follow.suppressUntil(now)
+    val effects = recovered.toMutableList()
+    if (follow.markBehind()) effects += SyncEffect.OpenBehind(true)
+    return effects
+  }
+
+  private fun behindEffect(changed: Boolean): List<SyncEffect> {
+    if (!changed) return emptyList()
+    return listOf(SyncEffect.OpenBehind(follow.openBehind))
+  }
+
+  /** A committed cursor or baseline restarts the baseline clock. A ping does not. An older event does not restart the open-turn clock. */
   private fun noteDurableProgress(now: Long) {
     onCommitted()
     if (!baseline.isOpen) {
@@ -600,17 +635,30 @@ class SyncApplier(
   }
 
   private suspend fun applyState(key: String, valueJson: String): List<SyncEffect> {
+    val now = nowMs()
+    when (key) {
+      "head" -> follow.noteHeadJson(valueJson, now)
+      "status" -> follow.noteStatusJson(valueJson, now)
+    }
     try {
-      store.saveState(hostId, key, valueJson, nowMs())
+      store.saveState(hostId, key, valueJson, now)
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
-      if (key != "approval") return emptyList()
+      if (key != "approval") return behindOnly()
     }
-    return listOf(SyncEffect.StateApplied(key, valueJson), SyncEffect.CacheReady)
+    val effects = mutableListOf<SyncEffect>(SyncEffect.StateApplied(key, valueJson), SyncEffect.CacheReady)
+    if (follow.consumeChanged()) effects += SyncEffect.OpenBehind(follow.openBehind)
+    return effects
+  }
+
+  private fun behindOnly(): List<SyncEffect> {
+    if (!follow.consumeChanged()) return emptyList()
+    return listOf(SyncEffect.OpenBehind(follow.openBehind))
   }
 
   private suspend fun applyBlockData(frame: SyncFrame.BlockData): List<SyncEffect> {
+    follow.noteBodyPiece(frame.blockId, nowMs())
     val key = frame.ref.ifEmpty { frame.blockId }
     val pieces = fetches.getOrPut(key) { java.util.TreeMap() }
     if (frame.hasRevision) {
@@ -632,13 +680,16 @@ class SyncApplier(
       return emptyList()
     }
     fetches.remove(key)
-    return when (finished) {
+    if (finished is FetchFinish.Applied) follow.noteBodyApplied(frame.blockId, nowMs())
+    val effects = when (finished) {
       is FetchFinish.Again -> {
-        listOf(SyncEffect.FetchBlock(conversationId, frame.blockId, finished.offset, finished.prefixHash, finished.requestId))
+        mutableListOf<SyncEffect>(SyncEffect.FetchBlock(conversationId, frame.blockId, finished.offset, finished.prefixHash, finished.requestId))
       }
-      is FetchFinish.Applied -> emptyList()
-      FetchFinish.Ignore -> emptyList()
+      is FetchFinish.Applied -> mutableListOf()
+      FetchFinish.Ignore -> mutableListOf()
     }
+    if (follow.consumeChanged()) effects += SyncEffect.OpenBehind(follow.openBehind)
+    return effects
   }
 
   private fun deliver(effects: List<SyncEffect>): List<SyncEffect> {
@@ -646,6 +697,194 @@ class SyncApplier(
     return effects
   }
 }
+
+/**
+ * The open turn's applied sequence, separate from any commit.
+ * A ping is not an input. An older event does not restart either clock.
+ * Body pieces for the open block are the gap closing; they are not a reconnect.
+ */
+private class OpenTurnFollow {
+  var conversationId = ""
+  var streamId = ""
+  var openBehind = false
+    private set
+
+  private var announcedHead = -1L
+  private var announcedOpenBlock = ""
+  private var turnRunning = false
+  private var openTurnId = ""
+  private val openBlocks = HashSet<String>()
+  private var openTurnAppliedSeq = -1L
+  private var bodyOwed = false
+  private var lastBodyMs = -1L
+  private var bodyWaitSince = -1L
+  private var seqBehindSince = -1L
+  private var changed = false
+
+  fun noteHeadJson(valueJson: String, now: Long): Boolean {
+    val value = jsonObject(valueJson) ?: return false
+    val seq = value.longField("seq") ?: return false
+    value.textField("conversation_id")?.let { if (it.isNotEmpty()) conversationId = it }
+    value.textField("stream_id")?.let { if (it.isNotEmpty()) streamId = it }
+    value.textField("open_block")?.let { if (it.isNotEmpty()) announcedOpenBlock = it }
+    value.flagField("running")?.let { turnRunning = it }
+    if (seq > announcedHead) announcedHead = seq
+    arm(now)
+    return refresh()
+  }
+
+  fun noteStatusJson(valueJson: String, now: Long): Boolean {
+    val value = jsonObject(valueJson) ?: return false
+    val busy = value.flagField("busy")
+    val sending = value.flagField("sending")
+    if (busy == null && sending == null) return false
+    turnRunning = busy == true || sending == true
+    if (!turnRunning) {
+      bodyOwed = false
+      bodyWaitSince = -1L
+    }
+    arm(now)
+    return refresh()
+  }
+
+  fun noteApplied(event: MonitorEvent, now: Long): Boolean {
+    if (event.conversationId.isNotEmpty()) conversationId = event.conversationId
+    if (event.streamId.isNotEmpty()) streamId = event.streamId
+    val openProgress = noteOpen(event, now)
+    if (openProgress || !turnRunning) {
+      if (event.seq > openTurnAppliedSeq) openTurnAppliedSeq = event.seq
+      seqBehindSince = -1L
+      arm(now)
+    }
+    return refresh()
+  }
+
+  fun noteBodyPiece(blockId: String, now: Long): Boolean {
+    if (!isOpenBlock(blockId)) return false
+    noteBody(now)
+    return refresh()
+  }
+
+  fun noteBodyApplied(blockId: String, now: Long): Boolean {
+    if (!isOpenBlock(blockId)) return false
+    noteBody(now)
+    return refresh()
+  }
+
+  fun consider(now: Long): FollowDecision {
+    arm(now)
+    val recover = seqStale(now) || bodyStale(now)
+    return FollowDecision(recover, refresh())
+  }
+
+  fun consumeChanged(): Boolean {
+    val was = changed
+    changed = false
+    return was
+  }
+
+  fun markBehind(): Boolean {
+    if (openBehind) return false
+    openBehind = true
+    changed = true
+    return true
+  }
+
+  /** The new socket gets a full budget. The announced head stays, so the chip can stay on Catching up. */
+  fun suppressUntil(now: Long) {
+    seqBehindSince = if (seqBehind()) now else -1L
+    bodyWaitSince = if (lastBodyMs < 0L && bodyCondition()) now else -1L
+    if (lastBodyMs >= 0L && now - lastBodyMs >= SyncRecoveryBudgetMs) lastBodyMs = now
+  }
+
+  private fun noteOpen(event: MonitorEvent, now: Long): Boolean {
+    return when (event) {
+      is MonitorEvent.TurnOpen -> {
+        openTurnId = event.turnId
+        openBlocks.clear()
+        bodyOwed = false
+        true
+      }
+      is MonitorEvent.TurnClose -> {
+        if (event.turnId != openTurnId || openTurnId.isEmpty()) return false
+        openTurnId = ""
+        openBlocks.clear()
+        true
+      }
+      is MonitorEvent.BlockOpen -> {
+        if (openTurnId.isNotEmpty() && event.turnId != openTurnId) return false
+        if (openTurnId.isEmpty()) openTurnId = event.turnId
+        openBlocks.add(event.blockId)
+        true
+      }
+      is MonitorEvent.BlockAppend -> {
+        if (!isOpenBlock(event.blockId)) return false
+        noteBody(now)
+        true
+      }
+      is MonitorEvent.BlockReplace -> {
+        if (!isOpenBlock(event.blockId)) return false
+        if (event.deferred) bodyOwed = true else noteBody(now)
+        true
+      }
+      is MonitorEvent.BlockClose -> isOpenBlock(event.blockId)
+      is MonitorEvent.ImageAdded -> event.turnId.isNotEmpty() && event.turnId == openTurnId
+      else -> false
+    }
+  }
+
+  private fun noteBody(now: Long) {
+    lastBodyMs = now
+    bodyOwed = false
+    bodyWaitSince = -1L
+  }
+
+  private fun isOpenBlock(blockId: String): Boolean {
+    if (blockId.isEmpty()) return false
+    return blockId == announcedOpenBlock || blockId in openBlocks
+  }
+
+  private fun openBlockKnown(): Boolean = announcedOpenBlock.isNotEmpty() || openBlocks.isNotEmpty()
+
+  private fun seqBehind(): Boolean = announcedHead > 0L && openTurnAppliedSeq < announcedHead
+
+  private fun bodyCondition(): Boolean = turnRunning && openBlockKnown() && (bodyOwed || seqBehind())
+
+  private fun bodyRecent(now: Long): Boolean = lastBodyMs >= 0L && now - lastBodyMs < SyncRecoveryBudgetMs
+
+  private fun arm(now: Long) {
+    if (seqBehind()) {
+      if (seqBehindSince < 0L) seqBehindSince = now
+    } else {
+      seqBehindSince = -1L
+    }
+    if (lastBodyMs < 0L && bodyCondition()) {
+      if (bodyWaitSince < 0L) bodyWaitSince = now
+    } else if (!bodyCondition()) {
+      bodyWaitSince = -1L
+    }
+  }
+
+  private fun seqStale(now: Long): Boolean {
+    return seqBehind() && seqBehindSince >= 0L && now - seqBehindSince >= SyncRecoveryBudgetMs && !bodyRecent(now)
+  }
+
+  private fun bodyStale(now: Long): Boolean {
+    if (!bodyCondition() || bodyRecent(now)) return false
+    if (lastBodyMs >= 0L) return now - lastBodyMs >= SyncRecoveryBudgetMs
+    return bodyWaitSince >= 0L && now - bodyWaitSince >= SyncRecoveryBudgetMs
+  }
+
+  private fun refresh(): Boolean {
+    val behind = seqBehind()
+    if (behind == openBehind) return false
+    openBehind = behind
+    changed = true
+    return true
+  }
+}
+
+private data class FollowDecision(val recover: Boolean, val changed: Boolean)
 
 fun estimatedEventBytes(event: MonitorEvent): Int {
   val text = when (event) {

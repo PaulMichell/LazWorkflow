@@ -199,6 +199,8 @@ data class MonitorUi(
   val undeliveredPrompt: String = "",
   val reviewingOffline: Boolean = false,
   val statusBusy: Boolean = false,
+  /** The applied open turn is behind the desktop head. The chip says Catching up, not Busy. */
+  val openBehind: Boolean = false,
   val pairedElsewhere: Boolean = false,
   /** The link is down but will come back. Send is held until it does. */
   val sendWhileOffline: Boolean = false,
@@ -1543,6 +1545,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           if (effect.key == "status" || effect.key == "plan") publishMonitoring(resynchronised = true)
         }
         is computing.michell.monitor.data.SyncEffect.Note -> uiState.value = coordinator.noteSyncNote(effect.text)
+        is computing.michell.monitor.data.SyncEffect.OpenBehind -> uiState.value = coordinator.noteOpenBehind(effect.behind)
         computing.michell.monitor.data.SyncEffect.CacheReady -> uiState.value = coordinator.noteCacheReadable()
       }
     }

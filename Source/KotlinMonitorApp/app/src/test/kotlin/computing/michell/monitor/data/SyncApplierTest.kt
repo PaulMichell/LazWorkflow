@@ -331,6 +331,130 @@ class SyncApplierTest {
     assertEquals(SyncEffect.Resume("c1", "stream-a", 4L, true), recovered.first { it is SyncEffect.Resume })
   }
 
+  @Test
+  fun olderCommitsDoNotResetTheOpenTurnClock() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 2L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    val announced = applier.offerFrame(head(20), 1)
+    assertTrue(announced.contains(SyncEffect.OpenBehind(true)))
+    applier.offer(title(3))
+    clock.now = 50L
+    val committed = applier.tick()
+    assertTrue(committed.any { it == SyncEffect.CacheReady })
+    assertTrue(committed.none { it == SyncEffect.Reconnect })
+    clock.now = SyncRecoveryBudgetMs - 1
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = SyncRecoveryBudgetMs
+    val recovered = applier.tick()
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 3L, true), recovered.first { it is SyncEffect.Resume })
+    assertEquals(3L, store.seq("c1"))
+  }
+
+  @Test
+  fun aTransferClosingTheGapIsNotReconnected() = runBlocking {
+    val store = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(head(40), 1)
+    applier.offer(turnOpen(1))
+    applier.offer(blockOpen(2))
+    var seq = 3L
+    clock.now = 50L
+    applier.offer(append(seq))
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    repeat(2) {
+      clock.now += SyncRecoveryBudgetMs - 1
+      assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+      seq += 1
+      applier.offer(append(seq))
+      clock.now += 50L
+      assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    }
+  }
+
+  @Test
+  fun noOpenBlockBodyForTheBudgetResumesFromTheDurableCursor() = runBlocking {
+    val store = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(head(10), 1)
+    applier.offer(turnOpen(1))
+    applier.offer(blockOpen(2))
+    clock.now = 50L
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = SyncRecoveryBudgetMs
+    val recovered = applier.tick()
+    assertTrue(recovered.contains(SyncEffect.Reconnect))
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 2L, true), recovered.first { it is SyncEffect.Resume })
+  }
+
+  @Test
+  fun openBlockBodyPiecesCloseTheGapWithoutAReconnect() = runBlocking {
+    val store = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(head(10), 1)
+    applier.offer(turnOpen(1))
+    applier.offer(blockOpen(2))
+    clock.now = 50L
+    applier.tick()
+    clock.now = SyncRecoveryBudgetMs - 1
+    applier.offerFrame(SyncFrame.BlockData("c1", "b-open", "ref", 1L, true, 0, "hel", 6, false), 1)
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = SyncRecoveryBudgetMs + 50L
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+  }
+
+  @Test
+  fun aFinishedStatusClearsTheRunningStallWhileAnOlderBodyFetchIsOpen() = runBlocking {
+    val store = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(head(3), 1)
+    applier.offer(turnOpen(1))
+    applier.offer(blockOpen(2))
+    applier.offer(append(3))
+    clock.now = 50L
+    val caught = applier.tick()
+    assertTrue(caught.contains(SyncEffect.OpenBehind(false)))
+    applier.offerFrame(SyncFrame.BlockData("c1", "older", "old-ref", 1L, true, 0, "xx", 4, false), 1)
+    val finished = applier.offerFrame(SyncFrame.State("status", """{"busy":false,"sending":false}"""), 1)
+    assertTrue(finished.any { it is SyncEffect.StateApplied && it.key == "status" && it.valueJson.contains("\"busy\":false") })
+    clock.now = 50L + SyncRecoveryBudgetMs
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+  }
+
+  private fun head(seq: Long, running: Boolean = true, block: String = "b-open"): SyncFrame.State {
+    return SyncFrame.State(
+      "head",
+      """{"seq":$seq,"conversation_id":"c1","stream_id":"stream-a","open_block":"$block","running":$running}"""
+    )
+  }
+
+  private fun turnOpen(seq: Long): MonitorEvent.TurnOpen {
+    return MonitorEvent.TurnOpen("c1", "stream-a", seq, "t1", 1, "Build", "go", "2026-10-29T09:20:00Z")
+  }
+
+  private fun blockOpen(seq: Long): MonitorEvent.BlockOpen {
+    return MonitorEvent.BlockOpen("c1", "stream-a", seq, "t1", "b-open", 0, "answer", "")
+  }
+
+  private fun append(seq: Long): MonitorEvent.BlockAppend {
+    return MonitorEvent.BlockAppend("c1", "stream-a", seq, "b-open", 0, "x")
+  }
+
+  private fun title(seq: Long): MonitorEvent.TitleChanged {
+    return MonitorEvent.TitleChanged("c1", "stream-a", seq, "Older")
+  }
+
   private fun baselineBegin(conversationId: String, streamId: String): SyncFrame.SnapshotBegin {
     return SyncFrame.SnapshotBegin(
       conversationId, streamId, 1L, "Title", "/work", 0,

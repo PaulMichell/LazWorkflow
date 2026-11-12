@@ -1,9 +1,11 @@
 package computing.michell.monitor.ui
 
 /* One connection chip. The label follows the link phase, whether that link will
-   reconnect, and busy. A catch-up flag, a paired-elsewhere flag, and a chrome
-   banner are not inputs. A parked wait still uses the banner the link itself
-   published, so idle-until-touch and a confirmed Wi-Fi loss stay Offline.
+   reconnect, busy, and whether the open block is behind the announced head.
+   A paired-elsewhere flag and a chrome banner are not inputs. A body fetch is
+   not an input: a finished status clears Busy even while an older fetch runs.
+   A parked wait still uses the banner the link itself published, so
+   idle-until-touch and a confirmed Wi-Fi loss stay Offline.
    (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.connection.BackgroundBanner
@@ -18,6 +20,7 @@ const val ChipLive = "Live"
 const val ChipSyncing = "Syncing"
 const val ChipOffline = "Offline"
 const val ChipBusy = "Busy"
+const val ChipCatchingUp = "Catching up"
 const val ChipReconnecting = "Reconnecting"
 const val ChipConnecting = "Connecting"
 const val PairedElsewhereLabel = "Paired elsewhere"
@@ -37,9 +40,11 @@ fun linkSyncing(
 }
 
 /**
- * Live or Busy when the socket is up. Reconnecting or Connecting while an in-use
- * retry will come back. Offline otherwise. `banner` is the link status text, not
- * a chrome note: it only keeps a parked wait from printing Reconnecting.
+ * Live or Busy when the socket is up and the open block matches the announced head.
+ * A stale open block says Catching up, then Busy or Live once it matches.
+ * Busy is the status frame, not an in-flight body fetch. Reconnecting or Connecting
+ * while an in-use retry will come back. Offline otherwise. `banner` is the link
+ * status text, not a chrome note: it only keeps a parked wait from printing Reconnecting.
  */
 fun connectionChip(
   phase: LinkPhase,
@@ -47,9 +52,13 @@ fun connectionChip(
   busy: Boolean,
   lastSyncMs: Long = 0L,
   zone: ZoneId = ZoneId.systemDefault(),
-  banner: String = ""
+  banner: String = "",
+  openBehind: Boolean = false
 ): ConnectionChip {
-  if (phase == LinkPhase.Live) return ConnectionChip(if (busy) ChipBusy else ChipLive)
+  if (phase == LinkPhase.Live) {
+    if (openBehind) return ConnectionChip(ChipCatchingUp)
+    return ConnectionChip(if (busy) ChipBusy else ChipLive)
+  }
   if (inUseRetry(phase, reconnectable, banner)) {
     val label = if (phase == LinkPhase.Connecting) ChipConnecting else ChipReconnecting
     return ConnectionChip(label)

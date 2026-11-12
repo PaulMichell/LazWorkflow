@@ -427,7 +427,8 @@ fun ActivityStatus(
     ui.reconnectable,
     ui.statusBusy,
     ui.lastSyncMs,
-    banner = ui.linkBanner
+    banner = ui.linkBanner,
+    openBehind = ui.openBehind
   )
   val connectionText = statusConnectionLabel(chip.label, ui.banner)
   // The link is plain on the left. Notices are toasts, not a second chip.

@@ -186,6 +186,11 @@ Type
     FProjectRoot: String;
     FTitle: String;
     FCommittedCursor: Int64;
+    { Last head published on the state lane. Not cleared by an older log commit. }
+    FAnnouncedHead: Int64;
+    FAnnouncedOpenBlock: String;
+    FAnnouncedTurnRunning: Boolean;
+    FAnnouncedHeadValid: Boolean;
     FMirror: TMonitorMirror;
     FPlanFetch: TMonitorPlanFetch;
     FObserved: TMonitorSnapshot;
@@ -368,6 +373,8 @@ Type
     Procedure NoteCommandDone(Const Id: String; Const DoneText: String = '');
     { WriterBuilt skips the value parse. Pass True only for an AssistantMonitorSync state writer. }
     Procedure PublishState(Const Key, ValueJson: String; WriterBuilt: Boolean = False);
+    { State-lane head. A full log credit window must not hide it. Identical values are not queued again. }
+    Procedure AnnounceLogHead;
     Procedure SetApprovalCloseHandler(Handler: TMonitorApprovalCloseHandler);
     Procedure SetIdleHandler(Handler: TMonitorIdleHandler);
     /// Records a pending or display id. Does not send a frame.
@@ -662,6 +669,10 @@ Begin
   FProjectRoot := '';
   FTitle := '';
   FCommittedCursor := 0;
+  FAnnouncedHead := -1;
+  FAnnouncedOpenBlock := '';
+  FAnnouncedTurnRunning := False;
+  FAnnouncedHeadValid := False;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
   FHostFlags.PlanAgentRunning := False;
@@ -2531,6 +2542,10 @@ Begin
     FProjectRoot := ProjectRoot;
     FTitle := Title;
     FCommittedCursor := 0;
+    FAnnouncedHead := -1;
+    FAnnouncedOpenBlock := '';
+    FAnnouncedTurnRunning := False;
+    FAnnouncedHeadValid := False;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
     NoteFillChanged;
   Finally
@@ -2595,6 +2610,48 @@ Begin
   Finally
     UnlockSession;
   End;
+End;
+
+Procedure TMonitorSession.AnnounceLogHead;
+Var
+  Head: Int64;
+  OpenBlockId, Json: String;
+  TurnRunning, Changed: Boolean;
+  Blocks: TAssistantMonitorBlockArray;
+  Index: Integer;
+Begin
+  If (Not Assigned(FMirror)) Or (Not Assigned(FOutbox)) Then
+    Exit;
+  Head := FMirror.Head;
+  If Head < 0 Then
+    Exit;
+  OpenBlockId := '';
+  Json := '';
+  SetLength(Blocks, 0);
+  If CopyLiveBlocks(Blocks) Then
+    Begin
+      For Index := 0 To High(Blocks) Do
+        If Blocks[Index].Running And (Blocks[Index].BlockId <> '') Then
+          OpenBlockId := Blocks[Index].BlockId;
+      If (OpenBlockId = '') And (Length(Blocks) > 0) Then
+        OpenBlockId := Blocks[High(Blocks)].BlockId;
+    End;
+  LockSession;
+  Try
+    TurnRunning := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+    Changed := (Not FAnnouncedHeadValid) Or (Head <> FAnnouncedHead) Or (OpenBlockId <> FAnnouncedOpenBlock) Or
+      (TurnRunning <> FAnnouncedTurnRunning);
+    If Not Changed Then
+      Exit;
+    FAnnouncedHead := Head;
+    FAnnouncedOpenBlock := OpenBlockId;
+    FAnnouncedTurnRunning := TurnRunning;
+    FAnnouncedHeadValid := True;
+    Json := MonitorLogHeadValueJson(Head, FConversationId, FEpoch, OpenBlockId, TurnRunning);
+  Finally
+    UnlockSession;
+  End;
+  PublishState('head', Json, True);
 End;
 
 Function TMonitorSession.LogAcked: Int64;

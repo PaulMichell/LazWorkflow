@@ -27,6 +27,27 @@ class ConnectionChipTest {
   }
 
   @Test
+  fun aStaleOpenBlockShowsCatchingUpInsteadOfBusy() {
+    val stale = connectionChip(LinkPhase.Live, true, true, openBehind = true)
+    assertEquals(ChipCatchingUp, stale.label)
+    val matched = connectionChip(LinkPhase.Live, true, true, openBehind = false)
+    assertEquals(ChipBusy, matched.label)
+    val caughtIdle = connectionChip(LinkPhase.Live, true, false, openBehind = false)
+    assertEquals(ChipLive, caughtIdle.label)
+    val stillBehind = connectionChip(LinkPhase.Live, true, false, openBehind = true)
+    assertEquals(ChipCatchingUp, stillBehind.label)
+  }
+
+  @Test
+  fun aFinishedTurnClearsBusyWhileAnOlderBodyFetchIsRunning() {
+    // A body fetch is not an input. Status busy=false is Live once the open block matches.
+    val finished = connectionChip(LinkPhase.Live, true, false, openBehind = false)
+    assertEquals(ChipLive, finished.label)
+    val stillRunning = connectionChip(LinkPhase.Live, true, true, openBehind = false)
+    assertEquals(ChipBusy, stillRunning.label)
+  }
+
+  @Test
   fun aLiveCatchUpDoesNotPrintTheLogCursor() {
     val chip = connectionChip(LinkPhase.Live, false, false, lastSyncMs = 413L)
     assertEquals(ChipLive, chip.label)

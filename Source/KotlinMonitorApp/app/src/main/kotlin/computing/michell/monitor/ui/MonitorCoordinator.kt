@@ -355,6 +355,13 @@ class MonitorCoordinator(
     published()
   }
 
+  /** The open block is behind the announced head, or has caught it. Does not change Busy. */
+  fun noteOpenBehind(behind: Boolean): MonitorUi = synchronized(gate) {
+    if (local.openBehind == behind) return published()
+    local = local.copy(openBehind = behind)
+    published()
+  }
+
   fun noteCacheReadable(): MonitorUi = synchronized(gate) {
     local = local.copy(catchingUp = false, reviewingOffline = false)
     published()

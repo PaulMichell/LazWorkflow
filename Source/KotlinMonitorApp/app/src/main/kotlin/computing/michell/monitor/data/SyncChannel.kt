@@ -374,6 +374,7 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
         )
       )
     }
+    "head" -> ui.copy(syncHead = value.longField("seq") ?: ui.syncHead)
     "session" -> ui.copy(view = ui.view.copy(
       model = value.textField("model") ?: ui.view.model,
       backend = value.textField("backend") ?: ui.view.backend,

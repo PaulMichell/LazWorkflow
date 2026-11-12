@@ -544,8 +544,6 @@ Var
   Epoch: String;
   Cursor: Int64;
 Begin
-  If Not Assigned(ProjectAssistantConversation) Then
-    Exit;
   LockBridge;
   Try
     Session := FSession;
@@ -553,6 +551,10 @@ Begin
     UnlockBridge;
   End;
   If Not Assigned(Session) Then
+    Exit;
+  { The state lane carries the log head even when the credit window is full of older events. }
+  Session.AnnounceLogHead;
+  If Not Assigned(ProjectAssistantConversation) Then
     Exit;
   Epoch := Session.MirrorEpoch;
   If Epoch = '' Then

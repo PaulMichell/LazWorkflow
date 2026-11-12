@@ -91,6 +91,8 @@ Function MonitorConversationValueJson(Const ConversationId: String): String;
 Function MonitorStatusValueJson(Const View: TAssistantMonitorView): String;
 /// Status for a resume. The phase, status text, start time and error are empty.
 Function MonitorResumeStatusValueJson(Const Status: TMonitorSyncStatus): String;
+/// Desktop log head. The phone compares this with the open turn it has applied. Not a content commit.
+Function MonitorLogHeadValueJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId: String; TurnRunning: Boolean): String;
 Function MonitorApprovalValueJson(Active: Boolean; Const ToolId: String): String;
 Function MonitorSessionValueJson(Const View: TAssistantMonitorView): String;
 Function MonitorModeValueJson(Const View: TAssistantMonitorView): String;
@@ -576,6 +578,12 @@ Begin
     MonitorBoolean(Status.PlanRunning) + ',"phase":"","status_text":"","can_send":' + MonitorBoolean(Status.CanSend) + ',"can_steer":' +
     MonitorBoolean(Status.CanSteer) + ',"can_stop":' + MonitorBoolean(Status.CanStop) + ',"can_change_mode":' + MonitorBoolean(Status.CanChangeMode) +
     ',"started_at":"","error_text":""}';
+End;
+
+Function MonitorLogHeadValueJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId: String; TurnRunning: Boolean): String;
+Begin
+  Result := '{"seq":' + IntToStr(Head) + ',"conversation_id":' + Quoted(ConversationId) + ',"stream_id":' + Quoted(StreamId) +
+    ',"open_block":' + Quoted(OpenBlockId) + ',"running":' + MonitorBoolean(TurnRunning) + '}';
 End;
 
 Function MonitorApprovalValueJson(Active: Boolean; Const ToolId: String): String;
