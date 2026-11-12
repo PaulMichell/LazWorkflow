@@ -129,7 +129,7 @@ Acceptance: a running block past 4096 bytes updates on the phone while a plan fe
 ## 7. Install and prove recovery on the phone
 
 ### 7.1 Build, install, and record recovery without a process kill
-Status: in progress
+Status: complete
 
 Build the `LazAssistantMonitor` package and the debug APK. Install that APK on the paired phone. Unit tests are not this item. The November 11 device soak stays in `Documents/Plan-20261111-131823.md` and is not repeated here.
 
