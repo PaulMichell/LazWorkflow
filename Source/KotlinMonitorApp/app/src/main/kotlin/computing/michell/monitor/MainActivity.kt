@@ -69,7 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.formatIncident
+
 import computing.michell.monitor.connection.transientRestartAllowed
 import computing.michell.monitor.ui.ActivityStatus
 import computing.michell.monitor.ui.AppMenu
@@ -174,6 +174,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   val permissionRequest by model.dictationPermissionRequest.collectAsState()
   val link by model.link.collectAsState()
   val incident by model.incident.collectAsState()
+  val incidentRing by model.incidentRingText.collectAsState()
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
   val port by model.pairPort.collectAsState()
@@ -272,7 +273,7 @@ private fun MonitorShell(model: MonitorViewModel) {
           model::showCachedList,
           model::closeSettings,
           link.failureReason,
-          formatIncident(incident),
+          incidentRing,
           transientRestartAllowed(
             incident.stopped,
             incident.terminalKind,
@@ -283,7 +284,7 @@ private fun MonitorShell(model: MonitorViewModel) {
           ),
           model::restartTransient,
           {
-            val text = model.exportIncident()
+            val text = model.copyDiagnostics()
             val clipboard = context.getSystemService(ClipboardManager::class.java)
             clipboard?.setPrimaryClip(ClipData.newPlainText("Monitor diagnostics", text))
             Toast.makeText(context, "Diagnostics copied", Toast.LENGTH_SHORT).show()

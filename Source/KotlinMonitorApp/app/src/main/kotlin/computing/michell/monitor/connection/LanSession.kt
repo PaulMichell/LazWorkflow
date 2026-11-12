@@ -815,6 +815,8 @@ class LanSession(
   internal var resumeQueued: (() -> Boolean)? = null
   /** Re-samples the current Wi-Fi bind. The view model sets this. Tests may too. */
   internal var refreshLanRoute: (() -> Unit)? = null
+  /** Persists a posture change. The view model writes app files. Tests may too. */
+  internal var recordIncident: ((IncidentSnapshot, List<String>) -> Unit)? = null
   @Volatile
   private var writeStartedNanos = 0L
   private val applierReady = Channel<Unit>(Channel.CONFLATED)
@@ -1777,9 +1779,11 @@ class LanSession(
   }
 
   fun exportIncident(): String {
-    val text = redactDiagnostic(formatIncident(captureIncident("export")), secretValues())
+    val snapshot = captureIncident("export")
+    val text = redactDiagnostic(formatIncident(snapshot), secretValues())
     diagnostic(text)
-    incidentState.value = captureIncident("export")
+    incidentState.value = snapshot
+    recordIncident?.invoke(snapshot, secretValues())
     return text
   }
 
@@ -2393,10 +2397,13 @@ class LanSession(
 
   private fun publishIncident(transition: String, log: Boolean) {
     if (transition.isNotEmpty()) transitionReason = transition
-    val previous = incidentState.value.posture
+    val previous = incidentState.value
     val snapshot = captureIncident(transitionReason)
     incidentState.value = snapshot
-    if (log || snapshot.posture != previous) trace(formatIncident(snapshot))
+    if (log || snapshot.posture != previous.posture) trace(formatIncident(snapshot))
+    val changed = previous.phase != snapshot.phase || previous.posture != snapshot.posture ||
+      previous.failureReason != snapshot.failureReason
+    if (changed) recordIncident?.invoke(snapshot, secretValues())
   }
 }
 

@@ -2,12 +2,21 @@ package computing.michell.monitor.connection
 
 /* Compact connection incident. One capture names the posture (c) 2026 Michell Computing.
 
-   The text never includes a session token, pairing code, authentication MAC,
-   or prompt. Callers still pass those values to [redactDiagnostic] so a reason
-   that echoed one cannot leak it. */
+   The last posture changes are a short ring in app files, so a restart can
+   still show them. The text never includes a session token, pairing code,
+   authentication MAC, or prompt. Callers still pass those values to
+   [redactDiagnostic] so a reason that echoed one cannot leak it. */
+
+import java.io.File
 
 /** Matches the recovery budget. Heartbeats inside this window are not a stall. */
 const val HeartbeatWithoutProgressMs = 15_000L
+
+/** How many posture changes survive a process restart. */
+const val IncidentRingLimit = 20
+
+/** App-files name. Not logcat, and not the in-memory snapshot alone. */
+const val IncidentRingFileName = "incident-ring.txt"
 
 const val PostureIdle = "intentionally idle"
 const val PostureAwaitingUser = "awaiting user action"
@@ -24,7 +33,7 @@ private val ProgressBanners = setOf(
   IdleOfflineBanner
 )
 
-private val SecretLabel = Regex("(?i)(sessionToken|pairCode|authMac|hmac)=\\S+|pairing code[=:]\\s*\\S+|prompt[=:][^\\n]*")
+private val SecretLabel = Regex("(?i)(sessionToken|pairCode|authMac|hmac)=\\S+|pairing code[=:]\\s*\\S+|prompt[=:][^\\n|]*")
 
 data class IncidentSnapshot(
   val loopGeneration: Int = 0,
@@ -166,6 +175,98 @@ fun formatIncident(snapshot: IncidentSnapshot): String {
 }
 
 fun ageText(ageMs: Long): String = if (ageMs < 0L) "none" else ageMs.toString()
+
+/**
+ * One stored posture change. Fields are separated so a failure with spaces
+ * still round-trips. Secrets are not fields; [redactDiagnostic] strips any that leak.
+ */
+fun formatIncidentRecord(snapshot: IncidentSnapshot): String {
+  return listOf(
+    "posture" to snapshot.posture,
+    "phase" to snapshot.phase,
+    "reason" to snapshot.transitionReason.ifEmpty { "none" },
+    "failure" to snapshot.failureReason.ifEmpty { "none" },
+    "loop" to snapshot.loopGeneration.toString(),
+    "socket" to snapshot.socketGeneration.toString(),
+    "network" to snapshot.networkIdentity.ifEmpty { "none" },
+    "paused" to snapshot.paused.toString(),
+    "terminal" to snapshot.terminalKind.ifEmpty { "none" },
+    "demand" to snapshot.monitoringDemand.toString()
+  ).joinToString(" | ") { (name, value) -> "$name=${incidentField(value)}" }
+}
+
+private fun incidentField(value: String): String = value.replace("|", "/").replace("\n", " ").replace("\r", " ")
+
+fun recordField(line: String, name: String): String {
+  val prefix = "$name="
+  val found = line.split(" | ").firstOrNull { it.startsWith(prefix) } ?: return ""
+  return found.removePrefix(prefix)
+}
+
+/** Phase, posture, and failure as stored. A repeat of those three is not another ring entry. */
+fun incidentIdentity(line: String): String {
+  return "${recordField(line, "phase")}\u0000${recordField(line, "posture")}\u0000${recordField(line, "failure")}"
+}
+
+data class IncidentRing(val lines: List<String> = emptyList(), val identity: String = "")
+
+fun appendIncident(ring: IncidentRing, snapshot: IncidentSnapshot, secrets: List<String> = emptyList()): IncidentRing {
+  val line = redactDiagnostic(formatIncidentRecord(snapshot), secrets)
+  val identity = incidentIdentity(line)
+  if (ring.lines.isNotEmpty() && ring.identity == identity) return ring
+  return IncidentRing((ring.lines + line).takeLast(IncidentRingLimit), identity)
+}
+
+fun formatIncidentRing(ring: IncidentRing): String = ring.lines.joinToString("\n")
+
+fun parseIncidentRing(text: String): IncidentRing {
+  val lines = text.lineSequence().map { it.trim() }.filter { it.startsWith("posture=") }.toList().takeLast(IncidentRingLimit)
+  val last = lines.lastOrNull() ?: return IncidentRing()
+  return IncidentRing(lines, incidentIdentity(last))
+}
+
+fun loadIncidentRing(file: File): IncidentRing {
+  if (!file.isFile) return IncidentRing()
+  return try {
+    parseIncidentRing(file.readText())
+  } catch (error: Exception) {
+    IncidentRing()
+  }
+}
+
+fun saveIncidentRing(file: File, ring: IncidentRing) {
+  val parent = file.parentFile
+  if (parent != null && !parent.isDirectory) parent.mkdirs()
+  val temporary = File(parent, "${file.name}.tmp")
+  temporary.writeText(formatIncidentRing(ring))
+  if (!temporary.renameTo(file)) {
+    file.writeText(formatIncidentRing(ring))
+    temporary.delete()
+  }
+}
+
+/** Remembers the ring and writes it. A failed write keeps the in-memory lines. */
+class IncidentRingFile(private val file: File) {
+  private val lock = Any()
+  private var ring = loadIncidentRing(file)
+
+  val text: String
+    get() = synchronized(lock) { formatIncidentRing(ring) }
+
+  fun record(snapshot: IncidentSnapshot, secrets: List<String>): String {
+    synchronized(lock) {
+      val next = appendIncident(ring, snapshot, secrets)
+      if (next.lines == ring.lines) return formatIncidentRing(ring)
+      ring = next
+      try {
+        saveIncidentRing(file, ring)
+      } catch (error: Exception) {
+        // The session must keep running if app files cannot be written.
+      }
+      return formatIncidentRing(ring)
+    }
+  }
+}
 
 /** Drops known secrets and any labelled token, code, MAC, or prompt that leaked into a reason. */
 fun redactDiagnostic(text: String, secrets: List<String> = emptyList()): String {

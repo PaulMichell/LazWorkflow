@@ -3,6 +3,7 @@ package computing.michell.monitor.connection
 /* One captured incident names the posture, and a queue admit is not a write (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.ui.settingsErrorText
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -105,6 +106,88 @@ class ConnectionDiagnosticTest {
     assertFalse(leaked.contains("send the secret"))
     assertTrue(formatIncident(snapshot).contains("terminal=none"))
     assertFalse(formatIncident(snapshot).contains("prompt"))
+  }
+
+  @Test
+  fun aStoredLineKeepsThePostureAndRedactsSecrets() {
+    val token = "session-token-value"
+    val code = "pairing-code"
+    val mac = "abcdef0123456789"
+    val snapshot = IncidentSnapshot(
+      loopGeneration = 2,
+      socketGeneration = 7,
+      phase = LinkPhase.Disconnected.name,
+      banner = ReconnectingBanner,
+      transitionReason = "retry",
+      failureReason = "closed $token $code hmac=$mac prompt=send the secret",
+      monitoringDemand = true,
+      networkIdentity = "wifi:12",
+      paused = false,
+      terminalKind = "",
+      armed = true,
+      reconnectable = true
+    )
+    val secrets = listOf(token, code, mac)
+    val ring = appendIncident(IncidentRing(), snapshot, secrets)
+    val line = ring.lines.single()
+    assertTrue(line, line.contains("posture=$PostureRetrying"))
+    assertTrue(line, line.contains("reason=retry"))
+    assertTrue(line, line.contains("network=wifi:12"))
+    assertTrue(line, line.contains("loop=2"))
+    assertTrue(line, line.contains("socket=7"))
+    assertTrue(line.contains("paused=false"))
+    assertTrue(line.contains("terminal=none"))
+    assertTrue(line.contains("demand=true"))
+    assertFalse(line.contains(token))
+    assertFalse(line.contains(code))
+    assertFalse(line.contains(mac))
+    assertFalse(line.contains("send the secret"))
+    val directory = Files.createTempDirectory("incident-ring")
+    try {
+      val file = directory.resolve(IncidentRingFileName).toFile()
+      IncidentRingFile(file).record(snapshot, secrets)
+      val reloaded = IncidentRingFile(file).text
+      assertTrue(reloaded.contains("posture=$PostureRetrying"))
+      assertTrue(reloaded.contains("reason=retry"))
+      assertTrue(reloaded.contains("network=wifi:12"))
+      assertFalse(reloaded.contains(token))
+      assertFalse(reloaded.contains(code))
+      assertFalse(reloaded.contains(mac))
+      assertFalse(reloaded.contains("send the secret"))
+      assertEquals(reloaded, IncidentRingFile(file).record(snapshot, secrets))
+    } finally {
+      directory.toFile().deleteRecursively()
+    }
+  }
+
+  @Test
+  fun theRingKeepsTheLastTwentyPostureChanges() {
+    var ring = IncidentRing()
+    for (index in 1..IncidentRingLimit + 3) {
+      ring = appendIncident(ring, IncidentSnapshot(
+        phase = LinkPhase.Disconnected.name,
+        banner = ReconnectingBanner,
+        transitionReason = "drop-$index",
+        failureReason = "closed-$index",
+        networkIdentity = "wifi:$index",
+        armed = true,
+        reconnectable = true
+      ))
+    }
+    assertEquals(IncidentRingLimit, ring.lines.size)
+    assertTrue(ring.lines.first().contains("reason=drop-4"))
+    assertTrue(ring.lines.last().contains("reason=drop-${IncidentRingLimit + 3}"))
+    assertTrue(ring.lines.last().contains("network=wifi:${IncidentRingLimit + 3}"))
+    val again = appendIncident(ring, IncidentSnapshot(
+      phase = LinkPhase.Disconnected.name,
+      banner = ReconnectingBanner,
+      transitionReason = "ignored",
+      failureReason = "closed-${IncidentRingLimit + 3}",
+      networkIdentity = "wifi:other",
+      armed = true,
+      reconnectable = true
+    ))
+    assertEquals(ring.lines, again.lines)
   }
 
   @Test

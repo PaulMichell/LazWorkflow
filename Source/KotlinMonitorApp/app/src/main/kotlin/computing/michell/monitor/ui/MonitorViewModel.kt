@@ -68,6 +68,8 @@ import computing.michell.monitor.MonitorHoldService
 import computing.michell.monitor.ScreenHold
 import computing.michell.monitor.connection.holdLinkAcrossScreenOff
 import computing.michell.monitor.connection.LanRouteBook
+import computing.michell.monitor.connection.IncidentRingFile
+import computing.michell.monitor.connection.IncidentRingFileName
 import computing.michell.monitor.connection.LanSession
 import computing.michell.monitor.connection.SslSocketConnector
 import computing.michell.monitor.connection.LinkPhase
@@ -774,6 +776,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val lanRoutes = LanRouteBook()
   private val session = LanSession(store, SslSocketConnector(lanRoutes), ledger = commandLedger,
     diagnostic = { android.util.Log.d("MonitorLink", it) })
+  private val incidentRing = IncidentRingFile(File(application.filesDir, IncidentRingFileName))
+  private val incidentRingState = MutableStateFlow(incidentRing.text)
+  val incidentRingText: StateFlow<String> = incidentRingState.asStateFlow()
   private val screenHold = ScreenHold(
     start = { MonitorHoldService.start(getApplication()) },
     stop = { MonitorHoldService.stop(getApplication()) }
@@ -883,6 +888,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val screenFetch = computing.michell.monitor.data.ScreenFetch(initiallyConnected = false)
 
   init {
+    session.recordIncident = { snapshot, secrets -> incidentRingState.value = incidentRing.record(snapshot, secrets) }
     session.refreshLanRoute = { lanWatch.refresh() }
     val record = store.load()
     pairAddress.value = record.address
@@ -1298,6 +1304,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun exportIncident(): String = session.exportIncident()
+
+  /** The ring Settings shows, including lines written before this process started. */
+  fun copyDiagnostics(): String {
+    exportIncident()
+    return incidentRingState.value
+  }
 
   fun closeSettings() {
     coordinator.setSettingsOpen(false)

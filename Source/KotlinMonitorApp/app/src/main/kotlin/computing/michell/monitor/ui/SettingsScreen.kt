@@ -127,6 +127,11 @@ fun SettingsScreen(
       HorizontalDivider()
       Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
       Text(
+        "Last posture changes. Kept on this phone after a restart.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+      Text(
         diagnosticText.ifEmpty { "No incident captured yet." },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
