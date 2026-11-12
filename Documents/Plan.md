@@ -120,7 +120,7 @@ Do not leave the chip on Busy for that stall. Busy means the desktop turn is run
 Acceptance: generate a running turn faster than the phone applies it. Within the recovery budget the phone either reaches that head or shows catching up and then the head, without a process restart. A transfer that is closing the gap is not reconnected. A finished turn clears Busy when its status frame arrives, even if an older body fetch is still running. Extend the sync applier test and `ConnectionChipTest`.
 
 ### 6.3 Keep the open block's body ahead of plan and history fetches
-Status: not started
+Status: complete
 
 The running block owns a fetch slot. A plan fetch and a history fetch must not take that slot. A newer revision releases the previous fetch and asks for the new body. `applyBlockData` returning Applied must release the slot even if the board watch has not yet republished the block. A resume retries the open body after it drops in-flight replies, instead of leaving the block deferred with no grant.
 
