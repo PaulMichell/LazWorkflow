@@ -80,7 +80,7 @@ Acceptance: report loss while the second sample still lists Wi-Fi. The next in-u
 ## 4. Replace a socket that is up but not syncing
 
 ### 4.1 A touch and the sync budget must drop a non-delivering socket
-Status: not started
+Status: complete
 
 `noteActivity` returns when `link != null`, so a touch cannot replace a socket that is open and not applying events. `onWifiLost` does not close that socket. `forceReconnect` is the applier's recovery, but only when it is reached and the phone does not then latch.
 
