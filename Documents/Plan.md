@@ -146,3 +146,16 @@ If a case still sticks, copy the incident ring from Settings into the plan note 
 Note: 2026-11-12. `LazAssistantMonitor` rebuilt cleanly and the debug APK is `Source/KotlinMonitorApp/app/build/outputs/apk/debug/app-debug.apk`. `adb devices -l` listed no phone after `adb start-server`. The APK was not installed. None of the device cases were recorded. This item stays in progress until a paired phone is attached.
 
 Note: 2026-11-12 03:12 UTC. Retried. `LazAssistantMonitor` rebuilt cleanly again (errors=0). `:app:assembleDebug --offline` was up to date; the debug APK is still `Source/KotlinMonitorApp/app/build/outputs/apk/debug/app-debug.apk`. `adb devices -l` was empty after `adb start-server`. `adb mdns services` and avahi listed no wireless-debugging service, including the saved host `adb-9459f79bdced-lmSVzj`. `lsusb` showed no Android device. One Wi-Fi neighbour answered ping and refused `adb` on port 5555; it was not identified as the paired phone. The APK was not installed. None of the device cases were recorded. This item stays in progress until a paired phone is attached.
+
+Note: 2026-11-12 03:22 UTC. The paired phone `9459f79bdced` (Xiaomi 2201116SG, `192.168.0.5`) appeared on USB. The debug APK installed with `adb install -r`. Process `9653` connected to the desktop listener on `192.168.0.7:56122`, retried an `expired` reject in the same process, and resumed the open conversation. No host harness was used.
+
+Recorded on that process:
+
+- Leave and return: Home, then the same activity brought forward. Pid stayed `9653`. Loop stayed `1`. Socket generation moved `2` to `3`, posture went `background` then `live`, and `ResumeOk` followed. The open conversation showed the new head. The UI dump had no route toast.
+- Wi-Fi bind drop, app left in the foreground: `svc wifi disable` then `enable`. Pid stayed `9653`. The old bind `33854` failed with `EPERM`, then the new network `145409523503117` opened socket generation `4` and posture became `live` with `ResumeOk`. The conversation head was current afterwards. No toast was in the hierarchy or in `logcat` for `Toast`/`EPERM`/`route`.
+- Running desktop turn: the chip stayed `Busy` while the turn was running, and the transcript kept the current head, including text written after the Wi-Fi recovery. It did not sit on a stale turn. `Catching up` was not shown because the head did not fall behind.
+
+Not recorded, so this item stays in progress:
+
+- Pings flowing while sync is withheld. The only heartbeat-without-progress line lasted under a second during the Wi-Fi reopen, then sync resumed. That is not the sustained withhold case.
+- A revoked or disabled listener. The live listener was left enabled so this session was not dropped. Reconnect-does-not-bypass was not exercised.
