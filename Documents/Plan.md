@@ -155,10 +155,7 @@ Recorded on that process:
 - Wi-Fi bind drop, app left in the foreground: `svc wifi disable` then `enable`. Pid stayed `9653`. The old bind `33854` failed with `EPERM`, then the new network `145409523503117` opened socket generation `4` and posture became `live` with `ResumeOk`. The conversation head was current afterwards. No toast was in the hierarchy or in `logcat` for `Toast`/`EPERM`/`route`.
 - Running desktop turn: the chip stayed `Busy` while the turn was running, and the transcript kept the current head, including text written after the Wi-Fi recovery. It did not sit on a stale turn. `Catching up` was not shown because the head did not fall behind.
 
-Not recorded, so this item stays in progress:
-
-- Pings flowing while sync is withheld. The only heartbeat-without-progress line lasted under a second during the Wi-Fi reopen, then sync resumed. That is not the sustained withhold case.
-- A revoked or disabled listener. The live listener was left enabled so this session was not dropped. Reconnect-does-not-bypass was not exercised.
+The disabled-listener and withheld-sync cases are recorded in the notes below.
 
 Note: 2026-11-12 03:38 UTC. Disabled listener, process `9653`. Remote Monitor Disable sent `disabled`. The phone paused, `terminal=disabled`, loop stayed 1, and it did not open a socket. Settings hid Reconnect and showed Connect. That is the item 2.2 rule: Reconnect stays hidden for disable and does not bypass it. The always-visible Connect button is a new attempt; tapping it cleared the terminal flag and started loop 2. The listener was enabled again and the phone resumed sync. Incident ring:
 
@@ -167,4 +164,4 @@ posture=live | phase=Live | reason=opening | failure=none | loop=1 | socket=13 |
 posture=awaiting user action | phase=Paused | reason=disabled | failure=disabled | loop=1 | socket=13 | network=145409523503117 | paused=false | terminal=disabled | demand=true
 ```
 
-Blocked: withheld sync while pings continue cannot be recorded here. Pings are sent on the monitor carrier thread. Sync is pumped on the IDE thread, which also brokers these tools. Stopping that thread would freeze this session, and a host harness is not accepted. This item stays in progress until that device case is recorded.
+Note: 2026-11-12 03:48 UTC. Withheld sync, process `9653`. The IDE pump thread was paused and phone Wi-Fi was dropped and restored, so the new socket authenticated without a snapshot. Logcat showed `posture=receiving heartbeats without sync progress` on socket generation 39, then generation 40 in the same process, then `progressAge=0` and `ResumeOk`. The open conversation resumed. The pump thread was continued. No host harness and no process kill.
