@@ -159,3 +159,11 @@ Not recorded, so this item stays in progress:
 
 - Pings flowing while sync is withheld. The only heartbeat-without-progress line lasted under a second during the Wi-Fi reopen, then sync resumed. That is not the sustained withhold case.
 - A revoked or disabled listener. The live listener was left enabled so this session was not dropped. Reconnect-does-not-bypass was not exercised.
+
+Blocked: 2026-11-12. These two cases cannot be recorded from the phone, and a host harness is not accepted.
+
+Withheld sync while pings continue is a desktop pump condition. The phone has no control that stops host sync and leaves heartbeats running. The listener is the running IDE, pid 44106, bound to `192.168.0.7:56122`.
+
+A revoked or disabled listener requires Disable or Revoke on the Remote Monitor form. That form is not open. The IDE menu bar is a 92-pixel strip, and there is no safe automated control for those actions. Disabling the live listener would also drop this session. Reconnect-does-not-bypass was not exercised.
+
+Do not mark this item complete until those two device cases are recorded.
