@@ -62,7 +62,7 @@ Acceptance: deliver `bye` `replaced` while this session is opening the next sock
 ## 3. Bind the desk LAN without a new process
 
 ### 3.1 Re-sample Wi-Fi before every open
-Status: not started
+Status: complete
 
 Call `refreshLanRoute` at the start of every `attempt`, including a touch-triggered retry while the app stays in the foreground. If the radio is up, remember that bind and set `lanAvailable`. If the saved bind is gone, do not open an unbound socket onto mobile data; sample again or wait for a confirmed absence. Do not publish `LanRouteUnavailable` as the banner, and do not toast it.
 
