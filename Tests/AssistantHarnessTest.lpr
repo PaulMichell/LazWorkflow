@@ -191,12 +191,12 @@ Begin
       (Pos('Inspect permits reads only', Prompt) > 0) And
       (Pos('Tool availability, mode gates, target scope and approval decisions still apply', Prompt) > 0));
     Prompt := Harness.BuildSystemPrompt(amPlan, Names, Root, '');
-    Check('plan sandbox guidance permits Markdown only',
-      (Pos('Document and Plan permit Markdown writes', Prompt) > 0) And
+    Check('plan sandbox guidance permits documents and images, not source',
+      (Pos('Document and Plan permit Markdown, image, and other document writes', Prompt) > 0) And
       (Pos('Never edit source (.pas/.lfm) in Plan mode', Prompt) > 0));
     Prompt := Harness.BuildSystemPrompt(amDocument, Names, Root, '');
-    Check('document sandbox guidance permits Markdown only',
-      (Pos('Document and Plan permit Markdown writes', Prompt) > 0) And
+    Check('document sandbox guidance permits documents and images, not source',
+      (Pos('Document and Plan permit Markdown, image, and other document writes', Prompt) > 0) And
       (Pos('Do not edit source (.pas/.lfm)', Prompt) > 0));
     Names.Add('free-pascal-engineer');
     Prompt := Harness.BuildSystemPrompt(amInspect, Names, Root, '');

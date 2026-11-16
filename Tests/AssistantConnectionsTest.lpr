@@ -305,13 +305,12 @@ Begin
         (Pos('image_id', Prompt) = 0) And
         (Pos('cannot write image files', Prompt) = 0) And
         ToolAllowedInMode('write_image', amBuild));
-      Check('Plan and Document never register write_image',
-        (Pos('write_image', BuildAssistantToolsJsonForMode(amPlan)) = 0) And
-        (Pos('write_image', BuildAssistantToolsJsonForMode(amDocument)) = 0) And
-        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) = 0) And
-        (Pos('cannot write image files', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) = 0) And
-        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amDocument, Names, Root, '')) = 0) And
-        (Not ToolAllowedInMode('write_image', amPlan)) And (Not ToolAllowedInMode('write_image', amDocument)));
+      Check('a capable Plan or Document turn registers write_image',
+        (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amPlan)) > 0) And
+        (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amDocument)) > 0) And
+        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '')) > 0) And
+        (Pos('<image_output>', WorkflowAssistantHarness.BuildSystemPrompt(amDocument, Names, Root, '')) > 0) And
+        ToolAllowedInMode('write_image', amPlan) And ToolAllowedInMode('write_image', amDocument));
       Check('Inspect and Chat do not offer image writing',
         (Pos('write_image', BuildAssistantToolsJsonForMode(amInspect)) = 0) And
         (BuildAssistantToolsJsonForMode(amChat) = '') And (Not ToolAllowedInMode('write_image', amInspect)));
@@ -334,9 +333,9 @@ Begin
         (Pos('grok', LowerCase(ImageToolSlice(ToolsJson))) = 0));
       Prompt := '';
       ErrorText := '';
-      Check('a Plan call is unknown even when the flag is on',
-        (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', Root, amPlan,
-          Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = ''));
+      Check('a Plan image call is no longer an unknown tool',
+        ToolAllowedInMode('write_image', amPlan) And
+        (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amPlan)) > 0));
       Store.Active.ImageOutput := False;
       Store.Save;
       ToolsJson := BuildAssistantToolsJsonForMode(amBuild);

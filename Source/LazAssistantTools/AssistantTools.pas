@@ -475,9 +475,14 @@ Begin
       Result := Mode In [amInspect, amBuild];
       Exit;
     End;
+  { Text documents in Plan and Document. Source edits, compile, and Git staging stay in Build. }
+  If (Name = 'write_file') Or (Name = 'replace_in_file') Then
+    Begin
+      Result := Mode In [amPlan, amDocument, amBuild];
+      Exit;
+    End;
   { Build-mode source tools — never Inspect or Plan. }
-  If (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'run_compile') Or (Name = 'stage_patch') Or
+  If (Name = 'run_compile') Or (Name = 'stage_patch') Or
     (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
     (Name = 'delete_path') Or (Name = 'rename_path') Or
     (Name = 'add_unit_to_project') Or
@@ -793,6 +798,32 @@ Begin
     '}}';
 End;
 
+Function BuildDocumentFileToolsJson: String;
+Begin
+  Result :=
+    '{"type":"function","function":{' +
+      '"name":"write_file",' +
+      '"description":"Create or overwrite a text document in Plan or Document mode. ' +
+        'Allowed extensions are .txt, .text, .html, .htm, .csv, .tsv, .svg, .xml, .rtf, .adoc, .asciidoc, .rst, .tex, and .org. ' +
+        'Markdown still uses write_markdown. Images use write_image. Source, forms, and project files stay in Build.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative document path, for example Documents/Notes.html"},' +
+        '"content":{"type":"string","description":"Full non-empty text contents"},' +
+        '"open":{"type":"boolean","description":"Open a source tab after write (default false). Do not use this for Markdown."}' +
+      '},"required":["path","content"]}' +
+    '}},' +
+    '{"type":"function","function":{' +
+      '"name":"replace_in_file",' +
+      '"description":"Exact text replacement in a text document that Plan or Document may write. ' +
+        'The same extension rule as write_file. old_text must match the open editor buffer when the file is open.",' +
+      '"parameters":{"type":"object","properties":{' +
+        '"path":{"type":"string","description":"Project-relative document path"},' +
+        '"old_text":{"type":"string","description":"Exact text to find"},' +
+        '"new_text":{"type":"string","description":"Replacement text"},' +
+        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"}' +
+      '},"required":["path","old_text","new_text"]}}}';
+End;
+
 Function BuildWriteImageToolJson: String;
 Begin
   Result :=
@@ -888,9 +919,10 @@ Begin
         Exit;
       End;
     amDocument:
-      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildDocumentToolsJson;
+      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildDocumentToolsJson + ',' +
+        BuildDocumentFileToolsJson;
     amPlan:
-      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson;
+      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildDocumentFileToolsJson;
     amBuild:
       Begin
         Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
@@ -899,10 +931,7 @@ Begin
           '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}},' +
           '{"type":"function","function":{"name":"stage_patch","description":' +
           '"' + JsonEscapeText(AssistantStagePatchDescription) + '"' + ',"parameters":' + AssistantStagePatchSchema + '}}';
-        { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
-        If OfferWriteImage And AssistantTurnOffersImageOutput(amBuild) Then
-          Body := Body + ',' + BuildWriteImageToolJson;
-      End;
+        End;
     amInspect:
       Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildSymbolToolsJson +
         ',{"type":"function","function":{"name":"run_git","description":' +
@@ -915,6 +944,9 @@ Begin
       Result := '';
       Exit;
     End;
+  { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
+  If OfferWriteImage And AssistantTurnOffersImageOutput(Mode) Then
+    Body := Body + ',' + BuildWriteImageToolJson;
   If AllowSubagents Then
     Body := Body + ',' + BuildSpawnToolJson;
   Result := '[' + Body + ']';
@@ -3143,6 +3175,21 @@ Begin
     '(ensure_form_component or replace_in_file).';
 End;
 
+Function PlanDocumentFileWriteRefused(Const Path: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := '';
+  If Not (GAssistantToolMode In [amPlan, amDocument]) Then Exit;
+  If IsTextDocumentPath(Path) Then Exit;
+  Result := True;
+  If IsMarkdownPath(Path) Then
+    ErrorText :=
+      'A plan or document is written with write_markdown or update_markdown, not by editing it in the source editor.'
+  Else
+    ErrorText :=
+      'Plan and Document mode can write Markdown, images, and other document files. Source and project files stay in Build.';
+End;
+
 Function ToolWriteFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Resolved, Content, Note: String;
@@ -3161,6 +3208,7 @@ Begin
       ErrorText := 'write_file requires path.';
       Exit;
     End;
+  If PlanDocumentFileWriteRefused(Path, ErrorText) Then Exit;
   If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
     Exit;
   Resolved := ExpandResolvedPath(Resolved);
@@ -3236,6 +3284,7 @@ Begin
       ErrorText := 'replace_in_file requires path.';
       Exit;
     End;
+  If PlanDocumentFileWriteRefused(Path, ErrorText) Then Exit;
   If OldText = '' Then
     Begin
       ErrorText := 'replace_in_file requires non-empty old_text.';

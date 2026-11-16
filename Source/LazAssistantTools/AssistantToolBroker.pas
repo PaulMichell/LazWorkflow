@@ -125,7 +125,7 @@ Type
 Implementation
 
 Uses
-  jsonparser, AssistantProtocol, AssistantGit, AssistantTools;
+  jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools;
 
 Const
   MaxBufferBytes = 1048576;
@@ -210,7 +210,8 @@ End;
 Function TAssistantToolBroker.CanWritePath(Const Path: String): Boolean;
 Begin
   Result := (FWriteScope = awsProject) Or
-    ((FWriteScope = awsMarkdown) And FAdapter.IsMarkdownPath(Path));
+    ((FWriteScope = awsMarkdown) And
+      (FAdapter.IsMarkdownPath(Path) Or IsTextDocumentPath(Path)));
 End;
 
 Function TAssistantWorkspaceAdapter.CanChangeSets: Boolean;
@@ -538,7 +539,7 @@ Begin
     End;
   If (Path <> '') And Not CanWritePath(Path) Then
     Begin
-      ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.';
+      ErrorText := 'Plan and Document mode can only change Markdown and document files; Ask is read-only.';
       Exit;
     End;
   Result := True;
@@ -1244,13 +1245,13 @@ Begin
             End;
           If Not CanWritePath(Node.AsString) Then
             Begin
-              ErrorText := 'Plan mode can only create Markdown files.';
+              ErrorText := 'Plan and Document mode can only create Markdown and document files.';
               Exit;
             End;
           If Not FAdapter.CheckNewFile(Node.AsString, Path, ErrorText) Then Exit;
           If Not CanWritePath(Path) Then
             Begin
-              ErrorText := 'Plan mode can only create Markdown files.';
+              ErrorText := 'Plan and Document mode can only create Markdown and document files.';
               Exit;
             End;
           Node := Args.Find('text');
@@ -1730,7 +1731,7 @@ Begin
       If (Not Semantic) And
         (Not CanWritePath(Node.AsString) Or Not CanWritePath(Path)) Then
           Begin
-            ErrorText := 'Plan mode can only change Markdown files; Ask is read-only.';
+            ErrorText := 'Plan and Document mode can only change Markdown and document files; Ask is read-only.';
             Exit;
           End;
       Revision := Args.Get('revision', '');
@@ -1892,7 +1893,8 @@ Begin
       Exit;
     End;
   WriteNote := '';
-  If Scope = awsMarkdown Then WriteNote := ' Only .md, .markdown and .mdown files are writable.';
+  If Scope = awsMarkdown Then
+    WriteNote := ' Only Markdown and other document files are writable. Source stays in Build.';
   If FAdapter.SavesEdits Then
     Begin
       SaveNote := 'Saves to disk as it edits: an open editor keeps Undo and is not brought forward, and a file that is ' +

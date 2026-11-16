@@ -71,6 +71,8 @@ Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
 Function ResolvePlanPathUnder(Const Root, RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 Function IsMarkdownPath(Const Path: String): Boolean;
+{ Text documents Plan and Document may write with write_file. Not Markdown, not images, not source. }
+Function IsTextDocumentPath(Const Path: String): Boolean;
 Function ProjectRelativePath(Const AbsolutePath: String): String;
 Function IsAssistantPlanGeneratedLine(Const Line: String): Boolean;
 Function TextIsAssistantPlan(Const Body: String): Boolean;
@@ -329,6 +331,7 @@ Begin
     'Use free Markdown. The user''s prompt decides the layout. ' +
     'Do not use the assistant plan format. Do not add the line "' + AssistantPlanGeneratedLine + '". ' +
     'Do not add Status lines. Do not call set_active_plan. Do not edit source files. ' +
+    'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. ' +
     'Do not write the active plan. ' +
     'If the user asks for a new document, use a new Documents/Report-YYYYMMDD-HHMMSS.md path and do not overwrite this file. ' +
     'A question that does not ask for a document or a change does not need a write.';
@@ -339,7 +342,8 @@ Begin
   Result :=
     '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
     'using the write_markdown tool (path: "' + PlanPath +
-    '"). Chat reply must be a short summary only, not the full plan body. ' +
+    '"). Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. ' +
+    'Chat reply must be a short summary only, not the full plan body. ' +
     'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
     '`, numbered ## sections without Status, and ### items with Status.';
 End;
@@ -350,6 +354,16 @@ Var
 Begin
   Ext := LowerCase(ExtractFileExt(Path));
   Result := (Ext = '.md') Or (Ext = '.markdown') Or (Ext = '.mdown');
+End;
+
+Function IsTextDocumentPath(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '.txt') Or (Ext = '.text') Or (Ext = '.html') Or (Ext = '.htm') Or
+    (Ext = '.csv') Or (Ext = '.tsv') Or (Ext = '.svg') Or (Ext = '.xml') Or (Ext = '.rtf') Or
+    (Ext = '.adoc') Or (Ext = '.asciidoc') Or (Ext = '.rst') Or (Ext = '.tex') Or (Ext = '.org');
 End;
 
 Function ProjectRelativePath(Const AbsolutePath: String): String;

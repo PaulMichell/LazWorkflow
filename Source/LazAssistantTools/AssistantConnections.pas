@@ -74,8 +74,8 @@ Function AssistantBackendCanDraw(Const Backend: String): Boolean;
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
 /// ImageOutput on the active saved profile. False when no profile is selected.
 Function ActiveProfileImageOutput: Boolean;
-/// True only for a Build turn whose active profile can generate images.
-/// Plan and Document never offer write_image; they do not write project files.
+/// True for a Plan, Document, or Build turn whose active profile can generate images.
+/// Inspect and Chat never offer write_image.
 Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
 
 Type
@@ -206,7 +206,7 @@ End;
 Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
 Begin
   { Read the saved profile on each call. A model switch applies on the next turn. }
-  Result := (Mode = amBuild) And ActiveProfileImageOutput;
+  Result := (Mode In [amPlan, amDocument, amBuild]) And ActiveProfileImageOutput;
 End;
 
 Constructor TAssistantConnections.Create(Const ConfigRoot: String);

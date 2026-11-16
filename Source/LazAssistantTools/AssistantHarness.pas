@@ -113,7 +113,8 @@ Begin
     'These are separate permission boundaries: native permission instructions govern native execution tools; ' +
     'registered LazWorkflow tools enforce IDE mode, target and approval rules at the broker.' + LineEnding +
     'Using an offered IDE tool within those rules is the intended project workflow, not native sandbox escalation.' + LineEnding +
-    'Use the registered project tools offered for this turn: Build permits project edits and builds; Document and Plan permit Markdown writes; ' +
+    'Use the registered project tools offered for this turn: Build permits project edits and builds; ' +
+    'Document and Plan permit Markdown, image, and other document writes; ' +
     'Inspect permits reads only; Chat has no project tools. Tool availability, mode gates, target scope and approval decisions still apply.' + LineEnding +
     'For authorized edits in Build, use replace_in_file / write_file / ensure_form_component and run_compile when offered. ' +
     'Do not request native sandbox escalation or a mode change solely because the native sandbox is read-only.' + LineEnding +
@@ -181,6 +182,7 @@ Begin
       Result := Result +
         'You are the Project Assistant in **Document mode** for Free Pascal / Lazarus.' + LineEnding +
         'Write free-form Markdown with `write_markdown` / `update_markdown`. The user prompt decides the layout.' + LineEnding +
+        'Images use `write_image`. Other documents (.html, .txt, .svg, and the same family) use `write_file` / `replace_in_file`.' + LineEnding +
         'Do not use the assistant plan format, the plan identity line, or Status lines.' + LineEnding +
         'Do not call `set_active_plan`. Do not edit source (.pas/.lfm). Do not write the active plan.' + LineEnding +
         'Current document: **' + GetDocumentRelativePath + '**. ' +
@@ -190,6 +192,7 @@ Begin
       Result := Result +
         'You are the Project Assistant in **Plan mode** for Free Pascal / Lazarus.' + LineEnding +
         'Write durable plan Markdown via `write_markdown` / `update_markdown`. Do not only paste the plan in chat.' + LineEnding +
+        'Images use `write_image`. Other documents (.html, .txt, .svg, and the same family) use `write_file` / `replace_in_file`.' + LineEnding +
         'Default / active plan path: **' + PlanPath + '**.' + LineEnding +
         AssistantPlanAuthoringRules + LineEnding +
         'Prefer `update_markdown` for Status: lines or a single section. Never edit source (.pas/.lfm) in Plan mode.';

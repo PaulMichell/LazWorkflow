@@ -659,9 +659,9 @@ Begin
           '5. Prefer `update_markdown` for Status: lines or a single section; `write_markdown` for new files or full plans. ' +
           '6. After writing, you may call `set_active_plan` and `open_markdown` if helpful. ' +
           '7. Never edit source (.pas/.lfm) in Plan mode. ' +
-          LineEnding +
+          'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file.' + LineEnding +
           'Tools: read_file, read_image, list_directory, open_markdown, get_project_info, write_markdown, ' +
-          'update_markdown, list_plans, get_active_plan, set_active_plan.';
+          'update_markdown, write_file, replace_in_file, write_image, list_plans, get_active_plan, set_active_plan.';
       End;
     amDocument:
       Result :=
@@ -669,10 +669,11 @@ Begin
         'Write free-form Markdown reports and notes with write_markdown or update_markdown. ' +
         'The user prompt decides the layout. Do not use the assistant plan format, the plan identity line, or Status lines. ' +
         'Do not call set_active_plan. Do not write the active plan. Do not edit source files. ' +
+        'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. ' +
         'Chat is a short summary. The Markdown file is the source of truth when you produce or revise a document. ' +
         'You may read and search the project first. ' +
         'Tools: read_file, read_image, list_directory, grep, search_in_project, open_file, open_markdown, ' +
-        'get_project_info, write_markdown, update_markdown.';
+        'get_project_info, write_markdown, update_markdown, write_file, replace_in_file, write_image.';
     amBuild:
       Result :=
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus. ' +

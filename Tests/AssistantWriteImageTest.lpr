@@ -702,16 +702,19 @@ Begin
 
     BeginWriteImageTurn;
     MockCalls := 0;
-    CheckNoted('Plan call is refused', Note,
-      (Not CallWrite(amPlan, ArgsFor('icons/plan-mode.png', 'a red dot', ''), Reply, Note)) And
-      (Note = 'Unknown tool: write_image') And (Reply = '') And (MockCalls = 0) And
-      (Not FileExists(ProjectFile(Project, 'icons/plan-mode.png'))) And
-      (Pos('write_image', BuildAssistantToolsJsonForMode(amPlan)) = 0));
-    CheckNoted('Document call is refused', Note,
-      (Not CallWrite(amDocument, ArgsFor('icons/document-mode.png', 'a red dot', ''), Reply, Note)) And
-      (Note = 'Unknown tool: write_image') And (Reply = '') And (MockCalls = 0) And
-      (Not FileExists(ProjectFile(Project, 'icons/document-mode.png'))) And
-      (Pos('write_image', BuildAssistantToolsJsonForMode(amDocument)) = 0));
+    BeginWriteImageTurn;
+    MockCalls := 0;
+    MockResponse := PngResponse;
+    CheckNoted('Plan call writes the fixture PNG', Note,
+      CallWrite(amPlan, ArgsFor('icons/plan-mode.png', 'a red dot', ''), Reply, Note) And
+      WroteFixture('icons/plan-mode.png', Reply, ProjectFile(Project, 'icons/plan-mode.png'), 'grok-imagine-image-2.0') And
+      (MockCalls = 1) And (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amPlan)) > 0));
+    BeginWriteImageTurn;
+    MockCalls := 0;
+    CheckNoted('Document call writes the fixture PNG', Note,
+      CallWrite(amDocument, ArgsFor('icons/document-mode.png', 'a red dot', ''), Reply, Note) And
+      WroteFixture('icons/document-mode.png', Reply, ProjectFile(Project, 'icons/document-mode.png'), 'grok-imagine-image-2.0') And
+      (MockCalls = 1) And (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amDocument)) > 0));
     TestSharedWriter(IncludeTrailingPathDelimiter(RepoRoot) + 'Source' + PathDelim + 'LazAssistantTools');
     WriteLn('AssistantWriteImageTest passed');
   Finally

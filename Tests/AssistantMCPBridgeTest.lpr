@@ -445,12 +445,12 @@ Begin
   Check('a read run lists no replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) = 0);
   Check('a read run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(ctsMarkdown);
-  Check('a Markdown run lists replace_buffer for Markdown only',
-    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) > 0));
+  Check('a Markdown run lists replace_buffer for documents, not every file',
+    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) > 0));
   Check('a Markdown run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(ctsProject);
   Check('a project run lists replace_buffer for any file',
-    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('Only .md', Bridge.ToolsJSON) = 0));
+    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) = 0));
   Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
   Check('a project run lists the form tool', Pos('"lazarus_ensure_form_component"', Bridge.ToolsJSON) > 0);
   Check('a project run lists delete, rename and add-unit',

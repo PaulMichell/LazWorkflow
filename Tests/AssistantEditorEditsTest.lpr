@@ -179,7 +179,7 @@ Begin
     Run := Broker.BeginRun(awsMarkdown); Broker.OnApproval := @Workspace.Approve;
     Workspace.ApprovalAction := 0; Workspace.ApprovalCalls := 0;
     Check('Plan advertises Markdown edits and saves', (Pos('lazarus_replace_buffer', Broker.ToolsJson) > 0)
-      And (Pos('lazarus_save_buffer', Broker.ToolsJson) > 0) And (Pos('Plan mode: only .md', Broker.ToolsJson) > 0));
+      And (Pos('lazarus_save_buffer', Broker.ToolsJson) > 0) And (Pos('other document files', Broker.ToolsJson) > 0));
     Check('Plan does not advertise builds', Pos('lazarus_start_build', Broker.ToolsJson) = 0);
     Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"Plan.MD"}', Reply, Err);
     Data := GetJSON(Reply); Try Revision := TJSONObject(Data).Get('revision', ''); Finally Data.Free; End;

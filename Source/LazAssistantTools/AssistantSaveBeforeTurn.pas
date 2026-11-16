@@ -1,8 +1,9 @@
 Unit AssistantSaveBeforeTurn;
 
 { Unsaved work a turn could edit, and saving it before the turn starts. Build may change any project file, so open
-  editors, the project, open packages and Markdown windows all count. Plan and Document write only Markdown, so only
-  Markdown windows count. Chat and Inspect edit nothing. Call on the IDE thread. (c) 2026 Michell Computing. }
+  editors, the project, open packages and Markdown windows all count. Plan and Document write Markdown, images, and
+  other document files, so only Markdown windows count here; a document write saves its own open editor. Chat and
+  Inspect edit nothing. Call on the IDE thread. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}

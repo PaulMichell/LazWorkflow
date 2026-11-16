@@ -171,6 +171,8 @@ Begin
       And (Pos('write_markdown', Err) > 0) And Not FileExists(Root + '/Documents/Plan.md') And (IDE.Opens = 1));
     Broker.OnApproval := Nil;
     Check('Plan cannot create Pascal source', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.pas","text":"unit New;"}', Reply, Err) And Not FileExists(Root + '/new.pas'));
+    Check('Plan can create an HTML document', Broker.Execute(Run, 'lazarus_create_file', '{"path":"Documents/Notes.html","text":"<p>Notes</p>"}', Reply, Err)
+      And FileExists(Root + '/Documents/Notes.html'));
     Check('Plan cannot create form or project files', Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.lfm","text":"object"}', Reply, Err)
       And Not Broker.Execute(Run, 'lazarus_create_file', '{"path":"new.lpi","text":"<project/>"}', Reply, Err));
     fpSymlink(PChar(Root + '/closed.pas'), PChar(Root + '/source-alias.md'));
