@@ -1,6 +1,6 @@
 Unit StyledSurface;
 
-{ Bounded bitmap viewport and shared scroll handling (c) 2026 Michell Computing. }
+{ Scrolling surface painted directly on the control canvas, with shared scroll handling (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -30,10 +30,9 @@ Type
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
     { Non-nil only during Paint: content draws on the control canvas so HiDPI
-      backings rasterise text at native resolution. The bitmap is for measure. }
+      backings rasterise text at native resolution. The small bitmap is for measure. }
     FPaintCanvas: TCanvas;
     Procedure UpdateScrollbarBounds;
-    Procedure EnsureBuffer;
     Procedure DoScroll(Sender: TObject);
     Procedure SetScrollTop(Value: Int64);
     Procedure SetScrollLeft(Value: Integer);
@@ -108,6 +107,8 @@ Begin
   Color := clWindow;
   Width := 240;
   Height := 100;
+  { Measuring needs only a canvas with a font. Paint uses the control canvas, and ConfigureCanvas passes the
+    client size, so this bitmap stays small whatever the control's size. }
   Bitmap := TBitmap.Create;
   Bitmap.PixelFormat := pf32bit;
   Bitmap.SetSize(8, 8);
@@ -146,17 +147,6 @@ Begin
   If FShowHorizontal Then Dec(Result.Bottom, HorizontalBar.Height);
   Result.Right := Max(Result.Left + 1, Result.Right);
   Result.Bottom := Max(Result.Top + 1, Result.Bottom);
-End;
-
-Procedure TStyledSurface.EnsureBuffer;
-Var
-  BufferW, BufferH: Integer;
-Begin
-  If Not Assigned(Bitmap) Then Exit;
-  { Logical size only. Measurement uses this canvas; paint uses the control canvas. }
-  BufferW := Max(1, ClientWidth);
-  BufferH := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
-  If (Bitmap.Width <> BufferW) Or (Bitmap.Height <> BufferH) Then Bitmap.SetSize(BufferW, BufferH);
 End;
 
 Procedure TStyledSurface.ConfigureCanvas;
@@ -270,9 +260,8 @@ Begin
   Inherited Resize;
   If Not Assigned(VerticalBar) Then Exit;
   UpdateScrollbarBounds;
-  { Measure on the resized surface before layout. The first canvas must not
-    keep its line height after the view changes size. }
-  EnsureBuffer;
+  { Give the renderer the new client size before layout. It re-measures when the
+    surface changes, so the first canvas does not keep a stale line height. }
   ConfigureCanvas;
   GeometryChanged;
   SetExtent(FContentWidth, FContentHeight);
@@ -396,7 +385,6 @@ Var
 Begin
   Started := GetTickCount64;
   View := ViewRect;
-  EnsureBuffer;
   { Paint on the control canvas. Cocoa/Qt HiDPI backings rasterise TextOut at
     native resolution; an offscreen 1x bitmap blit was soft, and a scaled CTM
     offscreen path left the conversation blank on Mac. }

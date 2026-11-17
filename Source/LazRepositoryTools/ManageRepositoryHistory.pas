@@ -607,8 +607,8 @@ Begin
   RingPenW := Max(1, GraphScale(2));
   EdgePenW := Max(1, GraphScale(2));
   PixelScale := GraphPixelScale;
-  { One extra device pixel keeps the ring ramp off the marker and leaves the lane
-    line visible between them. Coverage ramps are half a pixel, not DPI-scaled. }
+  { The +1 is one logical pixel (not DPI-scaled): it keeps the ring ramp off the marker
+    and leaves the lane line visible between them. Coverage ramps are half a physical pixel. }
   RingInner := NodeR + Ring + 1 - RingPenW / 2;
   MarkerRadius := NodeR;
   If MarkerRadius > RingInner - 1 Then
