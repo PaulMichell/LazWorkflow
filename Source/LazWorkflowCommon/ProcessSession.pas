@@ -42,7 +42,9 @@ Uses
 {$ENDIF}
 
 {$IFDEF DARWIN}
-{ macOS has no sigtimedwait. The set is the same 32-bit sigset_t BaseUnix uses. }
+{ macOS has no sigtimedwait. BaseUnix imports sigpending without Darwin's leading
+  underscore, so these libc imports are used instead. The set is sigset_t. }
+Function DarwinSigPending(SigSet: PSigSet): cint; CDecl; External 'c' Name 'sigpending';
 Function DarwinSigWait(SigSet: PSigSet; Var Signo: cint): cint; CDecl; External 'c' Name 'sigwait';
 {$ENDIF}
 
@@ -173,6 +175,8 @@ Begin
   {$IFDEF LINUX}
   { fpSigPending omits Linux's required sigset-size argument. }
   If do_syscall(syscall_nr_rt_sigpending, TSysParam(@Pending), TSysParam(8)) <> 0 Then
+  {$ELSEIF DEFINED(DARWIN)}
+  If DarwinSigPending(@Pending) <> 0 Then
   {$ELSE}
   If fpSigPending(Pending) <> 0 Then
   {$ENDIF}
@@ -189,7 +193,7 @@ Begin
       {$IFDEF DARWIN}
       { sigwait returns at once when SIGPIPE is already pending, and would block if it is not. }
       Signo := 0;
-      If (fpSigPending(Pending) = 0) And (fpSigIsMember(Pending, SIGPIPE) = 1) Then
+      If (DarwinSigPending(@Pending) = 0) And (fpSigIsMember(Pending, SIGPIPE) = 1) Then
         DarwinSigWait(@Blocked, Signo);
       {$ELSE}
       WaitTime.tv_sec := 0;
