@@ -29,6 +29,9 @@ Type
     FScrollStyle: TScrollStyle;
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
+    { Non-nil only during Paint: content draws on the control canvas so HiDPI
+      backings rasterise text at native resolution. The bitmap is for measure. }
+    FPaintCanvas: TCanvas;
     Procedure UpdateScrollbarBounds;
     Procedure EnsureBuffer;
     Procedure DoScroll(Sender: TObject);
@@ -102,6 +105,7 @@ Begin
   Bitmap := TBitmap.Create;
   Bitmap.PixelFormat := pf32bit;
   Bitmap.SetSize(8, 8);
+  FPaintCanvas := Nil;
   FRenderer := TStyledCanvas.Create;
   VerticalBar := TScrollBar.Create(Nil);
   VerticalBar.Parent := Self;
@@ -120,6 +124,7 @@ End;
 
 Destructor TStyledSurface.Destroy;
 Begin
+  FPaintCanvas := Nil;
   FreeAndNil(VerticalBar);
   FreeAndNil(HorizontalBar);
   FreeAndNil(FRenderer);
@@ -142,15 +147,26 @@ Var
   BufferW, BufferH: Integer;
 Begin
   If Not Assigned(Bitmap) Then Exit;
+  { Logical size only. Measurement uses this canvas; paint uses the control canvas. }
   BufferW := Max(1, ClientWidth);
   BufferH := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
   If (Bitmap.Width <> BufferW) Or (Bitmap.Height <> BufferH) Then Bitmap.SetSize(BufferW, BufferH);
 End;
 
 Procedure TStyledSurface.ConfigureCanvas;
+Var
+  Target: TCanvas;
 Begin
-  If Assigned(FRenderer) And Assigned(Bitmap) Then
-    FRenderer.Configure(Bitmap.Canvas, Font, Bitmap.Width, Bitmap.Height);
+  If Not Assigned(FRenderer) Then
+    Exit;
+  If Assigned(FPaintCanvas) Then
+    Target := FPaintCanvas
+  Else If Assigned(Bitmap) Then
+    Target := Bitmap.Canvas
+  Else
+    Exit;
+  { Always logical client size so metrics stay stable across paint vs measure. }
+  FRenderer.Configure(Target, Font, Max(1, ClientWidth), Max(1, ClientHeight));
 End;
 
 Procedure TStyledSurface.SetScrollbars(Vertical, Horizontal: Boolean);
@@ -280,7 +296,10 @@ End;
 
 Function TStyledSurface.GetBufferCanvas: TCanvas;
 Begin
-  Result := Bitmap.Canvas;
+  If Assigned(FPaintCanvas) Then
+    Result := FPaintCanvas
+  Else
+    Result := Bitmap.Canvas;
 End;
 
 Procedure TStyledSurface.SetExtent(NewWidth: Integer; NewHeight: Int64);
@@ -367,35 +386,37 @@ End;
 Procedure TStyledSurface.Paint;
 Var
   Started: QWord;
-  Clip, View, BufferRect: TRect;
-  LogicalTop, CopyHeight, BufferHeight: Integer;
+  Clip, View: TRect;
 Begin
   Started := GetTickCount64;
   View := ViewRect;
-  { At most 8 MiB per viewport. Normal desktop widths use horizontal strips. }
   EnsureBuffer;
-  BufferHeight := Max(1, Bitmap.Height);
-  LogicalTop := 0;
-  While LogicalTop < ClientHeight Do
-    Begin
-      CopyHeight := Min(BufferHeight, ClientHeight - LogicalTop);
-      BufferRect := Rect(0, 0, ClientWidth, CopyHeight);
-      Bitmap.Canvas.Brush.Style := bsSolid;
-      Bitmap.Canvas.Brush.Color := Color;
-      Bitmap.Canvas.FillRect(BufferRect);
-      ConfigureCanvas;
-      Clip := View;
-      OffsetRect(Clip, 0, -LogicalTop);
-      If IntersectRect(Clip, Clip, BufferRect) Then PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - LogicalTop - ScrollTop);
-      Bitmap.Canvas.Brush.Style := bsSolid;
-      If Focused Then Bitmap.Canvas.Brush.Color := $00C08038 Else Bitmap.Canvas.Brush.Color := $00C8C5BE;
-      Bitmap.Canvas.FillRect(0, -LogicalTop, ClientWidth, 1 - LogicalTop);
-      Bitmap.Canvas.FillRect(0, ClientHeight - 1 - LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-      Bitmap.Canvas.FillRect(0, -LogicalTop, 1, ClientHeight - LogicalTop);
-      Bitmap.Canvas.FillRect(ClientWidth - 1, -LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-      Canvas.CopyRect(Rect(0, LogicalTop, ClientWidth, LogicalTop + CopyHeight), Bitmap.Canvas, BufferRect);
-      Inc(LogicalTop, CopyHeight);
-    End;
+  { Paint on the control canvas. Cocoa/Qt HiDPI backings rasterise TextOut at
+    native resolution; an offscreen 1x bitmap blit was soft, and a scaled CTM
+    offscreen path left the conversation blank on Mac. }
+  FPaintCanvas := Canvas;
+  Try
+    Canvas.Brush.Style := bsSolid;
+    Canvas.Brush.Color := Color;
+    Canvas.FillRect(ClientRect);
+    ConfigureCanvas;
+    Clip := View;
+    If (Clip.Right > Clip.Left) And (Clip.Bottom > Clip.Top) Then
+      PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - ScrollTop);
+    Canvas.Brush.Style := bsSolid;
+    If Focused Then
+      Canvas.Brush.Color := $00C08038
+    Else
+      Canvas.Brush.Color := $00C8C5BE;
+    Canvas.FillRect(0, 0, ClientWidth, 1);
+    Canvas.FillRect(0, ClientHeight - 1, ClientWidth, ClientHeight);
+    Canvas.FillRect(0, 0, 1, ClientHeight);
+    Canvas.FillRect(ClientWidth - 1, 0, ClientWidth, ClientHeight);
+  Finally
+    FPaintCanvas := Nil;
+    { Point the renderer back at the measure bitmap for layout work. }
+    ConfigureCanvas;
+  End;
   FLastPaintMilliseconds := GetTickCount64 - Started;
   Inc(FPaintCount);
 End;

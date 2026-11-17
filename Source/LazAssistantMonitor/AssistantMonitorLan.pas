@@ -169,7 +169,7 @@ Uses
   {$IFDEF WINDOWS}
   Windows, winsock2,
   {$ENDIF}
-  sockets, AssistantHttps, AssistantMonitorCodec, AssistantMonitorTls, WorkflowLog;
+  ctypes, sockets, AssistantHttps, AssistantMonitorCodec, AssistantMonitorTls, WorkflowLog;
 
 Const
   MonitorBindWaitMs = 10000;

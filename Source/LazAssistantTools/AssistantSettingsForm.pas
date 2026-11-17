@@ -208,6 +208,8 @@ Type
     SelectedConnection: Integer;
     FFillingModels: Boolean;
     FLoading: Boolean;
+    { True while a row is being applied, so a Cocoa click from the list rebuild returns. }
+    FApplyingConnection: Boolean;
     FPlanUsageWorker: TThread;
     FPlanUsageTimer: TTimer;
     FPlanUsageClosed: Boolean;
@@ -706,23 +708,29 @@ Var
   Item: TAssistantConnection;
 Begin
   Selected := ConnectionsList.ItemIndex;
-  ConnectionsList.Items.BeginUpdate;
+  { Clearing or selecting a row fires OnClick on Cocoa. ConnectionChanged calls this. }
+  ConnectionsList.LockSelectionChange;
   Try
-    ConnectionsList.Items.Clear;
-    For I := 0 To Connections.Count - 1 Do
-      Begin
-        Item := Connections[I];
-        If Item.Id = Connections.ActiveId Then
-          ConnectionsList.Items.Add(Item.Name + ' (current)')
-        Else
-          ConnectionsList.Items.Add(Item.Name);
-      End;
+    ConnectionsList.Items.BeginUpdate;
+    Try
+      ConnectionsList.Items.Clear;
+      For I := 0 To Connections.Count - 1 Do
+        Begin
+          Item := Connections[I];
+          If Item.Id = Connections.ActiveId Then
+            ConnectionsList.Items.Add(Item.Name + ' (current)')
+          Else
+            ConnectionsList.Items.Add(Item.Name);
+        End;
+    Finally
+      ConnectionsList.Items.EndUpdate;
+    End;
+    If Selected >= Connections.Count Then
+      Selected := Connections.Count - 1;
+    ConnectionsList.ItemIndex := Selected;
   Finally
-    ConnectionsList.Items.EndUpdate;
+    ConnectionsList.UnlockSelectionChange;
   End;
-  If Selected >= Connections.Count Then
-    Selected := Connections.Count - 1;
-  ConnectionsList.ItemIndex := Selected;
   Item := Connections.Active;
   If Assigned(Item) Then
     ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '.'
@@ -1019,6 +1027,8 @@ Var
   Item: TAssistantConnection;
   NewSelection: Integer;
 Begin
+  If FApplyingConnection Then
+    Exit;
   If CodexFrame.Busy Then
     Begin
       ConnectionsList.ItemIndex := SelectedConnection;
@@ -1027,47 +1037,52 @@ Begin
   NewSelection := ConnectionsList.ItemIndex;
   If Not FLoading Then
     StoreConnection;
-  RefreshConnections;
-  SelectedConnection := NewSelection;
-  ConnectionsList.ItemIndex := NewSelection;
-  If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
-    Begin
-      ShowConnectionKind('');
-      ConnectionNameEdit.Text := '';
-      ApplyImageCapability(Nil);
-      UpdateCompactAvailability;
-      Exit;
-    End;
-  Item := Connections[SelectedConnection];
-  FLoading := True;
+  FApplyingConnection := True;
   Try
-    ConnectionNameEdit.Text := Item.Name;
-    ShowConnectionKind(Item.Backend);
-    If Item.Backend = 'grok' Then
-      LoadGrokConnection(Item)
-    Else If Item.Backend = 'codex' Then
+    RefreshConnections;
+    SelectedConnection := NewSelection;
+    ConnectionsList.ItemIndex := NewSelection;
+    If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
       Begin
-        Try
-          CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort,
-            Item.ApprovalMode, Item.CachedModelsJson);
-        Except
-          On E: Exception Do
-            CodexFrame.ConnectionStatus.Caption := E.Message;
-        End;
-        ShowCodexPlanUsage(Item);
-        EnsureUsageTimer;
-        If Assigned(FPlanUsageTimer) Then
-          FPlanUsageTimer.Interval := 1000;
-      End
-    Else If Item.Backend = 'openai-compatible' Then
-      LoadCompatibleConnection(Item)
-    Else If Item.Backend = 'claude' Then
-      LoadClaudeConnection(Item);
-    ApplyImageCapability(Item);
+        ShowConnectionKind('');
+        ConnectionNameEdit.Text := '';
+        ApplyImageCapability(Nil);
+        UpdateCompactAvailability;
+        Exit;
+      End;
+    Item := Connections[SelectedConnection];
+    FLoading := True;
+    Try
+      ConnectionNameEdit.Text := Item.Name;
+      ShowConnectionKind(Item.Backend);
+      If Item.Backend = 'grok' Then
+        LoadGrokConnection(Item)
+      Else If Item.Backend = 'codex' Then
+        Begin
+          Try
+            CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort,
+              Item.ApprovalMode, Item.CachedModelsJson);
+          Except
+            On E: Exception Do
+              CodexFrame.ConnectionStatus.Caption := E.Message;
+          End;
+          ShowCodexPlanUsage(Item);
+          EnsureUsageTimer;
+          If Assigned(FPlanUsageTimer) Then
+            FPlanUsageTimer.Interval := 1000;
+        End
+      Else If Item.Backend = 'openai-compatible' Then
+        LoadCompatibleConnection(Item)
+      Else If Item.Backend = 'claude' Then
+        LoadClaudeConnection(Item);
+      ApplyImageCapability(Item);
+    Finally
+      FLoading := False;
+    End;
+    UpdateCompactAvailability;
   Finally
-    FLoading := False;
+    FApplyingConnection := False;
   End;
-  UpdateCompactAvailability;
 End;
 
 Procedure TAssistantSettingsForm.AddKind(Const Backend, DisplayName: String);

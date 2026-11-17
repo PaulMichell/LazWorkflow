@@ -26,6 +26,7 @@ Type
     FLaneColors: Array[0..9] Of TColor;
     Procedure InitLaneColors;
     Function GraphScale(DesignPx: Integer): Integer;
+    Function GraphPixelScale: Single;
     Function GraphCanMeasureFont: Boolean;
     Function GraphLaneWidth: Integer;
     Function GraphLeftMargin: Integer;
@@ -106,6 +107,19 @@ Begin
     PPI := 96;
   Result := Integer((Int64(DesignPx) * PPI) Div 96);
   If (DesignPx > 0) And (Result < 1) Then
+    Result := 1;
+End;
+
+Function TManageHistoryGraph.GraphPixelScale: Single;
+Begin
+  { Backing scale for smooth markers. Retina is typically 2; 1x stays 1.
+    TPaintBox is a graphic control (no handle); GetCanvasScaleFactor walks parents. }
+  Result := 1;
+  If Assigned(FPaintBox) Then
+    Result := FPaintBox.GetCanvasScaleFactor
+  Else If Assigned(FHost) And FHost.HandleAllocated Then
+    Result := FHost.GetCanvasScaleFactor;
+  If Result < 1 Then
     Result := 1;
 End;
 
@@ -429,12 +443,14 @@ Var
   Token, RefName, HostFontName: String;
   Kind: TRefKind;
   Bg, Fg, Border: TColor;
+  PixelScale: Single;
 Begin
   If (Trim(Refs) = '') Or (Not Assigned(FPaintBox)) Then
     Exit;
   HostFontName := 'default';
   If Assigned(FHost) Then
     HostFontName := FHost.Font.Name;
+  PixelScale := GraphPixelScale;
 
   Parts := TStringList.Create;
   Try
@@ -556,7 +572,8 @@ Begin
             CardW := TextWidth(RefName) + PadX * 2;
             If CardW < MinW Then
               CardW := MinW;
-            DrawSmoothRoundRect(FPaintBox.Canvas, Rect(TextX, CardY, TextX + CardW, CardY + CardH), GraphScale(4), Bg, Border, RowColor);
+            DrawSmoothRoundRect(FPaintBox.Canvas, Rect(TextX, CardY, TextX + CardW, CardY + CardH), GraphScale(4), Bg, Border, RowColor,
+              PixelScale);
             Brush.Style := bsClear;
             TextOut(TextX + PadX, CardY + (CardH - TextHeight(RefName)) Div 2, RefName);
             Brush.Style := bsSolid;
@@ -572,7 +589,7 @@ Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
   TextH, TextY, EdgePenW, MsgPad, RingPenW, NodeY: Integer;
-  MarkerRadius, RingInner, HalfStroke: Single;
+  MarkerRadius, RingInner, HalfStroke, PixelScale: Single;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
@@ -589,6 +606,7 @@ Begin
   Ring := Max(2, GraphScale(2));
   RingPenW := Max(1, GraphScale(2));
   EdgePenW := Max(1, GraphScale(2));
+  PixelScale := GraphPixelScale;
   { One extra device pixel keeps the ring ramp off the marker and leaves the lane
     line visible between them. Coverage ramps are half a pixel, not DPI-scaled. }
   RingInner := NodeR + Ring + 1 - RingPenW / 2;
@@ -667,8 +685,9 @@ Begin
           { Ring first, then the same disk as every other row, so the ring mask cannot clip this marker. }
           If CommitIsCheckedOut(C) Then
             DrawSmoothRing(FPaintBox.Canvas, X, NodeY, NodeR + Ring + 1, RingPenW, clWindowText,
-              HistoryRowFill(I = FSelectedIndex), Strokes);
-          DrawSmoothDisk(FPaintBox.Canvas, X, NodeY, MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex), Strokes);
+              HistoryRowFill(I = FSelectedIndex), Strokes, PixelScale);
+          DrawSmoothDisk(FPaintBox.Canvas, X, NodeY, MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex), Strokes,
+            PixelScale);
 
           TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;
