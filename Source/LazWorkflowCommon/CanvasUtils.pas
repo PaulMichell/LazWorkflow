@@ -24,19 +24,22 @@ Type
 
 /// Draws a symmetric rounded rectangle. Blend against Background, the colour just painted under Bounds.
 /// The first paint cannot read those pixels: a canvas read comes back black and darkens the edge.
+/// Rasterised into an opaque 8-bit-alpha bitmap and copied once (Cocoa-safe; no 1-bit mask).
 Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor);
 
 /// Draws an antialiased disk over what is already painted. Radius is the 50% edge.
-/// Uses the same coverage grid as DrawSmoothRing. Uncovered pixels are left untouched.
+/// Uses the same coverage grid as DrawSmoothRing. Uncovered pixels use alpha 0 so paths remain.
 /// Partial pixels blend against Background, or against a stroke when the sample lies on one.
 /// Do not read the canvas: a read comes back black and darkens the edge.
+/// Drawn via an 8-bit alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
 Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill, Background: TColor;
   Const Strokes: TSmoothStrokeArray = Nil);
 
 /// Draws an antialiased ring over what is already painted. Radius is the stroke centreline.
-/// StrokeWidth is the full thickness. Uncovered pixels are left untouched, so lane dots and paths remain.
+/// StrokeWidth is the full thickness. Uncovered pixels use alpha 0 so lane dots and paths remain.
 /// Partial pixels blend against Background, or against a stroke when the sample lies on one.
 /// Do not read the canvas: a read comes back black and darkens the edge.
+/// Drawn via an 8-bit alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
 Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke, Background: TColor;
   Const Strokes: TSmoothStrokeArray = Nil);
 
@@ -141,41 +144,46 @@ Begin
   BorderColor := ColorToFP(Border);
   BackColor := ColorToFP(Background);
   { Rasterise in image memory so the widgetset cannot stroke or offset individual
-    pixel writes. Include the background in every corner and copy once, opaquely. }
-  Bitmap := TBitmap.Create;
+    pixel writes. Include the background in every corner and copy once, opaquely.
+    Prefer an explicit alpha description: Cocoa premultiplies on upload, and a
+    1-bit mask path (used earlier for lane dots) paints transparent pixels black. }
+  Image := TLazIntfImage.Create(W, H, [riqfRGB, riqfAlpha]);
   Try
-    Bitmap.PixelFormat := pf32bit;
-    Bitmap.SetSize(W, H);
-    Bitmap.Transparent := False;
-    Image := Bitmap.CreateIntfImage;
+    If Image.DataDescription.AlphaPrec < 1 Then
+      Exit;
+    For Y := 0 To H - 1 Do
+      For X := 0 To W - 1 Do
+        Begin
+          OuterSum := 0;
+          InnerSum := 0;
+          { 4x4 grid: 2x2 left blocky corners on Retina-sized ref cards. }
+          For SampleY := 0 To 3 Do
+            For SampleX := 0 To 3 Do
+              Begin
+                SD := RoundRectDistance(
+                  (Bounds.Left + X + (SampleX + 0.5) / 4) - CX,
+                  (Bounds.Top + Y + (SampleY + 0.5) / 4) - CY,
+                  HalfW, HalfH, UsedRadius);
+                OuterSum := OuterSum + Clamp01(0.5 - SD);
+                InnerSum := InnerSum + Clamp01(0.5 - (SD + 1));
+              End;
+          Outer := OuterSum / 16;
+          Inner := InnerSum / 16;
+          Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
+          { Fully opaque, premultiplied-safe: Cocoa leaves RGB unchanged when A=1. }
+          Pixel.Alpha := 65535;
+          Image.Colors[X, Y] := Pixel;
+        End;
+    Bitmap := TBitmap.Create;
     Try
-      For Y := 0 To H - 1 Do
-        For X := 0 To W - 1 Do
-          Begin
-            OuterSum := 0;
-            InnerSum := 0;
-            For SampleY := 0 To 1 Do
-              For SampleX := 0 To 1 Do
-                Begin
-                  SD := RoundRectDistance(
-                    (Bounds.Left + X + 0.5 + (SampleX * 2 - 1) * 0.25) - CX,
-                    (Bounds.Top + Y + 0.5 + (SampleY * 2 - 1) * 0.25) - CY,
-                    HalfW, HalfH, UsedRadius);
-                  OuterSum := OuterSum + Clamp01(0.5 - SD);
-                  InnerSum := InnerSum + Clamp01(0.5 - (SD + 1));
-                End;
-            Outer := OuterSum / 4;
-            Inner := InnerSum / 4;
-            Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
-            Image.Colors[X, Y] := Pixel;
-          End;
       Bitmap.LoadFromIntfImage(Image);
+      Bitmap.Transparent := False;
+      Target.Draw(Bounds.Left, Bounds.Top, Bitmap);
     Finally
-      Image.Free;
+      Bitmap.Free;
     End;
-    Target.Draw(Bounds.Left, Bounds.Top, Bitmap);
   Finally
-    Bitmap.Free;
+    Image.Free;
   End;
 End;
 
@@ -295,10 +303,14 @@ Begin
   SampleGrid := 8;
   Samples := SampleGrid * SampleGrid;
   SampleScale := 1 / SampleGrid;
-  { Mask the hole and the corners. An opaque square would repaint the lane dot and paths. }
-  Image := TLazIntfImage.Create(W, H, [riqfRGB, riqfMask]);
+  { Cocoa's plain bitmap Draw uses the image rep only and ignores a 1-bit mask, so
+    "transparent" mask pixels painted as black boxes around every lane dot and ring.
+    Use an 8-bit alpha channel instead. Keep alpha binary (0 or 65535) with the fringe
+    pre-blended against Background/Strokes: Cocoa premultiplies on upload, and a second
+    multiply would darken partial-alpha edges. }
+  Image := TLazIntfImage.Create(W, H, [riqfRGB, riqfAlpha]);
   Try
-    If Image.DataDescription.MaskBitsPerPixel < 1 Then
+    If Image.DataDescription.AlphaPrec < 1 Then
       Exit;
     For Y := 0 To H - 1 Do
       For X := 0 To W - 1 Do
@@ -322,25 +334,27 @@ Begin
                 SumG := SumG + MixChannel(Under.Green, EdgeColor.Green, Coverage);
                 SumB := SumB + MixChannel(Under.Blue, EdgeColor.Blue, Coverage);
               End;
-          Pixel.Red := AverageChannel(SumR, Samples);
-          Pixel.Green := AverageChannel(SumG, Samples);
-          Pixel.Blue := AverageChannel(SumB, Samples);
           If CoverageSum <= 0 Then
             Begin
+              { Premultiplied-safe clear pixel: RGB must be 0 when Alpha is 0. }
+              Pixel.Red := 0;
+              Pixel.Green := 0;
+              Pixel.Blue := 0;
               Pixel.Alpha := 0;
-              Image.Colors[X, Y] := Pixel;
-              Image.Masked[X, Y] := True;
             End
           Else
             Begin
+              Pixel.Red := AverageChannel(SumR, Samples);
+              Pixel.Green := AverageChannel(SumG, Samples);
+              Pixel.Blue := AverageChannel(SumB, Samples);
               Pixel.Alpha := 65535;
-              Image.Colors[X, Y] := Pixel;
-              Image.Masked[X, Y] := False;
             End;
+          Image.Colors[X, Y] := Pixel;
         End;
     Bitmap := TBitmap.Create;
     Try
       Bitmap.LoadFromIntfImage(Image);
+      Bitmap.Transparent := False;
       Target.Draw(Left, Top, Bitmap);
     Finally
       Bitmap.Free;
