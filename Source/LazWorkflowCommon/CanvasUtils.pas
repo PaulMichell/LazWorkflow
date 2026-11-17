@@ -24,7 +24,7 @@ Type
 
 /// Draws a symmetric rounded rectangle. Blend against Background, the colour just painted under Bounds.
 /// The first paint cannot read those pixels: a canvas read comes back black and darkens the edge.
-/// Rasterised into an opaque 8-bit-alpha bitmap and copied once (Cocoa-safe; no 1-bit mask).
+/// Rasterised into an opaque RGB bitmap and copied once (Cocoa-safe; no mask, no alpha channel needed).
 /// PixelScale is the control canvas scale (Retina 2). Values <= 1 keep a 1x buffer.
 Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Single; Fill, Border, Background: TColor;
   PixelScale: Single = 1);
@@ -168,18 +168,15 @@ Begin
     UsedRadius := Scale;
   { One logical pixel of border, in physical samples. }
   BorderWidth := Scale;
-  If BorderWidth < 1 Then
-    BorderWidth := 1;
   CX := PhysW / 2;
   CY := PhysH / 2;
   FillColor := ColorToFP(Fill);
   BorderColor := ColorToFP(Border);
   BackColor := ColorToFP(Background);
-  { Rasterise at backing resolution so Retina does not upscale a soft 1x fringe. }
-  Image := TLazIntfImage.Create(PhysW, PhysH, [riqfRGB, riqfAlpha]);
+  { Rasterise at backing resolution so Retina does not upscale a soft 1x fringe.
+    Every pixel is opaque, so the image needs no alpha channel and draws on any widgetset. }
+  Image := TLazIntfImage.Create(PhysW, PhysH, [riqfRGB]);
   Try
-    If Image.DataDescription.AlphaPrec < 1 Then
-      Exit;
     For Y := 0 To PhysH - 1 Do
       For X := 0 To PhysW - 1 Do
         Begin
@@ -198,7 +195,6 @@ Begin
           Outer := OuterSum / 16;
           Inner := InnerSum / 16;
           Pixel := MixCoverage(BackColor, BorderColor, FillColor, Outer, Inner);
-          Pixel.Alpha := 65535;
           Image.Colors[X, Y] := Pixel;
         End;
     Bitmap := TBitmap.Create;
