@@ -29,6 +29,10 @@ Type
     FScrollStyle: TScrollStyle;
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
+    { Physical buffer is Client*Scale. Layout and PaintContent stay in logical pixels. }
+    FBufferScale: Double;
+    FLogicalBufferHeight: Integer;
+    Function BufferScaleFactor: Double;
     Procedure UpdateScrollbarBounds;
     Procedure EnsureBuffer;
     Procedure DoScroll(Sender: TObject);
@@ -102,6 +106,8 @@ Begin
   Bitmap := TBitmap.Create;
   Bitmap.PixelFormat := pf32bit;
   Bitmap.SetSize(8, 8);
+  FBufferScale := 1;
+  FLogicalBufferHeight := 8;
   FRenderer := TStyledCanvas.Create;
   VerticalBar := TScrollBar.Create(Nil);
   VerticalBar.Parent := Self;
@@ -137,20 +143,45 @@ Begin
   Result.Bottom := Max(Result.Top + 1, Result.Bottom);
 End;
 
+Function TStyledSurface.BufferScaleFactor: Double;
+Begin
+  { Backing scale (Retina 2, some displays 1.5…). Logical layout stays 1:1 with LCL. }
+  If HandleAllocated Then
+    Result := GetCanvasScaleFactor
+  Else
+    Result := 1;
+  If Result < 1 Then
+    Result := 1;
+End;
+
 Procedure TStyledSurface.EnsureBuffer;
 Var
-  BufferW, BufferH: Integer;
+  Scale: Double;
+  PhysW, PhysH, MaxLogicalH: Integer;
 Begin
   If Not Assigned(Bitmap) Then Exit;
-  BufferW := Max(1, ClientWidth);
-  BufferH := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
-  If (Bitmap.Width <> BufferW) Or (Bitmap.Height <> BufferH) Then Bitmap.SetSize(BufferW, BufferH);
+  Scale := BufferScaleFactor;
+  PhysW := Max(1, Ceil(ClientWidth * Scale - 1E-6));
+  { Cap the physical strip at about 8 MiB so huge views still paint in bands. }
+  MaxLogicalH := Max(1, (8 * 1024 * 1024) Div Max(4, PhysW * 4));
+  If Scale > 1 Then
+    MaxLogicalH := Max(1, Trunc(MaxLogicalH / Scale));
+  MaxLogicalH := Min(Max(1, ClientHeight), MaxLogicalH);
+  PhysH := Max(1, Ceil(MaxLogicalH * Scale - 1E-6));
+  If (Bitmap.Width <> PhysW) Or (Bitmap.Height <> PhysH) Or (Abs(FBufferScale - Scale) > 1E-6) Then
+    Begin
+      Bitmap.SetSize(PhysW, PhysH);
+      FBufferScale := Scale;
+      FLogicalBufferHeight := MaxLogicalH;
+    End;
 End;
 
 Procedure TStyledSurface.ConfigureCanvas;
 Begin
+  { Surface size is always logical so metric invalidation does not follow the
+    physical buffer. Paint applies BufferScale on the bitmap CTM separately. }
   If Assigned(FRenderer) And Assigned(Bitmap) Then
-    FRenderer.Configure(Bitmap.Canvas, Font, Bitmap.Width, Bitmap.Height);
+    FRenderer.Configure(Bitmap.Canvas, Font, Max(1, ClientWidth), Max(1, ClientHeight));
 End;
 
 Procedure TStyledSurface.SetScrollbars(Vertical, Horizontal: Boolean);
@@ -367,33 +398,54 @@ End;
 Procedure TStyledSurface.Paint;
 Var
   Started: QWord;
-  Clip, View, BufferRect: TRect;
-  LogicalTop, CopyHeight, BufferHeight: Integer;
+  Clip, View, BufferRect, DestRect, SrcRect: TRect;
+  LogicalTop, CopyHeight, SrcW, SrcH: Integer;
+  Scale: Double;
 Begin
   Started := GetTickCount64;
   View := ViewRect;
-  { At most 8 MiB per viewport. Normal desktop widths use horizontal strips. }
+  { Physical buffer at canvas scale so Retina/HiDPI does not upscale soft 1x glyphs. }
   EnsureBuffer;
-  BufferHeight := Max(1, Bitmap.Height);
+  Scale := FBufferScale;
+  If Scale < 1 Then
+    Scale := 1;
   LogicalTop := 0;
   While LogicalTop < ClientHeight Do
     Begin
-      CopyHeight := Min(BufferHeight, ClientHeight - LogicalTop);
+      CopyHeight := Min(Max(1, FLogicalBufferHeight), ClientHeight - LogicalTop);
       BufferRect := Rect(0, 0, ClientWidth, CopyHeight);
-      Bitmap.Canvas.Brush.Style := bsSolid;
-      Bitmap.Canvas.Brush.Color := Color;
-      Bitmap.Canvas.FillRect(BufferRect);
-      ConfigureCanvas;
-      Clip := View;
-      OffsetRect(Clip, 0, -LogicalTop);
-      If IntersectRect(Clip, Clip, BufferRect) Then PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - LogicalTop - ScrollTop);
-      Bitmap.Canvas.Brush.Style := bsSolid;
-      If Focused Then Bitmap.Canvas.Brush.Color := $00C08038 Else Bitmap.Canvas.Brush.Color := $00C8C5BE;
-      Bitmap.Canvas.FillRect(0, -LogicalTop, ClientWidth, 1 - LogicalTop);
-      Bitmap.Canvas.FillRect(0, ClientHeight - 1 - LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-      Bitmap.Canvas.FillRect(0, -LogicalTop, 1, ClientHeight - LogicalTop);
-      Bitmap.Canvas.FillRect(ClientWidth - 1, -LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-      Canvas.CopyRect(Rect(0, LogicalTop, ClientWidth, LogicalTop + CopyHeight), Bitmap.Canvas, BufferRect);
+      SrcW := Max(1, Ceil(ClientWidth * Scale - 1E-6));
+      SrcH := Max(1, Ceil(CopyHeight * Scale - 1E-6));
+      SrcRect := Rect(0, 0, SrcW, SrcH);
+      DestRect := Rect(0, LogicalTop, ClientWidth, LogicalTop + CopyHeight);
+      { Draw in logical coordinates with a scaled CTM so text rasterises at
+        backing resolution. Cocoa text metrics ignore CTM, so layout stays valid. }
+      Bitmap.Canvas.SaveHandleState;
+      Try
+        If Scale > 1.0001 Then
+          SetCanvasScaleFactor(Bitmap.Canvas.Handle, Scale);
+        Bitmap.Canvas.Brush.Style := bsSolid;
+        Bitmap.Canvas.Brush.Color := Color;
+        Bitmap.Canvas.FillRect(BufferRect);
+        ConfigureCanvas;
+        Clip := View;
+        OffsetRect(Clip, 0, -LogicalTop);
+        If IntersectRect(Clip, Clip, BufferRect) Then
+          PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - LogicalTop - ScrollTop);
+        Bitmap.Canvas.Brush.Style := bsSolid;
+        If Focused Then
+          Bitmap.Canvas.Brush.Color := $00C08038
+        Else
+          Bitmap.Canvas.Brush.Color := $00C8C5BE;
+        Bitmap.Canvas.FillRect(0, -LogicalTop, ClientWidth, 1 - LogicalTop);
+        Bitmap.Canvas.FillRect(0, ClientHeight - 1 - LogicalTop, ClientWidth, ClientHeight - LogicalTop);
+        Bitmap.Canvas.FillRect(0, -LogicalTop, 1, ClientHeight - LogicalTop);
+        Bitmap.Canvas.FillRect(ClientWidth - 1, -LogicalTop, ClientWidth, ClientHeight - LogicalTop);
+      Finally
+        Bitmap.Canvas.RestoreHandleState;
+      End;
+      { Blit physical pixels into the logical dest; on a 2x backing this is 1:1. }
+      Canvas.CopyRect(DestRect, Bitmap.Canvas, SrcRect);
       Inc(LogicalTop, CopyHeight);
     End;
   FLastPaintMilliseconds := GetTickCount64 - Started;
