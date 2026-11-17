@@ -538,6 +538,8 @@ Begin
     If Assigned(OnStarted) Then
       OnStarted();
     {$IF FPC_FULLVERSION < 30301}
+    { Optional: without it WriteInput masks SIGPIPE instead. }
+    SetPipeNoSignal(ClaudeProcess.Input.Handle);
     Offset := 1;
     While Offset <= Length(InputText) Do
       Begin

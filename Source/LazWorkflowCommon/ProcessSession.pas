@@ -26,6 +26,8 @@ Procedure TerminateSession(Process: TProcess);
 Function ProcessWasSignalled(Process: TProcess): Boolean;
 /// Sets O_NONBLOCK on a Unix pipe handle. Other hosts return false.
 Function SetPipeNonBlocking(Handle: THandle): Boolean;
+/// Asks Darwin not to raise SIGPIPE for writes to a pipe this process created. Other hosts return false.
+Function SetPipeNoSignal(Handle: THandle): Boolean;
 /// Writes without delivering SIGPIPE to this process. False means the mask could not be set.
 Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Written: Integer; Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
 Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
@@ -46,6 +48,11 @@ Uses
   underscore, so these libc imports are used instead. The set is sigset_t. }
 Function DarwinSigPending(SigSet: PSigSet): cint; CDecl; External 'c' Name 'sigpending';
 Function DarwinSigWait(SigSet: PSigSet; Var Signo: cint): cint; CDecl; External 'c' Name 'sigwait';
+
+{ macOS 10.13 and later: a write to a descriptor with this flag returns EPIPE and raises no signal. }
+Const
+  DarwinSetNoSigPipe = 73;
+  DarwinGetNoSigPipe = 74;
 {$ENDIF}
 
 {$IFDEF UNIX}
@@ -144,6 +151,14 @@ Begin
   {$ENDIF}
 End;
 
+Function SetPipeNoSignal(Handle: THandle): Boolean;
+Begin
+  Result := False;
+  {$IFDEF DARWIN}
+  Result := fpFcntl(cint(Handle), DarwinSetNoSigPipe, 1) >= 0;
+  {$ENDIF}
+End;
+
 Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Written: Integer; Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
 {$IFDEF UNIX}
 Var
@@ -163,6 +178,19 @@ Begin
   Again := False;
   ErrorText := '';
   Result := False;
+  {$IFDEF DARWIN}
+  { One fcntl in place of the mask, pending check and sigwait. The flag is read rather than remembered, so a
+    reused descriptor number, or a handle that SetPipeNoSignal did not mark, still takes the masked path. }
+  If fpFcntl(cint(Handle), DarwinGetNoSigPipe) > 0 Then
+    Begin
+      Written := fpWrite(cint(Handle), Buf, Count);
+      Err := fpGetErrno;
+      Closed := (Written < 0) And Not (Err In [ESysEAGAIN, ESysEINTR]);
+      Again := (Written < 0) And (Err In [ESysEAGAIN, ESysEINTR]);
+      Result := True;
+      Exit;
+    End;
+  {$ENDIF}
   {$IFDEF UNIX}
   fpSigEmptySet(Blocked);
   fpSigAddSet(Blocked, SIGPIPE);

@@ -114,6 +114,8 @@ Begin
     FProcess.Execute;
     If Not SetPipeNonBlocking(FProcess.Input.Handle) Then
       Raise Exception.Create('Nonblocking pipe setup failed');
+    { Optional: without it the write masks SIGPIPE instead. }
+    SetPipeNoSignal(FProcess.Input.Handle);
     Result := True;
   Except
     { Never expose environment or process output in errors. }
