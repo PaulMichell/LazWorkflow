@@ -228,6 +228,7 @@ Type
     Procedure SaveSkillModes;
     Procedure ShowConnectionKind(Const Backend: String);
     Procedure ApplyImageCapability(Item: TAssistantConnection);
+    Procedure SelectConnectionRow(Index: Integer);
     Procedure RefreshConnections;
     Procedure StoreConnection;
     Procedure ShowConnectionUsage(Item: TAssistantConnection; UsageLabel: TLabel);
@@ -495,7 +496,7 @@ End;
 
 Procedure TAssistantSettingsForm.FormCreate(Sender: TObject);
 Var
-  I: Integer;
+  I, Selected: Integer;
 Begin
   Caption := 'Project Assistant Settings';
   SkillsGrid.ShowHint := True;
@@ -520,10 +521,11 @@ Begin
   RefreshConnections;
   If Connections.Count > 0 Then
     Begin
-      ConnectionsList.ItemIndex := 0;
+      Selected := 0;
       For I := 0 To Connections.Count - 1 Do
         If Connections[I].Id = Connections.ActiveId Then
-          ConnectionsList.ItemIndex := I;
+          Selected := I;
+      SelectConnectionRow(Selected);
     End;
   ConnectionChanged(Nil);
   PopulateSkills;
@@ -702,13 +704,24 @@ Begin
   End;
 End;
 
+Procedure TAssistantSettingsForm.SelectConnectionRow(Index: Integer);
+Begin
+  { Setting ItemIndex fires OnClick on Cocoa, which would store and load the connection a second time. }
+  ConnectionsList.LockSelectionChange;
+  Try
+    ConnectionsList.ItemIndex := Index;
+  Finally
+    ConnectionsList.UnlockSelectionChange;
+  End;
+End;
+
 Procedure TAssistantSettingsForm.RefreshConnections;
 Var
   I, Selected: Integer;
   Item: TAssistantConnection;
 Begin
   Selected := ConnectionsList.ItemIndex;
-  { Clearing or selecting a row fires OnClick on Cocoa. ConnectionChanged calls this. }
+  { Clearing a row fires OnClick on Cocoa. ConnectionChanged calls this. }
   ConnectionsList.LockSelectionChange;
   Try
     ConnectionsList.Items.BeginUpdate;
@@ -725,12 +738,12 @@ Begin
     Finally
       ConnectionsList.Items.EndUpdate;
     End;
-    If Selected >= Connections.Count Then
-      Selected := Connections.Count - 1;
-    ConnectionsList.ItemIndex := Selected;
   Finally
     ConnectionsList.UnlockSelectionChange;
   End;
+  If Selected >= Connections.Count Then
+    Selected := Connections.Count - 1;
+  SelectConnectionRow(Selected);
   Item := Connections.Active;
   If Assigned(Item) Then
     ActiveConnectionLabel.Caption := 'Current chat: ' + Item.Name + '.'
@@ -1031,7 +1044,7 @@ Begin
     Exit;
   If CodexFrame.Busy Then
     Begin
-      ConnectionsList.ItemIndex := SelectedConnection;
+      SelectConnectionRow(SelectedConnection);
       Exit;
     End;
   NewSelection := ConnectionsList.ItemIndex;
@@ -1041,7 +1054,7 @@ Begin
   Try
     RefreshConnections;
     SelectedConnection := NewSelection;
-    ConnectionsList.ItemIndex := NewSelection;
+    SelectConnectionRow(NewSelection);
     If (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
       Begin
         ShowConnectionKind('');
@@ -1128,7 +1141,7 @@ Begin
     End;
   SelectedConnection := -1;
   RefreshConnections;
-  ConnectionsList.ItemIndex := Connections.Count - 1;
+  SelectConnectionRow(Connections.Count - 1);
   ConnectionChanged(Nil);
 End;
 
@@ -1175,9 +1188,9 @@ Begin
   SelectedConnection := -1;
   RefreshConnections;
   If Connections.Count > 0 Then
-    ConnectionsList.ItemIndex := 0
+    SelectConnectionRow(0)
   Else
-    ConnectionsList.ItemIndex := -1;
+    SelectConnectionRow(-1);
   ConnectionChanged(Nil);
 End;
 
