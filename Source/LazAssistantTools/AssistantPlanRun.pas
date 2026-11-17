@@ -533,7 +533,7 @@ Begin
   Else
     Result := 'Compile after edits when a build tool is offered. ';
   If BrokerToolListed(ToolsJson, 'lazarus_start_tests') Then
-    Result := Result + 'Run lazarus_start_tests with only for named regression tests. ';
+    Result := Result + 'Run lazarus_start_tests with only for named regression tests, adding gui true for GUI tests. ';
   Result := Result + 'A clean compile does not mark this item complete.';
 End;
 

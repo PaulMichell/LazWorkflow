@@ -1170,7 +1170,7 @@ End;
 
 Procedure CheckNamedTests;
 Var
-  Root, ResultText, ErrorText, Command, Saved, DefineDir, HeapDir, ValDir, DebugDir, TraceDir: String;
+  Root, ResultText, ErrorText, Command, Saved, DefineDir, HeapDir, ValDir, DebugDir, TraceDir, GuiDir, GuiOnlyDir: String;
   Obj: TJSONObject;
   Args: TJSONArray;
   Launches: Integer;
@@ -1243,6 +1243,27 @@ Begin
   ValDir := OutputDirectory(Workspace.LastCommand);
   Check('memory-check modes do not share an output directory', (HeapDir <> ValDir) And (Pos('-heaptrc-', HeapDir) > 0) And
     (Pos('-valgrind-', ValDir) > 0) And DirectoryExists(HeapDir) And DirectoryExists(ValDir));
+  Check('gui with only is passed as --gui', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"gui":true}', ResultText, ErrorText) And
+    (Workspace.LaunchCount = Launches + 4));
+  Command := Workspace.LastCommand;
+  Check('gui follows the only pair', (ArgumentCount(Command) = 8) And (ArgumentAt(Command, 3) = '--only') And
+    (ArgumentAt(Command, 4) = 'GoodTest') And (ArgumentAt(Command, 5) = '--gui') And (ArgumentAt(Command, 6) = '--output-dir'));
+  GuiOnlyDir := ArgumentAt(Command, 7);
+  Check('a gui run uses its own output directory', (Pos('-gui-', GuiOnlyDir) > 0) And DirectoryExists(GuiOnlyDir));
+  Check('gui alone is passed', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","gui":true}', ResultText, ErrorText) And (ArgumentCount(Workspace.LastCommand) = 6) And
+    (ArgumentAt(Workspace.LastCommand, 3) = '--gui'));
+  GuiDir := OutputDirectory(Workspace.LastCommand);
+  Check('gui false leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","gui":false}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
+  Launches := Workspace.LaunchCount;
+  Check('gui with a memory check is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc","gui":true}', ResultText, ErrorText) And
+    (Pos('gui cannot be used with memory_check heaptrc', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
+  Check('a non-boolean gui is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","gui":"yes"}', ResultText, ErrorText) And
+    (Pos('gui must be true or false', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
   Check('a define with only is passed', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"defines":["DEBUG"]}', ResultText, ErrorText));
   DebugDir := OutputDirectory(Workspace.LastCommand);
@@ -1284,6 +1305,10 @@ Begin
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And
     (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
     (Workspace.LaunchCount = Launches));
+  Check('gui on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+    '{"build_job_id":"job-1","gui":true}', ResultText, ErrorText) And
+    (Pos('gui applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
+    (Workspace.LaunchCount = Launches));
   Workspace.BaseCommand := Saved;
   Check('memory_check none leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     '{"build_job_id":"job-1","memory_check":"none"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
@@ -1296,6 +1321,8 @@ Begin
   RemoveDir(ValDir);
   RemoveDir(DebugDir);
   RemoveDir(TraceDir);
+  RemoveDir(GuiOnlyDir);
+  RemoveDir(GuiDir);
   Workspace.AllowBuild := False;
   Workspace.BaseCommand := '';
   Workspace.ProjectRoot := '';

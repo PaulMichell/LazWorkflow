@@ -35,10 +35,11 @@ Type
 
 { Append runner options and a private --output-dir to a test command. OptionsJSON is an object with only (test program
   names, each an existing Tests/<name>.lpr), memory_check ('none', 'heaptrc' or 'valgrind', which needs a non-empty
-  only) and defines (at most 8 names, each passed as --define). With no options CommandJSON comes back unchanged; any
+  only), defines (at most 8 names, each passed as --define) and gui (a boolean; true passes --gui so the GUI test
+  programs run too, and cannot be used with a memory check). With no options CommandJSON comes back unchanged; any
   option needs the repository runner Tests/RunAssistantTests.pas. The output directory names the build, the memory
-  check, the sorted defines and the tests, so a run never reuses units compiled with other flags. It is made under
-  Temporary/ at the project root, never in the system temporary directory. }
+  check, the sorted defines, a GUI run and the tests, so a run never reuses units compiled with other flags. It is
+  made under Temporary/ at the project root, never in the system temporary directory. }
 Function ApplyTestOptions(Const CommandJSON, ProjectRoot, OptionsJSON: String; Out NewCommand, ErrorText: String): Boolean;
 
 Implementation
@@ -151,7 +152,8 @@ End;
 
 { Read and check OptionsJSON. Only keeps the given order; Defines is sorted, and like the runner it drops repeats
   without regard to case before counting them against the limit. }
-Function ReadTestOptions(Const OptionsJSON: String; Only, Defines: TStringList; Out MemoryCheck, ErrorText: String): Boolean;
+Function ReadTestOptions(Const OptionsJSON: String; Only, Defines: TStringList; Out MemoryCheck, ErrorText: String;
+  Out Gui: Boolean): Boolean;
 Var
   Data, Node: TJSONData;
   Options: TJSONObject;
@@ -161,6 +163,7 @@ Begin
   Result := False;
   MemoryCheck := 'none';
   ErrorText := '';
+  Gui := False;
   If Trim(OptionsJSON) = '' Then Exit(True);
   Try
     Data := GetJSON(OptionsJSON);
@@ -176,7 +179,8 @@ Begin
       End;
     Options := TJSONObject(Data);
     For I := 0 To Options.Count - 1 Do
-      If (Options.Names[I] <> 'only') And (Options.Names[I] <> 'memory_check') And (Options.Names[I] <> 'defines') Then
+      If (Options.Names[I] <> 'only') And (Options.Names[I] <> 'memory_check') And (Options.Names[I] <> 'defines') And
+        (Options.Names[I] <> 'gui') Then
         Begin
           ErrorText := 'Unknown test option: ' + Options.Names[I];
           Exit;
@@ -220,6 +224,16 @@ Begin
               Exit;
             End;
         MemoryCheck := Node.AsString;
+      End;
+    Node := Options.Find('gui');
+    If Assigned(Node) Then
+      Begin
+        If Node.JSONType <> jtBoolean Then
+          Begin
+            ErrorText := 'gui must be true or false.';
+            Exit;
+          End;
+        Gui := Node.AsBoolean;
       End;
     Node := Options.Find('defines');
     If Assigned(Node) Then
@@ -265,6 +279,7 @@ Var
   Only, Defines: TStringList;
   I: Integer;
   MemoryCheck, OptionName, TestFile, OutputDir, Token: String;
+  Gui: Boolean;
 Begin
   Result := False;
   NewCommand := '';
@@ -275,8 +290,8 @@ Begin
   Try
     Defines.Sorted := True;
     Defines.CaseSensitive := False;
-    If Not ReadTestOptions(OptionsJSON, Only, Defines, MemoryCheck, ErrorText) Then Exit;
-    If (Only.Count = 0) And (MemoryCheck = 'none') And (Defines.Count = 0) Then
+    If Not ReadTestOptions(OptionsJSON, Only, Defines, MemoryCheck, ErrorText, Gui) Then Exit;
+    If (Only.Count = 0) And (MemoryCheck = 'none') And (Defines.Count = 0) And Not Gui Then
       Begin
         NewCommand := CommandJSON;
         Exit(True);
@@ -286,11 +301,19 @@ Begin
         ErrorText := 'memory_check ' + MemoryCheck + ' needs at least one only name.';
         Exit;
       End;
+    { The runner refuses --gui with --heaptrc or --valgrind. }
+    If Gui And (MemoryCheck <> 'none') Then
+      Begin
+        ErrorText := 'gui cannot be used with memory_check ' + MemoryCheck + '.';
+        Exit;
+      End;
     { Name the option the caller gave in the errors below; only comes first because it is the usual one. }
     If Only.Count > 0 Then
       OptionName := 'only'
     Else If MemoryCheck <> 'none' Then
       OptionName := 'memory_check'
+    Else If Gui Then
+      OptionName := 'gui'
     Else
       OptionName := 'defines';
     If Trim(ProjectRoot) = '' Then
@@ -331,6 +354,8 @@ Begin
       Token := Token + '-' + MemoryCheck;
     For I := 0 To Defines.Count - 1 Do
       Token := Token + '-d' + Defines[I];
+    If Gui Then
+      Token := Token + '-gui';
     For I := 0 To Only.Count - 1 Do
       Token := Token + '-' + Only[I];
     If Not ForceProjectTemporaryDirectory(ProjectRoot, 'Tests-' + ShortDirToken(Token), OutputDir) Then
@@ -350,6 +375,8 @@ Begin
       End;
     If MemoryCheck <> 'none' Then
       TJSONArray(Args).Add('--' + MemoryCheck);
+    If Gui Then
+      TJSONArray(Args).Add('--gui');
     TJSONArray(Args).Add('--output-dir');
     TJSONArray(Args).Add(ExcludeTrailingPathDelimiter(OutputDir));
     NewCommand := Data.AsJSON;

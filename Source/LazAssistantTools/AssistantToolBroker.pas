@@ -1364,6 +1364,17 @@ Begin
                   If NewText <> '' Then NewText := NewText + ',';
                   NewText := NewText + '"defines":' + Node.AsJSON;
                 End;
+              Node := Args.Find('gui');
+              If Assigned(Node) Then
+                Begin
+                  If Node.JSONType <> jtBoolean Then
+                    Begin
+                      ErrorText := 'gui must be true or false.';
+                      Exit;
+                    End;
+                  If NewText <> '' Then NewText := NewText + ',';
+                  NewText := NewText + '"gui":' + Node.AsJSON;
+                End;
               If NewText <> '' Then NewText := '{' + NewText + '}';
               If Not FAdapter.TestCommand(ActualPath, NewText, Text, ErrorText) Then Exit;
               If Not Approve(RunId, Tool, '', Text, '', ErrorText) Then Exit;
@@ -1981,10 +1992,13 @@ Begin
     'Each name must match an existing Tests/<name>.lpr and is passed as --only. ' +
     'Optional memory_check (none, heaptrc or valgrind) and defines (a list of conditional names passed as --define) also apply only to ' +
     'Tests/RunAssistantTests.pas. A memory check other than none needs only; valgrind runs far slower than heaptrc. ' +
+    'Optional gui true passes --gui so the GUI test programs build and run too; a GUI-only test named in only needs it. ' +
+    'gui cannot be combined with a memory check, and it uses the IDE''s display. ' +
     'Output goes to a directory chosen here under Temporary/ at the project root. ' +
     'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
     '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}},' +
-    '"memory_check":{"type":"string","enum":["none","heaptrc","valgrind"]},"defines":{"type":"array","items":{"type":"string"}}},' +
+    '"memory_check":{"type":"string","enum":["none","heaptrc","valgrind"]},"defines":{"type":"array","items":{"type":"string"}},' +
+    '"gui":{"type":"boolean"}},' +
     '"required":["build_job_id"],"additionalProperties":false}},' +
     '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
   If ((Scope = awsProject) Or (Scope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
