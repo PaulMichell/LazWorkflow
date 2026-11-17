@@ -98,6 +98,12 @@ Constructor TStyledSurface.Create(OwnerComponent: TComponent);
 Begin
   Inherited Create(OwnerComponent);
   ControlStyle := ControlStyle + [csOpaque, csDoubleClicks];
+  {$IFDEF LCLWin32}
+  { Windows only: Paint fills ClientRect before drawing, and Win32 does not buffer a TCustomControl, so every
+    Invalidate would show a blank frame. The Win32 backing is 1x, so the memory buffer costs no text sharpness.
+    Cocoa and GTK supply a ready (HiDPI) paint DC, which a 1x buffer would blur. }
+  DoubleBuffered := True;
+  {$ENDIF}
   TabStop := True;
   Color := clWindow;
   Width := 240;
