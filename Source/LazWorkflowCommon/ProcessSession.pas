@@ -41,6 +41,11 @@ Uses
   BaseUnix, Unix{$IFDEF LINUX}, Syscall{$ENDIF};
 {$ENDIF}
 
+{$IFDEF DARWIN}
+{ macOS has no sigtimedwait. The set is the same 32-bit sigset_t BaseUnix uses. }
+Function DarwinSigWait(SigSet: PSigSet; Var Signo: cint): cint; CDecl; External 'c' Name 'sigwait';
+{$ENDIF}
+
 {$IFDEF UNIX}
 Type
   TSessionStarter = Class
@@ -141,9 +146,14 @@ Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Writt
 {$IFDEF UNIX}
 Var
   Blocked, Previous, Pending: TSigSet;
+  {$IFNDEF DARWIN}
   WaitTime: TTimespec;
+  {$ENDIF}
   HadPending: Boolean;
   Err: cint;
+  {$IFDEF DARWIN}
+  Signo: cint;
+  {$ENDIF}
 {$ENDIF}
 Begin
   Written := -1;
@@ -176,9 +186,16 @@ Begin
   Err := fpGetErrno;
   If (Written < 0) And (Err = ESysEPIPE) And Not HadPending Then
     Begin
+      {$IFDEF DARWIN}
+      { sigwait returns at once when SIGPIPE is already pending, and would block if it is not. }
+      Signo := 0;
+      If (fpSigPending(Pending) = 0) And (fpSigIsMember(Pending, SIGPIPE) = 1) Then
+        DarwinSigWait(@Blocked, Signo);
+      {$ELSE}
       WaitTime.tv_sec := 0;
       WaitTime.tv_nsec := 0;
       fpSigTimedWait(Blocked, Nil, @WaitTime);
+      {$ENDIF}
     End;
   fpSigProcMask(SIG_SETMASK, @Previous, Nil);
   Closed := (Written < 0) And Not (Err In [ESysEAGAIN, ESysEINTR]);

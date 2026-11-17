@@ -315,7 +315,7 @@ Begin
   Inherited Create;
   FLanguage := '';
   FChecker := Nil;
-  FCheckerThread := 0;
+  FCheckerThread := TThreadID(0);
   FComOwned := False;
   FAvailable := False;
 End;
@@ -338,7 +338,7 @@ Begin
       FComOwned := False;
     End;
   {$ENDIF}
-  FCheckerThread := 0;
+  FCheckerThread := TThreadID(0);
 End;
 
 Function TWindowsSpellEngine.EnsureChecker: Boolean;
