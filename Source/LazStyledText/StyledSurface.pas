@@ -29,10 +29,9 @@ Type
     FScrollStyle: TScrollStyle;
     FLastPaintMilliseconds: QWord;
     FPaintCount: QWord;
-    { Physical buffer is Client*Scale. Layout and PaintContent stay in logical pixels. }
-    FBufferScale: Double;
-    FLogicalBufferHeight: Integer;
-    Function BufferScaleFactor: Double;
+    { Non-nil only during Paint: content draws on the control canvas so HiDPI
+      backings rasterise text at native resolution. The bitmap is for measure. }
+    FPaintCanvas: TCanvas;
     Procedure UpdateScrollbarBounds;
     Procedure EnsureBuffer;
     Procedure DoScroll(Sender: TObject);
@@ -106,8 +105,7 @@ Begin
   Bitmap := TBitmap.Create;
   Bitmap.PixelFormat := pf32bit;
   Bitmap.SetSize(8, 8);
-  FBufferScale := 1;
-  FLogicalBufferHeight := 8;
+  FPaintCanvas := Nil;
   FRenderer := TStyledCanvas.Create;
   VerticalBar := TScrollBar.Create(Nil);
   VerticalBar.Parent := Self;
@@ -126,6 +124,7 @@ End;
 
 Destructor TStyledSurface.Destroy;
 Begin
+  FPaintCanvas := Nil;
   FreeAndNil(VerticalBar);
   FreeAndNil(HorizontalBar);
   FreeAndNil(FRenderer);
@@ -143,45 +142,31 @@ Begin
   Result.Bottom := Max(Result.Top + 1, Result.Bottom);
 End;
 
-Function TStyledSurface.BufferScaleFactor: Double;
-Begin
-  { Backing scale (Retina 2, some displays 1.5…). Logical layout stays 1:1 with LCL. }
-  If HandleAllocated Then
-    Result := GetCanvasScaleFactor
-  Else
-    Result := 1;
-  If Result < 1 Then
-    Result := 1;
-End;
-
 Procedure TStyledSurface.EnsureBuffer;
 Var
-  Scale: Double;
-  PhysW, PhysH, MaxLogicalH: Integer;
+  BufferW, BufferH: Integer;
 Begin
   If Not Assigned(Bitmap) Then Exit;
-  Scale := BufferScaleFactor;
-  PhysW := Max(1, Ceil(ClientWidth * Scale - 1E-6));
-  { Cap the physical strip at about 8 MiB so huge views still paint in bands. }
-  MaxLogicalH := Max(1, (8 * 1024 * 1024) Div Max(4, PhysW * 4));
-  If Scale > 1 Then
-    MaxLogicalH := Max(1, Trunc(MaxLogicalH / Scale));
-  MaxLogicalH := Min(Max(1, ClientHeight), MaxLogicalH);
-  PhysH := Max(1, Ceil(MaxLogicalH * Scale - 1E-6));
-  If (Bitmap.Width <> PhysW) Or (Bitmap.Height <> PhysH) Or (Abs(FBufferScale - Scale) > 1E-6) Then
-    Begin
-      Bitmap.SetSize(PhysW, PhysH);
-      FBufferScale := Scale;
-      FLogicalBufferHeight := MaxLogicalH;
-    End;
+  { Logical size only. Measurement uses this canvas; paint uses the control canvas. }
+  BufferW := Max(1, ClientWidth);
+  BufferH := Max(1, Min(ClientHeight, 8 * 1024 * 1024 Div Max(4, ClientWidth * 4)));
+  If (Bitmap.Width <> BufferW) Or (Bitmap.Height <> BufferH) Then Bitmap.SetSize(BufferW, BufferH);
 End;
 
 Procedure TStyledSurface.ConfigureCanvas;
+Var
+  Target: TCanvas;
 Begin
-  { Surface size is always logical so metric invalidation does not follow the
-    physical buffer. Paint applies BufferScale on the bitmap CTM separately. }
-  If Assigned(FRenderer) And Assigned(Bitmap) Then
-    FRenderer.Configure(Bitmap.Canvas, Font, Max(1, ClientWidth), Max(1, ClientHeight));
+  If Not Assigned(FRenderer) Then
+    Exit;
+  If Assigned(FPaintCanvas) Then
+    Target := FPaintCanvas
+  Else If Assigned(Bitmap) Then
+    Target := Bitmap.Canvas
+  Else
+    Exit;
+  { Always logical client size so metrics stay stable across paint vs measure. }
+  FRenderer.Configure(Target, Font, Max(1, ClientWidth), Max(1, ClientHeight));
 End;
 
 Procedure TStyledSurface.SetScrollbars(Vertical, Horizontal: Boolean);
@@ -311,7 +296,10 @@ End;
 
 Function TStyledSurface.GetBufferCanvas: TCanvas;
 Begin
-  Result := Bitmap.Canvas;
+  If Assigned(FPaintCanvas) Then
+    Result := FPaintCanvas
+  Else
+    Result := Bitmap.Canvas;
 End;
 
 Procedure TStyledSurface.SetExtent(NewWidth: Integer; NewHeight: Int64);
@@ -398,56 +386,37 @@ End;
 Procedure TStyledSurface.Paint;
 Var
   Started: QWord;
-  Clip, View, BufferRect, DestRect, SrcRect: TRect;
-  LogicalTop, CopyHeight, SrcW, SrcH: Integer;
-  Scale: Double;
+  Clip, View: TRect;
 Begin
   Started := GetTickCount64;
   View := ViewRect;
-  { Physical buffer at canvas scale so Retina/HiDPI does not upscale soft 1x glyphs. }
   EnsureBuffer;
-  Scale := FBufferScale;
-  If Scale < 1 Then
-    Scale := 1;
-  LogicalTop := 0;
-  While LogicalTop < ClientHeight Do
-    Begin
-      CopyHeight := Min(Max(1, FLogicalBufferHeight), ClientHeight - LogicalTop);
-      BufferRect := Rect(0, 0, ClientWidth, CopyHeight);
-      SrcW := Max(1, Ceil(ClientWidth * Scale - 1E-6));
-      SrcH := Max(1, Ceil(CopyHeight * Scale - 1E-6));
-      SrcRect := Rect(0, 0, SrcW, SrcH);
-      DestRect := Rect(0, LogicalTop, ClientWidth, LogicalTop + CopyHeight);
-      { Draw in logical coordinates with a scaled CTM so text rasterises at
-        backing resolution. Cocoa text metrics ignore CTM, so layout stays valid. }
-      Bitmap.Canvas.SaveHandleState;
-      Try
-        If Scale > 1.0001 Then
-          SetCanvasScaleFactor(Bitmap.Canvas.Handle, Scale);
-        Bitmap.Canvas.Brush.Style := bsSolid;
-        Bitmap.Canvas.Brush.Color := Color;
-        Bitmap.Canvas.FillRect(BufferRect);
-        ConfigureCanvas;
-        Clip := View;
-        OffsetRect(Clip, 0, -LogicalTop);
-        If IntersectRect(Clip, Clip, BufferRect) Then
-          PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - LogicalTop - ScrollTop);
-        Bitmap.Canvas.Brush.Style := bsSolid;
-        If Focused Then
-          Bitmap.Canvas.Brush.Color := $00C08038
-        Else
-          Bitmap.Canvas.Brush.Color := $00C8C5BE;
-        Bitmap.Canvas.FillRect(0, -LogicalTop, ClientWidth, 1 - LogicalTop);
-        Bitmap.Canvas.FillRect(0, ClientHeight - 1 - LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-        Bitmap.Canvas.FillRect(0, -LogicalTop, 1, ClientHeight - LogicalTop);
-        Bitmap.Canvas.FillRect(ClientWidth - 1, -LogicalTop, ClientWidth, ClientHeight - LogicalTop);
-      Finally
-        Bitmap.Canvas.RestoreHandleState;
-      End;
-      { Blit physical pixels into the logical dest; on a 2x backing this is 1:1. }
-      Canvas.CopyRect(DestRect, Bitmap.Canvas, SrcRect);
-      Inc(LogicalTop, CopyHeight);
-    End;
+  { Paint on the control canvas. Cocoa/Qt HiDPI backings rasterise TextOut at
+    native resolution; an offscreen 1x bitmap blit was soft, and a scaled CTM
+    offscreen path left the conversation blank on Mac. }
+  FPaintCanvas := Canvas;
+  Try
+    Canvas.Brush.Style := bsSolid;
+    Canvas.Brush.Color := Color;
+    Canvas.FillRect(ClientRect);
+    ConfigureCanvas;
+    Clip := View;
+    If (Clip.Right > Clip.Left) And (Clip.Bottom > Clip.Top) Then
+      PaintContent(Clip, View.Left - ScrollLeft, Int64(View.Top) - ScrollTop);
+    Canvas.Brush.Style := bsSolid;
+    If Focused Then
+      Canvas.Brush.Color := $00C08038
+    Else
+      Canvas.Brush.Color := $00C8C5BE;
+    Canvas.FillRect(0, 0, ClientWidth, 1);
+    Canvas.FillRect(0, ClientHeight - 1, ClientWidth, ClientHeight);
+    Canvas.FillRect(0, 0, 1, ClientHeight);
+    Canvas.FillRect(ClientWidth - 1, 0, ClientWidth, ClientHeight);
+  Finally
+    FPaintCanvas := Nil;
+    { Point the renderer back at the measure bitmap for layout work. }
+    ConfigureCanvas;
+  End;
   FLastPaintMilliseconds := GetTickCount64 - Started;
   Inc(FPaintCount);
 End;
