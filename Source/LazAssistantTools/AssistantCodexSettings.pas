@@ -513,6 +513,8 @@ Begin
   DeleteProfileButton.Enabled := CodexProfilePathIsDerived(ProfileDir);
   RuntimeEdit.Text := Trim(Runtime);
   ModelCombo.Items.Clear;
+  { Cocoa keeps the previous edit text after Items.Clear. }
+  ModelCombo.Text := '';
   If Model <> '' Then
     Begin
       ModelCombo.Items.Add(Model);

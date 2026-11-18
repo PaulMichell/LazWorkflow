@@ -463,6 +463,7 @@ Var
   Excluded: TStringList;
   Widget: String;
   I: Integer;
+  Preferred: Array Of String;
 Begin
   Result := TStringList.Create;
   Result.Sorted := True;
@@ -470,19 +471,15 @@ Begin
   Result.CaseSensitive := True;
   Excluded := TStringList.Create;
   Try
-    { gtk3 is the project widgetset. gtk2 units can exist without the gtk2 libraries. }
-    FillExcluded(Excluded, 'gtk3');
-    CollectPpuDirs(LazarusRoot, Excluded, Result);
-    If HasInterfaces(Result) Then
-      Exit;
-    For I := 0 To 2 Do
+    { Prefer the host widgetset so Mac GUI tests link Cocoa, not a Linux gtk3 tree. }
+    {$IFDEF DARWIN}
+    Preferred := ['cocoa', 'qt5', 'qt6', 'gtk3', 'gtk2'];
+    {$ELSE}
+    Preferred := ['gtk3', 'gtk2', 'qt5', 'qt6', 'cocoa'];
+    {$ENDIF}
+    For I := 0 To High(Preferred) Do
       Begin
-        Case I Of
-          0: Widget := 'gtk2';
-          1: Widget := 'qt5';
-        Else
-          Widget := 'qt6';
-        End;
+        Widget := Preferred[I];
         Result.Clear;
         FillExcluded(Excluded, Widget);
         CollectPpuDirs(LazarusRoot, Excluded, Result);
@@ -507,6 +504,13 @@ Begin
     Command.Add('-Fu' + UnitDirs[I]);
   For I := 0 To LibraryDirs.Count - 1 Do
     Command.Add('-Fl' + ExpandFileName(LibraryDirs[I]));
+  {$IFDEF DARWIN}
+  { Match LCL Cocoa package linker options (lcl/interfaces/lcl.lpk). }
+  Command.Add('-k-weak_framework');
+  Command.Add('-kAppKit');
+  Command.Add('-k-weak_framework');
+  Command.Add('-kUserNotifications');
+  {$ENDIF}
 End;
 
 { The default output directory is a new Temporary/Tests-<pid>-<n> at the repository root. Temporary/ gets a .gitignore
