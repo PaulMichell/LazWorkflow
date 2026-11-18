@@ -2,7 +2,8 @@ Unit AssistantCodexTransport;
 
 { Single-owner, nonblocking JSONL process transport. Use from a worker, never
   the IDE thread. Cancel is the only method callable from another thread.
-  Linux preview: other platforms fail closed until their pipe handling is tested. (c) 2026 Michell Computing. }
+  Linux and macOS share the Unix pipe loop. Other hosts fail closed until their
+  pipe handling is tested. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -98,8 +99,9 @@ Begin
   FWriteBytes := 0;
   FWriteOffset := 1;
   Result := False;
-  {$IFNDEF LINUX}
-  FError := 'Codex process transport is currently qualified for Linux only.';
+  { Darwin has the same nonblocking pipes and process-group stop as Linux. Windows has neither O_NONBLOCK nor SIGPIPE. }
+  {$IF NOT (DEFINED(LINUX) OR DEFINED(DARWIN))}
+  FError := 'Codex process transport is currently qualified for Linux and macOS only.';
   Exit;
   {$ENDIF}
   Try
@@ -114,7 +116,7 @@ Begin
     FProcess.Execute;
     If Not SetPipeNonBlocking(FProcess.Input.Handle) Then
       Raise Exception.Create('Nonblocking pipe setup failed');
-    { Optional: without it the write masks SIGPIPE instead. }
+    { Darwin marks the write end so a dead child returns EPIPE. Linux has no such flag; the write masks SIGPIPE. }
     SetPipeNoSignal(FProcess.Input.Handle);
     Result := True;
   Except
