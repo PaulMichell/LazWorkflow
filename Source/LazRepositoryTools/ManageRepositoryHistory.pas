@@ -24,6 +24,8 @@ Type
     FRepoPath: String;
     FHeadSha: String;
     FLaneColors: Array[0..9] Of TColor;
+    { Commit markers, reused across paints. Prepare empties it when the scale or theme colours change. }
+    Markers: TSmoothMarkerCache;
     Procedure InitLaneColors;
     Function GraphScale(DesignPx: Integer): Integer;
     Function GraphPixelScale: Single;
@@ -40,9 +42,9 @@ Type
     Function FormatCommitDate(Const CommitTime: Int64): String;
     Procedure DrawRefCards(Const Refs: String; Var TextX: Integer; RowTop: Integer; RowColor: TColor);
     Function CommitIsCheckedOut(Const CommitRec: TGitCommitRec): Boolean;
-    Function StrokesNear(NodeX, NodeY, Reach: Single; Const Visible: TGitEdgeIndices; HalfWidth: Single): TSmoothStrokeArray;
   Public
     Constructor Create(Host: TCustomForm);
+    Destructor Destroy; Override;
     Procedure Bind(PaintBox: TPaintBox; ScrollBar: TScrollBar; Model: TGitGraphModel);
     Function RowHeight: Integer;
     Function ContentHeight: Integer;
@@ -71,6 +73,13 @@ Begin
   FRepoPath := '';
   FHeadSha := '';
   InitLaneColors;
+  Markers := TSmoothMarkerCache.Create;
+End;
+
+Destructor TManageHistoryGraph.Destroy;
+Begin
+  FreeAndNil(Markers);
+  Inherited Destroy;
 End;
 
 Procedure TManageHistoryGraph.Bind(PaintBox: TPaintBox; ScrollBar: TScrollBar; Model: TGitGraphModel);
@@ -359,73 +368,6 @@ Begin
   Result := (FHeadSha <> '') And SameText(CommitRec.Sha, FHeadSha);
 End;
 
-Function TManageHistoryGraph.StrokesNear(NodeX, NodeY, Reach: Single; Const Visible: TGitEdgeIndices; HalfWidth: Single): TSmoothStrokeArray;
-
-  Function NearSegment(AX1, AY1, AX2, AY2: Single): Boolean;
-  Var
-    Dx, Dy, Len2, T, Px, Py: Single;
-  Begin
-    Dx := AX2 - AX1;
-    Dy := AY2 - AY1;
-    Len2 := Dx * Dx + Dy * Dy;
-    If Len2 <= 0 Then
-      Begin
-        Px := NodeX - AX1;
-        Py := NodeY - AY1;
-        Result := Px * Px + Py * Py <= Reach * Reach;
-        Exit;
-      End;
-    T := ((NodeX - AX1) * Dx + (NodeY - AY1) * Dy) / Len2;
-    If T < 0 Then
-      T := 0
-    Else If T > 1 Then
-      T := 1;
-    Px := NodeX - (AX1 + T * Dx);
-    Py := NodeY - (AY1 + T * Dy);
-    Result := Px * Px + Py * Py <= Reach * Reach;
-  End;
-
-  Procedure AddStroke(AX1, AY1, AX2, AY2: Single; AColor: TColor);
-  Var
-    N: Integer;
-  Begin
-    If Not NearSegment(AX1, AY1, AX2, AY2) Then
-      Exit;
-    N := Length(Result);
-    SetLength(Result, N + 1);
-    Result[N].X1 := AX1;
-    Result[N].Y1 := AY1;
-    Result[N].X2 := AX2;
-    Result[N].Y2 := AY2;
-    Result[N].HalfWidth := HalfWidth;
-    Result[N].Color := AColor;
-  End;
-
-Var
-  I: Integer;
-  E: TGitGraphEdge;
-  X1, Y1, X2, Y2: Single;
-  Col: TColor;
-Begin
-  Result := Nil;
-  For I := 0 To High(Visible) Do
-    Begin
-      E := FModel.Edge(Visible[I]);
-      X1 := LaneX(E.ChildLane);
-      Y1 := RowMidY(E.ChildIndex);
-      X2 := LaneX(E.ParentLane);
-      Y2 := RowMidY(E.ParentIndex);
-      Col := FLaneColors[FModel.LaneColorIndex(E.ChildLane)];
-      If E.ChildLane = E.ParentLane Then
-        AddStroke(X1, Y1, X2, Y2, Col)
-      Else
-        Begin
-          AddStroke(X1, Y1, X1, Y2, Col);
-          AddStroke(X1, Y2, X2, Y2, Col);
-        End;
-    End;
-End;
-
 Function HistoryRowFill(Selected: Boolean): TColor;
 Begin
   If Selected Then
@@ -589,11 +531,10 @@ Procedure TManageHistoryGraph.Paint;
 Var
   FirstRow, LastRow, I, TextX, Y, X, Off, SubjectW, RH, DateColW, NodeR, Ring: Integer;
   TextH, TextY, EdgePenW, MsgPad, RingPenW, NodeY: Integer;
-  MarkerRadius, RingInner, HalfStroke, PixelScale: Single;
+  MarkerRadius, RingInner, PixelScale: Single;
   C: TGitCommitRec;
   E: TGitGraphEdge;
   Visible: TGitEdgeIndices;
-  Strokes: TSmoothStrokeArray;
   Col: TColor;
   LabelText, DateText: String;
 Begin
@@ -615,8 +556,8 @@ Begin
     MarkerRadius := RingInner - 1;
   If MarkerRadius < 1 Then
     MarkerRadius := 1;
-  { Match the painted pen. A wider underlay bulges the circle where the line meets it. }
-  HalfStroke := EdgePenW / 2;
+  { The ring takes clWindowText; lane colours are fixed. A new scale or theme invalidates every cached marker. }
+  Markers.Prepare(PixelScale, [clWindowText, clWindow]);
   MsgPad := GraphScale(16);
   With FPaintBox.Canvas Do
     Begin
@@ -681,13 +622,11 @@ Begin
           Col := FLaneColors[FModel.LaneColorIndex(C.Lane)];
           X := LaneX(C.Lane);
           NodeY := RowMidY(I);
-          Strokes := StrokesNear(X, NodeY, MarkerRadius + HalfStroke, Visible, HalfStroke);
-          { Ring first, then the same disk as every other row, so the ring mask cannot clip this marker. }
+          { Every lane line is already painted, so each straight-alpha marker composites over the lines and row fill.
+            Ring first, then the same disk as every other row, so the ring cannot cover this marker. }
           If CommitIsCheckedOut(C) Then
-            DrawSmoothRing(FPaintBox.Canvas, X, NodeY, NodeR + Ring + 1, RingPenW, clWindowText,
-              HistoryRowFill(I = FSelectedIndex), Strokes, PixelScale);
-          DrawSmoothDisk(FPaintBox.Canvas, X, NodeY, MarkerRadius, Col, HistoryRowFill(I = FSelectedIndex), Strokes,
-            PixelScale);
+            Markers.DrawRing(FPaintBox.Canvas, X, NodeY, NodeR + Ring + 1, RingPenW, clWindowText, PixelScale);
+          Markers.DrawDisk(FPaintBox.Canvas, X, NodeY, MarkerRadius, Col, PixelScale);
 
           TextX := GraphContentWidth + GraphTextGap;
           Brush.Style := bsClear;

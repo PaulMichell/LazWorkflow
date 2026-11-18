@@ -12,15 +12,57 @@ Interface
 Uses
   Graphics, IntfGraphics, Types;
 
+Const
+  { A cached marker centre is quantised to 1/SmoothMarkerCentreSteps of a logical pixel. }
+  SmoothMarkerCentreSteps = 4;
+
 Type
-  { A straight stroke already painted under a smooth shape. The fringe blends with Color
-    where a sample lies inside the stroke, so the shape does not erase the line. }
-  TSmoothStroke = Record
-    X1, Y1, X2, Y2: Single;
-    HalfWidth: Single;
-    Color: TColor;
+  { One cached marker. Dest is the logical rectangle it covers, relative to the whole-pixel part of the centre. }
+  TSmoothMarkerEntry = Record
+    Edge: TColor;
+    OuterRadius, InnerRadius, Scale: Single;
+    StepX, StepY: Integer;
+    Bitmap: TBitmap;
+    Dest: TRect;
   End;
-  TSmoothStrokeArray = Array Of TSmoothStroke;
+
+  { A bounded cache of the straight-alpha bitmaps DrawSmoothDisk and DrawSmoothRing would build. The key is the edge
+    colour (resolved to RGB), the outer radius, the inner radius (or none), the clamped pixel scale and the sub-pixel
+    offset of the centre. That offset changes the pixels, because the bitmap starts at Floor(Centre - Radius - Pad),
+    so it is quantised to 1/SmoothMarkerCentreSteps of a logical pixel rather than snapped to the physical grid.
+    The owner calls Prepare before each paint; Prepare empties the cache when the scale or the theme colours change.
+    When the cache is full the oldest entry is dropped. }
+  TSmoothMarkerCache = Class
+  Private
+    FCapacity: Integer;
+    FCount: Integer;
+    Entries: Array Of TSmoothMarkerEntry;
+    PreparedScale: Single;
+    PreparedColors: Array Of TColor;
+    Function IndexOf(Edge: TColor; OuterRadius, InnerRadius, Scale: Single; StepX, StepY: Integer): Integer;
+    Procedure DropOldest;
+  Protected
+    { An empty 32-bit image, RGB plus alpha with no mask, for one marker to be rendered into. }
+    Function NewMarkerImage: TLazIntfImage; Virtual;
+    { Uploads one rendered marker. Called once per entry; the bitmap is never changed afterwards. }
+    Function NewMarkerBitmap(Image: TLazIntfImage): TBitmap; Virtual;
+  Public
+    Constructor Create(MaxEntries: Integer = 48);
+    Destructor Destroy; Override;
+    Procedure Clear;
+    { Empties the cache when PixelScale (clamped) or any of ThemeColors (resolved to RGB) differs from last time. }
+    Procedure Prepare(PixelScale: Single; Const ThemeColors: Array Of TColor);
+    { The cached bitmap for a disk (InnerRadius < 0) or ring band, rendering it on a miss. Dest receives the logical
+      rectangle to draw it in. Nil, with an empty Dest, when nothing is drawn. The cache owns the bitmap. }
+    Function Marker(CentreX, CentreY, OuterRadius, InnerRadius: Single; Edge: TColor; PixelScale: Single;
+      Out Dest: TRect): TBitmap;
+    { The cached equivalents of DrawSmoothDisk and DrawSmoothRing. }
+    Procedure DrawDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill: TColor; PixelScale: Single);
+    Procedure DrawRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke: TColor;
+      PixelScale: Single);
+    Property Capacity: Integer Read FCapacity;
+    Property Count: Integer Read FCount;
+  End;
 
 /// Draws a symmetric rounded rectangle. Blend against Background, the colour just painted under Bounds.
 /// The first paint cannot read those pixels: a canvas read comes back black and darkens the edge.
@@ -31,21 +73,18 @@ Procedure DrawSmoothRoundRect(Target: TCanvas; Const Bounds: TRect; Radius: Sing
 
 /// Draws an antialiased disk over what is already painted. Radius is the 50% edge.
 /// Uses the same coverage grid as DrawSmoothRing. Uncovered pixels use alpha 0 so paths remain.
-/// Partial pixels blend against Background, or against a stroke when the sample lies on one.
-/// Do not read the canvas: a read comes back black and darkens the edge.
-/// Drawn via an 8-bit alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
+/// Partial pixels hold the fill colour with alpha equal to their coverage; the widgetset composites them.
+/// Drawn via an 8-bit straight-alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
 /// PixelScale is the control canvas scale (Retina 2). Values <= 1 keep a 1x buffer.
-Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill, Background: TColor;
-  Const Strokes: TSmoothStrokeArray = Nil; PixelScale: Single = 1);
+Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill: TColor; PixelScale: Single = 1);
 
 /// Draws an antialiased ring over what is already painted. Radius is the stroke centreline.
 /// StrokeWidth is the full thickness. Uncovered pixels use alpha 0 so lane dots and paths remain.
-/// Partial pixels blend against Background, or against a stroke when the sample lies on one.
-/// Do not read the canvas: a read comes back black and darkens the edge.
-/// Drawn via an 8-bit alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
+/// Partial pixels hold the stroke colour with alpha equal to their coverage; the widgetset composites them.
+/// Drawn via an 8-bit straight-alpha bitmap (not a 1-bit mask): Cocoa ignores masks on plain Draw.
 /// PixelScale is the control canvas scale (Retina 2). Values <= 1 keep a 1x buffer.
-Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke, Background: TColor;
-  Const Strokes: TSmoothStrokeArray = Nil; PixelScale: Single = 1);
+Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke: TColor;
+  PixelScale: Single = 1);
 
 /// Rasterises the image DrawSmoothRoundRect copies for a LogicalW x LogicalH rectangle. Image is resized to the
 /// backing size. Returns False, leaving Image unchanged, when the rectangle is too small to draw.
@@ -55,15 +94,15 @@ Function RenderSmoothRoundRect(Image: TLazIntfImage; LogicalW, LogicalH: Integer
 
 /// Rasterises the image DrawSmoothDisk (InnerRadius < 0) or DrawSmoothRing (the band between the radii) copies.
 /// Image needs an alpha channel and is resized to the backing size; Dest receives the logical rectangle it covers.
+/// Every drawn pixel is Edge with straight (not premultiplied) alpha equal to its coverage.
 /// Returns False when nothing is drawn. SkipUniform False supersamples every pixel, as for RenderSmoothRoundRect.
 Function RenderCoverageCircle(Image: TLazIntfImage; CentreX, CentreY, OuterRadius, InnerRadius: Single;
-  Edge, Background: TColor; Const Strokes: TSmoothStrokeArray; PixelScale: Single; Out Dest: TRect;
-  SkipUniform: Boolean = True): Boolean;
+  Edge: TColor; PixelScale: Single; Out Dest: TRect; SkipUniform: Boolean = True): Boolean;
 
 Implementation
 
 Uses
-  fpimage, GraphType, Math;
+  SysUtils, fpimage, GraphType, Math;
 
 Const
   { Full width of the coverage ramp of a disk or ring, in physical pixels. }
@@ -265,11 +304,11 @@ End;
 
 { InnerRadius < 0 fills a disk of OuterRadius. Otherwise the stroke is the band between the two radii.
   Both shapes use one 8x8 coverage grid so a lane dot cannot be softer or harder than the checkout ring.
-  Strokes supply the colour already painted under the shape. A canvas read cannot: it comes back black.
+  Partial pixels carry the edge colour with straight alpha equal to their coverage, and the widgetset composites them
+  over whatever is already painted, so nothing here needs to know what lies underneath.
   Geometry is logical; PixelScale rasterises at backing resolution. }
 Function RenderCoverageCircle(Image: TLazIntfImage; CentreX, CentreY, OuterRadius, InnerRadius: Single;
-  Edge, Background: TColor; Const Strokes: TSmoothStrokeArray; PixelScale: Single; Out Dest: TRect;
-  SkipUniform: Boolean): Boolean;
+  Edge: TColor; PixelScale: Single; Out Dest: TRect; SkipUniform: Boolean): Boolean;
 
   Function Clamp01(Value: Single): Single;
   Begin
@@ -281,22 +320,14 @@ Function RenderCoverageCircle(Image: TLazIntfImage; CentreX, CentreY, OuterRadiu
       Result := Value;
   End;
 
-  Function MixChannel(Base, Over, Coverage: Single): Single;
+  Function CoverageAlpha(Coverage: Single): Word;
   Begin
-    Result := Base + (Over - Base) * Coverage;
-  End;
-
-  Function AverageChannel(Sum: Single; Count: Integer): Word;
-  Var
-    Value: Single;
-  Begin
-    Value := Sum / Count;
-    If Value <= 0 Then
+    If Coverage <= 0 Then
       Result := 0
-    Else If Value >= 65535 Then
+    Else If Coverage >= 1 Then
       Result := 65535
     Else
-      Result := Round(Value);
+      Result := Round(65535 * Coverage);
   End;
 
   Function SampleCoverage(Dist, OuterR, InnerR: Single): Single;
@@ -317,48 +348,12 @@ Function RenderCoverageCircle(Image: TLazIntfImage; CentreX, CentreY, OuterRadiu
       End;
   End;
 
-  Function UnderColor(SampleX, SampleY: Single; Const Base: TFPColor): TFPColor;
-  Var
-    S: Integer;
-    SegX, SegY, Len2, T, Px, Py, Limit: Single;
-  Begin
-    Result := Base;
-    For S := 0 To High(Strokes) Do
-      Begin
-        Limit := Strokes[S].HalfWidth * PixelScale;
-        If Limit <= 0 Then
-          Continue;
-        SegX := (Strokes[S].X2 - Strokes[S].X1) * PixelScale;
-        SegY := (Strokes[S].Y2 - Strokes[S].Y1) * PixelScale;
-        Len2 := SegX * SegX + SegY * SegY;
-        If Len2 <= 0 Then
-          Begin
-            Px := SampleX - Strokes[S].X1 * PixelScale;
-            Py := SampleY - Strokes[S].Y1 * PixelScale;
-          End
-        Else
-          Begin
-            T := ((SampleX - Strokes[S].X1 * PixelScale) * SegX +
-              (SampleY - Strokes[S].Y1 * PixelScale) * SegY) / Len2;
-            If T < 0 Then
-              T := 0
-            Else If T > 1 Then
-              T := 1;
-            Px := SampleX - (Strokes[S].X1 * PixelScale + T * SegX);
-            Py := SampleY - (Strokes[S].Y1 * PixelScale + T * SegY);
-          End;
-        If Px * Px + Py * Py <= Limit * Limit Then
-          Exit(TColorToFPColor(ColorToRGB(Strokes[S].Color)));
-      End;
-  End;
-
 Var
   Scale: Single;
   Left, Top, Right, Bottom, PhysW, PhysH, X, Y, SampleX, SampleY, SampleGrid, Samples, MaxExtent: Integer;
-  SampleScale, Dx, Dy, Dist, Coverage, CoverageSum, SampleXPos, SampleYPos: Single;
+  SampleScale, Dx, Dy, Dist, CoverageSum: Single;
   PhysCentreX, PhysCentreY, PhysOuter, PhysInner, Pad, OuterCoverage, InnerCoverage: Single;
-  SumR, SumG, SumB: Single;
-  EdgeColor, BackColor, Under, Pixel: TFPColor;
+  EdgeColor, Pixel: TFPColor;
 Begin
   Result := False;
   Dest := Rect(0, 0, 0, 0);
@@ -366,9 +361,7 @@ Begin
     Exit;
   If Image.DataDescription.AlphaPrec < 1 Then
     Exit;
-  { Nested stroke tests read PixelScale; keep it clamped for the whole body. }
-  PixelScale := ClampSmoothScale(PixelScale);
-  Scale := PixelScale;
+  Scale := ClampSmoothScale(PixelScale);
   Pad := SmoothCoverageWidth / 2;
   Left := Floor(CentreX - OuterRadius - Pad);
   Top := Floor(CentreY - OuterRadius - Pad);
@@ -388,7 +381,6 @@ Begin
   Else
     PhysInner := InnerRadius * Scale;
   EdgeColor := TColorToFPColor(ColorToRGB(Edge));
-  BackColor := TColorToFPColor(ColorToRGB(Background));
   SampleGrid := 8;
   Samples := SampleGrid * SampleGrid;
   SampleScale := 1 / SampleGrid;
@@ -396,8 +388,7 @@ Begin
   For Y := 0 To PhysH - 1 Do
     For X := 0 To PhysW - 1 Do
       Begin
-        { A pixel well clear of every edge has one coverage throughout. Fully covered samples all take the edge
-          colour, whatever lies under them, and uncovered ones leave the pixel transparent. }
+        { A pixel well clear of every edge has one coverage throughout: opaque edge colour, or transparent. }
         Dx := X + 0.5 - PhysCentreX;
         Dy := Y + 0.5 - PhysCentreY;
         Dist := Sqrt(Dx * Dx + Dy * Dy);
@@ -416,78 +407,273 @@ Begin
             Image.Colors[X, Y] := Pixel;
             Continue;
           End;
-        SumR := 0;
-        SumG := 0;
-        SumB := 0;
         CoverageSum := 0;
         For SampleY := 0 To SampleGrid - 1 Do
           For SampleX := 0 To SampleGrid - 1 Do
             Begin
-              SampleXPos := X + (SampleX + 0.5) * SampleScale;
-              SampleYPos := Y + (SampleY + 0.5) * SampleScale;
-              Dx := SampleXPos - PhysCentreX;
-              Dy := SampleYPos - PhysCentreY;
+              Dx := X + (SampleX + 0.5) * SampleScale - PhysCentreX;
+              Dy := Y + (SampleY + 0.5) * SampleScale - PhysCentreY;
               Dist := Sqrt(Dx * Dx + Dy * Dy);
-              Coverage := SampleCoverage(Dist, PhysOuter, PhysInner);
-              CoverageSum := CoverageSum + Coverage;
-              { Stroke tests use physical space with origin at the logical (0,0) scaled. }
-              Under := UnderColor(SampleXPos + Left * Scale, SampleYPos + Top * Scale, BackColor);
-              SumR := SumR + MixChannel(Under.Red, EdgeColor.Red, Coverage);
-              SumG := SumG + MixChannel(Under.Green, EdgeColor.Green, Coverage);
-              SumB := SumB + MixChannel(Under.Blue, EdgeColor.Blue, Coverage);
+              CoverageSum := CoverageSum + SampleCoverage(Dist, PhysOuter, PhysInner);
             End;
         If CoverageSum <= 0 Then
           Pixel := ClearPixel
         Else
           Begin
-            Pixel.Red := AverageChannel(SumR, Samples);
-            Pixel.Green := AverageChannel(SumG, Samples);
-            Pixel.Blue := AverageChannel(SumB, Samples);
-            Pixel.Alpha := 65535;
+            Pixel := EdgeColor;
+            Pixel.Alpha := CoverageAlpha(CoverageSum / Samples);
           End;
         Image.Colors[X, Y] := Pixel;
       End;
   Result := True;
 End;
 
-Procedure DrawCoverageCircle(Target: TCanvas; CentreX, CentreY, OuterRadius, InnerRadius: Single; Edge, Background: TColor;
-  Const Strokes: TSmoothStrokeArray; PixelScale: Single);
+{ The outer and inner radii of a ring band. False when there is nothing to draw. }
+Function RingRadii(Radius, StrokeWidth: Single; Out OuterRadius, InnerRadius: Single): Boolean;
+Begin
+  OuterRadius := Radius + StrokeWidth / 2;
+  InnerRadius := Radius - StrokeWidth / 2;
+  If InnerRadius < 0 Then
+    InnerRadius := 0;
+  Result := (StrokeWidth > 0) And (Radius > 0);
+End;
+
+Procedure DrawCoverageCircle(Target: TCanvas; CentreX, CentreY, OuterRadius, InnerRadius: Single; Edge: TColor;
+  PixelScale: Single);
 Var
   Image: TLazIntfImage;
   Dest: TRect;
 Begin
   If Not Assigned(Target) Then
     Exit;
+  { RGB plus alpha with no mask. A BGRA description is not premultiplied on Cocoa, and a masked image is declared
+    premultiplied under Qt on macOS; either would darken the straight-alpha fringe. }
   Image := TLazIntfImage.Create(0, 0, [riqfRGB, riqfAlpha]);
   Try
-    If RenderCoverageCircle(Image, CentreX, CentreY, OuterRadius, InnerRadius, Edge, Background, Strokes, PixelScale,
-      Dest) Then
+    If RenderCoverageCircle(Image, CentreX, CentreY, OuterRadius, InnerRadius, Edge, PixelScale, Dest) Then
       BlitSmoothImage(Target, Dest, Image, ClampSmoothScale(PixelScale));
   Finally
     Image.Free;
   End;
 End;
 
-Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill, Background: TColor;
-  Const Strokes: TSmoothStrokeArray; PixelScale: Single);
+Procedure DrawSmoothDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill: TColor; PixelScale: Single);
 Begin
   If Radius <= 0 Then
     Exit;
-  DrawCoverageCircle(Target, CentreX, CentreY, Radius, -1, Fill, Background, Strokes, PixelScale);
+  DrawCoverageCircle(Target, CentreX, CentreY, Radius, -1, Fill, PixelScale);
 End;
 
-Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke, Background: TColor;
-  Const Strokes: TSmoothStrokeArray; PixelScale: Single);
+Procedure DrawSmoothRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke: TColor;
+  PixelScale: Single);
 Var
   OuterRadius, InnerRadius: Single;
 Begin
-  If (StrokeWidth <= 0) Or (Radius <= 0) Then
+  If RingRadii(Radius, StrokeWidth, OuterRadius, InnerRadius) Then
+    DrawCoverageCircle(Target, CentreX, CentreY, OuterRadius, InnerRadius, Stroke, PixelScale);
+End;
+
+{ TSmoothMarkerCache }
+
+{ Splits a logical coordinate into its whole-pixel floor and a quantised fraction in 0..SmoothMarkerCentreSteps - 1.
+  A fraction that rounds up to a whole step moves to the next pixel. }
+Procedure QuantiseCentre(Value: Single; Out Base, Step: Integer);
+Begin
+  Base := Floor(Value);
+  Step := Round((Value - Base) * SmoothMarkerCentreSteps);
+  If Step >= SmoothMarkerCentreSteps Then
+    Begin
+      Inc(Base);
+      Step := 0;
+    End;
+End;
+
+Function SameRadius(A, B: Single): Boolean;
+Begin
+  Result := Abs(A - B) <= 1E-4;
+End;
+
+Constructor TSmoothMarkerCache.Create(MaxEntries: Integer);
+Begin
+  Inherited Create;
+  FCapacity := Max(1, MaxEntries);
+  FCount := 0;
+  SetLength(Entries, FCapacity);
+  PreparedScale := 0;
+  PreparedColors := Nil;
+End;
+
+Destructor TSmoothMarkerCache.Destroy;
+Begin
+  Clear;
+  Inherited Destroy;
+End;
+
+Procedure TSmoothMarkerCache.Clear;
+Var
+  I: Integer;
+Begin
+  For I := 0 To FCount - 1 Do
+    FreeAndNil(Entries[I].Bitmap);
+  FCount := 0;
+End;
+
+Procedure TSmoothMarkerCache.Prepare(PixelScale: Single; Const ThemeColors: Array Of TColor);
+Var
+  I: Integer;
+  Scale: Single;
+  Changed: Boolean;
+Begin
+  Scale := ClampSmoothScale(PixelScale);
+  Changed := (Abs(Scale - PreparedScale) > 1E-3) Or (Length(PreparedColors) <> Length(ThemeColors));
+  If Not Changed Then
+    For I := 0 To High(ThemeColors) Do
+      If ColorToRGB(ThemeColors[I]) <> PreparedColors[I] Then
+        Begin
+          Changed := True;
+          Break;
+        End;
+  If Not Changed Then
     Exit;
-  OuterRadius := Radius + StrokeWidth / 2;
-  InnerRadius := Radius - StrokeWidth / 2;
+  Clear;
+  PreparedScale := Scale;
+  SetLength(PreparedColors, Length(ThemeColors));
+  For I := 0 To High(ThemeColors) Do
+    PreparedColors[I] := ColorToRGB(ThemeColors[I]);
+End;
+
+Function TSmoothMarkerCache.IndexOf(Edge: TColor; OuterRadius, InnerRadius, Scale: Single; StepX, StepY: Integer): Integer;
+Var
+  I: Integer;
+Begin
+  For I := 0 To FCount - 1 Do
+    If (Entries[I].Edge = Edge) And (Entries[I].StepX = StepX) And (Entries[I].StepY = StepY) And
+      SameRadius(Entries[I].OuterRadius, OuterRadius) And SameRadius(Entries[I].InnerRadius, InnerRadius) And
+      SameRadius(Entries[I].Scale, Scale) Then
+      Exit(I);
+  Result := -1;
+End;
+
+Procedure TSmoothMarkerCache.DropOldest;
+Var
+  I: Integer;
+Begin
+  If FCount = 0 Then
+    Exit;
+  FreeAndNil(Entries[0].Bitmap);
+  For I := 1 To FCount - 1 Do
+    Entries[I - 1] := Entries[I];
+  Entries[FCount - 1].Bitmap := Nil;
+  Dec(FCount);
+End;
+
+Function TSmoothMarkerCache.NewMarkerImage: TLazIntfImage;
+Begin
+  { No mask: a BGRA description is not premultiplied on Cocoa, and a masked image is declared premultiplied under Qt
+    on macOS; either would darken the straight-alpha fringe. }
+  Result := TLazIntfImage.Create(0, 0, [riqfRGB, riqfAlpha]);
+End;
+
+Function TSmoothMarkerCache.NewMarkerBitmap(Image: TLazIntfImage): TBitmap;
+Begin
+  { GTK2 keeps the 32-bit pixbuf only while nothing else touches the bitmap. Load it once and never set Transparent,
+    Masked, BeginUpdate or Handle afterwards, or GTK2 falls back to a 1-bit mask. The cache keeps the bitmap alive,
+    so its canvas DC keeps the pixbuf. }
+  Result := TBitmap.Create;
+  Try
+    Result.LoadFromIntfImage(Image);
+  Except
+    Result.Free;
+    Raise;
+  End;
+End;
+
+Function TSmoothMarkerCache.Marker(CentreX, CentreY, OuterRadius, InnerRadius: Single; Edge: TColor; PixelScale: Single;
+  Out Dest: TRect): TBitmap;
+Var
+  BaseX, BaseY, StepX, StepY, Index: Integer;
+  Scale: Single;
+  EdgeRGB: TColor;
+  Image: TLazIntfImage;
+  Local: TRect;
+  Bitmap: TBitmap;
+Begin
+  Result := Nil;
+  Dest := Rect(0, 0, 0, 0);
+  If OuterRadius <= 0 Then
+    Exit;
   If InnerRadius < 0 Then
-    InnerRadius := 0;
-  DrawCoverageCircle(Target, CentreX, CentreY, OuterRadius, InnerRadius, Stroke, Background, Strokes, PixelScale);
+    InnerRadius := -1;
+  Scale := ClampSmoothScale(PixelScale);
+  EdgeRGB := ColorToRGB(Edge);
+  QuantiseCentre(CentreX, BaseX, StepX);
+  QuantiseCentre(CentreY, BaseY, StepY);
+  Index := IndexOf(EdgeRGB, OuterRadius, InnerRadius, Scale, StepX, StepY);
+  If Index < 0 Then
+    Begin
+      { Rendered with the centre's whole-pixel part removed. RenderCoverageCircle is exact under a whole-pixel
+        shift, so the result equals rendering at the quantised centre itself. }
+      Image := NewMarkerImage;
+      Try
+        If Not RenderCoverageCircle(Image, StepX / SmoothMarkerCentreSteps, StepY / SmoothMarkerCentreSteps,
+          OuterRadius, InnerRadius, EdgeRGB, Scale, Local) Then
+          Exit;
+        Bitmap := NewMarkerBitmap(Image);
+      Finally
+        Image.Free;
+      End;
+      If FCount >= FCapacity Then
+        DropOldest;
+      Index := FCount;
+      Entries[Index].Edge := EdgeRGB;
+      Entries[Index].OuterRadius := OuterRadius;
+      Entries[Index].InnerRadius := InnerRadius;
+      Entries[Index].Scale := Scale;
+      Entries[Index].StepX := StepX;
+      Entries[Index].StepY := StepY;
+      Entries[Index].Bitmap := Bitmap;
+      Entries[Index].Dest := Local;
+      Inc(FCount);
+    End;
+  Result := Entries[Index].Bitmap;
+  Dest := Entries[Index].Dest;
+  OffsetRect(Dest, BaseX, BaseY);
+End;
+
+Procedure DrawMarkerBitmap(Target: TCanvas; Bitmap: TBitmap; Const Dest: TRect; PixelScale: Single);
+Begin
+  If (Not Assigned(Target)) Or (Not Assigned(Bitmap)) Then
+    Exit;
+  { Win32 still copies and premultiplies the bitmap on every blit, as it did before the cache. That cost is not a
+    regression; the cache saves the rasterising, not the copy. }
+  If Abs(ClampSmoothScale(PixelScale) - 1) <= 1E-3 Then
+    Target.Draw(Dest.Left, Dest.Top, Bitmap)
+  Else
+    Target.StretchDraw(Dest, Bitmap);
+End;
+
+Procedure TSmoothMarkerCache.DrawDisk(Target: TCanvas; CentreX, CentreY, Radius: Single; Fill: TColor; PixelScale: Single);
+Var
+  Bitmap: TBitmap;
+  Dest: TRect;
+Begin
+  If (Not Assigned(Target)) Or (Radius <= 0) Then
+    Exit;
+  Bitmap := Marker(CentreX, CentreY, Radius, -1, Fill, PixelScale, Dest);
+  DrawMarkerBitmap(Target, Bitmap, Dest, PixelScale);
+End;
+
+Procedure TSmoothMarkerCache.DrawRing(Target: TCanvas; CentreX, CentreY, Radius, StrokeWidth: Single; Stroke: TColor;
+  PixelScale: Single);
+Var
+  OuterRadius, InnerRadius: Single;
+  Bitmap: TBitmap;
+  Dest: TRect;
+Begin
+  If (Not Assigned(Target)) Or (Not RingRadii(Radius, StrokeWidth, OuterRadius, InnerRadius)) Then
+    Exit;
+  Bitmap := Marker(CentreX, CentreY, OuterRadius, InnerRadius, Stroke, PixelScale, Dest);
+  DrawMarkerBitmap(Target, Bitmap, Dest, PixelScale);
 End;
 
 End.
