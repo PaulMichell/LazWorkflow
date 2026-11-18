@@ -185,8 +185,10 @@ Begin
  Check('Save Image appears on an attachment', Assigned(MenuByCaption('Save Image')) And MenuByCaption('Save Image').Visible);
  MenuByCaption('Copy Image').OnClick(MenuByCaption('Copy Image'));
  Check('copy places a PNG on the clipboard', Clipboard.HasFormat(RegisterClipboardFormat('image/png')));
- A.Key := Trace[0].ID; A.Text := StyledPosition(0, 0); B.Key := Trace[0].ID; B.Text := StyledPosition(0, 5);
+ { Paragraph 0 is the "User" title. The words under the picture are the body, paragraph 1. }
+ A.Key := Trace[0].ID; A.Text := StyledPosition(1, 0); B.Key := Trace[0].ID; B.Text := StyledPosition(1, 5);
  View.SelectRange(A, B);
+ Check('selection is the words under the picture', Pos('Words', View.SelectedText) > 0);
  View.PressShift(VK_C, [ssCtrl]);
  Check('Ctrl+C on a text selection still copies text', Pos('Words', Clipboard.AsText) > 0);
  View.MoveTo(SampleX, View.ViewRect.Top + View.Layout[0].Padding + View.Layout.ImageRowHeight(0) + 4);
@@ -199,12 +201,16 @@ Begin
  Dialog := TAssistantImageView.Create(Nil);
  Try
   Dialog.LoadImage(Root, Trace[0].ImageRefs[0]);
+  { Fit again once the window is mapped. The client is the 1:1 size, and never below 32. }
+  Dialog.Show;
+  Application.ProcessMessages;
   PPI := Dialog.Font.PixelsPerInch;
   If PPI < 1 Then PPI := 96;
   NativeW := Round(Int64(Stored.Width) * PPI / 96);
   If NativeW < 1 Then NativeW := 1;
+  WriteLn('viewer client ', Dialog.ClientWidth, 'x', Dialog.ClientHeight, ' image ', W, 'x', H);
   Check('viewer is 1:1 at the surface DPI', ScaledImageExtent(Stored.Width, Stored.Height, NativeW, PPI, W, H) And
-    (Dialog.ImagePaint.Width = W) And (Dialog.ImagePaint.Height = H));
+    (Dialog.ClientWidth = Max(32, W)) And (Dialog.ClientHeight = Max(32, H)));
   KeyCode := VK_ESCAPE;
   Dialog.FormKeyDown(Dialog, KeyCode, []);
   Check('Esc closes the image view', (KeyCode = 0) And (Dialog.ModalResult = mrCancel));
@@ -293,6 +299,8 @@ Begin
  Started:=GetTickCount64; Sync;
  WriteLn('benchmark 10000 sections: ',GetTickCount64-Started,' ms, height=',View.ContentHeight,', child controls=',View.ControlCount);
  Check('10000 sections remain addressable',(View.Layout.Count=10000) And (View.ContentHeight>30000) And (View.ControlCount=ControlsBefore));
+ { Sync can leave a timer invalidate behind the last paint. Repaint observes the published revision. }
+ View.Repaint;
  Check('painting uses the published layout revision',View.PaintRevision=View.LayoutRevision);
  If GetEnvironmentVariable('LAZ_CONVERSATION_BENCHMARK')<>'' Then
    Begin
