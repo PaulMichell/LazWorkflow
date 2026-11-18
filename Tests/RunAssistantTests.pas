@@ -31,7 +31,7 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..58] Of String = (
+  CoreTestNames: Array[0..59] Of String = (
     'CanvasSmoothShapesTest', 'AssistantUtf8StreamTest', 'AssistantClaudeClientTest', 'AssistantMCPProtocolTest', 'AssistantMCPListenerTest',
     'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
@@ -39,7 +39,7 @@ Const
     'AssistantLfmTest', 'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest',
     'AssistantSearchUtilTest', 'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantAccountUsageTest',
     'AssistantFileCreationTest', 'AssistantCodexHandshakeTest', 'AssistantTestRunnerTest',
-    'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantCodexSchemaTest', 'AssistantWorkTargetTest',
+    'FindCodexExecutableTest', 'AssistantCodexTransportTest', 'AssistantCodexClientTest', 'AssistantCodexSchemaTest', 'AssistantWorkTargetTest',
     'AssistantGeneratedImageTest', 'AssistantWriteImageTest', 'AssistantBuildJobTest', 'AssistantGitTest',
     'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
