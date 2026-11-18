@@ -238,7 +238,8 @@ Begin
   If Busy Then Exit;
   Found := FindCodexExecutable;
   If Found = '' Then
-    ConnectionStatus.Caption := 'Codex was not found on PATH or in the VS Code extension. Use Browse to select an installed executable.'
+    ConnectionStatus.Caption :=
+      'Codex was not found on PATH, in ChatGPT.app, or in a VS Code / Cursor extension. Use Browse to select an installed executable.'
   Else
     Begin
       RuntimeEdit.Text := Found;

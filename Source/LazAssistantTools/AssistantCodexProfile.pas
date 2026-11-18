@@ -203,28 +203,78 @@ Begin
   Result := 0;
 End;
 
-Function FindCodexExecutable: String;
+Function CodexCliInsideChatGptApp(Const AppBundle: String): String;
+Var
+  Root, Candidate: String;
+Begin
+  { Desktop ChatGPT.app ships the CLI under Resources/codex-cli. Prefer the
+    public bin/codex wrapper; fall back to the nested CodexCLI.app binary. }
+  Result := '';
+  Root := IncludeTrailingPathDelimiter(AppBundle) + 'Contents/Resources/codex-cli/';
+  Candidate := Root + 'bin/codex';
+  If FileIsExecutable(Candidate) Then
+    Exit(Candidate);
+  Candidate := Root + 'CodexCLI.app/Contents/MacOS/codex';
+  If FileIsExecutable(Candidate) Then
+    Exit(Candidate);
+End;
+
+Function FindCodexInChatGptApps: String;
+Const
+  Bundles: Array[0..3] Of String = (
+    '/Applications/ChatGPT.app',
+    '/Applications/ChatGPT Desktop.app',
+    'Applications/ChatGPT.app',
+    'Applications/ChatGPT Desktop.app');
+Var
+  Bundle, Path: String;
+Begin
+  Result := '';
+  For Bundle In Bundles Do
+    Begin
+      If Bundle[1] = '/' Then
+        Path := Bundle
+      Else
+        Path := IncludeTrailingPathDelimiter(GetUserDir) + Bundle;
+      Result := CodexCliInsideChatGptApp(Path);
+      If Result <> '' Then
+        Exit;
+    End;
+End;
+
+Function FindCodexInEditorExtensions: String;
 Const
   Roots: Array[0..2] Of String = ('.vscode/extensions/', '.vscode-insiders/extensions/', '.cursor/extensions/');
+  { Extension package layout differs by host OS and CPU. Try every known bin. }
+  BinRel: Array[0..5] Of String = (
+    'bin/linux-x86_64/codex',
+    'bin/linux-aarch64/codex',
+    'bin/darwin-x86_64/codex',
+    'bin/darwin-arm64/codex',
+    'bin/win32-x64/codex.exe',
+    'bin/win32-arm64/codex.exe');
 Var
-  Root, Relative, Candidate, BestName: String;
+  Root, Relative, Candidate, BestName, Rel: String;
   Search: TDirectoryScan;
 Begin
-  Result := FindDefaultExecutablePath('codex');
-  If Result <> '' Then Exit;
+  Result := '';
   BestName := '';
   For Relative In Roots Do
     Begin
       Root := IncludeTrailingPathDelimiter(GetUserDir) + Relative;
-      If StartDirectoryScan(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then Continue;
+      If StartDirectoryScan(Root + 'openai.chatgpt-*', faDirectory, Search) <> 0 Then
+        Continue;
       Try
         Repeat
-          Candidate := Root + Search.Name + '/bin/linux-x86_64/codex';
-          If FileIsExecutable(Candidate) And ((BestName = '') Or
-            (CompareCodexExtensionVersions(Search.Name, BestName) > 0)) Then
+          For Rel In BinRel Do
             Begin
-              BestName := Search.Name;
-              Result := Candidate;
+              Candidate := Root + Search.Name + PathDelim + Rel;
+              If FileIsExecutable(Candidate) And ((BestName = '') Or
+                (CompareCodexExtensionVersions(Search.Name, BestName) > 0)) Then
+                Begin
+                  BestName := Search.Name;
+                  Result := Candidate;
+                End;
             End;
         Until AdvanceDirectoryScan(Search) <> 0;
       Finally
@@ -233,20 +283,41 @@ Begin
     End;
 End;
 
+Function FindCodexExecutable: String;
+Begin
+  { PATH first (Homebrew / npm global / user install). }
+  Result := FindDefaultExecutablePath('codex');
+  If Result <> '' Then
+    Exit;
+  { macOS desktop app (Applications or ~/Applications). }
+  Result := FindCodexInChatGptApps;
+  If Result <> '' Then
+    Exit;
+  { VS Code / Cursor ChatGPT extension packages. }
+  Result := FindCodexInEditorExtensions;
+End;
+
 Function ResolveCodexExecutable(Const SavedPath: String): String;
 Var
   Path, Root: String;
 Begin
   Result := Trim(SavedPath);
-  If FileIsExecutable(Result) Then Exit;
-  If Result = '' Then Exit(FindCodexExecutable);
+  If FileIsExecutable(Result) Then
+    Exit;
+  If Result = '' Then
+    Exit(FindCodexExecutable);
   Path := ExpandFileName(Result);
   Root := IncludeTrailingPathDelimiter(GetUserDir);
-  { Only extension-managed paths migrate automatically. A missing custom
-    executable remains an error, never a silent change of runtime. }
-  If ((Pos(Root + '.vscode/extensions/openai.chatgpt-', Path) = 1) Or
-    (Pos(Root + '.vscode-insiders/extensions/openai.chatgpt-', Path) = 1) Or
-    (Pos(Root + '.cursor/extensions/openai.chatgpt-', Path) = 1)) And
-    (ExtractFileName(Path) = 'codex') Then Result := FindCodexExecutable;
+  { Extension-managed and ChatGPT.app paths migrate automatically. A missing
+    custom executable remains an error, never a silent change of runtime. }
+  If (ExtractFileName(Path) = 'codex') Or (ExtractFileName(Path) = 'codex.exe') Then
+    If ((Pos(Root + '.vscode/extensions/openai.chatgpt-', Path) = 1) Or
+      (Pos(Root + '.vscode-insiders/extensions/openai.chatgpt-', Path) = 1) Or
+      (Pos(Root + '.cursor/extensions/openai.chatgpt-', Path) = 1) Or
+      (Pos('/Applications/ChatGPT.app/', Path) > 0) Or
+      (Pos('/Applications/ChatGPT Desktop.app/', Path) > 0) Or
+      (Pos(Root + 'Applications/ChatGPT.app/', Path) = 1) Or
+      (Pos(Root + 'Applications/ChatGPT Desktop.app/', Path) = 1)) Then
+      Result := FindCodexExecutable;
 End;
 End.
