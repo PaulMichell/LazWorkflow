@@ -2,8 +2,9 @@ Unit AssistantCodexTransport;
 
 { Single-owner, nonblocking JSONL process transport. Use from a worker, never
   the IDE thread. Cancel is the only method callable from another thread.
-  Linux and macOS share the Unix pipe loop. Other hosts fail closed until their
-  pipe handling is tested. (c) 2026 Michell Computing. }
+  Linux and macOS share the Unix pipe loop. Windows writes through one overlapped
+  named pipe so Poll does not block, and the child still has a blocking stdin.
+  (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -13,7 +14,7 @@ Unit AssistantCodexTransport;
 Interface
 
 Uses
-  Classes, SysUtils, Process;
+  Classes, SysUtils, Process, ProcessSession;
 
 Const
   CodexMaxFrameBytes = 1048576;
@@ -33,7 +34,12 @@ Type
     FWriteTimeout: Cardinal;
     FOwner: TThreadID;
     FExitCode: Integer;
+    FWriteSlot: TPipeWriteSlot;
+    {$IFDEF WINDOWS}
+    FInputHandle: THandle;
+    {$ENDIF}
     Procedure CheckOwner;
+    Function InputHandle: THandle;
     Procedure Fail(Const Reason: String);
     Procedure AcceptBytes(Const Bytes: String);
     Procedure Drain;
@@ -57,7 +63,7 @@ Type
 Implementation
 
 Uses
-  ProcessSession, AssistantCodexDiagnostics;
+  AssistantCodexDiagnostics;
 
 Constructor TAssistantCodexTransport.Create(WriteTimeoutMs: Cardinal);
 Begin
@@ -83,8 +89,23 @@ Begin
     Raise Exception.Create('Codex transport must be used by its owning worker.');
 End;
 
+Function TAssistantCodexTransport.InputHandle: THandle;
+Begin
+  Result := 0;
+  {$IFDEF WINDOWS}
+  Result := FInputHandle;
+  {$ELSE}
+  If Assigned(FProcess) And Assigned(FProcess.Input) Then Result := FProcess.Input.Handle;
+  {$ENDIF}
+End;
+
 Function TAssistantCodexTransport.Start(Const Executable, WorkingDirectory: String;
     Args: TStrings; Environment: TStrings): Boolean;
+{$IFDEF WINDOWS}
+Var
+  ReadHandle: THandle;
+  PipeError: String;
+{$ENDIF}
 Begin
   CheckOwner;
   Stop;
@@ -99,10 +120,8 @@ Begin
   FWriteBytes := 0;
   FWriteOffset := 1;
   Result := False;
-  { Darwin has the same nonblocking pipes and process-group stop as Linux. Windows has neither O_NONBLOCK nor SIGPIPE. }
-  {$IF NOT (DEFINED(LINUX) OR DEFINED(DARWIN))}
-  FError := 'Codex process transport is currently qualified for Linux and macOS only.';
-  Exit;
+  {$IFDEF WINDOWS}
+  ReadHandle := 0;
   {$ENDIF}
   Try
     FProcess := TProcess.Create(Nil);
@@ -110,24 +129,52 @@ Begin
     FProcess.CurrentDirectory := WorkingDirectory;
     FProcess.Parameters.Assign(Args);
     If Assigned(Environment) Then FProcess.Environment.Assign(Environment);
+    {$IFDEF WINDOWS}
+    FProcess.Options := [poUsePipes, poNoConsole];
+    {$ELSE}
     FProcess.Options := [poUsePipes];
+    {$ENDIF}
     If Not StartInOwnSession(FProcess) Then
       Raise Exception.Create('Unable to start the Codex runtime or configure its pipes.');
+    {$IFDEF WINDOWS}
+    { After Options and StartInOwnSession: both reset every descriptor to a pipe. }
+    If Not CreateChildInputPipe(FInputHandle, ReadHandle, CodexMaxFrameBytes + 16, PipeError) Then
+      Raise Exception.Create('Unable to start the Codex runtime or configure its pipes.');
+    PreparePipeWrite(FWriteSlot);
+    If FWriteSlot.Event = 0 Then
+      Raise Exception.Create('Unable to start the Codex runtime or configure its pipes.');
+    FProcess.InputDescriptor.IOType := iotHandle;
+    FProcess.InputDescriptor.CustomHandle := ReadHandle;
+    FProcess.InputDescriptor.CustomHandleIsInheritable := True;
+    ReadHandle := 0;
+    {$ENDIF}
     FProcess.Execute;
+    {$IFNDEF WINDOWS}
     If Not SetPipeNonBlocking(FProcess.Input.Handle) Then
       Raise Exception.Create('Nonblocking pipe setup failed');
     { Darwin marks the write end so a dead child returns EPIPE. Linux has no such flag; the write masks SIGPIPE. }
     SetPipeNoSignal(FProcess.Input.Handle);
+    {$ENDIF}
     Result := True;
   Except
     { Never expose environment or process output in errors. }
-    On E: Exception Do Fail('Unable to start the Codex runtime or configure its pipes.');
+    On E: Exception Do
+      Begin
+        {$IFDEF WINDOWS}
+        ClosePipeHandle(ReadHandle);
+        {$ENDIF}
+        Fail('Unable to start the Codex runtime or configure its pipes.');
+      End;
   End;
 End;
 
 Procedure TAssistantCodexTransport.Stop;
 Begin
   CheckOwner;
+  {$IFDEF WINDOWS}
+  ReleasePipeWrite(FInputHandle, FWriteSlot);
+  ClosePipeHandle(FInputHandle);
+  {$ENDIF}
   If Assigned(FProcess) Then
     Begin
       TerminateSession(FProcess);
@@ -259,14 +306,14 @@ Begin
       Exit;
     End;
   Frame := FOutgoing[0];
-  { A dead child's pipe must not deliver SIGPIPE to the Lazarus process. }
-  If Not WritePipeNoSignal(FProcess.Input.Handle, Frame[FWriteOffset], Length(Frame) - FWriteOffset + 1, N, Closed,
+  { Unix: a dead child must not raise SIGPIPE. Windows: one overlapped write, so this poll does not wait. }
+  If Not WritePipeNoBlock(InputHandle, Frame[FWriteOffset], Length(Frame) - FWriteOffset + 1, FWriteSlot, N, Closed,
     Again, PipeError) Then
     Begin
-      If PipeError = 'Unable to inspect pending pipe signals.' Then
-        Fail('Unable to inspect pending pipe signals.')
+      If (PipeError = '') Or (PipeError = 'Unable to protect the pipe write.') Then
+        Fail('Unable to protect Codex pipe write.')
       Else
-        Fail('Unable to protect Codex pipe write.');
+        Fail(PipeError);
       Exit;
     End;
   If Again Then

@@ -2,11 +2,11 @@ Unit ProcessSession;
 
 { Process session control the LCL process class does not provide (c) 2026 Michell Computing.
 
-  Unix and Darwin share one arm. Windows uses TProcess options and Terminate.
-  TProcess.ExitCode on FPC 3.3.1 is already wexitstatus, and is 0 when the
-  child was signalled, so only the signal test is wrapped. SpawnDetached stays
-  here because poDetached does not orphan a Unix child and conflicts with a
-  new Windows console. }
+  Unix and Darwin share one arm. Windows uses TProcess options and Terminate,
+  and an overlapped named-pipe write so a poll does not block. TProcess.ExitCode
+  on FPC 3.3.1 is already wexitstatus, and is 0 when the child was signalled, so
+  only the signal test is wrapped. SpawnDetached stays here because poDetached
+  does not orphan a Unix child and conflicts with a new Windows console. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -30,13 +30,36 @@ Function SetPipeNonBlocking(Handle: THandle): Boolean;
 Function SetPipeNoSignal(Handle: THandle): Boolean;
 /// Writes without delivering SIGPIPE to this process. False means the mask could not be set.
 Function WritePipeNoSignal(Handle: THandle; Const Buf; Count: Integer; Out Written: Integer; Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
+
+Type
+  { One outstanding nonblocking write. Unix leaves it empty. Windows keeps the overlapped operation here so the
+    caller's buffer must stay alive until Pending is false. }
+  TPipeWriteSlot = Record
+    Event: THandle;
+    Pending: Boolean;
+    State: Pointer;
+  End;
+
+/// Windows: an inheritable blocking read end for the child, and an overlapped write end for the parent.
+/// Anonymous pipes cannot set overlapped mode on one end only, and PIPE_NOWAIT would make the child reads return
+/// immediately. Other hosts return false.
+Function CreateChildInputPipe(Out WriteHandle, ReadHandle: THandle; BufferBytes: Cardinal; Out ErrorText: String): Boolean;
+/// Prepares Slot for WritePipeNoBlock. Unix does nothing.
+Procedure PreparePipeWrite(Var Slot: TPipeWriteSlot);
+/// Cancels a pending write and releases Slot. Handle may be 0.
+Procedure ReleasePipeWrite(Handle: THandle; Var Slot: TPipeWriteSlot);
+/// Closes Handle when it is not 0.
+Procedure ClosePipeHandle(Var Handle: THandle);
+/// Nonblocking write. Unix is WritePipeNoSignal. Windows uses Slot and never waits for the child to read.
+Function WritePipeNoBlock(Handle: THandle; Const Buf; Count: Integer; Var Slot: TPipeWriteSlot; Out Written: Integer;
+  Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
 Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
 
 Implementation
 
 {$IFDEF WINDOWS}
 Uses
-  UTF8Process;
+  Windows, UTF8Process;
 {$ENDIF}
 {$IFDEF UNIX}
 Uses
@@ -71,6 +94,11 @@ Begin
   If fpSetsid < 0 Then
     fpExit(126);
 End;
+{$ENDIF}
+
+{$IFDEF WINDOWS}
+Var
+  PipeSerial: Integer;
 {$ENDIF}
 
 Function StartInOwnSession(Process: TProcess): Boolean;
@@ -237,6 +265,227 @@ Begin
   ErrorText := 'Pipe write is not available on this host.';
   {$ENDIF}
 End;
+
+Procedure ClosePipeHandle(Var Handle: THandle);
+Begin
+  If Handle = 0 Then Exit;
+  FileClose(Handle);
+  Handle := 0;
+End;
+
+{$IFDEF WINDOWS}
+Type
+  PPipeOverlapped = ^TOverlapped;
+
+Function PipeIsClosed(Err: DWORD): Boolean;
+Begin
+  Result := (Err = ERROR_BROKEN_PIPE) Or (Err = ERROR_NO_DATA) Or (Err = ERROR_PIPE_NOT_CONNECTED);
+End;
+
+Function CreateChildInputPipe(Out WriteHandle, ReadHandle: THandle; BufferBytes: Cardinal; Out ErrorText: String): Boolean;
+Var
+  PipeName: UnicodeString;
+  Inherit: TSecurityAttributes;
+  Connect: TOverlapped;
+  ConnectEvent: THandle;
+  Err: DWORD;
+Begin
+  Result := False;
+  WriteHandle := 0;
+  ReadHandle := 0;
+  ErrorText := '';
+  ConnectEvent := 0;
+  If BufferBytes < 4096 Then BufferBytes := 4096;
+  Inc(PipeSerial);
+  PipeName := '\\.\pipe\lazworkflow-codex-' + IntToStr(GetCurrentProcessId) + '-' + IntToStr(PipeSerial);
+  WriteHandle := CreateNamedPipeW(PWideChar(PipeName), PIPE_ACCESS_OUTBOUND Or FILE_FLAG_OVERLAPPED,
+    PIPE_TYPE_BYTE Or PIPE_READMODE_BYTE Or PIPE_WAIT, 1, BufferBytes, BufferBytes, 0, Nil);
+  If WriteHandle = INVALID_HANDLE_VALUE Then
+    Begin
+      WriteHandle := 0;
+      ErrorText := 'Unable to create the Codex input pipe.';
+      Exit;
+    End;
+  FillChar(Inherit, SizeOf(Inherit), 0);
+  Inherit.nLength := SizeOf(Inherit);
+  Inherit.bInheritHandle := True;
+  ReadHandle := CreateFileW(PWideChar(PipeName), GENERIC_READ, 0, @Inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  If ReadHandle = INVALID_HANDLE_VALUE Then
+    Begin
+      ClosePipeHandle(WriteHandle);
+      ReadHandle := 0;
+      ErrorText := 'Unable to open the Codex input pipe.';
+      Exit;
+    End;
+  { The client CreateFile already connected the pipe. ConnectNamedPipe records that on an overlapped server. }
+  ConnectEvent := CreateEvent(Nil, True, False, Nil);
+  If ConnectEvent = 0 Then
+    Begin
+      ClosePipeHandle(ReadHandle);
+      ClosePipeHandle(WriteHandle);
+      ErrorText := 'Unable to create the Codex input pipe.';
+      Exit;
+    End;
+  FillChar(Connect, SizeOf(Connect), 0);
+  Connect.hEvent := ConnectEvent;
+  If Not ConnectNamedPipe(WriteHandle, @Connect) Then
+    Begin
+      Err := GetLastError;
+      If Err = ERROR_IO_PENDING Then
+        Begin
+          If WaitForSingleObject(ConnectEvent, 1000) <> WAIT_OBJECT_0 Then
+            Begin
+              CancelIo(WriteHandle);
+              WaitForSingleObject(ConnectEvent, 1000);
+              CloseHandle(ConnectEvent);
+              ClosePipeHandle(ReadHandle);
+              ClosePipeHandle(WriteHandle);
+              ErrorText := 'Unable to connect the Codex input pipe.';
+              Exit;
+            End;
+        End
+      Else If Err <> ERROR_PIPE_CONNECTED Then
+        Begin
+          CloseHandle(ConnectEvent);
+          ClosePipeHandle(ReadHandle);
+          ClosePipeHandle(WriteHandle);
+          ErrorText := 'Unable to connect the Codex input pipe.';
+          Exit;
+        End;
+    End;
+  CloseHandle(ConnectEvent);
+  Result := True;
+End;
+
+Procedure PreparePipeWrite(Var Slot: TPipeWriteSlot);
+Var
+  Overlapped: PPipeOverlapped;
+Begin
+  If Slot.Event <> 0 Then Exit;
+  Slot.Event := CreateEvent(Nil, True, False, Nil);
+  If Slot.Event = 0 Then Exit;
+  New(Overlapped);
+  FillChar(Overlapped^, SizeOf(TOverlapped), 0);
+  Slot.State := Overlapped;
+  Slot.Pending := False;
+End;
+
+Procedure ReleasePipeWrite(Handle: THandle; Var Slot: TPipeWriteSlot);
+Var
+  Overlapped: PPipeOverlapped;
+Begin
+  If Slot.Pending And (Handle <> 0) And (Slot.Event <> 0) Then
+    Begin
+      CancelIo(Handle);
+      WaitForSingleObject(Slot.Event, 5000);
+      Slot.Pending := False;
+    End;
+  If Slot.Event <> 0 Then
+    Begin
+      CloseHandle(Slot.Event);
+      Slot.Event := 0;
+    End;
+  If Assigned(Slot.State) Then
+    Begin
+      Overlapped := PPipeOverlapped(Slot.State);
+      Dispose(Overlapped);
+      Slot.State := Nil;
+    End;
+End;
+
+Function WritePipeNoBlock(Handle: THandle; Const Buf; Count: Integer; Var Slot: TPipeWriteSlot; Out Written: Integer;
+  Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
+Var
+  Overlapped: PPipeOverlapped;
+  Transferred: DWORD;
+  Err: DWORD;
+Begin
+  Written := 0;
+  Closed := False;
+  Again := False;
+  ErrorText := '';
+  Result := False;
+  If (Handle = 0) Or (Count < 1) Or (Slot.Event = 0) Or Not Assigned(Slot.State) Then
+    Begin
+      ErrorText := 'Unable to write the Codex pipe.';
+      Exit;
+    End;
+  Overlapped := PPipeOverlapped(Slot.State);
+  If Slot.Pending Then
+    Begin
+      If WaitForSingleObject(Slot.Event, 0) <> WAIT_OBJECT_0 Then
+        Begin
+          Again := True;
+          Result := True;
+          Exit;
+        End;
+      If Not GetOverlappedResult(Handle, Overlapped^, Transferred, False) Then
+        Begin
+          Err := GetLastError;
+          Slot.Pending := False;
+          Closed := PipeIsClosed(Err);
+          If Not Closed Then ErrorText := 'Unable to write the Codex pipe.';
+          Result := Closed;
+          Exit;
+        End;
+      Slot.Pending := False;
+      Written := Transferred;
+      Result := True;
+      Exit;
+    End;
+  ResetEvent(Slot.Event);
+  FillChar(Overlapped^, SizeOf(TOverlapped), 0);
+  Overlapped^.hEvent := Slot.Event;
+  If WriteFile(Handle, Buf, DWORD(Count), Transferred, POverlapped(Overlapped)) Then
+    Begin
+      Written := Transferred;
+      Result := True;
+      Exit;
+    End;
+  Err := GetLastError;
+  If Err = ERROR_IO_PENDING Then
+    Begin
+      Slot.Pending := True;
+      Again := True;
+      Result := True;
+      Exit;
+    End;
+  Closed := PipeIsClosed(Err);
+  If Not Closed Then ErrorText := 'Unable to write the Codex pipe.';
+  Result := Closed;
+End;
+{$ELSE}
+Function CreateChildInputPipe(Out WriteHandle, ReadHandle: THandle; BufferBytes: Cardinal; Out ErrorText: String): Boolean;
+Begin
+  WriteHandle := 0;
+  ReadHandle := 0;
+  ErrorText := '';
+  Result := False;
+  If BufferBytes = 0 Then Exit;
+End;
+
+Procedure PreparePipeWrite(Var Slot: TPipeWriteSlot);
+Begin
+  Slot.Event := 0;
+  Slot.Pending := False;
+  Slot.State := Nil;
+End;
+
+Procedure ReleasePipeWrite(Handle: THandle; Var Slot: TPipeWriteSlot);
+Begin
+  If Handle = 0 Then Slot.Pending := False;
+  Slot.Event := 0;
+  Slot.Pending := False;
+  Slot.State := Nil;
+End;
+
+Function WritePipeNoBlock(Handle: THandle; Const Buf; Count: Integer; Var Slot: TPipeWriteSlot; Out Written: Integer;
+  Out Closed, Again: Boolean; Out ErrorText: String): Boolean;
+Begin
+  Result := WritePipeNoSignal(Handle, Buf, Count, Written, Closed, Again, ErrorText);
+  If Slot.Pending Then Slot.Pending := False;
+End;
+{$ENDIF}
 
 {$IFDEF WINDOWS}
 Function SpawnDetached(Const Executable: String; Const Args: Array Of String; Out ErrorText: String): Boolean;
