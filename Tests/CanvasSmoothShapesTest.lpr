@@ -1,7 +1,8 @@
 Program CanvasSmoothShapesTest;
 
 { Checks the smooth-shape rasterisers: uniform pixels are skipped without changing one, straight-alpha markers
-  composite like the old pre-blended ones, and the marker cache keys and bounds its bitmaps (c) 2026 Michell Computing. }
+  composite like the old pre-blended ones, the marker cache keys and bounds its bitmaps, and an opaque round
+  rectangle draws without an alpha channel (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -373,6 +374,161 @@ Begin
   End;
 End;
 
+Function Channel(Value: TColor; Shift: Byte): Word;
+Begin
+  Result := Word((ColorToRGB(Value) Shr Shift) And $FF) * 257;
+End;
+
+Function SameRGB(Const Pixel: TFPColor; Color: TColor): Boolean;
+Begin
+  Result := (Pixel.Red = Channel(Color, 0)) And (Pixel.Green = Channel(Color, 8)) And (Pixel.Blue = Channel(Color, 16));
+End;
+
+Function NearChannel(Left, Right: Byte): Boolean;
+Begin
+  Result := Abs(Integer(Left) - Integer(Right)) <= 8;
+End;
+
+Function NearColor(Color: TColor; RedByte, GreenByte, BlueByte: Byte): Boolean;
+Var
+  RGB: TColor;
+Begin
+  RGB := ColorToRGB(Color);
+  Result := NearChannel(RedByte, RGB And $FF) And NearChannel(GreenByte, (RGB Shr 8) And $FF) And
+    NearChannel(BlueByte, (RGB Shr 16) And $FF);
+End;
+
+Function SampleFile(Const Name: String): String;
+Begin
+  Result := GetEnvironmentVariable('LAZ_TEST_OUTPUT_DIR');
+  If Result = '' Then
+    Result := 'Temporary';
+  ForceDirectories(Result);
+  Result := IncludeTrailingPathDelimiter(Result) + Name;
+End;
+
+Procedure SaveBitmap(Bitmap: TBitmap; Const Name: String);
+Var
+  Graphic: TPortableNetworkGraphic;
+  Path: String;
+Begin
+  Path := SampleFile(Name);
+  Graphic := TPortableNetworkGraphic.Create;
+  Try
+    Graphic.Assign(Bitmap);
+    Graphic.SaveToFile(Path);
+    WriteLn('sample ', Path);
+  Finally
+    Graphic.Free;
+  End;
+End;
+
+{ The history cards and status pills use this path. The image has no alpha channel, so a widgetset that reports none
+  must still draw the fill, the border and a mixed edge. }
+Procedure CheckOpaqueRoundRect;
+Var
+  Image: TLazIntfImage;
+  Description: TRawImageDescription;
+  Fill, Border, Background: TColor;
+  Pixel: TFPColor;
+  X, Y: Integer;
+  SeenMix: Boolean;
+  Bitmap: TBitmap;
+  Card: TRect;
+Begin
+  Fill := RGBToColor(187, 222, 251);
+  Border := RGBToColor(21, 101, 192);
+  Background := RGBToColor(255, 255, 255);
+  Image := TLazIntfImage.Create(0, 0);
+  Try
+    Description.Init_BPP32_B8G8R8_BIO_TTB(0, 0);
+    Image.DataDescription := Description;
+    Check('opaque round rect has no alpha channel', Image.DataDescription.AlphaPrec < 1);
+    Check('opaque round rect renders without alpha', RenderSmoothRoundRect(Image, 80, 22, 4, Fill, Border, Background, 1));
+    Check('opaque round rect centre is the card fill', SameRGB(Image.Colors[40, 11], Fill));
+    { The corner pixel is inside the coverage ramp, so it is not pure row colour. It must still be near white, not the fill. }
+    Pixel := Image.Colors[0, 0];
+    Check('opaque round rect corner stays near the row colour', (Pixel.Red > 60000) And (Pixel.Green > 60000) And (Pixel.Blue > 60000));
+    SeenMix := False;
+    For Y := 0 To Image.Height - 1 Do
+      For X := 0 To Image.Width - 1 Do
+        Begin
+          Pixel := Image.Colors[X, Y];
+          If (Pixel.Red <> Channel(Fill, 0)) And (Pixel.Red <> Channel(Background, 0)) And
+            (Pixel.Red <> Channel(Border, 0)) Then
+            SeenMix := True;
+        End;
+    Check('opaque round rect has a mixed edge', SeenMix);
+  Finally
+    Image.Free;
+  End;
+  Image := TLazIntfImage.Create(0, 0, [riqfRGB]);
+  Try
+    Check('widgetset RGB image renders a round rect',
+      RenderSmoothRoundRect(Image, 72, 18, 4, RGBToColor(232, 245, 233), RGBToColor(67, 160, 71), Background, 1));
+    Check('widgetset RGB image keeps the pill fill', SameRGB(Image.Colors[Image.Width Div 2, Image.Height Div 2],
+      RGBToColor(232, 245, 233)));
+  Finally
+    Image.Free;
+  End;
+  Bitmap := TBitmap.Create;
+  Try
+    Bitmap.SetSize(120, 40);
+    Bitmap.Canvas.Brush.Color := RGBToColor(255, 0, 255);
+    Bitmap.Canvas.FillRect(0, 0, Bitmap.Width, Bitmap.Height);
+    Card := Rect(8, 8, 96, 32);
+    DrawSmoothRoundRect(Bitmap.Canvas, Card, 4, Fill, Border, Background, 1);
+    Check('drawn card centre is the fill', NearColor(Fill, Red(Bitmap.Canvas.Pixels[40, 18]),
+      Green(Bitmap.Canvas.Pixels[40, 18]), Blue(Bitmap.Canvas.Pixels[40, 18])));
+    Check('drawn card corner is the row colour', NearColor(Background, Red(Bitmap.Canvas.Pixels[Card.Left, Card.Top]),
+      Green(Bitmap.Canvas.Pixels[Card.Left, Card.Top]), Blue(Bitmap.Canvas.Pixels[Card.Left, Card.Top])));
+    Check('drawn card does not wipe the canvas outside its bounds',
+      NearColor(RGBToColor(255, 0, 255), Red(Bitmap.Canvas.Pixels[1, 1]), Green(Bitmap.Canvas.Pixels[1, 1]),
+      Blue(Bitmap.Canvas.Pixels[1, 1])));
+    SaveBitmap(Bitmap, 'review-ref-card.png');
+    Bitmap.Canvas.FillRect(0, 0, Bitmap.Width, Bitmap.Height);
+    Card := Rect(16, 10, 88, 28);
+    DrawSmoothRoundRect(Bitmap.Canvas, Card, 4, RGBToColor(232, 245, 233), RGBToColor(67, 160, 71), Background, 1);
+    SaveBitmap(Bitmap, 'review-status-pill.png');
+  Finally
+    Bitmap.Free;
+  End;
+End;
+
+{ A lane line under a marker. The fringe must not come out black, and the centre must be the marker colour. }
+Procedure CheckMarkerOverLine;
+Var
+  Bitmap: TBitmap;
+  X, Y, Sample: Integer;
+  Dark: Boolean;
+Begin
+  Bitmap := TBitmap.Create;
+  Try
+    Bitmap.SetSize(48, 48);
+    Bitmap.Canvas.Brush.Color := clWhite;
+    Bitmap.Canvas.FillRect(0, 0, Bitmap.Width, Bitmap.Height);
+    Bitmap.Canvas.Pen.Color := RGBToColor(33, 150, 243);
+    Bitmap.Canvas.Pen.Width := 2;
+    Bitmap.Canvas.Line(0, 24, 47, 24);
+    DrawSmoothDisk(Bitmap.Canvas, 24, 24, 8, RGBToColor(230, 90, 30), 1);
+    Sample := Bitmap.Canvas.Pixels[24, 24];
+    Check('marker centre over a lane is the marker colour', NearColor(RGBToColor(230, 90, 30), Red(Sample),
+      Green(Sample), Blue(Sample)));
+    Dark := False;
+    For Y := 8 To 40 Do
+      For X := 8 To 40 Do
+        Begin
+          Sample := Bitmap.Canvas.Pixels[X, Y];
+          If (Red(Sample) < 20) And (Green(Sample) < 20) And (Blue(Sample) < 20) Then
+            Dark := True;
+        End;
+    Check('marker over a lane has no black fringe', Not Dark);
+    SaveBitmap(Bitmap, 'review-marker-line.png');
+  Finally
+    Bitmap.Free;
+  End;
+End;
+
 { Informational only: the time for a run of history-sized rings at 2x, with and without the skip. }
 Procedure ReportTiming;
 Var
@@ -425,6 +581,8 @@ Begin
         RGBToColor(240, 240, 240), DarkRow);
     End;
   CheckMarkerCache;
+  CheckOpaqueRoundRect;
+  CheckMarkerOverLine;
   ReportTiming;
   If FailCount > 0 Then
     Begin
