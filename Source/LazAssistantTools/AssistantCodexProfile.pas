@@ -266,7 +266,7 @@ Var
 Begin
   Normal := NormalizedPath(Path);
   Result := (Pos('/ChatGPT.app/', Normal) > 0) Or (Pos('/ChatGPT Desktop.app/', Normal) > 0) Or
-    (Pos('/OpenAI/Codex/bin/', Normal) > 0);
+    (Pos('/OpenAI/Codex/bin/', Normal) > 0) Or (Pos('/chatgpt/resources/codex', Normal) > 0);
 End;
 
 {$IFDEF WINDOWS}
@@ -296,11 +296,41 @@ Begin
 End;
 {$ENDIF}
 
+Function CodexBesideChatGptInstall(Const InstallDir: String): String;
+Begin
+  Result := IncludeTrailingPathDelimiter(InstallDir) + 'resources' + PathDelim + 'codex';
+  If Not FileIsExecutable(Result) Then Result := '';
+End;
+
+{$IFDEF LINUX}
+Function FindCodexInLinuxDesktop: String;
+Const
+  Roots: Array[0..3] Of String = ('/usr/lib/chatgpt', '/usr/lib64/chatgpt', '/usr/local/lib/chatgpt', '/opt/chatgpt');
+Var
+  Root, Launcher, Physical: String;
+Begin
+  Result := '';
+  For Root In Roots Do
+    Begin
+      Result := CodexBesideChatGptInstall(Root);
+      If Result <> '' Then Exit;
+    End;
+  { A package may install the chatgpt command as a symlink into its own directory. }
+  Launcher := FindDefaultExecutablePath('chatgpt');
+  If Launcher = '' Then Exit;
+  Physical := GetPhysicalFilename(Launcher, pfeOriginal);
+  Result := CodexBesideChatGptInstall(ExtractFilePath(ExcludeTrailingPathDelimiter(Physical)));
+End;
+{$ENDIF}
+
 Function FindCodexInDesktopApp: String;
 Begin
   Result := FindCodexInChatGptApps;
   {$IFDEF WINDOWS}
   If Result = '' Then Result := FindCodexInWindowsDesktop;
+  {$ENDIF}
+  {$IFDEF LINUX}
+  If Result = '' Then Result := FindCodexInLinuxDesktop;
   {$ENDIF}
 End;
 

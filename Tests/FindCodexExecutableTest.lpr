@@ -45,7 +45,17 @@ Begin
   Else
     WriteLn('ok   macOS Codex auto-detect');
   {$ELSE}
+  {$IFDEF LINUX}
+  If FileIsExecutable('/usr/lib/chatgpt/resources/codex') And (Pos('/chatgpt/resources/codex', Found) = 0) Then
+    Begin
+      WriteLn('FAIL Linux ChatGPT app is installed but auto-detect returned ', Found);
+      Failed := True;
+    End
+  Else
+    WriteLn('ok   Linux Codex auto-detect');
+  {$ELSE}
   WriteLn('ok   non-Darwin host (presence optional)');
+  {$ENDIF}
   {$ENDIF}
   If Failed Then
     Halt(1);
