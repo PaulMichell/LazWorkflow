@@ -80,7 +80,7 @@ Procedure InitializeSpellCheckerStorage(Const ConfigDirectory: String);
 Implementation
 
 Uses
-  LazFileUtils, fpjson, WorkflowSettings, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows, WorkflowLog;
+  LazFileUtils, fpjson, WorkflowSettings, SpellEngineHunspell, SpellEngineAspell, SpellEngineWindows, {$IFDEF DARWIN}SpellEngineMacOS,{$ENDIF} WorkflowLog;
 
 Type
   TSpellPreloadThread = Class(TThread)
@@ -150,6 +150,9 @@ Var
   Begin
     Result := Nil;
     Case LoadKind Of
+      {$IFDEF DARWIN}
+      sekMacOS: Result := TMacSpellEngine.Create(FLanguage);
+      {$ENDIF}
       sekWindows:
         Result := TWindowsSpellEngine.Create(FLanguage, FLibraryFileName, FDictionaryDirectory);
       sekHunspell:
@@ -624,6 +627,11 @@ Begin
   Try
     Names.Sorted := True;
     Names.Duplicates := dupIgnore;
+    {$IFDEF DARWIN}
+    ListMacSpellLanguages(Names);
+    AppendKind(Names, sekMacOS);
+    Names.Clear;
+    {$ENDIF}
     ListWindowsSpellLanguages(Names);
     AppendKind(Names, sekWindows);
     Names.Clear;

@@ -93,8 +93,9 @@ End;
 Function EngineKindCaption(Kind: TSpellEngineKind): String;
 Begin
   Case Kind Of
-    sekHunspell: Result := 'Hunspell (OpenOffice)';
+    sekHunspell: Result := 'Hunspell (LibreOffice / OpenOffice)';
     sekAspell: Result := 'ASpell';
+    sekMacOS: Result := 'macOS';
     sekWindows: Result := 'Windows';
   Else
     Result := SpellEngineKindToText(Kind);
@@ -106,6 +107,7 @@ Begin
   Case Kind Of
     sekHunspell: Result := 'Hunspell';
     sekAspell: Result := 'ASpell';
+    sekMacOS: Result := 'macOS';
     sekWindows: Result := 'Windows';
   Else
     Result := SpellEngineKindToText(Kind);
@@ -248,6 +250,11 @@ Begin
         StatusLabel.Caption := 'No engine loaded — memo only';
         Exit;
       End;
+    If (Preview.EngineKind In [sekMacOS, sekAuto]) And SpellEngineKindAvailable(sekMacOS) Then
+      Begin
+        StatusLabel.Caption := 'macOS spell checker available';
+        Exit;
+      End;
     FoundLibrary := '';
     If (Preview.EngineKind In [sekWindows, sekAuto]) And SpellEngineKindAvailable(sekWindows) Then
       Begin
@@ -343,6 +350,10 @@ End;
 Function LocateHunspellInstallation(Out LibraryFile, DictDir: String): Boolean;
 Var
   Dirs: TStringArray;
+  {$IFDEF DARWIN}
+  Names: TStringList;
+  DirIndex: Integer;
+  {$ENDIF}
 Begin
   LibraryFile := '';
   DictDir := '';
@@ -353,7 +364,24 @@ Begin
     FindHunspellLibrary(LibraryFile);
   If Length(Dirs) = 0 Then
     Dirs := HunspellDictionaryDirectories;
+  {$IFDEF DARWIN}
+  Names := TStringList.Create;
+    Try
+      For DirIndex := 0 To High(Dirs) Do
+        Begin
+          ListHunspellLanguages(Names, Dirs[DirIndex]);
+          If Names.Count > 0 Then
+            Begin
+              DictDir := Dirs[DirIndex];
+              Break;
+            End;
+        End;
+    Finally
+      Names.Free;
+    End;
+  {$ELSE}
   DictDir := ChooseDictionaryDirectory(Dirs);
+  {$ENDIF}
   Result := (LibraryFile <> '') And (DictDir <> '');
 End;
 
@@ -391,6 +419,12 @@ Begin
     If Preview.EngineKind = sekNone Then
       Begin
         StatusLabel.Caption := 'Select a spell checker first';
+        Exit;
+      End;
+    If (Preview.EngineKind In [sekMacOS, sekAuto]) And SpellEngineKindAvailable(sekMacOS) Then
+      Begin
+        SaveToConfig;
+        StatusLabel.Caption := 'Located macOS spell checker';
         Exit;
       End;
     FoundKind := sekNone;

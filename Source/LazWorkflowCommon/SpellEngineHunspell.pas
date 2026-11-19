@@ -7,6 +7,8 @@ Unit SpellEngineHunspell;
   {$LONGSTRINGS ON}
 {$ENDIF}
 
+{$IFDEF DARWIN}{$modeswitch objectivec1}{$ENDIF}
+
 Interface
 
 Uses
@@ -51,9 +53,10 @@ Procedure ResetHunspellDiscovery;
 
 Implementation
 
+
 Uses
   DynLibs, LazFileUtils, LazUTF8, LConvEncoding, SpellCheckerOptions, WorkflowLog, SpellHunspellWindows,
-  DirectoryListing;
+  {$IFDEF DARWIN}CocoaAll,{$ENDIF} DirectoryListing;
 
 Type
   THunspellCreate = Function(AffPath, DicPath: PChar): Pointer; CDecl;
@@ -200,6 +203,40 @@ Begin
   Finally LeaveCriticalSection(BindingLock); End;
 End;
 
+{$IFDEF DARWIN}
+Function LibreOfficeContents: String;
+Var
+  BundlePath: NSString;
+Begin
+  BundlePath := NSWorkspace.sharedWorkspace.absolutePathForAppBundleWithIdentifier(
+    NSString(NSString.stringWithUTF8String('org.libreoffice.script')));
+  If BundlePath <> Nil Then
+    Result := String(BundlePath.UTF8String) + '/Contents/'
+  Else If DirectoryExistsUTF8(GetUserDir + 'Applications/LibreOffice.app') Then
+    Result := GetUserDir + 'Applications/LibreOffice.app/Contents/'
+  Else
+    Result := '/Applications/LibreOffice.app/Contents/';
+End;
+
+Function BindBundledHunspell(Const Dir: String): Boolean;
+Var
+  Info: TDirectoryScan;
+  Code: Integer;
+Begin
+  Result := False;
+  Code := StartDirectoryScan(Dir + '*hunspell*.dylib', faAnyFile, Info);
+  Try
+    While Code = 0 Do
+      Begin
+        If BindHunspell(Dir + Info.Name) Then Exit(True);
+        Code := AdvanceDirectoryScan(Info);
+      End;
+  Finally
+    CloseDirectoryScan(Info);
+  End;
+End;
+{$ENDIF}
+
 Function FindHunspellLibrary(Out FullName: String): Boolean;
 Var
   Names, Configured: TStringArray;
@@ -219,6 +256,14 @@ Begin
       Result := FullName <> '';
       Exit;
     End;
+  {$IFDEF DARWIN}
+  If BindBundledHunspell(LibreOfficeContents + 'Frameworks/') Or
+     BindBundledHunspell(LibreOfficeContents + 'MacOS/') Then
+    Begin
+      FullName := HunLibPath;
+      Exit(True);
+    End;
+  {$ENDIF}
   Names := HunspellLibraryCandidates;
   For Index := 0 To High(Names) Do
     If BindHunspell(Names[Index]) Then
@@ -265,13 +310,20 @@ Begin
   {$ENDIF}
   AppendConfiguredDictionaries(Result);
   {$IFDEF DARWIN}
+  AppendUniqueDirectory(Result, LibreOfficeContents + 'Resources/extensions');
   AppendUniqueDirectory(Result, '/Library/Spelling');
   AppendUniqueDirectory(Result, GetUserDir + 'Library/Spelling');
-  AppendUniqueDirectory(Result, '/Applications/LibreOffice.app/Contents/Resources/extensions');
+  AppendUniqueDirectory(Result, '/opt/homebrew/share/hunspell');
   {$ENDIF}
 End;
 
 Function HunspellSearchDirectories(Const DictionaryDirectory: String): TStringArray;
+{$IFDEF DARWIN}
+Var
+  RootIndex, Code: Integer;
+  Parent: String;
+  Info: TDirectoryScan;
+{$ENDIF}
 {$IFDEF WINDOWS}
 Var
   Index, Limit: Integer;
@@ -286,6 +338,24 @@ Begin
     End
   Else
     Result := HunspellDictionaryDirectories;
+  {$IFDEF DARWIN}
+  For RootIndex := 0 To High(Result) Do
+    If SameText(ExtractFileName(Result[RootIndex]), 'extensions') Then
+      Begin
+        Parent := IncludeTrailingPathDelimiter(Result[RootIndex]);
+        Code := StartDirectoryScan(Parent + '*', faDirectory, Info);
+        Try
+          While Code = 0 Do
+            Begin
+              If (Info.Attr And faDirectory <> 0) And (Info.Name <> '.') And (Info.Name <> '..') Then
+                AppendUniqueDirectory(Result, Parent + Info.Name);
+              Code := AdvanceDirectoryScan(Info);
+            End;
+        Finally
+          CloseDirectoryScan(Info);
+        End;
+      End;
+  {$ENDIF}
   {$IFDEF WINDOWS}
   If Trim(DictionaryDirectory) = '' Then
     Exit;
