@@ -218,7 +218,6 @@ End;
 
 Type
   TPlanHashJob = Record
-    Path: String;
     Resolved: String;
     Age: LongInt;
     Bytes: Int64;
@@ -231,6 +230,8 @@ Type
     Wake: TEvent;
     Job: TPlanHashJob;
     HasJob: Boolean;
+    Running: TPlanHashJob;
+    IsRunning: Boolean;
     Generation: Integer;
     DonePath: String;
     DoneAge: LongInt;
@@ -243,8 +244,8 @@ Type
   Public
     Constructor Create;
     Destructor Destroy; Override;
-    Procedure Request(Const RelativePath, Resolved: String; Age: LongInt; Bytes: Int64);
-    Function PublishedRevision(Const RelativePath: String): String;
+    Procedure Request(Const Resolved: String; Age: LongInt; Bytes: Int64);
+    Function PublishedRevision(Const Resolved: String; Age: LongInt; Bytes: Int64): String;
   End;
 
 Var
@@ -272,17 +273,19 @@ Begin
   Inherited Destroy;
 End;
 
-Procedure TPlanHashThread.Request(Const RelativePath, Resolved: String; Age: LongInt; Bytes: Int64);
+Procedure TPlanHashThread.Request(Const Resolved: String; Age: LongInt; Bytes: Int64);
 Begin
   Lock.Acquire;
   Try
-    If (Not HasJob) And (DonePath = RelativePath) And (DoneAge = Age) And (DoneBytes = Bytes) And
+    If (Not HasJob) And (Not IsRunning) And (DonePath = Resolved) And (DoneAge = Age) And (DoneBytes = Bytes) And
       (DoneTick <> 0) And (GetTickCount64 - DoneTick < 1000) Then
       Exit;
-    If HasJob And (Job.Path = RelativePath) And (Job.Age = Age) And (Job.Bytes = Bytes) Then
+    If HasJob And (Job.Resolved = Resolved) And (Job.Age = Age) And (Job.Bytes = Bytes) Then
+      Exit;
+    If IsRunning And (Running.Generation = Generation) And (Running.Resolved = Resolved) And
+      (Running.Age = Age) And (Running.Bytes = Bytes) Then
       Exit;
     Inc(Generation);
-    Job.Path := RelativePath;
     Job.Resolved := Resolved;
     Job.Age := Age;
     Job.Bytes := Bytes;
@@ -294,11 +297,11 @@ Begin
   End;
 End;
 
-Function TPlanHashThread.PublishedRevision(Const RelativePath: String): String;
+Function TPlanHashThread.PublishedRevision(Const Resolved: String; Age: LongInt; Bytes: Int64): String;
 Begin
   Lock.Acquire;
   Try
-    If DonePath = RelativePath Then
+    If (DonePath = Resolved) And (DoneAge = Age) And (DoneBytes = Bytes) Then
       Result := DoneRevision
     Else
       Result := '';
@@ -314,14 +317,14 @@ Begin
   Revision := HashAbsoluteFile(One.Resolved);
   Lock.Acquire;
   Try
+    IsRunning := False;
     If One.Generation <> Generation Then
       Exit;
-    DonePath := One.Path;
+    DonePath := One.Resolved;
     DoneAge := One.Age;
     DoneBytes := One.Bytes;
     DoneRevision := Revision;
     DoneTick := GetTickCount64;
-    HasJob := False;
   Finally
     Lock.Release;
   End;
@@ -339,7 +342,9 @@ Begin
       Try
         If HasJob Then
           Begin
-            One := Job;
+            Running := Job;
+            IsRunning := True;
+            One := Running;
             HasJob := False;
             Have := True;
           End;
@@ -352,7 +357,14 @@ Begin
             Serve(One);
           Except
             On Exception Do
-              ;
+              Begin
+                Lock.Acquire;
+                Try
+                  IsRunning := False;
+                Finally
+                  Lock.Release;
+                End;
+              End;
           End;
         End
       Else
@@ -376,8 +388,8 @@ Begin
     Exit;
   If Not Assigned(PlanHashThread) Then
     PlanHashThread := TPlanHashThread.Create;
-  PlanHashThread.Request(RelativeOrAbsolute, Resolved, Age, Bytes);
-  Result := PlanHashThread.PublishedRevision(RelativeOrAbsolute);
+  PlanHashThread.Request(Resolved, Age, Bytes);
+  Result := PlanHashThread.PublishedRevision(Resolved, Age, Bytes);
 End;
 
 Function AssistantPlanFileStamp(Const RelativeOrAbsolute: String; Out Age: LongInt; Out Bytes: Int64): Boolean;
