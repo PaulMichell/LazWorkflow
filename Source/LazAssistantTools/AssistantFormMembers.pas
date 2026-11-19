@@ -9,9 +9,55 @@ Uses SysUtils, Classes, CodeCache;
 Function BindFormMembers(Code: TCodeBuffer; Const LfmBody, CompName, ClassName,
   MethodName: String; Var Body: String; Out FormClass, ErrorText: String): Boolean;
 
+Function EnsureComponentUses(Var PasBody: String; Const ClassName, ExplicitUnit: String): Boolean;
+
 Implementation
 
 Uses CodeToolManager, CodeTree, PascalParserTool;
+
+Function EnsureComponentUses(Var PasBody: String; Const ClassName, ExplicitUnit: String): Boolean;
+Var
+  UsesPos, SemiPos: Integer;
+  Slice, LowerBody, Needle, UnitName: String;
+Begin
+  Result := False;
+  UnitName := ExplicitUnit;
+  If UnitName = '' Then
+    Begin
+      If SameText(ClassName, 'TTimer') Then
+        UnitName := 'ExtCtrls'
+      Else If SameText(ClassName, 'TImageList') Then
+        UnitName := 'Controls'
+      Else If SameText(ClassName, 'TAction') Or SameText(ClassName, 'TActionList') Then
+        UnitName := 'ActnList';
+    End;
+  If Trim(UnitName) = '' Then
+    Exit;
+  LowerBody := LowerCase(PasBody);
+  Needle := LowerCase(UnitName);
+  { Already present as a whole word-ish token. }
+  If Pos(',' + Needle + ',', StringReplace(StringReplace(LowerBody, ' ', '', [rfReplaceAll]),
+    LineEnding, '', [rfReplaceAll])) > 0 Then
+    Exit;
+  If Pos(' ' + Needle + ',', LowerBody) > 0 Then
+    Exit;
+  If Pos(',' + Needle + ' ', LowerBody) > 0 Then
+    Exit;
+  If Pos('uses' + Needle, StringReplace(LowerBody, ' ', '', [rfReplaceAll])) > 0 Then
+    Exit;
+  UsesPos := Pos('uses', LowerBody);
+  If UsesPos < 1 Then
+    Exit;
+  SemiPos := Pos(';', Copy(PasBody, UsesPos, MaxInt));
+  If SemiPos < 1 Then
+    Exit;
+  SemiPos := UsesPos + SemiPos - 1;
+  Slice := Copy(PasBody, UsesPos, SemiPos - UsesPos);
+  If Pos(LowerCase(UnitName), LowerCase(Slice)) > 0 Then
+    Exit;
+  Insert(', ' + UnitName, PasBody, SemiPos);
+  Result := True;
+End;
 
 Function RootClassName(Const LfmBody: String): String;
 Var

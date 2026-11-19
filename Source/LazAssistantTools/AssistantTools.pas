@@ -3543,39 +3543,6 @@ Begin
     End;
 End;
 
-Function EnsureUsesHasUnit(Var PasBody: String; Const UnitName: String): Boolean;
-Var
-  UsesPos, SemiPos: Integer;
-  Slice, LowerBody, Needle: String;
-Begin
-  Result := False;
-  If Trim(UnitName) = '' Then
-    Exit;
-  LowerBody := LowerCase(PasBody);
-  Needle := LowerCase(UnitName);
-  { Already present as a whole word-ish token. }
-  If Pos(',' + Needle + ',', StringReplace(StringReplace(LowerBody, ' ', '', [rfReplaceAll]),
-    LineEnding, '', [rfReplaceAll])) > 0 Then
-    Exit;
-  If Pos(' ' + Needle + ',', LowerBody) > 0 Then
-    Exit;
-  If Pos(',' + Needle + ' ', LowerBody) > 0 Then
-    Exit;
-  If Pos('uses' + Needle, StringReplace(LowerBody, ' ', '', [rfReplaceAll])) > 0 Then
-    Exit;
-  UsesPos := Pos('uses', LowerBody);
-  If UsesPos < 1 Then
-    Exit;
-  SemiPos := Pos(';', Copy(PasBody, UsesPos, MaxInt));
-  If SemiPos < 1 Then
-    Exit;
-  SemiPos := UsesPos + SemiPos - 1;
-  Slice := Copy(PasBody, UsesPos, SemiPos - UsesPos);
-  If Pos(LowerCase(UnitName), LowerCase(Slice)) > 0 Then
-    Exit;
-  Insert(', ' + UnitName, PasBody, SemiPos);
-  Result := True;
-End;
 
 
 
@@ -3638,13 +3605,6 @@ Begin
     End;
   If ClassName[1] <> 'T' Then
     ClassName := 'T' + ClassName;
-  If UsesUnit = '' Then
-    Begin
-      If SameText(ClassName, 'TTimer') Or SameText(ClassName, 'TImageList') Then
-        UsesUnit := 'ExtCtrls'
-      Else If SameText(ClassName, 'TAction') Or SameText(ClassName, 'TActionList') Then
-        UsesUnit := 'ActnList';
-    End;
   If Not BuildLfmPropertyLines(PropsJson, PropLines, DetectedEvent) Then
     Begin
       ErrorText := 'properties must be a JSON object string when provided.';
@@ -3675,7 +3635,7 @@ Begin
     LeaveAssistantCodeTools;
   End;
   ChangedLfm := False;
-  If EnsureUsesHasUnit(PasBody, UsesUnit) Then ChangedPas := True;
+  If EnsureComponentUses(PasBody, ClassName, UsesUnit) Then ChangedPas := True;
   If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
     ChangedLfm := True;
   If Not AssistantTarget.AllowsWrite(PasPath) Or Not AssistantTarget.AllowsWrite(LfmPath) Then

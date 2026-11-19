@@ -18,9 +18,44 @@ var
   Code: TCodeBuffer;
   Body, Lfm, Owner, ErrorText, FirstEdit, Directory: String;
   Output: TStringList;
+procedure CheckComponentImport(const UnitName, ComponentType, ExpectedImport: String);
+var
+  Source, Resource, FormClass, Error: String;
+  Buffer: TCodeBuffer;
+  Lines: TStringList;
+begin
+  Buffer := CodeToolBoss.CreateFile(Directory + UnitName + '.pas');
+  Source := 'unit ' + UnitName + ';' + LineEnding + '{$mode objfpc}{$H+}' + LineEnding +
+    'interface' + LineEnding + 'uses Forms;' + LineEnding + 'type' + LineEnding +
+    '  TMainForm = class(TForm)' + LineEnding + '  end;' + LineEnding +
+    'implementation' + LineEnding + '{$R *.lfm}' + LineEnding + 'end.' + LineEnding;
+  Buffer.Source := Source;
+  Resource := 'object MainForm: TMainForm' + LineEnding + 'end' + LineEnding;
+  if not BindFormMembers(Buffer, Resource, 'Entry', ComponentType, '', Source, FormClass, Error) then
+    raise Exception.Create(Error);
+  if not EnsureComponentUses(Source, ComponentType, '') or
+    (Pos('uses Forms, ' + ExpectedImport + ';', Source) = 0) then
+    raise Exception.Create('Wrong import for ' + ComponentType);
+  if Pos('Entry: ' + ComponentType + ';', Source) = 0 then
+    raise Exception.Create('Missing field for ' + ComponentType);
+  if not UpsertLfmComponent(Resource, 'Entry', ComponentType, '') then
+    raise Exception.Create('Missing LFM entry for ' + ComponentType);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Source;
+    Lines.SaveToFile(Buffer.Filename);
+    Lines.Text := Resource;
+    Lines.SaveToFile(ChangeFileExt(Buffer.Filename, '.lfm'));
+  finally
+    Lines.Free;
+  end;
+end;
+
 begin
   Directory := IncludeTrailingPathDelimiter(ExpandFileName('Temporary/FormBinding'));
   ForceDirectories(Directory);
+  CheckComponentImport('ImageListImportForm', 'TImageList', 'Controls');
+  CheckComponentImport('TimerImportForm', 'TTimer', 'ExtCtrls');
   Code := CodeToolBoss.CreateFile(Directory + 'BindingForm.pas');
   Body := FormSource;
   Code.Source := Body;
