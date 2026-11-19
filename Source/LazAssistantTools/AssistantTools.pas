@@ -110,6 +110,7 @@ Uses
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantSessionObserve,
+  CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
@@ -3576,132 +3577,7 @@ Begin
   Result := True;
 End;
 
-Function EnsurePublishedField(Var PasBody: String; Const CompName, ClassName: String): Boolean;
-Var
-  FieldLine, Needle: String;
-  ClassPos, PubPos, InsertAt: Integer;
-Begin
-  Result := False;
-  FieldLine := '    ' + CompName + ': ' + ClassName + ';';
-  Needle := LowerCase(CompName + ':');
-  If Pos(Needle, LowerCase(PasBody)) > 0 Then
-    Exit;
-  ClassPos := Pos('= class(', LowerCase(PasBody));
-  If ClassPos < 1 Then
-    ClassPos := Pos('= class', LowerCase(PasBody));
-  If ClassPos < 1 Then
-    Exit;
-  PubPos := Pos('published', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
-  If PubPos > 0 Then
-    Begin
-      InsertAt := ClassPos + PubPos - 1 + Length('published');
-      While (InsertAt <= Length(PasBody)) And (PasBody[InsertAt] In [#10, #13, ' ']) Do
-        Inc(InsertAt);
-      Insert(LineEnding + FieldLine, PasBody, InsertAt);
-      Result := True;
-      Exit;
-    End;
-  { Fallback: insert before first private/public after class. }
-  PubPos := Pos('private', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
-  If PubPos < 1 Then
-    PubPos := Pos('public', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
-  If PubPos < 1 Then
-    Exit;
-  InsertAt := ClassPos + PubPos - 1;
-  Insert(LineEnding + '  published' + LineEnding + FieldLine + LineEnding, PasBody, InsertAt);
-  Result := True;
-End;
 
-Function EnsureEventMethodDecl(Var PasBody: String; Const MethodName: String): Boolean;
-Var
-  Decl, Needle: String;
-  ClassPos, PubPos, InsertAt: Integer;
-Begin
-  Result := False;
-  If Trim(MethodName) = '' Then
-    Exit;
-  Decl := '    Procedure ' + MethodName + '(Sender: TObject);';
-  Needle := LowerCase('procedure ' + MethodName + '(');
-  If Pos(Needle, LowerCase(PasBody)) > 0 Then
-    Exit;
-  ClassPos := Pos('= class(', LowerCase(PasBody));
-  If ClassPos < 1 Then
-    ClassPos := Pos('= class', LowerCase(PasBody));
-  If ClassPos < 1 Then
-    Exit;
-  PubPos := Pos('published', LowerCase(Copy(PasBody, ClassPos, MaxInt)));
-  If PubPos < 1 Then
-    Exit;
-  InsertAt := ClassPos + PubPos - 1 + Length('published');
-  While (InsertAt <= Length(PasBody)) And (PasBody[InsertAt] In [#10, #13, ' ']) Do
-    Inc(InsertAt);
-  Insert(LineEnding + Decl, PasBody, InsertAt);
-  Result := True;
-End;
-
-Function EnsureEventMethodImpl(Var PasBody: String; Const FormClass, MethodName: String): Boolean;
-Var
-  Needle, Stub: String;
-  ImplPos: Integer;
-Begin
-  Result := False;
-  If (Trim(FormClass) = '') Or (Trim(MethodName) = '') Then
-    Exit;
-  Needle := LowerCase('procedure ' + FormClass + '.' + MethodName);
-  If Pos(Needle, LowerCase(PasBody)) > 0 Then
-    Exit;
-  Stub :=
-    LineEnding +
-    'Procedure ' + FormClass + '.' + MethodName + '(Sender: TObject);' + LineEnding +
-    'Begin' + LineEnding +
-    '  { TODO: implement }' + LineEnding +
-    'End;' + LineEnding;
-  ImplPos := Pos(LineEnding + 'implementation', LowerCase(PasBody));
-  If ImplPos < 1 Then
-    ImplPos := Pos('implementation', LowerCase(PasBody));
-  If ImplPos < 1 Then
-    Exit;
-  { Insert before finalization/end. of unit if present, else append before last End. }
-  If Pos(LineEnding + 'initialization', LowerCase(PasBody)) > 0 Then
-    Insert(Stub, PasBody, Pos(LineEnding + 'initialization', LowerCase(PasBody)))
-  Else If Pos(LineEnding + 'finalization', LowerCase(PasBody)) > 0 Then
-    Insert(Stub, PasBody, Pos(LineEnding + 'finalization', LowerCase(PasBody)))
-  Else
-    Begin
-      { Before last "End." }
-      ImplPos := Length(PasBody);
-      While (ImplPos > 1) And (PasBody[ImplPos] In [#10, #13, ' ']) Do
-        Dec(ImplPos);
-      If (ImplPos >= 4) And (LowerCase(Copy(PasBody, ImplPos - 3, 4)) = 'end.') Then
-        Insert(Stub, PasBody, ImplPos - 3)
-      Else
-        PasBody := PasBody + Stub;
-    End;
-  Result := True;
-End;
-
-Function DetectFormClassName(Const PasBody: String): String;
-Var
-  P, StartPos, I: Integer;
-  Slice: String;
-Begin
-  Result := '';
-  P := Pos('= class(', LowerCase(PasBody));
-  If P < 1 Then
-    P := Pos('= class', LowerCase(PasBody));
-  If P < 1 Then
-    Exit;
-  StartPos := P - 1;
-  While (StartPos > 1) And (PasBody[StartPos] In [' ', #9]) Do
-    Dec(StartPos);
-  I := StartPos;
-  While (I > 1) And (PasBody[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Do
-    Dec(I);
-  If Not (PasBody[I] In ['A'..'Z', 'a'..'z', '0'..'9', '_']) Then
-    Inc(I);
-  Slice := Copy(PasBody, I, StartPos - I + 1);
-  Result := Trim(Slice);
-End;
 
 Function ToolEnsureFormComponent(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
@@ -3763,21 +3639,26 @@ Begin
     Exit;
   If Not LoadProjectFileText(LfmPath, LfmBody, FromEditor, ErrorText) Then
     Exit;
-  FormClass := DetectFormClassName(PasBody);
-  ChangedPas := False;
-  ChangedLfm := False;
-  If UsesUnit <> '' Then
-    If EnsureUsesHasUnit(PasBody, UsesUnit) Then
-      ChangedPas := True;
-  If EnsurePublishedField(PasBody, CompName, ClassName) Then
-    ChangedPas := True;
-  If EventMethod <> '' Then
+  If Not EnterAssistantCodeTools Then
     Begin
-      If EnsureEventMethodDecl(PasBody, EventMethod) Then
-        ChangedPas := True;
-      If EnsureEventMethodImpl(PasBody, FormClass, EventMethod) Then
-        ChangedPas := True;
+      ErrorText := 'IDE CodeTools is busy.';
+      Exit;
     End;
+  Try
+    If Assigned(LazarusIDE) And Not LazarusIDE.BeginCodeTools Then
+      Begin
+        ErrorText := 'IDE could not prepare CodeTools.';
+        Exit;
+      End;
+    Note := PasBody;
+    If Not BindFormMembers(CodeToolBoss.LoadFile(PasPath, True, False), LfmBody,
+      CompName, ClassName, EventMethod, PasBody, FormClass, ErrorText) Then Exit;
+    ChangedPas := PasBody <> Note;
+  Finally
+    LeaveAssistantCodeTools;
+  End;
+  ChangedLfm := False;
+  If EnsureUsesHasUnit(PasBody, UsesUnit) Then ChangedPas := True;
   If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
     ChangedLfm := True;
   { Write without opening tabs. An open form unit is updated in its editor and saved. }
