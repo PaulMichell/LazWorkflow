@@ -40,7 +40,7 @@ Function IsCodexApprovalRequest(Const Method: String): Boolean;
 
 Type
   TCodexRunState = (crsDisconnected, crsConnecting, crsReady, crsStartingThread,
-    crsStartingTurn, crsRunning, crsCancelling, crsCompleted, crsFailed);
+    crsStartingTurn, crsRunning, crsCancelling, crsCompleted, crsFailed, crsWaitingReconnect);
   TCodexToolRequest = Record
     RequestId, CallId, ThreadId, TurnId, Tool, Arguments: String;
     ContentBefore, ThinkingBefore: String;
@@ -550,7 +550,7 @@ Var
   InputJson, ImageError: String;
 Begin
   Result := (FHandshake.State = ccsSubscriptionAuthenticated) And
-    (FThreadId <> '') And (FState In [crsReady, crsCompleted]);
+    (FThreadId <> '') And (FState In [crsReady, crsCompleted, crsWaitingReconnect]);
   If Not Result Then Exit;
   If (Trim(AttachmentsJson) <> '') And (Trim(AttachmentsJson) <> '[]') And
     (FCompatibility.Support[ccImages] <> csSupported) Then
@@ -566,8 +566,12 @@ Begin
   Result := Request('turn/start', CodexTurnBody(FThreadId, '', InputJson, Effort, True, FCompatibility.Support[ccSummary] = csSupported));
   If Result Then
     Begin
-      FContent := '';
-      FThinking := '';
+      If FState <> crsWaitingReconnect Then
+        Begin
+          FContent := '';
+          FThinking := '';
+          FSeenCalls.Clear;
+        End;
       FTurnId := '';
       FMessageIds.Clear;
       FMessageId := '';
@@ -576,7 +580,6 @@ Begin
       FReasoningId := '';
       FReasoningStart := 1;
       FSummaryIndex := -1;
-      FSeenCalls.Clear;
       SetLength(FTools, 0);
       FToolTaken := False;
       FState := crsStartingTurn;
@@ -878,14 +881,21 @@ Begin
         Tool.CallId := Params.Get('callId', '');
         Tool.Tool := Params.Get('tool', '');
         Value := Params.Find('arguments');
-        If (Tool.ThreadId <> FThreadId) Or (Tool.TurnId <> FTurnId) Or
-          (Tool.CallId = '') Or (Tool.Tool = '') Or Not (Value Is TJSONObject) Or
-          (FSeenCalls.IndexOf(Tool.CallId) >= 0) Or (Length(FTools) >= 16) Or
-          (FSeenCalls.Count >= 1024) Then
-            Begin
-              Fail('Invalid, stale or duplicate Codex tool request.');
-              Exit;
-            End;
+        { A retransmission on the same RPC id already has a reply pending. }
+        For I := 0 To High(FTools) Do
+          If FTools[I].RequestId = Tool.RequestId Then Exit;
+        If (Tool.ThreadId <> FThreadId) Or (Tool.TurnId <> FTurnId) Then Status := 'Stale tool request.'
+        Else If (Tool.CallId = '') Or (Tool.Tool = '') Or Not (Value Is TJSONObject) Then Status := 'Invalid tool request.'
+        Else If FSeenCalls.IndexOf(Tool.CallId) >= 0 Then Status := 'Duplicate tool call. The original call may already have executed.'
+        Else If Length(FTools) >= 16 Then Status := 'Tool queue full. Retry after outstanding calls finish.'
+        Else If FSeenCalls.Count >= 1024 Then Status := 'Tool call limit reached for this turn.'
+        Else Status := '';
+        If Status <> '' Then
+          Begin
+            If Not FTransport.Queue('{"id":' + Tool.RequestId + ',"result":{"success":false,"contentItems":[{"type":"inputText","text":' +
+              Quote(Status) + '}]}}') Then Fail(FTransport.LastError);
+            Exit;
+          End;
         Tool.Arguments := Value.AsJSON;
         Tool.ContentBefore := FContent;
         Tool.ThinkingBefore := FThinking;
@@ -925,7 +935,17 @@ Begin
             If Status = 'failed' Then
               Begin
                 Value := Turn.FindPath('error.message');
-                If Assigned(Value) And (Value.JSONType = jtString) Then Fail('Codex turn failed: ' + CodexDiagnosticCategory(Value.AsString) + '.')
+                If Assigned(Value) And (Value.JSONType = jtString) Then
+                  Begin
+                    Status := CodexDiagnosticCategory(Value.AsString);
+                    If (FState = crsRunning) And (Length(FTools) = 0) And (FPendingId = '') And
+                      ((Status = 'network connection failed') Or (Status = 'request timed out')) Then
+                      Begin
+                        FState := crsWaitingReconnect;
+                        FThinking := FThinking + LineEnding + 'Connection interrupted. Waiting to reconnect.';
+                      End
+                    Else Fail('Codex turn failed: ' + Status + '.');
+                  End
                 Else Fail('Codex turn failed.');
                 Exit;
               End;

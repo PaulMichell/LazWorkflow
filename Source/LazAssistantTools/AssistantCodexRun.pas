@@ -31,7 +31,8 @@ Type
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
     FToolResult, FSteer: String;
-    FTimeout: Cardinal;
+    ReplayUnsafe: Boolean;
+    FTimeout, ReconnectDelayMs: Cardinal;
     FCancelled: LongInt;
     Function Cancelled: Boolean;
     Procedure Publish(Client: TAssistantCodexClient);
@@ -61,7 +62,7 @@ Type
 Implementation
 
 Uses
-  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages;
+  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages, AssistantRecovery, AssistantConfig;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
@@ -78,6 +79,9 @@ Begin
   FToolsJson := ToolsJson;
   FRunId := RunId;
   FTimeout := TimeoutMs;
+  ReconnectDelayMs := DefaultReconnectIntervalSeconds * 1000;
+  If Assigned(AssistantChatConfig) And (AssistantChatConfig.ReconnectIntervalSeconds > 0) Then
+    ReconnectDelayMs := Cardinal(AssistantChatConfig.ReconnectIntervalSeconds) * 1000;
   FProfile := ProfileDir;
   FEffort := Effort;
   FDeveloperInstructions := DeveloperInstructions;
@@ -144,6 +148,7 @@ Begin
       (Length(Text) <= 65536) And (Length(InputJson) <= 65536);
     If Result Then
       Begin
+        ReplayUnsafe := True;
         FSteer := Text;
         FSteerInput := InputJson;
       End
@@ -230,6 +235,7 @@ Begin
   Try
     If Cancelled Or FSnapshot.Done Or Not FToolPending Or FToolReady Or FToolServicing Then Exit;
     Tool := FTool;
+    ReplayUnsafe := True;
     FToolServicing := True;
   Finally
     LeaveCriticalSection(FLock);
@@ -267,7 +273,7 @@ End;
 Procedure TAssistantCodexRun.Execute;
 Var
   Client: TAssistantCodexClient;
-  Deadline, Now, PausedAt: QWord;
+  Deadline, Now, PausedAt, RetryAt: QWord;
   Tool: TCodexToolRequest;
   SteerInput, ToolResult, ToolAttachments, ToolCallId, ProfileError: String;
   Stage: Integer;
@@ -317,6 +323,7 @@ Begin
       Deadline := GetTickCount64 + FTimeout;
       DeadlinePaused := False;
       PausedAt := 0;
+      RetryAt := 0;
       Stage := 0;
       Repeat
         Now := GetTickCount64;
@@ -330,6 +337,16 @@ Begin
         End;
         If Cancelled Then
           Client.CancelConnection
+        Else If Client.State = crsWaitingReconnect Then
+          Begin
+            If RetryAt = 0 Then RetryAt := Now + ReconnectDelayMs;
+            If Now >= RetryAt Then
+              Begin
+                Client.StartTurn('Continue the interrupted task from the work already recorded in this thread.', FEffort);
+                RetryAt := 0;
+                Deadline := Now + FTimeout;
+              End;
+          End
         Else If IdeWaiting Then
           Begin
             If Not DeadlinePaused Then
@@ -444,6 +461,9 @@ Begin
     Env.Free;
     EnterCriticalSection(FLock);
     Try
+      If Not ReplayUnsafe And Not Cancelled And (FSnapshot.ErrorText <> '') And
+        (ClassifyDroppedTransport(CodexRetryPrefix + FSnapshot.ErrorText, '', False).Action = araRetryLastAction) Then
+        FSnapshot.ErrorText := CodexRetryPrefix + FSnapshot.ErrorText;
       FSnapshot.Done := True;
       FToolPending := False;
     Finally

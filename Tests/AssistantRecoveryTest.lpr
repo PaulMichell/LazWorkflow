@@ -154,6 +154,8 @@ Var
   WaitMs: QWord;
   Note: String;
 Begin
+  Decision := ClassifyDroppedTransport(CodexRetryPrefix + 'Codex runtime exited. Exit status 1.', '', False);
+  Check('Codex runtime exit before tool dispatch retries', Decision.Action = araRetryLastAction);
   Decision := ClassifyDroppedTransport('Codex runtime exited.', '', False);
   Check('Codex runtime exit does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Codex stdin closed unexpectedly.', '', False);

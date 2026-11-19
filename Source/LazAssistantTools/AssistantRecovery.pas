@@ -21,6 +21,7 @@ Const
   DefaultFaultRetryCap = 1;
   { Reconnect interval until item 5.1 stores the setting. Snapshotted when the turn starts. }
   DefaultReconnectIntervalSeconds = 30;
+  CodexRetryPrefix = 'Before tool dispatch or steering: ';
   { Credit retry when the reset is unknown, until item 5.1 stores the setting. }
   DefaultCreditIntervalMinutes = 60;
   { Stable phrases. IsAssistantProgressStatus matches these so a late snapshot is not an error. }
@@ -972,7 +973,14 @@ Begin
   { App-server turns and tool results are not idempotent. A lost response must
     not replay an entire Codex turn with potentially completed IDE actions. }
   If Pos('codex', LowerCase(ErrorText)) > 0 Then
-    Exit(Recovery(araStop, False));
+    Begin
+      If (Pos(CodexRetryPrefix, ErrorText) = 1) And ((Pos('Codex runtime exited.', ErrorText) > 0) Or
+        (Pos('Codex exited with a truncated protocol frame.', ErrorText) > 0) Or
+        (ErrorText = CodexRetryPrefix + 'Codex stdin closed unexpectedly.') Or (ErrorText = CodexRetryPrefix + 'Codex stdin write timed out.') Or
+        (ErrorText = CodexRetryPrefix + 'Codex connection/request timed out.') Or (Pos('network connection failed.', ErrorText) > 0) Or
+        (Pos('request timed out.', ErrorText) > 0)) Then Exit(Recovery(araRetryLastAction, True));
+      Exit(Recovery(araStop, False));
+    End;
   { Same order as an HTTP round: credits before a short 429, then a lost transport. }
   If AssistantFaultIsOutOfCredits(Fault) Then
     Exit(Recovery(araRetryLastAction, False, ahwCredits));

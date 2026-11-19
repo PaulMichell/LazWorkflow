@@ -108,6 +108,12 @@ Begin
             Send('{"id":' + Id + ',"result":{"turn":{"id":"turn-1","status":"inProgress"}}}');
             If Prompt = 'authchange' Then
               Begin Send('{"method":"account/updated","params":{"authMode":"apikey"}}'); Continue; End;
+            If Prompt = 'disconnect' Then
+              Begin
+                Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"Partial"}}');
+                Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"stream disconnected"}}}}');
+                Continue;
+              End;
             If Prompt = 'hang' Then Continue;
             If Prompt = 'finalonly' Then
               Begin
@@ -134,6 +140,10 @@ Begin
           Begin
             Send('{"id":' + Id + ',"result":{}}');
             Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted"}}}');
+          End
+        Else If Id = '"tool-request-2"' Then
+          Begin
+            If Obj.FindPath('result.success').AsBoolean Then Halt(2);
           End
         Else If (Method = '') And Assigned(Obj.Find('result')) Then
           Begin
@@ -669,8 +679,16 @@ Begin
     Client.StartTurn('finalonly'); WaitState(crsCompleted);
     Check('final-only messages retained once with paragraph separation',
       Client.Content = 'Final answer' + LineEnding + LineEnding + 'Second paragraph');
-    Start; Client.StartTurn('duplicate'); WaitState(crsFailed);
-    Check('duplicate call rejected', Pos('duplicate', Client.LastError) > 0);
+    Start; Client.StartTurn('duplicate'); WaitState(crsRunning);
+    Deadline := GetTickCount64 + 3000;
+    Repeat Client.Pump; Sleep(1); Until Client.TakeTool(Tool) Or (GetTickCount64 > Deadline);
+    Check('original call survives duplicate', Client.CompleteTool('call-1', 'result', True));
+    WaitState(crsCompleted);
+    Start; Client.StartTurn('disconnect'); WaitState(crsWaitingReconnect);
+    Check('resume on existing thread', Client.StartTurn('finalonly'));
+    WaitState(crsCompleted);
+    Check('partial output survives reconnect', Client.Content = 'Partial' + LineEnding + LineEnding +
+      'Final answer' + LineEnding + LineEnding + 'Second paragraph');
     Start; Client.StartTurn('authchange'); WaitState(crsFailed);
     Check('authentication change stops run', Pos('authentication changed', Client.LastError) > 0);
     Start; Client.StartTurn('hang'); WaitState(crsRunning);
