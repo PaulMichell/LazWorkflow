@@ -417,7 +417,12 @@ Begin
   PreviewControl.WordWrap := True;
   { Hide the bar when the preview fits. Word wrap is already on, so this is vertical only. }
   PreviewControl.ScrollBars := ssAutoVertical;
+  { Match the form/source font. ParentFont=False with Size left at 0 made Cocoa
+    Markdown preview use BaseSize 1 (unreadable). }
   PreviewControl.ParentFont := False;
+  PreviewControl.Font.Assign(Font);
+  If PreviewControl.Font.Size < 1 Then
+    PreviewControl.Font.Size := 10;
   PreviewControl.Visible := True;
   PreviewLoader := TStyledMarkdown.Create(PreviewControl);
 End;

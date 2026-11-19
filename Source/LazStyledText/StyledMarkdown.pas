@@ -70,7 +70,7 @@ Type
 Implementation
 
 Uses
-  SysUtils, Math, Graphics;
+  SysUtils, Math, Graphics, Controls;
 
 Type
   { Emits paragraphs and style ranges directly; no intermediate syntax tree. }
@@ -597,6 +597,25 @@ Begin
   FTarget := Target;
 End;
 
+Function StyledTextBaseSize(Control: TControl): Integer;
+Var
+  PPI: Integer;
+Begin
+  { Prefer Font.Size (points). On Cocoa a control with ParentFont=False often has
+    Size=0 while Height is set, which used to force BaseSize 1 and unreadably small
+    Markdown preview. }
+  Result := Abs(Control.Font.Size);
+  If Result < 1 Then
+    Begin
+      PPI := Control.Font.PixelsPerInch;
+      If PPI <= 0 Then
+        PPI := 96;
+      Result := Max(1, (Abs(Control.Font.Height) * 72 + PPI Div 2) Div PPI);
+    End;
+  If Result < 1 Then
+    Result := 10;
+End;
+
 Procedure TStyledMarkdown.LoadFromString(Const MarkdownText: UTF8String);
 Var
   Content: TStyledContent;
@@ -605,7 +624,7 @@ Var
   Range: TStyledRange;
   Groups: Array Of QWord;
 Begin
-  Content := BuildStyledMarkdown(FTarget.Renderer, MarkdownText, Max(1, Abs(FTarget.Font.Size)));
+  Content := BuildStyledMarkdown(FTarget.Renderer, MarkdownText, StyledTextBaseSize(FTarget));
   If FTarget Is TStyledEdit Then
     Begin
       Flat := Default(TStyledParagraph);
