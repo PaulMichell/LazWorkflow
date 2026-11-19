@@ -110,7 +110,7 @@ Uses
   SrcEditorIntf, IDEMsgIntf, IDEExternToolIntf, CompOptsIntf, WorkflowLog, RegExpr,
   AssistantHarness, AssistantSkills, AssistantMarkdownForm, AssistantPlan, AssistantProtocol, AssistantConfig,
   AssistantSessionObserve,
-  CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers,
+  CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers, AssistantFormSave,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
@@ -3586,6 +3586,23 @@ Var
   PasBody, LfmBody, Note: String;
   FromEditor: Boolean;
   ChangedPas, ChangedLfm: Boolean;
+
+  Function FormEditors(Const FilePath: String): TFormEditors;
+  Var I: Integer; Editor: TSourceEditorInterface;
+  Begin
+    Result := Nil;
+    If Not Assigned(SourceEditorManagerIntf) Then Exit;
+    For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+      Begin
+        Editor := SourceEditorManagerIntf.SourceEditors[I];
+        If Assigned(Editor) And (Editor.FileName <> '') And
+          (ExpandResolvedPath(Editor.FileName) = ExpandResolvedPath(FilePath)) Then
+          Begin
+            SetLength(Result, Length(Result) + 1);
+            Result[High(Result)] := Editor;
+          End;
+      End;
+  End;
 Begin
   Result := False;
   ResultText := '';
@@ -3661,13 +3678,13 @@ Begin
   If EnsureUsesHasUnit(PasBody, UsesUnit) Then ChangedPas := True;
   If UpsertLfmComponent(LfmBody, CompName, ClassName, PropLines) Then
     ChangedLfm := True;
-  { Write without opening tabs. An open form unit is updated in its editor and saved. }
-  If ChangedPas Then
-    If Not SaveProjectFileText(PasPath, PasBody, False, Note, ErrorText) Then
+  If Not AssistantTarget.AllowsWrite(PasPath) Or Not AssistantTarget.AllowsWrite(LfmPath) Then
+    Begin
+      ErrorText := 'Form pair is outside the writable target.';
       Exit;
-  If ChangedLfm Then
-    If Not SaveProjectFileText(LfmPath, LfmBody, False, Note, ErrorText) Then
-      Exit;
+    End;
+  If Not SaveFormPair(PasPath, LfmPath, PasBody, LfmBody, ChangedPas, ChangedLfm,
+    FormEditors(PasPath), FormEditors(LfmPath), @SaveProjectFileText, ErrorText) Then Exit;
   ResultText := Format(
     'ensure_form_component %s: %s (%s). pas_changed=%s lfm_changed=%s form_class=%s event=%s',
     [ProjectRelativePath(PasPath), CompName, ClassName,

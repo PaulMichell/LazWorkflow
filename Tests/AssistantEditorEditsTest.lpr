@@ -1,6 +1,6 @@
 Program AssistantEditorEditsTest;
 {$mode objfpc}{$H+}
-Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Forms, SysUtils, Types,
+Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Forms, Controls, Classes, SysUtils, Types, AssistantFormSave,
   SynEdit, SrcEditorIntf, AssistantEditorEdits, AssistantToolBroker, AssistantProtocol, fpjson, jsonparser;
 Type
   { Exercise the real IDE interface's ReplaceText with a real SynEdit Undo stack.
@@ -9,6 +9,9 @@ Type
   Protected
     Function GetSourceText: String; Override;
     Function GetReadOnly: Boolean; Override;
+    Function GetModified: Boolean; Override;
+    Procedure SetModified(Const NewValue: Boolean); Override;
+    Function GetEditorControl: TWinControl; Override;
     Procedure SetSourceText(Const Value: String); Override;
     Procedure SetCursorTextXY(Const Value: TPoint); Override;
     Procedure SetSelection(Const Value: String); Override;
@@ -36,7 +39,7 @@ Type
     Function SaveBuffer(Const Path, ExpectedText: String; Out ErrorText: String): Boolean; Override;
     Function Describe: String; Override;
     Function CanBuild: Boolean; Override;
-    Function StartBuild(Out ResultText, ErrorText: String): Boolean; Override;
+    Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Override;
   End;
 Function TBrokerWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean;
@@ -69,7 +72,7 @@ Begin
 End;
 Function TBrokerWorkspace.CanBuild: Boolean;
 Begin Result := True; End;
-Function TBrokerWorkspace.StartBuild(Out ResultText, ErrorText: String): Boolean;
+Function TBrokerWorkspace.StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean;
 Begin Inc(Builds); ResultText := '{"started":true}'; ErrorText := ''; Result := True; End;
 Function TBrokerWorkspace.BuildStatus(Out ResultText, ErrorText: String; Const Detail: String): Boolean;
 Begin ResultText := '{"done":true}'; ErrorText := ''; Result := True; End;
@@ -77,6 +80,12 @@ Function TBrokerWorkspace.Describe: String;
 Begin Result := 'Test project'; End;
 Function TTestEditor.GetSourceText: String;
 Begin Result := Syn.Text; End;
+Function TTestEditor.GetModified: Boolean;
+Begin Result := Syn.Modified; End;
+Procedure TTestEditor.SetModified(Const NewValue: Boolean);
+Begin Syn.Modified := NewValue; End;
+Function TTestEditor.GetEditorControl: TWinControl;
+Begin Result := Syn; End;
 Function TTestEditor.GetReadOnly: Boolean;
 Begin Result := Syn.ReadOnly; End;
 Procedure TTestEditor.SetSourceText(Const Value: String);
@@ -218,6 +227,93 @@ Begin
       End;
   Finally Broker.Free; Workspace.Free; End;
 End;
+Var
+  FormBuffers: Array[0..1] Of TTestEditor;
+  FailLfm: Boolean;
+
+Function SaveTestForm(Const Path, Content: String; OpenAfter: Boolean;
+  Out Note, ErrorText: String): Boolean;
+Var I: Integer; Stream: TFileStream;
+Begin
+  I := Ord(ExtractFileExt(Path) = '.lfm');
+  Result := ApplyAssistantEditorText(FormBuffers[I], FormBuffers[I].SourceText, Content, ErrorText);
+  If Not Result Then Exit;
+  Stream := TFileStream.Create(Path, fmCreate);
+  Try
+    If FailLfm And (I = 1) Then
+      Begin
+        Stream.WriteByte(0);
+        ErrorText := 'Injected LFM save failure';
+        Exit(False);
+      End;
+    Stream.WriteBuffer(Content[1], Length(Content));
+    FormBuffers[I].Modified := False;
+  Finally Stream.Free; End;
+End;
+
+Procedure TestFormPair(Host: TForm);
+Var
+  Paths, Disk, Buffers, Changed: Array[0..1] Of String;
+  I: Integer; Err, Directory: String; Files: TStringList;
+
+  Function Save: Boolean;
+  Begin
+    Result := SaveFormPair(Paths[0], Paths[1], Changed[0], Changed[1], True, True,
+      [FormBuffers[0]], [FormBuffers[1]], @SaveTestForm, Err);
+  End;
+
+  Function ReadBytes(Const Path: String): String;
+  Var Stream: TFileStream;
+  Begin
+    Stream := TFileStream.Create(Path, fmOpenRead);
+    Try
+      SetLength(Result, Stream.Size);
+      If Result <> '' Then Stream.ReadBuffer(Result[1], Length(Result));
+    Finally Stream.Free; End;
+  End;
+
+Begin
+  Directory := GetEnvironmentVariable('LAZ_TEST_OUTPUT_DIR');
+  If Directory = '' Then Directory := 'Temporary';
+  ForceDirectories(Directory);
+  Paths[0] := IncludeTrailingPathDelimiter(Directory) + 'RollbackForm.pas';
+  Paths[1] := ChangeFileExt(Paths[0], '.lfm');
+  Files := TStringList.Create;
+  Try
+    For I := 0 To 1 Do
+      Begin
+        Files.Text := 'disk ' + IntToStr(I);
+        Files.SaveToFile(Paths[I]);
+        Disk[I] := ReadBytes(Paths[I]);
+        FormBuffers[I] := TTestEditor.Create;
+        FormBuffers[I].Syn := TSynEdit.Create(Host);
+        FormBuffers[I].Syn.Parent := Host;
+        FormBuffers[I].Syn.Text := Disk[I];
+        If I = 0 Then FormBuffers[I].Syn.Text := 'unsaved Pascal edit';
+        FormBuffers[I].Modified := I = 0;
+        Buffers[I] := FormBuffers[I].SourceText;
+        Changed[I] := 'changed ' + Buffers[I];
+      End;
+    FailLfm := True;
+    Check('second save fails', Not Save And (Pos('Injected LFM save failure', Err) = 1) And
+      (Pos('Rollback restored', Err) > 0));
+    For I := 0 To 1 Do
+      Begin
+        Check('restored disk ' + Paths[I], ReadBytes(Paths[I]) = Disk[I]);
+        Check('restored editor ' + Paths[I], FormBuffers[I].SourceText = Buffers[I]);
+        Check('restored modified flag ' + Paths[I], FormBuffers[I].Modified = (I = 0));
+      End;
+    FailLfm := False;
+    Check('form save retry succeeds', Save);
+    For I := 0 To 1 Do
+      Check('retry persisted ' + Paths[I], (ReadBytes(Paths[I]) = Changed[I]) And
+        (FormBuffers[I].SourceText = Changed[I]) And Not FormBuffers[I].Modified);
+  Finally
+    Files.Free;
+    For I := 0 To 1 Do FormBuffers[I].Free;
+  End;
+End;
+
 Var Ed: TTestEditor; Host: TForm; Before, UserText, Changed, Err: String;
 Begin
   Application.Initialize;
@@ -265,6 +361,7 @@ Begin
     Check('CRLF text', Ed.SourceText = Changed);
     Ed.Syn.Undo;
     Check('CRLF Undo', Ed.SourceText = Before);
+    TestFormPair(Host);
     TestBroker(Ed);
   Finally
     Ed.Free;
