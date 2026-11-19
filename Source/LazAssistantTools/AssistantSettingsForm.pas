@@ -856,7 +856,6 @@ Procedure TAssistantSettingsForm.ShowCodexPlanUsage(Item: TAssistantConnection);
 Begin
   If Not Assigned(Item) Or (Item.Backend <> 'codex') Then
     Exit;
-  NotifyOpenProjectAssistantFormsAccountUsage;
   ShowConnectionUsage(Item, CodexUsageLabel);
   If CodexUsageLabel.Caption = UsageUnavailableText Then
     CodexUsageLabel.Caption := 'This program did not report counts.';
@@ -886,20 +885,20 @@ Begin
   If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
     Item := Connections[SelectedConnection];
   CodexSelected := Assigned(Item) And (Item.Backend = 'codex');
-  If CodexSelected Then
-    ShowCodexPlanUsage(Item);
-  If Assigned(FPlanUsageWorker) And (Not FPlanUsageWorker.Finished) Then
-    Exit;
-  If Assigned(FPlanUsageWorker) Then
+  If Assigned(FPlanUsageWorker) And FPlanUsageWorker.Finished Then
     Begin
       If TAccountUsageWorker(FPlanUsageWorker).QueryOk Then
         PublishAccountUsageSnapshot(TAccountUsageWorker(FPlanUsageWorker).Snapshot);
       FreeAndNil(FPlanUsageWorker);
     End;
+  If Assigned(FPlanUsageWorker) And Not CodexSelected Then
+    Exit;
   If Assigned(FPlanUsageTimer) And (Not CodexSelected) Then
     FPlanUsageTimer.Enabled := False;
   NotifyOpenProjectAssistantFormsAccountUsage;
-  If Assigned(Item) And (Item.Id = FPlanUsageConnectionId) And (Item.Backend = 'grok') Then
+  If CodexSelected Then
+    ShowCodexPlanUsage(Item)
+  Else If Assigned(Item) And (Item.Id = FPlanUsageConnectionId) And (Item.Backend = 'grok') Then
     ShowConnectionUsage(Item, GrokUsageLabel);
 End;
 
@@ -1051,6 +1050,7 @@ Begin
             On E: Exception Do
               CodexFrame.ConnectionStatus.Caption := E.Message;
           End;
+          NotifyOpenProjectAssistantFormsAccountUsage;
           ShowCodexPlanUsage(Item);
           EnsureUsageTimer;
           If Assigned(FPlanUsageTimer) Then
