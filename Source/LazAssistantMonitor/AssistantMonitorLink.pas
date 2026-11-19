@@ -91,6 +91,7 @@ Type
     Outbox: TMonitorOutbox;
     Pending: RawByteString;
     Unsent: RawByteString;
+    SendOffset: Integer;
     ReadOwed: Boolean;
     WriteOwed: Boolean;
     ReadWantsWrite: Boolean;
@@ -725,6 +726,7 @@ Procedure TMonitorLinkThread.SendReject(Const Reject: TMonitorFrame);
 Var
   Deadline: QWord;
 Begin
+  SendOffset := 0;
   If Not EncodeFrame(Reject.Json, Unsent) Then
     Exit;
   Deadline := GetTickCount64 + MonitorReplaceFlushMs;
@@ -1080,22 +1082,22 @@ Begin
     Begin
       If Not TakeFrame(Unsent) Then
         Exit;
+      SendOffset := 0;
       FrameTakenThisPass := True;
     End;
   If Unsent = '' Then
     Exit;
   While Unsent <> '' Do
     Begin
-      Count := SocketSsl.Write(@Unsent[1], Length(Unsent));
+      Count := SocketSsl.Write(@Unsent[SendOffset + 1], Length(Unsent) - SendOffset);
       If Count > 0 Then
         Begin
-          If Count > Length(Unsent) Then
-            Count := Length(Unsent);
-          Delete(Unsent, 1, Count);
+          Inc(SendOffset, Count);
           WriteOwed := False;
           WriteWantsWrite := False;
-          If Unsent = '' Then
+          If SendOffset >= Length(Unsent) Then
             Begin
+              Unsent := '';
               If ByeArmed Then
                 ByeSent := True;
               Exit;

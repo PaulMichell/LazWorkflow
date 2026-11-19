@@ -50,6 +50,7 @@ Type
     Socket: TInetSocket;
     Handler: TOpenSSLSocketHandler;
     Pending: RawByteString;
+    LastFrameJson: String;
     Destructor Destroy; Override;
     Function Open(Port: Word; HandshakeMs: Integer; Out ErrorText: String): Boolean;
     Function WriteJson(Const Json: String; Deadline: QWord): Boolean;
@@ -250,6 +251,7 @@ Begin
       CheckSynchronize(0);
       If TryConsumeMonitorFrame(Pending, Frame, Status) Then
         Begin
+          LastFrameJson := Frame.Json;
           Result := TryDecodeMonitorEnvelope(Frame.Json, Message, ErrorText);
           If Not Result And (ErrorText = '') Then
             ErrorText := 'Could not decode the monitor frame.';
@@ -861,18 +863,16 @@ End;
 
 Procedure TestPartialWrite(Client: TLoopClient);
 Var
-  First, Second: TMonitorMessage;
-  ErrorText: String;
-  Intact: Boolean;
+  FirstJson, SecondJson, ErrorText: String;
+  Message: TMonitorMessage;
 Begin
-  { A stalled reader forces a short TLS write. The next frame must not be spliced into it.
-    Both SSL_ERROR_WANT_READ and SSL_ERROR_WANT_WRITE are retried on the same buffer. }
-  Check('4.2 large frame queued for a partial write', QueueBulkLane(1) = 1);
-  Check('4.2 following frame queued while the first may be partial', QueueBulkLane(1) = 1);
-  Intact := Client.ReadMessage(After(8000), First, ErrorText) And (First.Kind = mmkSnapshotPage) And
-    Client.ReadMessage(After(8000), Second, ErrorText) And (Second.Kind = mmkSnapshotPage) And
-    (First.Id <> Second.Id) And (Pos(Second.Id, First.PayloadJson) = 0);
-  Check('4.2 a partial TLS write is resumed without splicing the next frame', Intact);
+  FirstJson := '{"v":3,"id":"partial1","type":"snapshot_page","payload":{"text":"' + StringOfChar('a', 256 * 1024) + '"}}';
+  SecondJson := '{"v":3,"id":"partial2","type":"snapshot_page","payload":{"text":"' + StringOfChar('b', 128 * 1024) + '"}}';
+  Check('4.2 large frame queued for a partial write', Session.TryQueueHostJson(FirstJson));
+  Check('4.2 following frame queued', Session.TryQueueHostJson(SecondJson));
+  Session.DrainOutbound;
+  Check('4.2 first frame arrives byte for byte', Client.ReadMessage(After(8000), Message, ErrorText) And (Client.LastFrameJson = FirstJson));
+  Check('4.2 following frame arrives intact and in order', Client.ReadMessage(After(8000), Message, ErrorText) And (Client.LastFrameJson = SecondJson));
 End;
 
 Procedure TestAnswerClock(Client: TLoopClient);
