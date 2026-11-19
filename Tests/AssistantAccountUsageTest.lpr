@@ -12,7 +12,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, SysUtils, DateUtils, AssistantConnections, AssistantAccountUsage;
+  Interfaces, Classes, SysUtils, DateUtils, AssistantConnections, AssistantAccountUsage, AssistantAccountWorker, GrokOAuth;
 
 Var
   FailCount: Integer;
@@ -217,6 +217,117 @@ Begin
     ErrorText, When) And (ErrorText = 'session-jwt'));
 End;
 
+Type
+  TFailedRefresh = Class(TGrokOAuthClient)
+    Function HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String; Out StatusCode: Integer): Boolean; Override;
+  End;
+
+Var
+  RefreshCalls, QueryEntered, ReleaseQuery: LongInt;
+  SawSettings, SawProject, SawCompatible: Boolean;
+
+Function TFailedRefresh.HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String; Out StatusCode: Integer): Boolean;
+Begin
+  InterlockedIncrement(RefreshCalls);
+  ResponseBody := '{}';
+  StatusCode := 503;
+  Result := False;
+End;
+
+Function InspectRequest(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String; Out Snapshot: TAccountUsageSnapshot;
+  Out ErrorText: String): Boolean;
+Var
+  ProjectFields: Boolean;
+Begin
+  ProjectFields := (Connection.Model = 'model') And (Connection.ApiBase = 'base') And (Connection.KeyEnv = 'KEY') And
+    (Connection.Preset = 'preset') And (Connection.WireApi = 'wire') And (RuntimePath = 'runtime') And (ProfileDir = 'profile');
+  If Connection.Backend = 'grok' Then
+    Begin
+      If (Connection.KeySource = 'stored') And (Connection.KeyValue = '') And (Connection.Id = 'original') Then
+        If ProjectFields Then
+          SawProject := True
+        Else
+          SawSettings := (Connection.Model = '') And (Connection.ApiBase = '') And (Connection.KeyEnv = '') And
+            (Connection.Preset = '') And (Connection.WireApi = '') And (RuntimePath = '') And (ProfileDir = '');
+    End
+  Else
+    Begin
+      SawCompatible := ProjectFields And (Connection.KeySource = 'env') And (Connection.KeyValue = 'configured');
+      InterlockedIncrement(QueryEntered);
+      While InterlockedCompareExchange(ReleaseQuery, 0, 0) = 0 Do
+        Sleep(1);
+    End;
+  ClearAccountUsageSnapshot(Snapshot);
+  Snapshot.ConnectionId := Connection.Id;
+  Snapshot.Known := True;
+  Snapshot.Caption := 'fixture';
+  ErrorText := '';
+  Result := True;
+End;
+
+Procedure TestWorkerRequests;
+Var
+  Worker: TAccountUsageWorker;
+  Item: TAssistantConnection;
+  Slot: TAccountUsageSlot;
+  Tokens: TGrokOAuthTokens;
+  PreviousClient: TGrokOAuthClient;
+  Deadline: QWord;
+
+  Function ProjectWorker: TAccountUsageWorker;
+  Begin
+    Result := TAccountUsageWorker.CreateForProject(Slot, Item.Id, Item.Backend, 'model', 'base', 'env', 'KEY', 'configured',
+      'preset', 'wire', 'runtime', 'profile');
+  End;
+
+Begin
+  Item := TAssistantConnection.Create;
+  Slot := TAccountUsageSlot.Create;
+  PreviousClient := GrokOAuthClient;
+  GrokOAuthClient := TFailedRefresh.Create;
+  Try
+    Tokens := Default(TGrokOAuthTokens);
+    Tokens.AccessToken := 'expired';
+    Tokens.RefreshToken := 'refreshable';
+    Tokens.ExpiresAt := Now - 1;
+    GrokOAuthClient.SetTokens(Tokens);
+    RegisterAccountUsageQuery('grok', @InspectRequest);
+    Item.Id := 'original';
+    Item.Backend := 'grok';
+    Item.Model := 'settings model';
+    Item.KeyValue := 'settings key';
+    Slot.SetActive(Item.Id);
+    Worker := TAccountUsageWorker.CreateForSettings(Item);
+    Worker.Start;
+    Worker.WaitFor;
+    Worker.Free;
+    Worker := ProjectWorker;
+    Worker.Start;
+    Worker.WaitFor;
+    Worker.Free;
+    Check('both Grok requests discard stale credentials and preserve caller-specific fields', SawSettings And SawProject And (RefreshCalls = 2));
+    Item.Backend := 'openai-compatible';
+    RegisterAccountUsageQuery(Item.Backend, @InspectRequest);
+    Worker := ProjectWorker;
+    Worker.Start;
+    Deadline := GetTickCount64 + 3000;
+    While (InterlockedCompareExchange(QueryEntered, 0, 0) = 0) And (GetTickCount64 < Deadline) Do
+      Sleep(1);
+    Slot.SetActive('new-selection');
+    InterlockedIncrement(ReleaseQuery);
+    Worker.WaitFor;
+    Check('compatible request retains project inputs', SawCompatible And (QueryEntered = 1));
+    Check('pending result belongs only to the original account', Worker.QueryOk And (Worker.Snapshot.ConnectionId = 'original') And
+      (AccountUsageCaption(Slot.ReadSnapshot, 'new-selection') = '') And (Slot.ReadSnapshot.Caption = ''));
+    Worker.Free;
+  Finally
+    GrokOAuthClient.Free;
+    GrokOAuthClient := PreviousClient;
+    Slot.Release;
+    Item.Free;
+  End;
+End;
+
 Procedure TestFooterChoice;
 Var
   Snapshot: TAccountUsageSnapshot;
@@ -265,6 +376,7 @@ Begin
     ClearGrokCliAuthBody;
     SetAccountUsageCompatibleTransport(Nil, Nil);
   End;
+  TestWorkerRequests;
   If FailCount = 0 Then
     Begin
       WriteLn('All AssistantAccountUsage tests passed.');

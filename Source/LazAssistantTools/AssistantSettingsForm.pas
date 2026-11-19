@@ -905,7 +905,6 @@ End;
 Procedure TAssistantSettingsForm.StartPlanUsageRefresh(Item: TAssistantConnection);
 Var
   Worker: TAccountUsageWorker;
-  Copy: TAssistantConnection;
 Begin
   If FPlanUsageClosed Or (Not Assigned(Item)) Or (Item.Backend <> 'grok') Then
     Exit;
@@ -916,13 +915,8 @@ Begin
       FPlanUsageWorker.WaitFor;
       FreeAndNil(FPlanUsageWorker);
     End;
-  Copy := TAssistantConnection.Create;
-  Copy.Id := Item.Id;
-  Copy.Backend := Item.Backend;
+  Worker := TAccountUsageWorker.CreateForSettings(Item);
   FPlanUsageConnectionId := Item.Id;
-  Worker := TAccountUsageWorker.Create;
-  Worker.FreeOnTerminate := False;
-  Worker.Connection := Copy;
   FPlanUsageWorker := Worker;
   EnsureUsageTimer;
   If Assigned(FPlanUsageTimer) Then

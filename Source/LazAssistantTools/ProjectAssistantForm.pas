@@ -5829,7 +5829,6 @@ End;
 Procedure TProjectAssistantForm.StartAccountUsageWorker;
 Var
   Worker: TAccountUsageWorker;
-  Copy: TAssistantConnection;
 Begin
   If (Not Assigned(FAccountUsageSlot)) Or FAccountUsageSlot.IsClosed Then
     Exit;
@@ -5845,23 +5844,8 @@ Begin
   SyncCodexUsageIdle;
   If FUseCodex And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
     Exit;
-  Copy := TAssistantConnection.Create;
-  Copy.Id := FActiveConnectionId;
-  Copy.Backend := FActiveBackend;
-  Copy.Model := FActiveModel;
-  Copy.ApiBase := FAccountApiBase;
-  Copy.KeySource := FAccountKeySource;
-  Copy.KeyEnv := FAccountKeyEnv;
-  Copy.KeyValue := FAccountKeyValue;
-  Copy.Preset := FAccountPreset;
-  Copy.WireApi := FAccountWire;
-  Worker := TAccountUsageWorker.Create;
-  Worker.FreeOnTerminate := False;
-  Worker.Slot := FAccountUsageSlot;
-  Worker.Connection := Copy;
-  Worker.RuntimePath := FCodexRuntime;
-  Worker.ProfileDir := FCodexProfile;
-  FAccountUsageSlot.Retain;
+  Worker := TAccountUsageWorker.CreateForProject(FAccountUsageSlot, FActiveConnectionId, FActiveBackend, FActiveModel, FAccountApiBase,
+    FAccountKeySource, FAccountKeyEnv, FAccountKeyValue, FAccountPreset, FAccountWire, FCodexRuntime, FCodexProfile);
   FAccountUsageWorker := Worker;
   FAccountUsageWanted := False;
   FAccountUsageAttemptId := FActiveConnectionId;

@@ -15,21 +15,24 @@ Uses
 Type
   TAccountUsageWorker = Class(TThread)
   Private
+    Slot: TAccountUsageSlot;
+    Connection: TAssistantConnection;
+    RuntimePath, ProfileDir: String;
     Detached: Boolean;
     LocalClient: TGrokOAuthClient;
     Original: TGrokOAuthTokens;
+    Constructor CreateRequest(Const ConnectionId, Backend: String);
     Procedure CaptureTokens;
     Procedure CommitTokens;
     Procedure AcquireToken;
   Protected
     Procedure Execute; Override;
   Public
-    Slot: TAccountUsageSlot;
-    Connection: TAssistantConnection;
-    RuntimePath, ProfileDir: String;
     Snapshot: TAccountUsageSnapshot;
     QueryOk: Boolean;
-    Constructor Create;
+    Constructor CreateForSettings(Item: TAssistantConnection);
+    Constructor CreateForProject(UsageSlot: TAccountUsageSlot; Const ConnectionId, Backend, Model, ApiBase, KeySource, KeyEnv, KeyValue,
+      Preset, WireApi, CodexRuntime, CodexProfile: String);
     Destructor Destroy; Override;
     Procedure Detach;
   End;
@@ -45,7 +48,12 @@ Var
   Workers: TList;
   TokenLock: TRTLCriticalSection;
 
-Constructor TAccountUsageWorker.Create;
+Constructor TAccountUsageWorker.CreateForSettings(Item: TAssistantConnection);
+Begin
+  CreateRequest(Item.Id, Item.Backend);
+End;
+
+Constructor TAccountUsageWorker.CreateRequest(Const ConnectionId, Backend: String);
 Var
   Index: Integer;
   Previous: TAccountUsageWorker;
@@ -57,7 +65,28 @@ Begin
       If Previous.Detached And Previous.Finished Then
         Previous.Free;
     End;
+  Connection := TAssistantConnection.Create;
+  Connection.Id := ConnectionId;
+  Connection.Backend := Backend;
   Workers.Add(Self);
+End;
+
+Constructor TAccountUsageWorker.CreateForProject(UsageSlot: TAccountUsageSlot; Const ConnectionId, Backend, Model, ApiBase, KeySource, KeyEnv,
+  KeyValue, Preset, WireApi, CodexRuntime, CodexProfile: String);
+Begin
+  CreateRequest(ConnectionId, Backend);
+  Connection.Model := Model;
+  Connection.ApiBase := ApiBase;
+  Connection.KeySource := KeySource;
+  Connection.KeyEnv := KeyEnv;
+  Connection.KeyValue := KeyValue;
+  Connection.Preset := Preset;
+  Connection.WireApi := WireApi;
+  RuntimePath := CodexRuntime;
+  ProfileDir := CodexProfile;
+  Slot := UsageSlot;
+  If Assigned(Slot) Then
+    Slot.Retain;
 End;
 
 Destructor TAccountUsageWorker.Destroy;
