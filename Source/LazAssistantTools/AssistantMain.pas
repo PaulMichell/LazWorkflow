@@ -22,7 +22,7 @@ Implementation
 
 Uses
   WorkflowLog, WorkflowEvents, WorkflowSettings, ProjectAssistantForm, AssistantService, AssistantSettingsForm,
-  AssistantMarkdownForm, AssistantConfig, GrokOAuth, IDEMsgIntf, IDEExternToolIntf;
+  AssistantMarkdownForm, AssistantConfig, AssistantAccountWorker, GrokOAuth, IDEMsgIntf, IDEExternToolIntf;
 
 Type
   { Context menu on IDE Messages: Ask Assistant to fix the selected line. }
@@ -393,6 +393,7 @@ AssistantIDEHooks := Nil;
 
 Finalization
 
+DrainAccountWorkers;
 OnAssistantTasksVisibilityChanged := Nil;
 If Assigned(AssistantMenuRoot) And Assigned(AssistantIDEHooks) Then
   AssistantMenuRoot.RemoveHandlerOnShow(@AssistantIDEHooks.AssistantMenuShow);

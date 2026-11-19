@@ -266,33 +266,8 @@ Implementation
 Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient, AssistantClaudeStream,
-  AssistantUsage, AssistantAccountUsage,
+  AssistantUsage, AssistantAccountUsage, AssistantAccountWorker,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
-
-Type
-  TPlanUsageWorker = Class(TThread)
-    Connection: TAssistantConnection;
-    Procedure Execute; Override;
-  End;
-
-Procedure TPlanUsageWorker.Execute;
-Var
-  Snapshot: TAccountUsageSnapshot;
-  ErrorText: String;
-Begin
-  ErrorText := '';
-  ClearAccountUsageSnapshot(Snapshot);
-  Try
-    Try
-      QueryAccountUsage(Connection, '', '', Snapshot, ErrorText);
-    Except
-      On E: Exception Do
-        ErrorText := '';
-    End;
-  Finally
-    Connection.Free;
-  End;
-End;
 
 Procedure AddFallbackModels(List: TStrings);
 Begin
@@ -872,8 +847,8 @@ Begin
     End;
   If Assigned(FPlanUsageWorker) Then
     Begin
-      FPlanUsageWorker.WaitFor;
-      FreeAndNil(FPlanUsageWorker);
+      TAccountUsageWorker(FPlanUsageWorker).Detach;
+      FPlanUsageWorker := Nil;
     End;
 End;
 
@@ -917,7 +892,8 @@ Begin
     Exit;
   If Assigned(FPlanUsageWorker) Then
     Begin
-      FPlanUsageWorker.WaitFor;
+      If TAccountUsageWorker(FPlanUsageWorker).QueryOk Then
+        PublishAccountUsageSnapshot(TAccountUsageWorker(FPlanUsageWorker).Snapshot);
       FreeAndNil(FPlanUsageWorker);
     End;
   If Assigned(FPlanUsageTimer) And (Not CodexSelected) Then
@@ -929,7 +905,7 @@ End;
 
 Procedure TAssistantSettingsForm.StartPlanUsageRefresh(Item: TAssistantConnection);
 Var
-  Worker: TPlanUsageWorker;
+  Worker: TAccountUsageWorker;
   Copy: TAssistantConnection;
 Begin
   If FPlanUsageClosed Or (Not Assigned(Item)) Or (Item.Backend <> 'grok') Then
@@ -944,12 +920,8 @@ Begin
   Copy := TAssistantConnection.Create;
   Copy.Id := Item.Id;
   Copy.Backend := Item.Backend;
-  Copy.KeySource := 'stored';
-  Copy.KeyValue := '';
-  If Assigned(GrokOAuthClient) Then
-    Copy.KeyValue := GrokOAuthClient.GetValidAccessToken;
   FPlanUsageConnectionId := Item.Id;
-  Worker := TPlanUsageWorker.Create(True);
+  Worker := TAccountUsageWorker.Create;
   Worker.FreeOnTerminate := False;
   Worker.Connection := Copy;
   FPlanUsageWorker := Worker;

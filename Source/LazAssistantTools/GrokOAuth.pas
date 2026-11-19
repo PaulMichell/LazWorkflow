@@ -47,16 +47,17 @@ Type
     FPendingVerifier: String;
     FPendingChallenge: String;
     FLoginBusy: Boolean;
+    UsageRefreshPending: Boolean;
     FLastTokenErrorCode: String;
     Procedure ClearPending;
-    Function HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String;
-      Out StatusCode: Integer): Boolean;
     Function ParseTokenResponse(Const ResponseBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
     Function TokenRequest(Const FormBody: String; Out NewTokens: TGrokOAuthTokens): Boolean;
     Function ExchangeAuthorizationCode(Const AuthCode: String): Boolean;
     Function IsAlreadyUsedError(Const MessageText: String): Boolean;
     Procedure PersistTokens;
     Procedure ForgetStoredTokens;
+  Protected
+    Function HttpPostForm(Const Url, FormBody: String; Out ResponseBody: String; Out StatusCode: Integer): Boolean; Virtual;
   Public
     Constructor Create;
     Function DiscoverEndpoints: Boolean;
@@ -66,6 +67,8 @@ Type
     { Completes login when the user pastes a code or full callback URL (no local listener). }
     Function LoginWithManualCode(Const CodeOrCallbackUrl: String): Boolean;
     Function BeginManualLogin(Out AuthUrl: String): Boolean;
+    Function BeginUsageRefresh: TGrokOAuthClient;
+    Function FinishUsageRefresh(LocalClient: TGrokOAuthClient; Const Original: TGrokOAuthTokens): Boolean;
     Function RefreshAccessToken: Boolean;
     Function GetValidAccessToken: String;
     Procedure ClearTokens;
@@ -90,6 +93,7 @@ Uses
   httpprotocol, fpsha256, fphashutils, ssockets, WorkflowLog, AssistantHttps, AssistantConfig;
 
 Type
+  TGrokOAuthClientClass = Class Of TGrokOAuthClient;
   TGrokOAuthCallbackThread = Class(TThread)
   Private
     FExpectedState: String;
@@ -537,7 +541,7 @@ End;
 
 Procedure TGrokOAuthClient.PersistTokens;
 Begin
-  If Not Assigned(AssistantChatConfig) Then
+  If (Self <> GrokOAuthClient) Or Not Assigned(AssistantChatConfig) Then
     Exit;
   AssistantChatConfig.ApplyOAuthTokens(FTokens);
   AssistantChatConfig.Save;
@@ -546,7 +550,7 @@ End;
 Procedure TGrokOAuthClient.ForgetStoredTokens;
 Begin
   ClearTokens;
-  If Not Assigned(AssistantChatConfig) Then
+  If (Self <> GrokOAuthClient) Or Not Assigned(AssistantChatConfig) Then
     Exit;
   AssistantChatConfig.ClearOAuthTokens;
   AssistantChatConfig.Save;
@@ -858,6 +862,33 @@ Begin
   WorkflowLogger.Info('GrokOAuth', 'Manual OAuth code exchange succeeded');
 End;
 
+{ Called on the main thread. The worker uses a private client during HTTP and
+  commits a rotation only while the original credentials are still current. }
+Function TGrokOAuthClient.BeginUsageRefresh: TGrokOAuthClient;
+Begin
+  Result := TGrokOAuthClientClass(ClassType).Create;
+  Result.FTokenEndpoint := FTokenEndpoint;
+  Result.FTokens := FTokens;
+  UsageRefreshPending := True;
+End;
+
+Function TGrokOAuthClient.FinishUsageRefresh(LocalClient: TGrokOAuthClient; Const Original: TGrokOAuthTokens): Boolean;
+Begin
+  UsageRefreshPending := False;
+  Result := (FTokens.AccessToken = Original.AccessToken) And (FTokens.RefreshToken = Original.RefreshToken) And
+    (FTokens.ExpiresAt = Original.ExpiresAt);
+  If Not Result Then
+    Exit;
+  If SameText(LocalClient.FLastTokenErrorCode, 'invalid_grant') Then
+    ForgetStoredTokens
+  Else If (LocalClient.FTokens.AccessToken <> Original.AccessToken) Or (LocalClient.FTokens.RefreshToken <> Original.RefreshToken) Or
+    (LocalClient.FTokens.ExpiresAt <> Original.ExpiresAt) Then
+    Begin
+      SetTokens(LocalClient.FTokens);
+      PersistTokens;
+    End;
+End;
+
 Function TGrokOAuthClient.RefreshAccessToken: Boolean;
 Var
   FormBody: String;
@@ -866,6 +897,11 @@ Var
 Begin
   Result := False;
   FLastError := '';
+  If UsageRefreshPending Then
+    Begin
+      FLastError := 'Account token refresh is in progress. Try again shortly.';
+      Exit;
+    End;
   If Trim(FTokens.RefreshToken) = '' Then
     Begin
       FLastError := 'No refresh token. Sign in again with SuperGrok / X Premium.';

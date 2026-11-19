@@ -60,6 +60,8 @@ Procedure RegisterAccountUsageQuery(Const BackendId: String; Query: TAccountUsag
 /// Does not append a turn-usage line and does not change the Settings usage sentence.
 Function QueryAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
   Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
+Function QueryWindowAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
+  Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
 Function AccountUsageRegistered(Const BackendId: String): Boolean;
 /// Keeps a known figure for the same connection when it is under 15 minutes old. The caption is never an error. 
 Function AccountUsageKeepOnFailure(Const Current: TAccountUsageSnapshot; Const ConnectionId: String;
@@ -228,6 +230,20 @@ Begin
     Snapshot.ConnectionId := Connection.Id;
   If (Not Result) And (ErrorText = '') Then
     ErrorText := 'Account usage query failed.';
+End;
+
+ThreadVar
+  DeferGrokPublication: Boolean;
+
+Function QueryWindowAccountUsage(Connection: TAssistantConnection; Const RuntimePath, ProfileDir: String;
+  Out Snapshot: TAccountUsageSnapshot; Out ErrorText: String): Boolean;
+Begin
+  DeferGrokPublication := True;
+  Try
+    Result := QueryAccountUsage(Connection, RuntimePath, ProfileDir, Snapshot, ErrorText);
+  Finally
+    DeferGrokPublication := False;
+  End;
 End;
 
 Function AccountUsageRegistered(Const BackendId: String): Boolean;
@@ -1623,7 +1639,8 @@ Begin
     If Tier <> '' Then
       Snapshot.Hint := Snapshot.Hint + LineEnding + 'Plan: ' + Tier;
     NoteFetched(Snapshot);
-    RememberAccountUsage(Snapshot);
+    If Not DeferGrokPublication Then
+      RememberAccountUsage(Snapshot);
     Result := True;
   Finally
     Data.Free;

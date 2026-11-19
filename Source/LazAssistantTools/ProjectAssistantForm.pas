@@ -682,7 +682,7 @@ Implementation
 Uses AssistantWorkTarget, PackageIntf,
   WorkflowLog, CanvasUtils, AssistantService, AssistantConfig, AssistantSettingsForm, AssistantIDEContext,
   AssistantPlanDocument, AssistantSaveBeforeTurn,
-  AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, LazFileUtils,
+  AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, AssistantAccountWorker, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness, AssistantClaudeStream,
@@ -5767,41 +5767,6 @@ Begin
     End;
 End;
 
-Type
-  TAccountUsageWorker = Class(TThread)
-    Slot: TAccountUsageSlot;
-    Connection: TAssistantConnection;
-    RuntimePath, ProfileDir: String;
-    Procedure Execute; Override;
-  End;
-
-Procedure TAccountUsageWorker.Execute;
-Var
-  Item: TAccountUsageSnapshot;
-  ErrorText: String;
-  QueryOk: Boolean;
-Begin
-  ErrorText := '';
-  QueryOk := False;
-  ClearAccountUsageSnapshot(Item);
-  Try
-    Try
-      If Slot.IsClosed Then
-        Exit;
-      QueryOk := QueryAccountUsage(Connection, RuntimePath, ProfileDir, Item, ErrorText);
-      If CodexAccountUsageCancelled Or Slot.IsClosed Then
-        Exit;
-      If Slot.StoreResult(Item, QueryOk) Then
-        WorkflowLogger.Warning('ProjectAssistant', 'Account usage query failed.');
-    Except
-      On E: Exception Do
-        WorkflowLogger.Warning('ProjectAssistant', 'Account usage query failed.');
-    End;
-  Finally
-    Connection.Free;
-    Slot.Release;
-  End;
-End;
 
 Procedure TProjectAssistantForm.RefreshCentreStatus;
 Var
@@ -5888,17 +5853,9 @@ Begin
   Copy.KeySource := FAccountKeySource;
   Copy.KeyEnv := FAccountKeyEnv;
   Copy.KeyValue := FAccountKeyValue;
-  { Grok Build reads the weekly pool with this same OAuth token. Do not log it. }
-  If FActiveBackend = 'grok' Then
-    Begin
-      Copy.KeySource := 'stored';
-      Copy.KeyValue := '';
-      If Assigned(GrokOAuthClient) Then
-        Copy.KeyValue := GrokOAuthClient.GetValidAccessToken;
-    End;
   Copy.Preset := FAccountPreset;
   Copy.WireApi := FAccountWire;
-  Worker := TAccountUsageWorker.Create(True);
+  Worker := TAccountUsageWorker.Create;
   Worker.FreeOnTerminate := False;
   Worker.Slot := FAccountUsageSlot;
   Worker.Connection := Copy;
@@ -5955,7 +5912,7 @@ Begin
     FAccountUsageSlot.Close;
   If Assigned(FAccountUsageWorker) Then
     Begin
-      ReapCodexWorker(FAccountUsageWorker);
+      TAccountUsageWorker(FAccountUsageWorker).Detach;
       FAccountUsageWorker := Nil;
     End;
   If Assigned(FAccountUsageSlot) Then
