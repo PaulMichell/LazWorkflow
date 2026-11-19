@@ -361,6 +361,38 @@ Begin
   End;
 End;
 
+Procedure TestArchiveCopy(Const Root: String; Const Stored: TAssistantStoredImage);
+Const
+  ArchiveId = '20261119T120000';
+Var
+  StoreDir, Conversation, SourcePath, CopyPath, ErrorText: String;
+  SourceBytes, ArchivedBytes: TMemoryStream;
+Begin
+  StoreDir := IncludeTrailingPathDelimiter(Root) + AssistantStoreFolderName;
+  Conversation := StoreDir + PathDelim + AssistantConversationFileName;
+  SourcePath := IncludeTrailingPathDelimiter(Root) + Stored.DisplayRelativePath;
+  CopyPath := StoreDir + PathDelim + 'images-' + ArchiveId + PathDelim + ExtractFileName(SourcePath);
+  Check('archive copies stored images', PreserveAssistantImages(StoreDir, ArchiveId, Conversation, ErrorText));
+  Check('archived image exists', FileExists(CopyPath));
+  If Not FileExists(CopyPath) Then Exit;
+  SourceBytes := TMemoryStream.Create;
+  ArchivedBytes := TMemoryStream.Create;
+  Try
+    SourceBytes.LoadFromFile(SourcePath);
+    ArchivedBytes.LoadFromFile(CopyPath);
+    Check('archive preserves image bytes', (SourceBytes.Size > 0) And (SourceBytes.Size = ArchivedBytes.Size) And
+      CompareMem(SourceBytes.Memory, ArchivedBytes.Memory, SourceBytes.Size));
+  Finally
+    ArchivedBytes.Free;
+    SourceBytes.Free;
+  End;
+  {$IFDEF UNIX}
+  Check('replace archived copy with symlink', DeleteFile(CopyPath) And (fpSymlink(PChar(SourcePath), PChar(CopyPath)) = 0));
+  Check('archive refuses destination symlink', Not PreserveAssistantImages(StoreDir, ArchiveId, Conversation, ErrorText) And
+    (Pos('symbolic link', ErrorText) > 0));
+  {$ENDIF}
+End;
+
 Begin
   FailCount := 0;
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-images-test-' + FormatDateTime('hhnnsszzz', Now);
@@ -370,6 +402,7 @@ Begin
     TestDimensionBeforeDecode(Root);
     TestPngRoundTrip(Root, Stored);
     TestTurnJsonRoundTrip(Root, Stored);
+    TestArchiveCopy(Root, Stored);
     TestStoredPaths(Root);
     TestSymlinkRefusal(Root, Stored);
   Finally

@@ -623,11 +623,6 @@ Begin
   Result := True;
 End;
 
-Function ReadOpenNoFollow(Const Path: String; Expected: Int64; Out Data: TBytes; Out ErrorText: String): Boolean;
-Begin
-  Result := ReadAllNoFollow(Path, Expected, Data, ErrorText);
-End;
-
 Function ReadStoredAssistantImage(Const ProjectRoot, RelativePath: String; Out Data: TBytes; Out ErrorText: String): Boolean;
 Var
   FullPath: String;
@@ -652,7 +647,7 @@ Begin
           ErrorText := 'Stored image could not be read.';
         Exit;
       End;
-    Result := ReadOpenNoFollow(FullPath, Size, Data, ErrorText);
+    Result := ReadAllNoFollow(FullPath, Size, Data, ErrorText);
   Except
     SetLength(Data, 0);
     Result := False;
@@ -2456,7 +2451,7 @@ Begin
       Exit;
     End;
   Size := FileSizeUTF8(SourcePath);
-  If Not ReadOpenNoFollow(SourcePath, Size, Data, ErrorText) Then Exit;
+  If Not ReadAllNoFollow(SourcePath, Size, Data, ErrorText) Then Exit;
   Result := WriteNewFile(DestPath, Data, ErrorText);
 End;
 
