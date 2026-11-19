@@ -12,7 +12,7 @@ Uses
   cthreads,
   BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, fpimage, fpwritepng, AssistantImages, AssistantConversation, AssistantProjectPaths;
+  Interfaces, Classes, SysUtils, fpimage, fpwritepng, AssistantImages, AssistantConversation, AssistantProjectPaths;
 
 Type
   { Reports a size over 8 MiB. A read means the size gate did not run first. }
@@ -252,6 +252,35 @@ Begin
   Check('stored ref has no base64', (Pos('base64', JsonText) = 0) And (Pos('data:', JsonText) = 0));
 End;
 
+Procedure TestStoredPaths(Const Root: String);
+Const
+  Ordinary = '.assistant/images/a.png';
+  Target = '.assistant/targets/demo/images/a.png';
+
+  Procedure CheckPath(Const Input, Expected: String);
+  Var
+    FullPath, ErrorText: String;
+    Accepted: Boolean;
+  Begin
+    Accepted := ResolveStoredAssistantImage(Root, Input, FullPath, ErrorText);
+    If Expected = '' Then
+      Check('reject invalid stored path', (Not Accepted) And (FullPath = '') And (ErrorText <> ''))
+    Else
+      Check('resolve ' + Expected, Accepted And (FullPath = IncludeTrailingPathDelimiter(Root) +
+        StringReplace(Expected, '/', PathDelim, [rfReplaceAll])));
+  End;
+
+Begin
+  CheckPath(Ordinary, Ordinary);
+  CheckPath('.assistant/images/../a.png', '');
+  CheckPath(Target, Target);
+  CheckPath('.assistant/targets/demo/sub/images/a.png', '');
+  CheckPath('  \.assistant/targets\demo/images\a.png  ', Target);
+  CheckPath('.assistant\images/a.png\extra', '');
+  CheckPath(StringOfChar('/', 8192) + Ordinary, Ordinary);
+  CheckPath(StringOfChar('/', 8192), '');
+End;
+
 Procedure TestSymlinkRefusal(Const Root: String; Const Stored: TAssistantStoredImage);
 Var
   FullPath, ErrorText, Decoy: String;
@@ -341,6 +370,7 @@ Begin
     TestDimensionBeforeDecode(Root);
     TestPngRoundTrip(Root, Stored);
     TestTurnJsonRoundTrip(Root, Stored);
+    TestStoredPaths(Root);
     TestSymlinkRefusal(Root, Stored);
   Finally
     DeleteTree(Root);

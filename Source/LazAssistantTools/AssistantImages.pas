@@ -508,16 +508,18 @@ Begin
     End;
 End;
 
-Function StoredImageFileName(Const RelativePath: String; Out FileName, ErrorText: String): Boolean;
+Function ParseStoredImagePath(Const RelativePath: String; Out Normal, FileName, ErrorText: String): Boolean;
 Var
-  Normal, Head, Segment: String;
-  Marker: Integer;
+  Head, Segment: String;
+  Marker, First: SizeInt;
 Begin
   Result := False;
   FileName := '';
   ErrorText := 'Stored image path is outside the image store.';
   Normal := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
-  While (Length(Normal) > 0) And (Normal[1] = '/') Do Delete(Normal, 1, 1);
+  First := 1;
+  While (First <= Length(Normal)) And (Normal[First] = '/') Do Inc(First);
+  If First > 1 Then Delete(Normal, 1, First - 1);
   If (Normal = '') Or (Pos('..', Normal) > 0) Then Exit;
   If Not SameText(Copy(Normal, 1, Length(AssistantStoreFolderName + '/')), AssistantStoreFolderName + '/') Then Exit;
   Marker := Pos('/' + AssistantImagesFolderName + '/', LowerCase(Normal));
@@ -544,6 +546,13 @@ Begin
       Exit;
     End;
   Result := True;
+End;
+
+Function StoredImageFileName(Const RelativePath: String; Out FileName, ErrorText: String): Boolean;
+Var
+  Normal: String;
+Begin
+  Result := ParseStoredImagePath(RelativePath, Normal, FileName, ErrorText);
 End;
 
 Function RefuseSymlinkChain(Const Root, FullPath: String; Out ErrorText: String): Boolean;
@@ -597,9 +606,7 @@ Begin
       ErrorText := 'No project root for the image store.';
       Exit;
     End;
-  If Not StoredImageFileName(RelativePath, FileName, ErrorText) Then Exit;
-  Normal := StringReplace(Trim(RelativePath), '\', '/', [rfReplaceAll]);
-  While (Length(Normal) > 0) And (Normal[1] = '/') Do Delete(Normal, 1, 1);
+  If Not ParseStoredImagePath(RelativePath, Normal, FileName, ErrorText) Then Exit;
   FullPath := Root + PathDelim + StringReplace(Normal, '/', PathDelim, [rfReplaceAll]);
   If (ExtractFileName(FullPath) <> FileName) Or
     (Not PathInside(Root + PathDelim + AssistantStoreFolderName, FullPath)) Then
