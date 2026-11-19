@@ -11,7 +11,7 @@ Function BindFormMembers(Code: TCodeBuffer; Const LfmBody, CompName, ClassName,
 
 Implementation
 
-Uses CodeToolManager, CodeTree;
+Uses CodeToolManager, CodeTree, PascalParserTool;
 
 Function RootClassName(Const LfmBody: String): String;
 Var
@@ -47,6 +47,21 @@ Var
   Members, Stub: String;
   MemberPos, StubPos: Integer;
 
+  Procedure CheckHandler(Handler: TCodeTreeNode);
+  Var
+    Header: String;
+  Begin
+    If Handler.Desc = ctnProcedure Then
+      Begin
+        Header := Tool.ExtractProcHead(Handler, [phpWithStart, phpWithoutClassName,
+          phpWithoutName, phpWithVarModifiers, phpWithResultType, phpWithCallingSpecs,
+          phpWithoutSemicolon]);
+        If SameText(Trim(Header), 'procedure(TObject)') Then Exit;
+      End;
+    Raise Exception.CreateFmt('%s.%s must be an instance procedure with one TObject parameter.',
+      [FormClass, MethodName]);
+  End;
+
   Function SourceOffset(CleanPos: Integer): Integer;
   Var
     Location: TCodePosition;
@@ -76,7 +91,9 @@ Begin
     StubPos := 0;
     If MethodName <> '' Then
       Begin
-        If Tool.FindClassMember(Owner, MethodName, False).Node = Nil Then
+        Node := Tool.FindClassMember(Owner, MethodName, False).Node;
+        If Node <> Nil Then CheckHandler(Node)
+        Else
           Members := Members + '    Procedure ' + MethodName + '(Sender: TObject);' + LineEnding;
         Impl := Tool.FindImplementationNode;
         If Impl = Nil Then Raise Exception.Create('Missing implementation section.');
@@ -84,7 +101,11 @@ Begin
         While Node <> Nil Do
           Begin
             If (Node.Desc = ctnProcedure) And
-              SameText(Tool.ExtractProcName(Node, []), FormClass + '.' + MethodName) Then Break;
+              SameText(Tool.ExtractProcName(Node, []), FormClass + '.' + MethodName) Then
+              Begin
+                CheckHandler(Node);
+                Break;
+              End;
             Node := Node.NextBrother;
           End;
         If Node = Nil Then

@@ -9,8 +9,10 @@ const
     'type THelper = class(TObject)' + LineEnding +
     '  Clock: TTimer; procedure Tick(Sender: TObject); end;' + LineEnding +
     '  TBindingForm = class(TForm)' + LineEnding +
+    '  procedure TimerTickFast(Origin: TObject);' + LineEnding +
     '  private FValue: Integer;' + LineEnding + '  end;' + LineEnding +
     'implementation' + LineEnding + '{$R *.lfm}' + LineEnding +
+    'procedure TBindingForm.TimerTickFast(Origin: TObject); begin end;' + LineEnding +
     'procedure THelper.Tick(Sender: TObject); begin end;' + LineEnding + 'end.' + LineEnding;
 var
   Code: TCodeBuffer;
@@ -23,15 +25,27 @@ begin
   Body := FormSource;
   Code.Source := Body;
   Lfm := 'object BindingForm: TBindingForm' + LineEnding + 'end' + LineEnding;
-  if not BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'Tick', Body, Owner, ErrorText) then
+  if not BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'TimerTick', Body, Owner, ErrorText) then
     raise Exception.Create(ErrorText);
+  if Pos('Procedure TBindingForm.TimerTick(Sender: TObject);', Body) = 0 then
+    raise Exception.Create('Missing exact TimerTick implementation');
   FirstEdit := Body;
   Code.Source := Body;
-  if not BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'Tick', Body, Owner, ErrorText) then
+  if not BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'timertick', Body, Owner, ErrorText) then
     raise Exception.Create(ErrorText);
   if Body <> FirstEdit then raise Exception.Create('Repeated edit changed the unit');
   if not UpsertLfmComponent(Lfm, 'Clock', 'TTimer', '    Enabled = False' + LineEnding +
-    '    OnTimer = Tick' + LineEnding) then raise Exception.Create('Missing LFM edit');
+    '    OnTimer = TimerTick' + LineEnding) then raise Exception.Create('Missing LFM edit');
+  Body := StringReplace(FirstEdit, 'TimerTick(Sender: TObject)', 'TimerTick(var Sender: TObject)', []);
+  Code.Source := Body;
+  if BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'TimerTick', Body, Owner, ErrorText) then
+    raise Exception.Create('Accepted incompatible declaration');
+  Body := StringReplace(FirstEdit, 'TBindingForm.TimerTick(Sender: TObject)',
+    'TBindingForm.TimerTick(Sender: Integer)', []);
+  Code.Source := Body;
+  if BindFormMembers(Code, Lfm, 'Clock', 'TTimer', 'TimerTick', Body, Owner, ErrorText) then
+    raise Exception.Create('Accepted incompatible implementation');
+  Body := FirstEdit;
   Output := TStringList.Create;
   try
     Output.Text := Body;
