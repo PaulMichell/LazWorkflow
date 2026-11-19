@@ -207,7 +207,8 @@ End;
 Procedure ListAspellLanguages(List: TStrings);
 Var
   Proc: TProcess;
-  OutputText, Line: String;
+  OutputText, ErrorText, Line: String;
+  ExitCode: Integer;
   Lines: TStringList;
   Index: Integer;
 Begin
@@ -219,13 +220,12 @@ Begin
     Proc.Executable := 'aspell';
     Proc.Parameters.Add('dump');
     Proc.Parameters.Add('dicts');
-    Proc.Options := [poUsePipes, poWaitOnExit, poNoConsole];
+    Proc.Options := [poUsePipes, poNoConsole];
     Try
-      Proc.Execute;
-      OutputText := '';
-      SetLength(OutputText, 65536);
-      Index := Proc.Output.Read(OutputText[1], Length(OutputText));
-      SetLength(OutputText, Index);
+      If Proc.RunCommandLoop(OutputText, ErrorText, ExitCode) <> 0 Then
+        Exit;
+      If ExitCode <> 0 Then
+        Exit;
     Except
       Exit;
     End;
