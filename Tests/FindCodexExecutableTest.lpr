@@ -31,6 +31,17 @@ Begin
       WriteLn('FAIL unexpected path shape: ', Found);
       Failed := True;
     End
+  Else If ((Pos('.vscode/extensions/openai.chatgpt-', Found) > 0) Or
+    (Pos('.vscode-insiders/extensions/openai.chatgpt-', Found) > 0) Or
+    (Pos('.cursor/extensions/openai.chatgpt-', Found) > 0)) And
+    (DirectoryExists('/Applications/ChatGPT.app') Or
+    DirectoryExists(IncludeTrailingPathDelimiter(GetUserDir) + 'Applications/ChatGPT.app') Or
+    DirectoryExists('/Applications/ChatGPT Desktop.app') Or
+    DirectoryExists(IncludeTrailingPathDelimiter(GetUserDir) + 'Applications/ChatGPT Desktop.app')) Then
+    Begin
+      WriteLn('FAIL official ChatGPT app is installed but auto-detect returned the editor extension: ', Found);
+      Failed := True;
+    End
   Else
     WriteLn('ok   macOS Codex auto-detect');
   {$ELSE}

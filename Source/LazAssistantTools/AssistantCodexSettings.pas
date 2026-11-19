@@ -239,7 +239,7 @@ Begin
   Found := FindCodexExecutable;
   If Found = '' Then
     ConnectionStatus.Caption :=
-      'Codex was not found on PATH, in ChatGPT.app, or in a VS Code / Cursor extension. Use Browse to select an installed executable.'
+      'Codex was not found in the ChatGPT app, on PATH, or in a VS Code / Cursor extension. Use Browse to select an installed executable.'
   Else
     Begin
       RuntimeEdit.Text := Found;
