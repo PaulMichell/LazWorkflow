@@ -86,6 +86,13 @@ Begin
     Exit;
   If Not ResolveMonitorBind(Settings, Address, ErrorText) Then
     Exit;
+  If (Address <> '') And (Address <> Settings.BindAddress) And Not Settings.BindAll Then
+    Begin
+      Settings.BindAddress := Address;
+      If Not SaveMonitorSettings(Settings, ErrorText) Then
+        WorkflowLogger.Warning('AssistantMonitor', 'corrected bind address was not stored: ' + ErrorText);
+      ErrorText := '';
+    End;
   If Not EnsureMonitorHostCertificate(ErrorText) Then
     Exit;
   Session := TMonitorSession.Create;

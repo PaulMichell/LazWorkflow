@@ -13,7 +13,7 @@ Unit AssistantMonitorSettings;
 Interface
 
 Uses
-  SysUtils;
+  Classes, SysUtils;
 
 Const
   MonitorSettingsSection = 'monitor';
@@ -55,8 +55,16 @@ Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: St
 Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;
 Function MonitorCertificateFile: String;
 Function MonitorKeyFile: String;
-{ bind_all true returns 0.0.0.0. Otherwise one IPv4 address is required. }
+{ bind_all true returns 0.0.0.0. Otherwise one IPv4 address is required.
+  A saved address that exists only on a virtual adapter is not the LAN endpoint. }
 Function ResolveMonitorBind(Const Settings: TMonitorSettings; Out Address, ErrorText: String): Boolean;
+{ IPv4 address on the default-route interface, so another machine on the LAN can reach it. }
+Function MonitorPreferredBindAddress: String;
+{ False when Address is assigned only to a virtual adapter and a LAN address exists.
+  An address that is not currently assigned stays true, so opening the dialog does not rewrite it. }
+Function MonitorBindAddressReachesLan(Const Address: String): Boolean;
+{ Every IPv4 address on the host, including loopback. Caller frees the list. }
+Function MonitorInterfaceAddresses: TStringList;
 
 Implementation
 
@@ -401,7 +409,418 @@ Begin
   Result := WorkflowSettingsDirectory + 'assistant-monitor' + PathDelim + 'host.key';
 End;
 
+Const
+  EndpointAfInet = 2;
+  {$IFDEF WINDOWS}
+  EndpointBufferOverflow = 111;
+  EndpointSkipAnycast = $0002;
+  EndpointSkipMulticast = $0004;
+  EndpointSkipDns = $0008;
+  ForwardRowBytes = 56;
+  {$ENDIF}
+
+Type
+  TMonitorEndpoint = Record
+    Address: String;
+    Name: String;
+    IfIndex: Cardinal;
+    OnDefaultRoute: Boolean;
+    VirtualAdapter: Boolean;
+  End;
+  TMonitorEndpointArray = Array Of TMonitorEndpoint;
+
+{$IFDEF UNIX}
+Type
+  PMonitorSocketIn = ^TMonitorSocketIn;
+  TMonitorSocketIn = Packed Record
+    {$IF DEFINED(DARWIN) OR DEFINED(BSD)}
+    Len: Byte;
+    Family: Byte;
+    {$ELSE}
+    Family: Word;
+    {$ENDIF}
+    Port: Word;
+    Address: Array[0..3] Of Byte;
+    Zero: Array[0..7] Of Byte;
+  End;
+  PMonitorIfAddrs = ^TMonitorIfAddrs;
+  TMonitorIfAddrs = Record
+    Next: PMonitorIfAddrs;
+    Name: PAnsiChar;
+    Flags: Cardinal;
+    {$IFDEF CPU64}
+    FlagPad: Cardinal;
+    {$ENDIF}
+    Address: PMonitorSocketIn;
+    Netmask: Pointer;
+    Broadcast: Pointer;
+    Data: Pointer;
+  End;
+
+Function getifaddrs(Out List: PMonitorIfAddrs): Integer; Cdecl; External 'c';
+Procedure freeifaddrs(List: PMonitorIfAddrs); Cdecl; External 'c';
+{$ENDIF}
+
+{$IFDEF WINDOWS}
+Type
+  PEndpointAdapter = ^TEndpointAdapter;
+  TEndpointAdapter = Packed Record
+    Length: LongWord;
+    IfIndex: LongWord;
+    Next: PEndpointAdapter;
+    AdapterName: PAnsiChar;
+    FirstUnicast: Pointer;
+    FirstAnycast: Pointer;
+    FirstMulticast: Pointer;
+    FirstDns: Pointer;
+    DnsSuffix: PWideChar;
+    Description: PWideChar;
+    FriendlyName: PWideChar;
+  End;
+  PEndpointUnicast = ^TEndpointUnicast;
+  TEndpointUnicast = Packed Record
+    Length: LongWord;
+    Flags: LongWord;
+    Next: PEndpointUnicast;
+    SockAddr: PByte;
+    SockLen: Integer;
+  End;
+
+Function GetAdaptersAddresses(Family, Flags: Cardinal; Reserved: Pointer; Addresses: PEndpointAdapter;
+  Var Size: Cardinal): Cardinal; StdCall; External 'iphlpapi.dll' Name 'GetAdaptersAddresses';
+Function GetIpForwardTable(Table: Pointer; Var Size: Cardinal; Order: Boolean): Cardinal; StdCall;
+  External 'iphlpapi.dll' Name 'GetIpForwardTable';
+{$ENDIF}
+
+Function IPv4Text(Const Address: Array Of Byte): String;
+Begin
+  Result := IntToStr(Address[0]) + '.' + IntToStr(Address[1]) + '.' + IntToStr(Address[2]) + '.' + IntToStr(Address[3]);
+End;
+
+Function IsLoopbackAddress(Const Address: String): Boolean;
+Begin
+  Result := Copy(Address, 1, 4) = '127.';
+End;
+
+Function IsLinkLocalAddress(Const Address: String): Boolean;
+Begin
+  Result := Copy(Address, 1, 8) = '169.254.';
+End;
+
+Function IsPrivate10(Const Address: String): Boolean;
+Begin
+  Result := Copy(Address, 1, 3) = '10.';
+End;
+
+Function IsPrivate172(Const Address: String): Boolean;
+Var
+  Dot, Second: Integer;
+Begin
+  Result := False;
+  If Copy(Address, 1, 4) <> '172.' Then
+    Exit;
+  Dot := Pos('.', Copy(Address, 5, MaxInt));
+  If Dot < 2 Then
+    Exit;
+  Second := StrToIntDef(Copy(Address, 5, Dot - 1), -1);
+  Result := (Second >= 16) And (Second <= 31);
+End;
+
+Function IsPrivate192(Const Address: String): Boolean;
+Begin
+  Result := Copy(Address, 1, 8) = '192.168.';
+End;
+
+Function AdapterIsVirtual(Const Name, Description: String): Boolean;
+Var
+  Text: String;
+Begin
+  Text := LowerCase(Name + ' ' + Description);
+  Result := (Pos('hyper-v', Text) > 0) Or (Pos('vethernet', Text) > 0) Or (Pos('wsl', Text) > 0) Or
+    (Pos('docker', Text) > 0) Or (Pos('virtualbox', Text) > 0) Or (Pos('vmware', Text) > 0) Or
+    (Pos('bluetooth', Text) > 0) Or (Pos('loopback', Text) > 0) Or (Pos('tunnel', Text) > 0) Or
+    (Pos('veth', Text) > 0) Or (Pos('virbr', Text) > 0) Or (Pos('vmnet', Text) > 0) Or
+    (Pos('utun', Text) > 0) Or (Pos('awdl', Text) > 0);
+End;
+
+Procedure AddEndpoint(Var Endpoints: TMonitorEndpointArray; Const Address, Name, Description: String; IfIndex: Cardinal;
+  OnDefaultRoute: Boolean);
+Var
+  Index: Integer;
+Begin
+  If Address = '' Then
+    Exit;
+  Index := Length(Endpoints);
+  SetLength(Endpoints, Index + 1);
+  Endpoints[Index].Address := Address;
+  Endpoints[Index].Name := Name;
+  Endpoints[Index].IfIndex := IfIndex;
+  Endpoints[Index].OnDefaultRoute := OnDefaultRoute;
+  Endpoints[Index].VirtualAdapter := AdapterIsVirtual(Name, Description) Or IsLoopbackAddress(Address);
+End;
+
+{$IFDEF WINDOWS}
+Function DefaultRouteIfIndex: Cardinal;
+Var
+  Size, Status, Count, I, Metric, BestMetric: Cardinal;
+  Table, Row: PByte;
+Begin
+  Result := 0;
+  BestMetric := High(Cardinal);
+  Size := 0;
+  GetIpForwardTable(Nil, Size, False);
+  If Size = 0 Then
+    Exit;
+  GetMem(Table, Size);
+  Try
+    Status := GetIpForwardTable(Table, Size, False);
+    If Status <> 0 Then
+      Exit;
+    Count := PCardinal(Table)^;
+    For I := 0 To Count - 1 Do
+      Begin
+        Row := Table + SizeOf(Cardinal) + I * ForwardRowBytes;
+        If (PLongWord(Row)^ <> 0) Or (PLongWord(Row + 4)^ <> 0) Then
+          Continue;
+        Metric := PLongWord(Row + 36)^;
+        If (Result = 0) Or (Metric < BestMetric) Then
+          Begin
+            Result := PLongWord(Row + 16)^;
+            BestMetric := Metric;
+          End;
+      End;
+  Finally
+    FreeMem(Table);
+  End;
+End;
+
+Function WideText(Value: PWideChar): String;
+Begin
+  If Value = Nil Then
+    Result := ''
+  Else
+    Result := String(Value);
+End;
+{$ENDIF}
+
+{$IFDEF UNIX}
+Function NextRouteField(Var Line: String): String;
+Var
+  Index: Integer;
+Begin
+  While (Line <> '') And (Line[1] <= ' ') Do
+    Delete(Line, 1, 1);
+  Index := 1;
+  While (Index <= Length(Line)) And (Line[Index] > ' ') Do
+    Inc(Index);
+  Result := Copy(Line, 1, Index - 1);
+  Delete(Line, 1, Index - 1);
+End;
+
+Function DefaultRouteName: String;
+Var
+  Routes: TStringList;
+  I, BestMetric, Metric: Integer;
+  Line, Iface, Destination, Mask, MetricText: String;
+Begin
+  Result := '';
+  BestMetric := MaxInt;
+  If Not FileExists('/proc/net/route') Then
+    Exit;
+  Routes := TStringList.Create;
+  Try
+    Routes.LoadFromFile('/proc/net/route');
+    For I := 1 To Routes.Count - 1 Do
+      Begin
+        Line := Routes[I];
+        Iface := NextRouteField(Line);
+        Destination := NextRouteField(Line);
+        NextRouteField(Line);
+        NextRouteField(Line);
+        NextRouteField(Line);
+        NextRouteField(Line);
+        MetricText := NextRouteField(Line);
+        Mask := NextRouteField(Line);
+        If (Destination <> '00000000') Or (Mask <> '00000000') Then
+          Continue;
+        Metric := StrToIntDef(MetricText, MaxInt);
+        If (Result = '') Or (Metric < BestMetric) Then
+          Begin
+            Result := Iface;
+            BestMetric := Metric;
+          End;
+      End;
+  Finally
+    Routes.Free;
+  End;
+End;
+{$ENDIF}
+
+Procedure CollectEndpoints(Var Endpoints: TMonitorEndpointArray);
+{$IFDEF UNIX}
+Var
+  List, Cursor: PMonitorIfAddrs;
+  RouteName: String;
+{$ENDIF}
+{$IFDEF WINDOWS}
+Var
+  Size, Status, RouteIf: Cardinal;
+  Buffer: PEndpointAdapter;
+  Adapter: PEndpointAdapter;
+  Unicast: PEndpointUnicast;
+  Name, Description: String;
+{$ENDIF}
+Begin
+  SetLength(Endpoints, 0);
+{$IFDEF UNIX}
+  RouteName := DefaultRouteName;
+  List := Nil;
+  If getifaddrs(List) = 0 Then
+    Try
+      Cursor := List;
+      While Assigned(Cursor) Do
+        Begin
+          If Assigned(Cursor^.Address) And (Cursor^.Address^.Family = EndpointAfInet) Then
+            AddEndpoint(Endpoints, IPv4Text(Cursor^.Address^.Address), String(Cursor^.Name), '', 0,
+              (RouteName <> '') And (String(Cursor^.Name) = RouteName));
+          Cursor := Cursor^.Next;
+        End;
+    Finally
+      freeifaddrs(List);
+    End;
+{$ENDIF}
+{$IFDEF WINDOWS}
+  RouteIf := DefaultRouteIfIndex;
+  Size := 0;
+  Buffer := Nil;
+  Status := GetAdaptersAddresses(EndpointAfInet, EndpointSkipAnycast Or EndpointSkipMulticast Or EndpointSkipDns, Nil, Nil, Size);
+  If (Status = EndpointBufferOverflow) And (Size > 0) Then
+    Begin
+      GetMem(Buffer, Size);
+      Try
+        Status := GetAdaptersAddresses(EndpointAfInet, EndpointSkipAnycast Or EndpointSkipMulticast Or EndpointSkipDns, Nil,
+          Buffer, Size);
+        If Status = 0 Then
+          Begin
+            Adapter := Buffer;
+            While Assigned(Adapter) Do
+              Begin
+                Name := WideText(Adapter^.FriendlyName);
+                Description := WideText(Adapter^.Description);
+                Unicast := Adapter^.FirstUnicast;
+                While Assigned(Unicast) Do
+                  Begin
+                    If Assigned(Unicast^.SockAddr) And (PWord(Unicast^.SockAddr)^ = EndpointAfInet) Then
+                      AddEndpoint(Endpoints,
+                        IPv4Text([Unicast^.SockAddr[4], Unicast^.SockAddr[5], Unicast^.SockAddr[6], Unicast^.SockAddr[7]]),
+                        Name, Description, Adapter^.IfIndex, (RouteIf <> 0) And (Adapter^.IfIndex = RouteIf));
+                    Unicast := Unicast^.Next;
+                  End;
+                Adapter := Adapter^.Next;
+              End;
+          End;
+      Finally
+        FreeMem(Buffer);
+      End;
+    End;
+{$ENDIF}
+End;
+
+Function EndpointKind(Const Address: String): Integer;
+Begin
+  If IsPrivate192(Address) Then
+    Result := 0
+  Else If IsPrivate10(Address) Then
+    Result := 1
+  Else If IsPrivate172(Address) Then
+    Result := 2
+  Else If Not IsLinkLocalAddress(Address) And Not IsLoopbackAddress(Address) Then
+    Result := 3
+  Else
+    Result := 4;
+End;
+
+Function ChooseEndpoint(Const Endpoints: TMonitorEndpointArray; OnRoute, SkipVirtual: Boolean; Kind: Integer): String;
+Var
+  I: Integer;
+Begin
+  Result := '';
+  For I := 0 To High(Endpoints) Do
+    If (Endpoints[I].OnDefaultRoute = OnRoute) And (Not SkipVirtual Or Not Endpoints[I].VirtualAdapter) And
+      (EndpointKind(Endpoints[I].Address) = Kind) Then
+      Exit(Endpoints[I].Address);
+End;
+
+Function MonitorPreferredBindAddress: String;
+Var
+  Endpoints: TMonitorEndpointArray;
+  HasRoute: Boolean;
+  I, Kind: Integer;
+Begin
+  Result := '';
+  SetLength(Endpoints, 0);
+  CollectEndpoints(Endpoints);
+  HasRoute := False;
+  For I := 0 To High(Endpoints) Do
+    If Endpoints[I].OnDefaultRoute And Not Endpoints[I].VirtualAdapter And (EndpointKind(Endpoints[I].Address) < 4) Then
+      HasRoute := True;
+  If HasRoute Then
+    For Kind := 0 To 3 Do
+      Begin
+        Result := ChooseEndpoint(Endpoints, True, True, Kind);
+        If Result <> '' Then
+          Exit;
+      End;
+  For Kind := 0 To 3 Do
+    Begin
+      Result := ChooseEndpoint(Endpoints, False, True, Kind);
+      If Result <> '' Then
+        Exit;
+    End;
+End;
+
+Function MonitorBindAddressReachesLan(Const Address: String): Boolean;
+Var
+  Endpoints: TMonitorEndpointArray;
+  I: Integer;
+  SeenVirtual, SeenOther: Boolean;
+Begin
+  Result := False;
+  If Address = '' Then
+    Exit;
+  SetLength(Endpoints, 0);
+  CollectEndpoints(Endpoints);
+  If MonitorPreferredBindAddress = '' Then
+    Exit(True);
+  SeenVirtual := False;
+  SeenOther := False;
+  For I := 0 To High(Endpoints) Do
+    If Endpoints[I].Address = Address Then
+      If Endpoints[I].VirtualAdapter Then
+        SeenVirtual := True
+      Else
+        SeenOther := True;
+  { Not assigned on this host. Keep it so a stored choice is not rewritten by opening the dialog. }
+  If Not SeenVirtual And Not SeenOther Then
+    Exit(True);
+  Result := SeenOther;
+End;
+
+Function MonitorInterfaceAddresses: TStringList;
+Var
+  Endpoints: TMonitorEndpointArray;
+  I: Integer;
+Begin
+  Result := TStringList.Create;
+  SetLength(Endpoints, 0);
+  CollectEndpoints(Endpoints);
+  For I := 0 To High(Endpoints) Do
+    Result.Add(Endpoints[I].Address);
+End;
+
 Function ResolveMonitorBind(Const Settings: TMonitorSettings; Out Address, ErrorText: String): Boolean;
+Var
+  Preferred: String;
 Begin
   Result := False;
   Address := '';
@@ -412,12 +831,18 @@ Begin
       Result := True;
       Exit;
     End;
-  If Not IsIPv4Address(Settings.BindAddress) Then
+  Preferred := MonitorPreferredBindAddress;
+  If MonitorBindAddressReachesLan(Settings.BindAddress) Then
+    Address := Settings.BindAddress
+  Else If Preferred <> '' Then
+    Address := Preferred
+  Else If IsIPv4Address(Settings.BindAddress) Then
+    Address := Settings.BindAddress
+  Else
     Begin
       ErrorText := 'One IPv4 address is required.';
       Exit;
     End;
-  Address := Settings.BindAddress;
   Result := True;
 End;
 
