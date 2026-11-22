@@ -1514,6 +1514,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       ::onSyncEffect
     )
     created.onCommitted = { session.noteCommittedProgress() }
+    created.onPageProgress = { session.noteSnapshotProgress() }
     syncApplier = created
     session.attachApplier(created)
     created.start(viewModelScope)

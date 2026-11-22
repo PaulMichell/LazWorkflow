@@ -42,6 +42,11 @@ const val SyncApplyRetries = 3
  * A commit of an older event does not reset the open-turn clock. That clock is the announced head.
  */
 const val SyncRecoveryBudgetMs = 15_000L
+/**
+ * The longest one baseline may hold a socket by sending outline pages without reaching SnapshotEnd.
+ * Each page restarts [SyncRecoveryBudgetMs] on a slow link; this bounds a host that pages for ever.
+ */
+const val SnapshotCeilingMs = 300_000L
 
 sealed class SyncEffect {
   data class Resume(val conversationId: String, val streamId: String, val seq: Long, val hold: Boolean = false) : SyncEffect()
@@ -368,6 +373,8 @@ class SyncApplier(
 ) {
   /** A committed cursor or baseline. A ping does not call this. Not a constructor parameter: trailing lambdas are effects. */
   var onCommitted: () -> Unit = {}
+  /** An outline page of the baseline being assembled. Delivery, not a durable cursor. */
+  var onPageProgress: () -> Unit = {}
   private val gate = Mutex()
   private val pending = ArrayDeque<MonitorEvent>()
   private val pendingSizes = ArrayDeque<Int>()
@@ -379,6 +386,8 @@ class SyncApplier(
   private val baseline = BaselineStage()
   /** When a baseline started and has not committed. Negative means none is waiting. */
   private var baselineSinceMs = -1L
+  /** When the waiting baseline began. Pages do not move this; it measures [SnapshotCeilingMs]. */
+  private var baselineBeganMs = -1L
   private var baselineConversation = ""
   private var baselineStream = ""
   private val stateChunks = StateChunkAssembly()
@@ -597,8 +606,15 @@ class SyncApplier(
     baselineSinceMs = now
   }
 
+  /** An outline page keeps the baseline budget running on a slow link. The durable cursor does not move. */
+  private fun notePageProgress(now: Long) {
+    if (baselineSinceMs >= 0L) baselineSinceMs = now
+    onPageProgress()
+  }
+
   private suspend fun baselineRecovery(now: Long): List<SyncEffect> {
-    if (baselineSinceMs < 0L || now - baselineSinceMs < SyncRecoveryBudgetMs) return emptyList()
+    if (baselineSinceMs < 0L) return emptyList()
+    if (now - baselineSinceMs < SyncRecoveryBudgetMs && now - baselineBeganMs < SnapshotCeilingMs) return emptyList()
     val conversationId = baselineConversation
     val streamId = baselineStream
     baselineSinceMs = -1L
@@ -641,6 +657,7 @@ class SyncApplier(
         baseline.begin(frame)
         if (baselineSinceMs < 0L) {
           baselineSinceMs = nowMs()
+          baselineBeganMs = baselineSinceMs
           baselineConversation = frame.conversationId
           baselineStream = frame.streamId
         }
@@ -653,7 +670,8 @@ class SyncApplier(
           commitTurnPage(frame)
           return listOf(SyncEffect.CacheReady)
         }
-        baseline.page(frame)
+        // Only an outline page this baseline announced counts. Extra pages are not progress.
+        if (baseline.page(frame) && frame.turns.isNotEmpty() && baseline.pagesWithinCount) notePageProgress(nowMs())
         emptyList()
       }
       is SyncFrame.SnapshotEnd -> {

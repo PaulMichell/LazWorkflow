@@ -1970,6 +1970,53 @@ class LanSessionTest {
   }
 
   @Test
+  fun snapshotPagesKeepASocketPastTheSyncBudgetUntilTheyStop() {
+    val clock = SteppableClock()
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    }, clock)
+    try {
+      session.connect("10.0.0.8", 56122)
+      reachLive(session, links, 0)
+      links[0].push(frameOf(encodeTicks(MessageKind.Pong, "host-pong", 2)))
+      clock.advanceMs(10_000L)
+      session.noteSnapshotProgress()
+      clock.advanceMs(computing.michell.monitor.data.SyncRecoveryBudgetMs - 1)
+      Thread.sleep(200)
+      assertFalse(links[0].closed)
+      assertEquals(1, opens.get())
+      clock.advanceMs(1)
+      waitUntil(8_000) { links.size >= 2 && links[0].closed }
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  fun aTouchDoesNotDropASocketThatIsReceivingSnapshotPages() {
+    val opens = AtomicInteger(0)
+    val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())
+    val session = LanSession(pairedStore(), TlsConnector { _, _, _ ->
+      opens.incrementAndGet()
+      ScriptedLink().also { links.add(it) }
+    })
+    try {
+      session.connect("10.0.0.8", 56122)
+      reachLive(session, links, 0)
+      session.noteSnapshotProgress()
+      session.noteActivity()
+      Thread.sleep(400)
+      assertEquals(1, opens.get())
+      assertFalse(links[0].closed)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aNewSocketResumesTheCursorThePreviousSocketQueued() {
     val opens = AtomicInteger(0)
     val links = java.util.Collections.synchronizedList(mutableListOf<ScriptedLink>())

@@ -487,6 +487,97 @@ class SyncApplierTest {
     assertEquals(SyncEffect.Resume("c1", "stream-a", 9L), applier.tick().first { it is SyncEffect.Resume })
   }
 
+  @Test
+  fun aBaselineWhosePagesKeepArrivingIsNotReplaced() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    var pages = 0
+    applier.onPageProgress = { pages += 1 }
+    applier.adoptConnection(1)
+    applier.offerFrame(pagedBegin(4), 1)
+    for (page in 1..4) {
+      clock.now = page * 10_000L
+      applier.offerFrame(outlinePage(page, 4), 1)
+      clock.now = page * 10_000L + SyncRecoveryBudgetMs - 1
+      val quiet = applier.tick()
+      assertTrue(quiet.none { it == SyncEffect.Reconnect })
+      assertTrue(quiet.none { it is SyncEffect.Resume })
+    }
+    assertEquals(4, pages)
+    applier.offerFrame(SyncFrame.SnapshotEnd("c1", "stream-a", 9L), 1)
+    assertEquals(9L, backing.seq("c1"))
+  }
+
+  @Test
+  fun aBaselineWhosePagesStopIsReplacedAtTheBudget() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(pagedBegin(4), 1)
+    clock.now = 10_000L
+    applier.offerFrame(outlinePage(1, 4), 1)
+    clock.now = 10_000L + SyncRecoveryBudgetMs - 1
+    assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+    clock.now = 10_000L + SyncRecoveryBudgetMs
+    assertTrue(applier.tick().contains(SyncEffect.Reconnect))
+    assertEquals(null, backing.cursorOf("host-1", "c1"))
+  }
+
+  @Test
+  fun aBaselineThatPagesPastTheCeilingIsReplaced() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    applier.adoptConnection(1)
+    val count = (SnapshotCeilingMs / 10_000L).toInt() + 2
+    applier.offerFrame(pagedBegin(count), 1)
+    var page = 1
+    while (page * 10_000L < SnapshotCeilingMs) {
+      clock.now = page * 10_000L
+      applier.offerFrame(outlinePage(page, count), 1)
+      assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
+      page += 1
+    }
+    clock.now = SnapshotCeilingMs
+    applier.offerFrame(outlinePage(page, count), 1)
+    assertTrue(applier.tick().contains(SyncEffect.Reconnect))
+  }
+
+  @Test
+  fun pagesBeyondTheAnnouncedCountAreNotProgress() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    var pages = 0
+    applier.onPageProgress = { pages += 1 }
+    applier.adoptConnection(1)
+    applier.offerFrame(pagedBegin(1), 1)
+    clock.now = 5_000L
+    applier.offerFrame(outlinePage(1, 1), 1)
+    clock.now = 10_000L
+    applier.offerFrame(outlinePage(2, 1), 1)
+    assertEquals(1, pages)
+    clock.now = 5_000L + SyncRecoveryBudgetMs
+    assertTrue(applier.tick().contains(SyncEffect.Reconnect))
+  }
+
+  private fun pagedBegin(pageCount: Int): SyncFrame.SnapshotBegin {
+    return SyncFrame.SnapshotBegin(
+      "c1", "stream-a", 9L, "Title", "/work", pageCount,
+      listOf(OutlineTurn("t0", 0, "old", emptyList())),
+      null, emptyList()
+    )
+  }
+
+  private fun outlinePage(page: Int, pageCount: Int): SyncFrame.SnapshotPage {
+    return SyncFrame.SnapshotPage(
+      "c1", "stream-a", 9L, page, pageCount,
+      listOf(OutlineTurn("t$page", page, "old", emptyList())), null
+    )
+  }
+
   /** Commits a baseline into the backing store at the frame's seq, as Room does. */
   private fun baselineStore(backing: MemorySyncStore): SyncStore = object : SyncStore {
     override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {

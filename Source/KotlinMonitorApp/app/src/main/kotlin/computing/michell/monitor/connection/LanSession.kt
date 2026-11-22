@@ -464,6 +464,8 @@ private class PhysicalConnection(
   @Volatile var liveAtMs: Long = -1L
   /** A committed cursor or baseline on this socket. Negative until then. A ping does not set this. */
   @Volatile var committedAtMs: Long = -1L
+  /** Last baseline outline page on this socket before a commit. Negative until then. Not a cursor. */
+  @Volatile var pageAtMs: Long = -1L
   @Volatile var outcome: ReadEnd = ReadEnd.Continue
   private val outcomeLock = Any()
 
@@ -1077,7 +1079,14 @@ class LanSession(
     val context = connection ?: return false
     if (link == null || context.committedAtMs >= 0L) return false
     noteLive(context)
-    return context.liveAtMs >= 0L
+    if (context.liveAtMs < 0L) return false
+    // A baseline still sending pages is delivering, even before its first commit.
+    return !pagesRecent(context, clockMs())
+  }
+
+  private fun pagesRecent(context: PhysicalConnection, now: Long): Boolean {
+    val page = context.pageAtMs
+    return page >= 0L && now - page < computing.michell.monitor.data.SyncRecoveryBudgetMs
   }
 
   /** Close a heartbeating socket that is not applying, and open the next one. */
@@ -1783,6 +1792,15 @@ class LanSession(
     return true
   }
 
+  /**
+   * A baseline outline page arrived before this socket's first commit. Restarts the delivery budget
+   * up to [computing.michell.monitor.data.SnapshotCeilingMs]. Not committed progress.
+   */
+  fun noteSnapshotProgress() {
+    val now = clockMs()
+    connection?.let { current -> if (current.committedAtMs < 0L) current.pageAtMs = now }
+  }
+
   /** A committed cursor or baseline. A ping does not call this. */
   fun noteCommittedProgress() {
     val now = clockMs()
@@ -1919,13 +1937,19 @@ class LanSession(
     noteHeartbeat(epoch, context)
   }
 
-  /** Live, and no committed cursor or baseline for the sync budget. A ping is not progress. */
+  /**
+   * Live, and no committed cursor or baseline for the sync budget. A ping is not progress.
+   * A baseline page restarts the budget, until the snapshot ceiling from Live.
+   */
   private fun deliveryStalled(context: PhysicalConnection): Boolean {
     if (context.committedAtMs >= 0L || context.events.shouldPauseRead()) return false
     noteLive(context)
     val started = context.liveAtMs
     if (started < 0L) return false
-    return clockMs() - started >= computing.michell.monitor.data.SyncRecoveryBudgetMs
+    val now = clockMs()
+    if (now - started >= computing.michell.monitor.data.SnapshotCeilingMs) return true
+    val since = maxOf(started, context.pageAtMs)
+    return now - since >= computing.michell.monitor.data.SyncRecoveryBudgetMs
   }
 
   private fun noteLive(context: PhysicalConnection) {

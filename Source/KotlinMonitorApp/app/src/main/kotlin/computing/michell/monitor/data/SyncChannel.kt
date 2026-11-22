@@ -539,6 +539,10 @@ class BaselineStage {
   val isOpen: Boolean
     get() = open
 
+  /** At least one outline page has arrived and no more than SnapshotBegin announced. */
+  val pagesWithinCount: Boolean
+    get() = pages in 1..pageCount
+
   fun begin(frame: SyncFrame.SnapshotBegin) {
     open = true
     failed = false
