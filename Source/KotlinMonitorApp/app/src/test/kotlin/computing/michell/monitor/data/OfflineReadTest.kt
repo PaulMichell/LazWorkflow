@@ -312,6 +312,26 @@ class OfflineReadTest {
     }
   }
 
+  @Test
+  fun aHeadPaintsBeforeAnyConversationRow() = runBlocking {
+    val room = openRoom()
+    try {
+      val store = RoomSyncStore(room.database)
+      val applier = SyncApplier("host-1", store, RoomClock(1_000L))
+      applier.adoptConnection(1)
+      val body = "Hello tail"
+      val json = """{"seq":12,"conversation_id":"c1","stream_id":"stream-a","open_block":"b-live","turn_id":"t-live",""" +
+        """"running":true,"body":"$body","body_bytes":${body.length},"full_bytes":${body.length},"hash":"${prefixHash(body)}"}"""
+      applier.offerFrame(SyncFrame.State("head", json), 1)
+      val blocks = room.database.sync().loadBlocks("host-1", "c1")
+      assertEquals(listOf("Hello tail"), blocks.map { block -> block.body })
+      assertEquals("t-live", blocks.single().turn)
+      assertEquals("c1", room.database.sync().loadConversation("host-1", "c1")?.id)
+    } finally {
+      room.delete()
+    }
+  }
+
 }
 
 private class RoomClock(var now: Long) : () -> Long {

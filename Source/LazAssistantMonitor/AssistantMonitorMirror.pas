@@ -181,6 +181,8 @@ Type
     Function CopyTurns(Out Stored: TMonitorMirrorTurnArray; Out Live: TAssistantMonitorTurn; Out HasLive: Boolean): Boolean;
     { Live block faces only. The pump reuses these bodies when length and running are unchanged. }
     Function CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
+    { Same copy, plus the live turn id the head snapshot must name. }
+    Function CopyLiveHead(Out TurnId: String; Out Blocks: TAssistantMonitorBlockArray): Boolean;
     { Harness fold. A later append drops events that no longer fit. }
     Procedure SetLogBudget(Bytes: Int64);
     { One locked copy of the open or parked conversation. Encode after this returns. }
@@ -1203,16 +1205,25 @@ End;
 
 Function TMonitorMirror.CopyLiveBlocks(Out Blocks: TAssistantMonitorBlockArray): Boolean;
 Var
+  TurnId: String;
+Begin
+  Result := CopyLiveHead(TurnId, Blocks);
+End;
+
+Function TMonitorMirror.CopyLiveHead(Out TurnId: String; Out Blocks: TAssistantMonitorBlockArray): Boolean;
+Var
   Live: TAssistantMonitorTurn;
 Begin
   EnterCriticalSection(FLock);
   Try
     SetLength(Blocks, 0);
+    TurnId := '';
     Result := FHasLive;
     If Not Result Then
       Exit;
     Live := Default(TAssistantMonitorTurn);
     CopyTurn(FLive, Live);
+    TurnId := Live.Id;
     Blocks := Live.Blocks;
   Finally
     LeaveCriticalSection(FLock);

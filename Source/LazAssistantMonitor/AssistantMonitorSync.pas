@@ -95,6 +95,9 @@ Function MonitorResumeStatusValueJson(Const Status: TMonitorSyncStatus): String;
 Function MonitorLogHeadValueJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId: String; TurnRunning: Boolean): String;
 { A prefix of Body, at most MonitorHeadBodyBytes of UTF-8. Empty when Body is empty. }
 Function MonitorHeadBodyPrefix(Const Body: String): String;
+{ The state lane keeps the open text until the phone has acknowledged this head.
+  Queuing the log is not delivery. }
+Function MonitorHeadBodyForPhone(PhoneAcked, Head: Int64; Const Body: String): String;
 { Head identity plus that prefix. The log acknowledgement is not this sequence. }
 Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;
   TurnRunning: Boolean; Const Body: String): String;
@@ -604,6 +607,14 @@ Begin
   Raw := UTF8String(Body);
   Cut := MonitorUtf8CutLength(Raw, MonitorHeadBodyBytes);
   Result := String(Copy(Raw, 1, Cut));
+End;
+
+Function MonitorHeadBodyForPhone(PhoneAcked, Head: Int64; Const Body: String): String;
+Begin
+  If PhoneAcked < Head Then
+    Result := MonitorHeadBodyPrefix(Body)
+  Else
+    Result := '';
 End;
 
 Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;

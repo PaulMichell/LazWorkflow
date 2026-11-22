@@ -302,12 +302,18 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
     if (seq < paintedSeq && blockId == paintedBlock) return false
     return database.withWriteTransaction {
       val dao = database.sync()
-      if (dao.loadConversation(hostId, conversationId) == null) return@withWriteTransaction false
+      if (dao.findHost(hostId) == null) dao.insertHost(HostRecord(hostId, "", ""))
+      if (dao.loadConversation(hostId, conversationId) == null) {
+        dao.insertConversation(ConversationRecord(conversationId, hostId, "", "", "", seq, nowMs, false))
+      }
       val existing = dao.loadBlock(hostId, conversationId, blockId)
       val turn = existing?.turn?.takeIf { id -> id.isNotEmpty() }
         ?: turnId.takeIf { id -> id.isNotEmpty() }
         ?: dao.loadTurns(hostId, conversationId).lastOrNull()?.turnId
-      if (turn.isNullOrEmpty()) return@withWriteTransaction false
+        ?: "head-$blockId"
+      if (existing == null && dao.loadTurnsById(hostId, conversationId, listOf(turn)).isEmpty()) {
+        dao.insertTurns(listOf(TurnRecord(hostId, conversationId, turn, 0, "", "", "", "", 0, "")))
+      }
       val row = existing?.copy(turn = turn, body = body, state = if (running) "running" else "ok")
         ?: BlockRecord(hostId, conversationId, turn, blockId, existing?.ordinal ?: 0, "answer", "", body, if (running) "running" else "ok")
       dao.saveBlocks(listOf(row))

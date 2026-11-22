@@ -189,6 +189,7 @@ Type
     { Last head published on the state lane. Not cleared by an older log commit. }
     FAnnouncedHead: Int64;
     FAnnouncedOpenBlock: String;
+    FAnnouncedTurnId: String;
     FAnnouncedTurnRunning: Boolean;
     FAnnouncedHeadBody: String;
     FAnnouncedHeadValid: Boolean;
@@ -672,6 +673,7 @@ Begin
   FCommittedCursor := 0;
   FAnnouncedHead := -1;
   FAnnouncedOpenBlock := '';
+  FAnnouncedTurnId := '';
   FAnnouncedTurnRunning := False;
   FAnnouncedHeadBody := '';
   FAnnouncedHeadValid := False;
@@ -2547,6 +2549,7 @@ Begin
     FCommittedCursor := 0;
     FAnnouncedHead := -1;
     FAnnouncedOpenBlock := '';
+    FAnnouncedTurnId := '';
     FAnnouncedTurnRunning := False;
     FAnnouncedHeadBody := '';
     FAnnouncedHeadValid := False;
@@ -2619,8 +2622,8 @@ End;
 Procedure TMonitorSession.AnnounceLogHead;
 Var
   Head: Int64;
-  OpenBlockId, OpenBody, SentBody, Json: String;
-  TurnRunning, Changed, Behind: Boolean;
+  OpenBlockId, OpenTurnId, OpenBody, SentBody, Json: String;
+  TurnRunning, Changed: Boolean;
   Blocks: TAssistantMonitorBlockArray;
   Index: Integer;
 Begin
@@ -2630,10 +2633,11 @@ Begin
   If Head < 0 Then
     Exit;
   OpenBlockId := '';
+  OpenTurnId := '';
   OpenBody := '';
   Json := '';
   SetLength(Blocks, 0);
-  If CopyLiveBlocks(Blocks) Then
+  If FMirror.CopyLiveHead(OpenTurnId, Blocks) Then
     Begin
       For Index := 0 To High(Blocks) Do
         If Blocks[Index].Running And (Blocks[Index].BlockId <> '') Then
@@ -2650,22 +2654,19 @@ Begin
   LockSession;
   Try
     TurnRunning := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
-    { The log lane is still short of this head. The state lane carries a bounded copy. }
-    Behind := FQueuedLogSeq < Head;
-    If Behind Then
-      SentBody := MonitorHeadBodyPrefix(OpenBody)
-    Else
-      SentBody := '';
+    { Queuing the log is not delivery. Keep the bounded body until the phone acks this head. }
+    SentBody := MonitorHeadBodyForPhone(FPhoneAcked, Head, OpenBody);
     Changed := (Not FAnnouncedHeadValid) Or (Head <> FAnnouncedHead) Or (OpenBlockId <> FAnnouncedOpenBlock) Or
-      (TurnRunning <> FAnnouncedTurnRunning) Or (SentBody <> FAnnouncedHeadBody);
+      (OpenTurnId <> FAnnouncedTurnId) Or (TurnRunning <> FAnnouncedTurnRunning) Or (SentBody <> FAnnouncedHeadBody);
     If Not Changed Then
       Exit;
     FAnnouncedHead := Head;
     FAnnouncedOpenBlock := OpenBlockId;
+    FAnnouncedTurnId := OpenTurnId;
     FAnnouncedTurnRunning := TurnRunning;
     FAnnouncedHeadBody := SentBody;
     FAnnouncedHeadValid := True;
-    Json := MonitorHeadSnapshotJson(Head, FConversationId, FEpoch, OpenBlockId, '', TurnRunning, SentBody);
+    Json := MonitorHeadSnapshotJson(Head, FConversationId, FEpoch, OpenBlockId, OpenTurnId, TurnRunning, SentBody);
   Finally
     UnlockSession;
   End;

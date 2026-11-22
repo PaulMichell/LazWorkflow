@@ -885,6 +885,10 @@ Begin
   Prefix := MonitorHeadBodyPrefix(Long);
   Check('the state-lane body is bounded', (Length(Prefix) = MonitorHeadBodyBytes) And (Length(Prefix) < Length(Long)));
   Check('an empty body does not pretend to be a snapshot', Pos('"body":', MonitorHeadSnapshotJson(1, 'c1', 'stream-a', 'b', '', False, '')) = 0);
+  Check('an unacked head keeps the open body', MonitorHeadBodyForPhone(4, 12, 'Hello tail') = 'Hello tail');
+  Check('queuing the log does not clear that body', MonitorHeadBodyForPhone(4, 12, 'Hello tail') = 'Hello tail');
+  Check('a caught-up phone does not repeat the body', MonitorHeadBodyForPhone(12, 12, 'Hello tail') = '');
+  Check('a newer head after the ack carries the body again', MonitorHeadBodyForPhone(12, 13, 'grown') = 'grown');
 End;
 
 { State can leave while the credit window still holds the phone short of the head. }
