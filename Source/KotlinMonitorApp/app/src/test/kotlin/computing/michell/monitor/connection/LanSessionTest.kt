@@ -1154,6 +1154,31 @@ class LanSessionTest {
   }
 
   @Test
+  fun switchDuringPairReplyDiscardsOldCredentialsAndKeepsNewCode() {
+    val store = HostStore(MemoryStringMap())
+    val first = ScriptedLink(peerFingerprint = "ab".repeat(32))
+    val second = ScriptedLink(peerFingerprint = "cd".repeat(32))
+    val session = LanSession(store, TlsConnector { _, port, _ -> if (port == 56122) first else second })
+    try {
+      session.connect("desktop", 56122, "111111")
+      waitUntil { first.frames().size >= 2 }
+      session.frameProbe = {
+        session.frameProbe = null
+        session.connect(" desktop ", 56123, "222222")
+      }
+      first.push(frameOf(computing.michell.monitor.protocol.encodePairOk("old", "old-client", "old-token")))
+      waitUntil { second.frames().size >= 2 }
+      assertEquals("222222", decodePair(envelope(second.frames()[1]).payloadJson)!!.code)
+      assertEquals(HostRecord("desktop", 56122), store.lookup("desktop", 56122))
+      second.push(frameOf(computing.michell.monitor.protocol.encodePairOk("new", "new-client", "new-token")))
+      waitUntil { store.load().paired }
+      assertEquals(HostRecord("desktop", 56123, "cd".repeat(32), "new-client", "new-token"), store.load())
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun firstPairUsesPresentedCertificateAndPinsOnlyAfterSuccess() {
     val store = HostStore(MemoryStringMap())
     val presented = "ab".repeat(32)

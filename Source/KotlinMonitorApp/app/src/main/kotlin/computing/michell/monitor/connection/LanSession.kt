@@ -804,7 +804,6 @@ class LanSession(
   private var loop: Job? = null
   private var link: TlsLink? = null
   private var writer: ConnectionWriter? = null
-  private var stagedOpening: List<ByteArray> = emptyList()
   /** Identity of the service coroutine's write lane. Not an OS thread. */
   @Volatile
   private var writeLane: Any? = null
@@ -995,7 +994,7 @@ class LanSession(
   }
 
   /** Opens the saved endpoint. Does not replace or clear the TLS pin. */
-  fun connect(address: String, port: Int, code: String = "") {
+  @Synchronized fun connect(address: String, port: Int, code: String = "") {
     store.select(address, port)
     pairCode = code
     lastActivityMs = clockMs()
@@ -1234,7 +1233,7 @@ class LanSession(
     if (loop?.isActive != true && !stopped) startLoop()
   }
 
-  fun disconnect() {
+  @Synchronized fun disconnect() {
     stopped = true
     armed = false
     monitoringDemand = false
@@ -1253,10 +1252,12 @@ class LanSession(
     job.cancel()
   }
 
-  private fun startLoop() {
+  @Synchronized private fun startLoop() {
     // The previous loop must finish closing its own socket before this one opens.
     // A stuck predecessor must not hold a user reconnect forever.
     val epoch = epochCounter.incrementAndGet()
+    val endpoint = store.load()
+    openingNow = false
     val previous = loop
     previous?.cancel()
     closeLink()
@@ -1271,11 +1272,11 @@ class LanSession(
       }
       if (epochCounter.get() != epoch || stopped) return@launch
       try {
-        runLoop()
+        runLoop(epoch, endpoint)
       } catch (error: CancellationException) {
         throw error
       } finally {
-        if (epochCounter.get() == epoch) closeLink()
+        closeCurrentLink(epoch)
       }
     }
   }
@@ -1286,13 +1287,12 @@ class LanSession(
       store.load().address.isNotEmpty()
   }
 
-  private suspend fun runLoop() {
-    val epoch = epochCounter.get()
+  private suspend fun runLoop(epoch: Int, endpoint: HostRecord) {
     var waitBeforeConnect = false
     while (coroutineContext[Job]?.isActive != false && !stopped && epochCounter.get() == epoch) {
       if (policy.paused) {
         val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
-        publish(LinkPhase.Paused, shown, statusState.value.lastError, "paused")
+        publishCurrent(epoch, LinkPhase.Paused, shown, statusState.value.lastError, "paused")
         resumes.receive()
         if (stopped || epochCounter.get() != epoch) return
         waitBeforeConnect = false
@@ -1360,11 +1360,8 @@ class LanSession(
       }
       if (stopped || epochCounter.get() != epoch) return
       waitBeforeConnect = true
-      when (attempt(epoch)) {
-        AttemptResult.Pinned -> {
-          terminal = true
-          return
-        }
+      when (attempt(epoch, endpoint)) {
+        AttemptResult.Pinned -> return
         AttemptResult.Superseded -> return
         AttemptResult.Deferred -> {
           waitBeforeConnect = false
@@ -1380,25 +1377,26 @@ class LanSession(
           val end = try {
             readUntilClose(epoch)
           } catch (error: CancellationException) {
-            if (epochCounter.get() == epoch) closeLink()
+            closeCurrentLink(epoch)
             throw error
           }
-          if (epochCounter.get() != epoch) return
-          closeLink()
-          session.onSocketClosed()
-          if (epochCounter.get() != epoch) return
-          // Rejected and Disabled pause. Background waits for the foreground. Everything else backs off.
-          if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
-            policy.pause()
-            val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
-            publishCurrent(epoch, LinkPhase.Paused, shown, "", "user-action")
-          } else if (end == ReadEnd.Background || leftForBackground) {
-            waitBeforeConnect = false
-            policy.resetBackoff()
-            publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, "", "background")
-          } else {
-            val reason = if (statusState.value.failureReason.isEmpty()) workerExit else ""
-            publishCurrent(epoch, LinkPhase.Disconnected, ReconnectingBanner, reason, "retry")
+          synchronized(this) {
+            if (epochCounter.get() != epoch) return
+            closeLink()
+            session.onSocketClosed()
+            // Rejected and Disabled pause. Background waits for the foreground. Everything else backs off.
+            if (end == ReadEnd.Disabled || end == ReadEnd.Rejected) {
+              policy.pause()
+              val shown = statusState.value.banner.ifEmpty { HostClosedBanner }
+              publishCurrent(epoch, LinkPhase.Paused, shown, "", "user-action")
+            } else if (end == ReadEnd.Background || leftForBackground) {
+              waitBeforeConnect = false
+              policy.resetBackoff()
+              publishCurrent(epoch, LinkPhase.Disconnected, BackgroundBanner, "", "background")
+            } else {
+              val reason = if (statusState.value.failureReason.isEmpty()) workerExit else ""
+              publishCurrent(epoch, LinkPhase.Disconnected, ReconnectingBanner, reason, "retry")
+            }
           }
         }
       }
@@ -1471,16 +1469,22 @@ class LanSession(
     }
   }
 
-  private suspend fun openBounded(address: String, port: Int, fingerprint: String): TlsLink {
+  private suspend fun openBounded(epoch: Int, address: String, port: Int, fingerprint: String): TlsLink {
     var held: TlsLink? = null
-    openingNow = true
+    synchronized(this) {
+      if (epochCounter.get() != epoch) throw CancellationException()
+      openingNow = true
+    }
     try {
       publishIncident("opening", true)
       return withTimeout(OpenBudgetMs) {
         withContext(Dispatchers.IO) {
           val socket = connector.open(address, port, fingerprint, lanRoute)
           held = socket
-          rememberOpening(socket)
+          synchronized(this@LanSession) {
+            if (epochCounter.get() != epoch) throw CancellationException()
+            rememberOpening(socket)
+          }
           ensureActive()
           socket
         }
@@ -1492,7 +1496,7 @@ class LanSession(
       abandonOpening(held)
       throw error
     } finally {
-      openingNow = false
+      synchronized(this) { if (epochCounter.get() == epoch) openingNow = false }
     }
   }
 
@@ -1556,24 +1560,26 @@ class LanSession(
     return context
   }
 
-  private suspend fun attempt(epoch: Int): AttemptResult {
+  private suspend fun attempt(epoch: Int, endpoint: HostRecord): AttemptResult {
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
     if (!inForeground) return AttemptResult.Deferred
-    val record = store.load()
-    if (record.uncertainPin && pairCode.isBlank()) {
-      val detail = "Verify the address and port on the desktop, then enter a fresh pairing code to recover this endpoint."
-      markTerminal("pin", detail)
-      publish(LinkPhase.Disconnected, detail, detail, "pin")
-      return AttemptResult.Pinned
-    }
+    val record = store.lookup(endpoint.address, endpoint.port)
     val fingerprint = if (record.uncertainPin) "" else record.fingerprint
-    val pinned = normalizeFingerprint(fingerprint)
-    if (fingerprint.isNotEmpty() && pinned.length != 64) {
-      markTerminal("pin", "TLS pin mismatch.")
-      publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.", "pin")
-      return AttemptResult.Pinned
+    val code = synchronized(this) {
+      if (epochCounter.get() != epoch) return AttemptResult.Superseded
+      if (record.uncertainPin && pairCode.isBlank()) {
+        val detail = "Verify the address and port on the desktop, then enter a fresh pairing code to recover this endpoint."
+        markTerminal("pin", detail)
+        publish(LinkPhase.Disconnected, detail, detail, "pin")
+        return AttemptResult.Pinned
+      }
+      if (fingerprint.isNotEmpty() && normalizeFingerprint(fingerprint).length != 64) {
+        markTerminal("pin", "TLS pin mismatch.")
+        publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.", "pin")
+        return AttemptResult.Pinned
+      }
+      pairCode
     }
-    if (epochCounter.get() != epoch) return AttemptResult.Superseded
     // A touch-triggered retry stays in the foreground. Sample before the open, not only on return.
     refreshLanRoute?.invoke()
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
@@ -1587,31 +1593,33 @@ class LanSession(
     attemptCount += 1
     publishCurrent(epoch, LinkPhase.Connecting, "", "", "opening")
     val opened = try {
-      openBounded(record.address, record.port, fingerprint)
+      openBounded(epoch, record.address, record.port, fingerprint)
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
-      if (epochCounter.get() != epoch) return AttemptResult.Superseded
-      if (isPinFailure(error)) {
-        val detail = error.message ?: "TLS pin mismatch."
-        markTerminal("pin", detail)
-        publish(LinkPhase.Disconnected, "TLS pin mismatch.", detail, "pin")
-        return AttemptResult.Pinned
+      synchronized(this) {
+        if (epochCounter.get() != epoch) return AttemptResult.Superseded
+        if (isPinFailure(error)) {
+          val detail = error.message ?: "TLS pin mismatch."
+          markTerminal("pin", detail)
+          publish(LinkPhase.Disconnected, "TLS pin mismatch.", detail, "pin")
+          return AttemptResult.Pinned
+        }
+        if (isRefused(error)) {
+          val detail = error.message ?: ConnectionRefusedBanner
+          publish(LinkPhase.Disconnected, ConnectionRefusedBanner, detail, "refused")
+          return AttemptResult.Refused
+        }
+        if (isStaleLanRoute(error)) {
+          // The exception is not a host failure and must not become a toast.
+          if (recoverStaleRoute()) return AttemptResult.Deferred
+          publish(LinkPhase.Disconnected, WaitingForWifiBanner, "", "stale-route")
+          return AttemptResult.Waiting
+        }
+        val detail = error.message ?: "Connection failed."
+        publish(LinkPhase.Disconnected, detail, detail, "open-failed")
+        return AttemptResult.Failed
       }
-      if (isRefused(error)) {
-        val detail = error.message ?: ConnectionRefusedBanner
-        publish(LinkPhase.Disconnected, ConnectionRefusedBanner, detail, "refused")
-        return AttemptResult.Refused
-      }
-      if (isStaleLanRoute(error)) {
-        // The exception is not a host failure and must not become a toast.
-        if (recoverStaleRoute()) return AttemptResult.Deferred
-        publish(LinkPhase.Disconnected, WaitingForWifiBanner, "", "stale-route")
-        return AttemptResult.Waiting
-      }
-      val detail = error.message ?: "Connection failed."
-      publish(LinkPhase.Disconnected, detail, detail, "open-failed")
-      return AttemptResult.Failed
     }
     staleRouteSkips = 0
     if (epochCounter.get() != epoch || stopped) {
@@ -1623,13 +1631,17 @@ class LanSession(
       closeWithBye(opened)
       return AttemptResult.Deferred
     }
+    return finishOpening(epoch, opened, record, code)
+  }
+
+  @Synchronized private fun finishOpening(epoch: Int, opened: TlsLink, record: HostRecord, code: String): AttemptResult {
     if (stopped || epochCounter.get() != epoch) {
       closeOwned(opened)
       return AttemptResult.Superseded
     }
     // The endpoint answered, so a stale loss hint must not banner the next drop.
     lanAvailable = true
-    installConnection(opened, record)
+    val context = installConnection(opened, record)
     session.onHandshakeComplete()
     val helloId = newId()
     val openPair = !record.paired
@@ -1646,14 +1658,14 @@ class LanSession(
     }
     staged.add(helloFrame.bytes)
     if (openPair) {
-      val pairFrame = tryEncodeFrame(encodePair(newId(), pairCode, opened.peerFingerprint))
+      val pairFrame = tryEncodeFrame(encodePair(newId(), code, opened.peerFingerprint))
       if (!pairFrame.ok) {
         if (epochCounter.get() == epoch) closeLink() else closeOwned(opened)
         return if (epochCounter.get() == epoch) AttemptResult.Failed else AttemptResult.Superseded
       }
       staged.add(pairFrame.bytes)
     }
-    stagedOpening = staged
+    for (frame in staged) context.writer.offerControl(frame)
     return AttemptResult.Opened
   }
 
@@ -1792,8 +1804,6 @@ class LanSession(
     val context = connection ?: return ReadEnd.PeerClosed
     val current = context.socket
     if (epochCounter.get() != epoch || activeGeneration != context.generation || link !== current) return ReadEnd.PeerClosed
-    for (frame in stagedOpening) context.writer.offerControl(frame)
-    stagedOpening = emptyList()
     val listener = { noteClock(epoch, context) }
     clock.addListener(listener)
     val adopted = CompletableDeferred<Unit>()
@@ -1881,10 +1891,12 @@ class LanSession(
       }
       failQueued(context.generation)
       context.abandon()
-      if (writer === context.writer) writer = null
-      if (connection === context) {
-        connection = null
-        if (activeGeneration == context.generation) activeGeneration = 0
+      synchronized(this) {
+        if (writer === context.writer) writer = null
+        if (connection === context) {
+          connection = null
+          if (activeGeneration == context.generation) activeGeneration = 0
+        }
       }
       closeOwned(current)
     }
@@ -1994,7 +2006,8 @@ class LanSession(
         noteHeartbeat(epoch, context)
         continue
       }
-      val count = readOnce(context, buffer)
+      val count = readOnce(epoch, context, buffer)
+      if (epochCounter.get() != epoch) return ReadEnd.PeerClosed
       if (context.outcome != ReadEnd.Continue) return finishRead(epoch, context, context.outcome)
       if (count < 0) return finishRead(epoch, context, ReadEnd.PeerClosed)
       // Partial-frame age is a duration on this clock, not civil time.
@@ -2023,7 +2036,7 @@ class LanSession(
 
   internal fun outboundPending(): Int = connection?.writer?.pendingFrames() ?: 0
 
-  private fun readOnce(context: PhysicalConnection, buffer: ByteArray): Int {
+  private fun readOnce(epoch: Int, context: PhysicalConnection, buffer: ByteArray): Int {
     return try {
       context.socket.input.read(buffer)
     } catch (error: CancellationException) {
@@ -2033,7 +2046,7 @@ class LanSession(
       else {
         if (context.outcome == ReadEnd.Continue) {
           val detail = error.message ?: "Read failed."
-          publishCurrent(epochCounter.get(), LinkPhase.Disconnected, detail, detail)
+          publishCurrent(epoch, LinkPhase.Disconnected, detail, detail)
         }
         -1
       }
@@ -2042,9 +2055,30 @@ class LanSession(
 
   private suspend fun onFrame(frame: MonitorFrame, epoch: Int, context: PhysicalConnection) {
     if (epochCounter.get() != epoch || activeGeneration != context.generation) return
+    frameProbe?.invoke(frame)
+    val message = applyFrame(frame, epoch, context) ?: return
+    when (message.kind) {
+      MessageKind.CommandStates -> {
+        val states = decodeCommandStates(message.payloadJson) ?: return
+        applyHostStates(states.map { HostCommandState(it.ref, it.state, it.reason) }, context)
+      }
+      MessageKind.CommandState -> {
+        val one = decodeCommandState(message.payloadJson) ?: return
+        applyHostStates(listOf(HostCommandState(one.ref, one.state, one.reason)), context)
+      }
+      else -> {}
+    }
+    if (epochCounter.get() != epoch || activeGeneration != context.generation) return
+    val delivered = inbound.publish(message)
+    if (delivered == DeliveryResult.Dropped && isEssentialDelivery(message.kind)) {
+      noteReadEnd(epoch, ReadEnd.Retry, context)
+    }
+  }
+
+  @Synchronized private fun applyFrame(frame: MonitorFrame, epoch: Int, context: PhysicalConnection): MonitorMessage? {
+    if (epochCounter.get() != epoch || activeGeneration != context.generation) return null
     val owned = context.socket
     val outbound = context.writer
-    frameProbe?.invoke(frame)
     // Any accepted frame ends the opening budget, including a sync event.
     context.setupComplete = true
     val sync = decodeSyncEnvelope(frame.json)
@@ -2058,20 +2092,20 @@ class LanSession(
       }
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
       noteLive(context)
-      return
+      return null
     }
     if (sync != null && sync !is SyncFrame.RevisionChanged) {
       session.noteSyncTraffic()
       if (!context.syncFrames.trySend(sync).isSuccess) noteReadEnd(epoch, ReadEnd.Retry, context)
       if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live) publishCurrent(epoch, LinkPhase.Live, "", "")
-      return
+      return null
     }
     if (sync is SyncFrame.RevisionChanged && !context.syncFrames.trySend(sync).isSuccess) {
       noteReadEnd(epoch, ReadEnd.Retry, context)
     }
     val envelope = tryDecodeEnvelope(frame)
-    if (!envelope.ok) return
-    val message = context.chunks.accept(envelope.message) ?: return
+    if (!envelope.ok) return null
+    val message = context.chunks.accept(envelope.message) ?: return null
     session.apply(message)
     noteLive(context)
     when (message.kind) {
@@ -2080,7 +2114,7 @@ class LanSession(
         if (paired != null) {
           val current = context.endpoint
           val presented = normalizeFingerprint(owned.peerFingerprint)
-          if (current.uncertainPin && presented.length != 64) return
+          if (current.uncertainPin && presented.length != 64) return null
           store.saveEndpoint(current.copy(clientId = paired.clientId, sessionToken = paired.sessionToken,
             hostId = context.helloHostId.ifEmpty { current.hostId },
             fingerprint = presented.takeIf { it.length == 64 } ?: current.fingerprint, uncertainPin = false))
@@ -2103,14 +2137,7 @@ class LanSession(
           // The screen asks for the one resume after hello. Do not write a second here.
         }
       }
-      MessageKind.CommandStates -> {
-        val states = decodeCommandStates(message.payloadJson) ?: return
-        applyHostStates(states.map { HostCommandState(it.ref, it.state, it.reason) }, context)
-      }
-      MessageKind.CommandState -> {
-        val one = decodeCommandState(message.payloadJson) ?: return
-        applyHostStates(listOf(HostCommandState(one.ref, one.state, one.reason)), context)
-      }
+      MessageKind.CommandStates, MessageKind.CommandState -> {}
       MessageKind.Ping -> {
         val ticks = decodeTicks(message.payloadJson)?.ticks ?: 0L
         if (!offerControl(encodeTicks(MessageKind.Pong, newId(), ticks), owned, outbound)) noteReadEnd(epoch, ReadEnd.WriteFailed, context)
@@ -2118,7 +2145,7 @@ class LanSession(
       MessageKind.Bye -> {
         val bye = decodeBye(message.payloadJson)
         if (bye?.reason == "replaced") {
-          val saved = store.load().clientId
+          val saved = store.lookup(context.endpoint.address, context.endpoint.port).clientId
           if (retriesReplacedBye(openingNow || replaceLink, holdingReplacement, saved, replacementClientId)) {
             // This session opened the next socket. The desktop's replaced bye is our own takeover.
             noteReadEnd(epoch, ReadEnd.PeerClosed, context)
@@ -2143,7 +2170,7 @@ class LanSession(
         // A saved pairing is not discarded, and a truncated close is not an
         // authentication failure. auth, expired, busy, an empty reason, and
         // protocol back off. Revocation, disable, pin, and pair code still pause.
-        if (retriesTransientReject(store.load().paired, reason)) {
+        if (retriesTransientReject(store.lookup(context.endpoint.address, context.endpoint.port).paired, reason)) {
           noteReadEnd(epoch, ReadEnd.Retry, context)
           publishCurrent(epoch, LinkPhase.Connecting, ReconnectingBanner, reason, reason.ifEmpty { "rejected" })
         } else {
@@ -2157,13 +2184,7 @@ class LanSession(
       else -> publishCurrent(epoch, if (session.phase == computing.michell.monitor.protocol.SessionPhase.Live ||
         session.phase == computing.michell.monitor.protocol.SessionPhase.Busy) LinkPhase.Live else LinkPhase.Connecting, "", "")
     }
-    // Auth is written here, before the screen sees hello. The screen still owns the Room resume.
-    // A dropped essential frame is not left half-applied: the link recovers and hello runs again.
-    if (activeGeneration != context.generation || link !== context.socket) return
-    val delivered = inbound.publish(message)
-    if (delivered == DeliveryResult.Dropped && isEssentialDelivery(message.kind)) {
-      noteReadEnd(epoch, ReadEnd.Retry, context)
-    }
+    return message
   }
 
   private fun offerControl(json: String, owned: TlsLink, outbound: ConnectionWriter): Boolean {
@@ -2225,7 +2246,7 @@ class LanSession(
     }
   }
 
-  private fun noteReadEnd(epoch: Int, end: ReadEnd, context: PhysicalConnection) {
+  @Synchronized private fun noteReadEnd(epoch: Int, end: ReadEnd, context: PhysicalConnection) {
     if (end == ReadEnd.Continue) return
     if (epochCounter.get() != epoch || activeGeneration != context.generation) return
     if (context.closeOutcome(end)) {
@@ -2261,7 +2282,7 @@ class LanSession(
     return quiet / 1_000_000L < MonitorLimits.DeadSessionMs
   }
 
-  private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String, transition: String = "") {
+  @Synchronized private fun publishCurrent(epoch: Int, phase: LinkPhase, banner: String, error: String, transition: String = "") {
     if (epochCounter.get() != epoch) return
     publish(phase, banner, error, transition)
   }
@@ -2280,6 +2301,10 @@ class LanSession(
       failureReason = failure
     )
     if (changed || transition.isNotEmpty()) publishIncident(transition, changed || transition.isNotEmpty())
+  }
+
+  @Synchronized private fun closeCurrentLink(epoch: Int) {
+    if (epochCounter.get() == epoch) closeLink()
   }
 
   private fun closeLink() {
@@ -2302,7 +2327,7 @@ class LanSession(
 
   private fun closeOwned(owned: TlsLink?) {
     if (owned == null) return
-    if (link === owned) link = null
+    synchronized(this) { if (link === owned) link = null }
     try {
       owned.close()
     } catch (error: Exception) {
