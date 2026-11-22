@@ -872,6 +872,73 @@ Begin
   End;
 End;
 
+{ State can leave while the credit window still holds the phone short of the head. }
+Procedure TestStatePublishesAheadOfTheCreditWindow;
+Var
+  Log: TMonitorMirror;
+  Outbox: TMonitorOutbox;
+  Turn: TAssistantMonitorTurn;
+  Tool: TAssistantMonitorBlock;
+  Frames: TMonitorSyncLogFrameArray;
+  Frame: RawByteString;
+  Lane: TMonitorOutboxLane;
+  Status: TMonitorSyncStatus;
+  Index, LastSent: Integer;
+  HeadSeen, Started, Elapsed: Int64;
+  SawStateBeforeLog, SawLog: Boolean;
+Begin
+  Log := TMonitorMirror.Create;
+  Outbox := TMonitorOutbox.Create;
+  Try
+    Log.BeginStream('stream-a', 'c1', '/work', 'Title');
+    Turn := SampleTurn('turn-live', 'Hi', 3);
+    Tool := Default(TAssistantMonitorBlock);
+    Tool.Kind := 'tool';
+    Tool.BlockId := 'quiet-tool';
+    Tool.Title := 'read_file';
+    Tool.ToolName := 'read_file';
+    Tool.Running := True;
+    Tool.Ok := True;
+    SetLength(Turn.Blocks, 2);
+    Turn.Blocks[1] := Tool;
+    Log.ObserveTurn(Turn);
+    { A large title is one event. Forty of them pass the credit window; a deferred body does not. }
+    For Index := 1 To 40 Do
+      Log.SetTitle('Title ' + IntToStr(Index) + ' ' + StringOfChar('x', 20000));
+    Started := GetTickCount64;
+    MonitorSyncEncodeLog(Log, 'c1', 'stream-a', MonitorCreditWindowBytes, 0, Frames, HeadSeen);
+    Elapsed := GetTickCount64 - Started;
+    LastSent := 0;
+    If Length(Frames) > 0 Then
+      LastSent := Frames[High(Frames)].Seq;
+    Check('desktop head is ahead of the last frame that fits', (HeadSeen > LastSent) And (LastSent > 0));
+    Status := Default(TMonitorSyncStatus);
+    Status.Busy := True;
+    Status.Sending := False;
+    Status.PlanRunning := True;
+    Check('a quiet tool status is state', Outbox.PutState('status', MonitorResumeStatusValueJson(Status)));
+    Check('a plan transition is state', Outbox.PutState('plan', '{"path":"/work/Documents/Plan.md","running":true}'));
+    Check('the log head is state', Outbox.PutState('head', MonitorLogHeadValueJson(HeadSeen, 'c1', 'stream-a', 'quiet-tool', True)));
+    For Index := 0 To High(Frames) Do
+      Check('the credit window accepts the framed tail', Outbox.AppendLog(Frames[Index].Seq, Frames[Index].Bytes));
+    SawStateBeforeLog := False;
+    SawLog := False;
+    While Outbox.Take(Frame, Lane) Do
+      Begin
+        If (Lane = molState) And Not SawLog Then
+          SawStateBeforeLog := True;
+        If Lane = molLog Then
+          SawLog := True;
+      End;
+    Check('status, plan and head leave before the withheld tail', SawStateBeforeLog And SawLog);
+    WriteLn('publication trace conversation=c1 stream=stream-a desktop_head=', HeadSeen,
+      ' last_sent=', LastSent, ' outstanding=', HeadSeen - LastSent, ' age_ms=', Elapsed, ' clock=GetTickCount64');
+  Finally
+    Outbox.Free;
+    Log.Free;
+  End;
+End;
+
 { A generous five-second bound catches quadratic fill/replay while allowing shared CI hosts. }
 Procedure TestIndexedTailTiming;
 Const
@@ -936,6 +1003,7 @@ End;
 
 Begin
   FailCount := 0;
+  TestStatePublishesAheadOfTheCreditWindow;
   TestIndexedTailTiming;
   TestEventFields;
   TestFoldAndReplay;
