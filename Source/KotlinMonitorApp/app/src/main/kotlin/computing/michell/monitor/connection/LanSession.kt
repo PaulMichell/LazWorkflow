@@ -442,6 +442,7 @@ internal interface LinkApplier {
  * inherit the writer, assemblers, queues, clocks or close outcome.
  */
 private class PhysicalConnection(
+  val endpoint: HostRecord,
   val generation: Int,
   val socket: TlsLink,
   val openedAtMs: Long,
@@ -450,6 +451,7 @@ private class PhysicalConnection(
 ) {
   // The session binds the real write when the writer coroutine starts. This refuses a stray run().
   val writer = ConnectionWriter { _ -> false }
+  var helloHostId = ""
   val chunks = ChunkAssembly()
   val events = AccountedEvents(eventBudget)
   val syncFrames = Channel<SyncFrame>(SyncFrameQueue)
@@ -994,15 +996,7 @@ class LanSession(
 
   /** Opens the saved endpoint. Does not replace or clear the TLS pin. */
   fun connect(address: String, port: Int, code: String = "") {
-    val current = store.load()
-    val trimmed = address.trim()
-    val changed = current.address != trimmed || current.port != port
-    val next = if (changed) {
-      current.copy(address = trimmed, port = port, fingerprint = current.fingerprint, clientId = "", sessionToken = "")
-    } else {
-      current.copy(address = trimmed, port = port, fingerprint = current.fingerprint)
-    }
-    store.save(next)
+    store.select(address, port)
     pairCode = code
     lastActivityMs = clockMs()
     armed = true
@@ -1549,10 +1543,10 @@ class LanSession(
     replacementClientId = ""
   }
 
-  private fun installConnection(opened: TlsLink): PhysicalConnection {
+  private fun installConnection(opened: TlsLink, endpoint: HostRecord): PhysicalConnection {
     clearOwnReplacement()
     val generation = connectionCounter.incrementAndGet()
-    val context = PhysicalConnection(generation, opened, clockMs(), clock.nanoTime(), eventBudget)
+    val context = PhysicalConnection(endpoint, generation, opened, clockMs(), clock.nanoTime(), eventBudget)
     connection = context
     writer = context.writer
     link = opened
@@ -1566,8 +1560,15 @@ class LanSession(
     if (epochCounter.get() != epoch || stopped) return AttemptResult.Superseded
     if (!inForeground) return AttemptResult.Deferred
     val record = store.load()
-    val pinned = normalizeFingerprint(record.fingerprint)
-    if (record.fingerprint.isNotEmpty() && pinned.length != 64) {
+    if (record.uncertainPin && pairCode.isBlank()) {
+      val detail = "Verify the address and port on the desktop, then enter a fresh pairing code to recover this endpoint."
+      markTerminal("pin", detail)
+      publish(LinkPhase.Disconnected, detail, detail, "pin")
+      return AttemptResult.Pinned
+    }
+    val fingerprint = if (record.uncertainPin) "" else record.fingerprint
+    val pinned = normalizeFingerprint(fingerprint)
+    if (fingerprint.isNotEmpty() && pinned.length != 64) {
       markTerminal("pin", "TLS pin mismatch.")
       publish(LinkPhase.Disconnected, "TLS pin mismatch.", "The fingerprint is not 64 hex characters.", "pin")
       return AttemptResult.Pinned
@@ -1586,7 +1587,7 @@ class LanSession(
     attemptCount += 1
     publishCurrent(epoch, LinkPhase.Connecting, "", "", "opening")
     val opened = try {
-      openBounded(record.address, record.port, record.fingerprint)
+      openBounded(record.address, record.port, fingerprint)
     } catch (error: CancellationException) {
       throw error
     } catch (error: Exception) {
@@ -1628,7 +1629,7 @@ class LanSession(
     }
     // The endpoint answered, so a stale loss hint must not banner the next drop.
     lanAvailable = true
-    installConnection(opened)
+    installConnection(opened, record)
     session.onHandshakeComplete()
     val helloId = newId()
     val openPair = !record.paired
@@ -2077,9 +2078,12 @@ class LanSession(
       MessageKind.PairOk -> {
         val paired = (message.inbound as? InboundPayload.PairOk)?.value ?: decodePairOk(message.payloadJson)
         if (paired != null) {
-          store.savePairing(paired.clientId, paired.sessionToken)
+          val current = context.endpoint
           val presented = normalizeFingerprint(owned.peerFingerprint)
-          if (presented.length == 64) store.save(store.load().copy(fingerprint = presented))
+          if (current.uncertainPin && presented.length != 64) return
+          store.saveEndpoint(current.copy(clientId = paired.clientId, sessionToken = paired.sessionToken,
+            hostId = context.helloHostId.ifEmpty { current.hostId },
+            fingerprint = presented.takeIf { it.length == 64 } ?: current.fingerprint, uncertainPin = false))
           pairCode = ""
           // First pair has no Room row. One resume, owned here, not by the screen.
           resumeFromRoom("", "", 0L)
@@ -2087,7 +2091,11 @@ class LanSession(
       }
       MessageKind.HelloOk -> {
         val hello = (message.inbound as? InboundPayload.HelloOk)?.value ?: decodeHelloOk(message.payloadJson)
-        val record = store.load()
+        val record = store.lookup(context.endpoint.address, context.endpoint.port)
+        if (hello != null && computing.michell.monitor.protocol.hostIdIsValid(hello.hostId)) {
+          context.helloHostId = hello.hostId
+          if (record.paired) store.saveEndpoint(record.copy(hostId = hello.hostId))
+        }
         if (hello != null && record.paired) {
           val mac = authMac(record.sessionToken, hello.nonce)
           session.noteOutbound(MessageKind.Auth)

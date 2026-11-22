@@ -20,7 +20,8 @@ data class HostRecord(
   val fingerprint: String = "",
   val clientId: String = "",
   val sessionToken: String = "",
-  val hostId: String = ""
+  val hostId: String = "",
+  val uncertainPin: Boolean = false
 ) {
   val paired: Boolean
     get() = clientId.isNotEmpty() && sessionToken.isNotEmpty()
@@ -28,18 +29,15 @@ data class HostRecord(
 
 internal interface StringMap {
   fun get(key: String): String?
-  fun putAll(values: Map<String, String>)
-  fun clear()
+  fun update(values: Map<String, String>, remove: Set<String> = emptySet())
 }
 
 internal class MemoryStringMap : StringMap {
   val values = linkedMapOf<String, String>()
   override fun get(key: String): String? = values[key]
-  override fun putAll(values: Map<String, String>) {
+  override fun update(values: Map<String, String>, remove: Set<String>) {
+    remove.forEach(this.values::remove)
     this.values.putAll(values)
-  }
-  override fun clear() {
-    values.clear()
   }
 }
 
@@ -57,9 +55,10 @@ private class EncryptedStringMap(context: Context) : StringMap {
     }
   }
 
-  override fun putAll(values: Map<String, String>) {
+  override fun update(values: Map<String, String>, remove: Set<String>) {
     try {
       val editor = preferences.edit()
+      remove.forEach(editor::remove)
       for ((key, value) in values) editor.putString(key, value)
       editor.apply()
     } catch (error: Exception) {
@@ -67,13 +66,6 @@ private class EncryptedStringMap(context: Context) : StringMap {
     }
   }
 
-  override fun clear() {
-    try {
-      preferences.edit().clear().apply()
-    } catch (error: Exception) {
-      preferences = recoverEncryptedPreferences(appContext)
-    }
-  }
 }
 
 private fun encryptedPreferences(context: Context): SharedPreferences {
@@ -125,39 +117,58 @@ private fun forgetEncryptedHostStore(context: Context) {
 class HostStore internal constructor(private val values: StringMap) {
   constructor(context: Context) : this(EncryptedStringMap(context.applicationContext))
 
-  fun load(): HostRecord {
-    val port = values.get(KeyPort)?.toIntOrNull() ?: MonitorLimits.ListenPort
-    return HostRecord(
-      values.get(KeyAddress).orEmpty(),
-      if (port in 1..65535) port else MonitorLimits.ListenPort,
-      values.get(KeyFingerprint).orEmpty(),
-      values.get(KeyClientId).orEmpty(),
-      values.get(KeySessionToken).orEmpty(),
-      values.get(KeyHostId).orEmpty()
-    )
+  init {
+    if (values.get(KeySelectedAddress) == null) {
+      val legacy = readRecord("", values.get(KeyAddress).orEmpty().trim(),
+        values.get(KeyPort)?.toIntOrNull()?.takeIf { it in 1..65535 } ?: MonitorLimits.ListenPort)
+      // An old switch kept the previous pin and host ID but cleared both credentials.
+      val record = legacy.copy(uncertainPin = legacy.fingerprint.isNotEmpty() && !legacy.paired)
+      values.update(fields(record) + selection(record), StoredKeys)
+    }
   }
 
-  fun save(record: HostRecord) {
-    values.putAll(recordFields(record))
+  private fun prefix(address: String, port: Int) = "endpoint/$port/${address.trim()}/"
+
+  private fun readRecord(prefix: String, address: String, port: Int) = HostRecord(
+    address, port, values.get(prefix + KeyFingerprint).orEmpty(), values.get(prefix + KeyClientId).orEmpty(),
+    values.get(prefix + KeySessionToken).orEmpty(), values.get(prefix + KeyHostId).orEmpty(),
+    values.get(prefix + KeyUncertain) == "true"
+  )
+
+  private fun selection(record: HostRecord) =
+    mapOf(KeySelectedAddress to record.address.trim(), KeySelectedPort to record.port.toString())
+
+  private fun fields(record: HostRecord) = mapOf(
+    KeyFingerprint to record.fingerprint, KeyClientId to record.clientId, KeySessionToken to record.sessionToken,
+    KeyHostId to record.hostId, KeyUncertain to record.uncertainPin.toString()
+  ).mapKeys { prefix(record.address, record.port) + it.key }
+
+  @Synchronized fun lookup(address: String, port: Int) = readRecord(prefix(address, port), address.trim(), port)
+
+  @Synchronized fun load(): HostRecord = lookup(values.get(KeySelectedAddress).orEmpty(),
+    values.get(KeySelectedPort)?.toIntOrNull() ?: MonitorLimits.ListenPort)
+
+  @Synchronized fun select(address: String, port: Int) {
+    values.update(selection(HostRecord(address, port)))
   }
 
-  fun savePairing(clientId: String, sessionToken: String) {
-    val current = load()
-    save(current.copy(clientId = clientId, sessionToken = sessionToken))
+  @Synchronized fun save(record: HostRecord) {
+    values.update(fields(record) + selection(record))
   }
 
-  fun saveHostId(hostId: String) {
-    val current = load()
-    save(current.copy(hostId = hostId))
+  @Synchronized fun saveEndpoint(record: HostRecord) {
+    values.update(fields(record))
   }
 
-  /** Forgets the pairing on this phone. Does not revoke the desktop client record. */
-  fun clear() {
-    values.clear()
+  @Synchronized fun clear() {
+    values.update(selection(HostRecord()), fields(load()).keys)
   }
 
   companion object {
     const val PreferenceFile = "computing.michell.monitor.host"
+    private const val KeySelectedAddress = "selected_address"
+    private const val KeySelectedPort = "selected_port"
+    private const val KeyUncertain = "uncertain_pin"
     const val KeyAddress = "host_address"
     const val KeyPort = "port"
     const val KeyFingerprint = "fingerprint"
@@ -166,15 +177,4 @@ class HostStore internal constructor(private val values: StringMap) {
     const val KeyHostId = "host_id"
     val StoredKeys = setOf(KeyAddress, KeyPort, KeyFingerprint, KeyClientId, KeySessionToken, KeyHostId)
   }
-}
-
-private fun recordFields(record: HostRecord): Map<String, String> {
-  return mapOf(
-    HostStore.KeyAddress to record.address,
-    HostStore.KeyPort to record.port.toString(),
-    HostStore.KeyFingerprint to record.fingerprint,
-    HostStore.KeyClientId to record.clientId,
-    HostStore.KeySessionToken to record.sessionToken,
-    HostStore.KeyHostId to record.hostId
-  )
 }

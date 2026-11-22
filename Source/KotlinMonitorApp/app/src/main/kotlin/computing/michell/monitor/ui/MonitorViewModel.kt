@@ -1190,9 +1190,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       uiState.update { it.copy(banner = "Enter the desktop address and port.", pairHold = true) }
       return
     }
-    val record = store.load()
-    val endpointChanged = record.address != address || record.port != port
-    val clientId = if (endpointChanged) "" else record.clientId
+    val clientId = store.lookup(address, port).clientId
     val effects = coordinator.onEvent(MonitorEvent.HostChanged(uiState.value, address, port, clientId))
     if (effects != null) applyUiEffects(effects)
     uiState.update { it.copy(pairHold = false, banner = ConnectingBanner) }
@@ -1839,7 +1837,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private suspend fun applyIncoming(message: MonitorMessage) {
     val hello = (message.inbound as? InboundPayload.HelloOk)?.value
     if (hello != null && hostIdIsValid(hello.hostId)) {
-      store.saveHostId(hello.hostId)
       attachApplier(hello.hostId)
     }
     val effects = coordinator.onEvent(MonitorEvent.Incoming(uiState.value, message)) ?: return

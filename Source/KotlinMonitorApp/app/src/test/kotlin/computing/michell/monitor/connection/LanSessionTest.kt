@@ -132,7 +132,7 @@ class LanSessionTest {
     val memory = MemoryStringMap()
     val store = HostStore(memory)
     store.save(HostRecord("10.0.0.8", 56122, "ab".repeat(32), "client-1", "token-1"))
-    assertEquals(HostStore.StoredKeys, memory.values.keys)
+    assertTrue(memory.values.keys.none { it in HostStore.StoredKeys })
     store.clear()
     val loaded = store.load()
     assertEquals("", loaded.clientId)
@@ -140,6 +140,45 @@ class LanSessionTest {
     assertEquals("", loaded.fingerprint)
     assertFalse(loaded.paired)
     assertFalse(memory.values.keys.any { it.contains("api") || it.contains("oauth") || it.contains("model") })
+  }
+
+  @Test
+  fun legacyMigrationSurvivesSelectionAndRestart() {
+    for (client in listOf("", "paired-client")) {
+      val memory = MemoryStringMap()
+      memory.values.putAll(mapOf("host_address" to " desktop ", "port" to "1234", "fingerprint" to "old-pin",
+        "host_id" to "history", "client_id" to client, "session_token" to if (client.isEmpty()) "" else "secret"))
+      val store = HostStore(memory)
+      val migrated = store.load()
+      assertEquals(HostRecord("desktop", 1234, "old-pin", client, if (client.isEmpty()) "" else "secret",
+        "history", client.isEmpty()), migrated)
+      store.select("desktop", 4321)
+      val reopened = HostStore(memory)
+      assertEquals(HostRecord("desktop", 4321), reopened.load())
+      reopened.clear()
+      reopened.select(" desktop ", 1234)
+      assertEquals(migrated, HostStore(memory).load())
+    }
+  }
+
+  @Test
+  fun uncertainPinRequiresExplicitPairingAndSurvivesFailure() {
+    val store = HostStore(MemoryStringMap())
+    val original = HostRecord("desktop", 56122, "ab".repeat(32), hostId = "cached-host", uncertainPin = true)
+    store.save(original)
+    val connector = RecordingConnector()
+    val session = LanSession(store, connector)
+    try {
+      session.connect("desktop", 56122)
+      waitUntil { session.status.value.banner.contains("fresh pairing code") }
+      assertTrue(connector.fingerprints().isEmpty())
+      session.connect("desktop", 56122, "new-code")
+      waitUntil { session.status.value.banner == "TLS pin mismatch." }
+      assertEquals(listOf(""), connector.fingerprints())
+      assertEquals(original, store.load())
+    } finally {
+      session.close()
+    }
   }
 
   @Test
@@ -1275,7 +1314,7 @@ class LanSessionTest {
   }
 
   @Test
-  fun changedHostKeepsThePinAndClearsTheCredential() {
+  fun changedHostSelectsIndependentPairing() {
     val store = HostStore(MemoryStringMap())
     val pin = "cd".repeat(32)
     store.save(HostRecord("10.0.0.8", 56122, pin, "client-1", "token-1"))
@@ -1286,11 +1325,12 @@ class LanSessionTest {
       val loaded = store.load()
       assertEquals("10.0.0.9", loaded.address)
       assertEquals(56123, loaded.port)
-      assertEquals(pin, loaded.fingerprint)
+      assertEquals("", loaded.fingerprint)
       assertEquals("", loaded.clientId)
       assertEquals("", loaded.sessionToken)
       waitUntil { connector.fingerprints().isNotEmpty() }
-      assertEquals(listOf(pin), connector.fingerprints())
+      assertEquals(listOf(""), connector.fingerprints())
+      assertEquals(pin, store.lookup("10.0.0.8", 56122).fingerprint)
     } finally {
       session.close()
     }
