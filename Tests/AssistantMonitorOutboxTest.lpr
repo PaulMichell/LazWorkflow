@@ -307,9 +307,29 @@ Begin
   End;
 End;
 
+{ A delayed bulk reply must not sit in front of the head or a terminal status. }
+Procedure TestDelayedBulkDoesNotHoldTheHead;
+Var
+  Outbox: TMonitorOutbox;
+Begin
+  Outbox := TMonitorOutbox.Create;
+  Try
+    Check('history bulk is queued', Outbox.AddBulk(Chunks('hist', 2, 64)));
+    Check('the head snapshot is state', Outbox.PutState('head', 'head-new|'));
+    Check('a dropped terminal status is replaced by the fresh one', Outbox.PutState('status', 'status-idle|'));
+    Check('a duplicate head keeps one value', Outbox.PutState('head', 'head-new|') And (Outbox.LaneCount(molState) = 2));
+    Check('the head leaves before the withheld bulk', NextIs(Outbox, 'head-new|', molState));
+    Check('the terminal status leaves before the withheld bulk', NextIs(Outbox, 'status-idle|', molState));
+    Check('the bulk is still waiting', NextIs(Outbox, 'hist0|', molBulk) And NextIs(Outbox, 'hist1|', molBulk));
+  Finally
+    Outbox.Free;
+  End;
+End;
+
 Begin
   FailCount := 0;
   Try
+    TestDelayedBulkDoesNotHoldTheHead;
     TestBarrierReadiness;
     TestLaneOrder;
     TestControlBetweenChunks;
