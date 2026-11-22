@@ -17,7 +17,7 @@ Uses
   Classes, SysUtils, Contnrs, Forms, Controls, Graphics, GraphType, Dialogs, ExtCtrls, StdCtrls, ComCtrls,
   LCLType, Menus, ActnList, Clipbrd, WorkflowEvents, StatusFooterFrame, SpellMemo, CompOptsIntf,
   IDEExternToolIntf, AssistantConversation, AssistantPlan, AssistantEvents, AssistantTrace,
-  AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient,
+  AssistantTraceView, AssistantAcceptance, AssistantBuildJob, AssistantCodexRun, AssistantClaudeClient, AssistantClaudeInput,
   AssistantToolBroker, AssistantMCPBridge, AssistantMCPListener,
   AssistantIDEWorkspace, AssistantGit, AssistantAccountUsage, AssistantRecovery, AssistantTurnFinish,
   AssistantPlanRun, AssistantSessionObserve, AssistantCodexContext;
@@ -223,6 +223,8 @@ Type
     { Claude Code's session for this conversation. The key is connection, project and first turn. }
     FClaudeSessionId, FClaudeSessionKey, FClaudeSubmitText: String;
     FClaudeResume, FClaudeFreshRetried: Boolean;
+    { This turn's picture refs. A relaunch of the same turn sends them again; a later turn does not. }
+    FClaudeLaunchImages: String;
     { Plan-run session for the current item. A new item does not resume the conversation session. }
     FClaudePlanItem: TClaudePlanItemSession;
     { Last rate-limit report applied to the footer, and the finished turn's usage for the usage log. }
@@ -4977,7 +4979,8 @@ End;
 Function TProjectAssistantForm.LaunchStoredClaudeRun: Boolean;
 Var
   TurnSettings: TClaudeTurnSettings;
-  ConfigFile, ToolsError: String;
+  ConfigFile, ToolsError, LaunchText: String;
+  Images: TClaudeImageArray;
 Begin
   Result := False;
   If (Not FClaudeLaunchReady) Or (FClaudeRuntime = '') Or (FClaudeModel = '') Or (FClaudeLaunchPrompt = '') Then
@@ -4992,7 +4995,17 @@ Begin
   TurnSettings.SessionId := FClaudeSessionId;
   TurnSettings.Resume := FClaudeResume;
   FClaudeToolsShown := 0;
+  LaunchText := FClaudeLaunchPrompt;
   Try
+    { A picture that cannot be read fails the send before anything starts. It is not replaced by a text note. }
+    If Not ClaudeImagesFromRefs(ProjectAssistantRoot, FClaudeLaunchImages, Images, ToolsError) Then
+      Raise Exception.Create(ToolsError);
+    If Length(Images) > 0 Then
+      Begin
+        TurnSettings.StreamInput := True;
+        LaunchText := ClaudeUserMessageLine(FClaudeLaunchPrompt, Images);
+        SetLength(Images, 0);
+      End;
     { Chat has no tools. Every other mode acts only through the Lazarus tools, so a turn without them is refused
       rather than run with reading alone. }
     If TurnSettings.ToolScope <> ctsNone Then
@@ -5001,7 +5014,7 @@ Begin
           Raise Exception.Create('The Lazarus tools could not start: ' + ToolsError);
         TurnSettings.MCPConfigFile := ConfigFile;
       End;
-    FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, FClaudeLaunchPrompt);
+    FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, LaunchText);
     SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
   Except
@@ -5342,9 +5355,10 @@ End;
 
 Function TProjectAssistantForm.StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, SubmitText: String;
+  Prompt, SubmitText, RefsJson, ImageError: String;
   WithContext: Boolean;
   Refs: TAssistantImageRefArray;
+  Images: TClaudeImageArray;
 Begin
   Result := False;
   If (FClaudeRuntime = '') Or (FClaudeModel = '') Then
@@ -5353,19 +5367,28 @@ Begin
       If Not FUseClaude Then Exit;
       If (FClaudeRuntime = '') Or (FClaudeModel = '') Then Exit;
     End;
+  { This turn's pictures only. A resumed session already holds earlier ones, so they are not sent again. }
   SetLength(Refs, 0);
   ParseAssistantImageRefs(FComposerImagesJson, Refs);
+  Refs := LimitAssistantImageRefs(Refs);
+  RefsJson := '';
   If Length(Refs) > 0 Then
+    RefsJson := AssistantImageRefsToJson(Refs);
+  { A stored picture that cannot be read stops the send here, before anything is shown as sent. }
+  If Not ClaudeImagesFromRefs(ProjectAssistantRoot, RefsJson, Images, ImageError) Then
     Begin
-      SetCurrentSystemNote('Claude Code turns do not attach images.');
-      RunAssistantModal('Claude Code turns do not attach images.', mtInformation, [mbOK], 0);
+      SetCurrentSystemNote(ImageError);
+      RunAssistantModal(ImageError, mtInformation, [mbOK], 0);
       Exit;
     End;
+  SetLength(Images, 0);
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
-  SubmitText := ClaudePromptWithToolNotes(ClaudeToolScopeForMode(ActiveMode), BuildSubmitApiText(ApiText, WithContext));
-  FPendingTurnAttachments := '';
+  SubmitText := ClaudePromptWithToolNotes(ClaudeToolScopeForMode(ActiveMode),
+    BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext));
+  FPendingTurnAttachments := RefsJson;
+  FClaudeLaunchImages := RefsJson;
   FClaudeSubmitText := SubmitText;
   FClaudeFreshRetried := False;
   If Not ApplyClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey, FClaudeResume,
@@ -5408,6 +5431,9 @@ Begin
   { The Lazarus tools and the Claude Code process start on this thread. The prompt is on screen first. }
   RevealSubmittedPrompt;
   Result := LaunchStoredClaudeRun;
+  { The composer keeps its pictures until the turn ends; a send failure puts them back. }
+  If Result Then
+    FComposerImagesSent := Length(Refs) > 0;
   If (Not Result) And FSending And (Not FTransportWait) Then
     FinishAssistantReply('The run could not be restarted.');
   If FClaudePlanItem.Active And (Not FSending) Then
@@ -6711,10 +6737,8 @@ Begin
   Reason := '';
   { One capability check. Codex reads inputModalities; Grok reads the same kind of list. A missing list allows attach. }
   If FUseClaude Then
-    Begin
-      Result := False;
-      Reason := 'Claude Code turns do not attach images.';
-    End
+    { Claude Code's model list names no input modalities, so it is unknown, which allows attach. }
+    Result := AssistantImageAttachAllowed(aiiUnknown, Reason)
   Else If FUseCodex Then
     Result := AssistantImageAttachAllowed(CodexModelImageInput(FCodexModelsJson, FCodexModel), Reason)
   Else If Assigned(AssistantClient) Then

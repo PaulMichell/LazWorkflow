@@ -48,6 +48,8 @@ Type
     { Claude Code's own session: started with --session-id, continued with --resume. }
     SessionId: String;
     Resume: Boolean;
+    { The prompt is one stream-json user message (AssistantClaudeInput), not plain text. }
+    StreamInput: Boolean;
   End;
 
   { The Claude session for the plan item being sent. Holding means the conversation session was set aside. }
@@ -987,6 +989,11 @@ Begin
         Begin
           AppendClaudeTurnArguments(Settings.Model, Settings.Effort, Settings.SessionId, Settings.Resume, Args);
           AppendClaudeModeArguments(Settings.ToolScope, Settings.MCPConfigFile, Args);
+          If Settings.StreamInput Then
+            Begin
+              Args.Add('--input-format');
+              Args.Add('stream-json');
+            End;
           BuildClaudeEnvironment(Environment);
           If RunCaptured(Settings.Executable, Settings.WorkingDirectory, Args, Environment, Prompt, Settings.TimeoutMs,
             StdoutText, StderrText, ExitCode, ErrorText, @IsCancelled, @ProcessStarted, @ReceiveLine) Then

@@ -12,7 +12,8 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, AssistantClaudeClient, AssistantClaudeStream;
+  Classes, SysUtils, fpjson, jsonparser, AssistantClaudeClient, AssistantClaudeStream, AssistantClaudeInput,
+  AssistantImages, ClaudeCaptureSupport;
 
 Const
   UsageFixture = '{"result":"fixture answer","usage":{"input_tokens":9,"output_tokens":3,"cost":1.25}}';
@@ -83,6 +84,85 @@ Begin
   Halt(1);
 End;
 
+{ The file's exact bytes, or empty when it cannot be read. }
+Function WholeFileText(Const FileName: String): String;
+Var
+  Stream: TFileStream;
+Begin
+  Result := '';
+  If Not FileExists(FileName) Then
+    Exit;
+  Stream := TFileStream.Create(FileName, fmOpenRead Or fmShareDenyNone);
+  Try
+    SetLength(Result, Stream.Size);
+    If Stream.Size > 0 Then
+      Stream.ReadBuffer(Result[1], Stream.Size);
+  Finally
+    Stream.Free;
+  End;
+End;
+
+{ True when both texts parse to the same JSON value, whatever their spacing. }
+Function SameJson(Const Left, Right: String): Boolean;
+Var
+  A, B: TJSONData;
+Begin
+  Result := False;
+  A := Nil;
+  B := Nil;
+  Try
+    A := GetJSON(Left);
+    B := GetJSON(Right);
+    Result := A.AsJSON = B.AsJSON;
+  Except
+    Result := False;
+  End;
+  A.Free;
+  B.Free;
+End;
+
+Procedure TestImageInput;
+Var
+  Images: TClaudeImageArray;
+  Line, ErrorText, Root: String;
+Begin
+  SetLength(Images, 1);
+  Images[0].MediaType := 'image/png';
+  Images[0].Data := 'iVBORw0KGgo=';
+  Line := ClaudeUserMessageLine('What is this?', Images);
+  Check('a picture message is one line ending in a line feed',
+    (Length(Line) > 1) And (Line[Length(Line)] = #10) And (Pos(#10, Line) = Length(Line)));
+  { CaptureImageMessage built the line that the image-input capture sent. }
+  Check('one picture matches the captured message shape',
+    SameJson(Line, CaptureImageMessage('What is this?', 'image/png', 'iVBORw0KGgo=', cmsPlain)));
+
+  SetLength(Images, 2);
+  Images[1].MediaType := 'image/jpeg';
+  Images[1].Data := '/9j/4AAQ';
+  Line := ClaudeUserMessageLine('Two' + #10 + 'lines', Images);
+  Check('two pictures follow the text block in order', SameJson(Line,
+    '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Two\nlines"},' +
+    '{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},' +
+    '{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQ"}}]}}'));
+  Check('a line feed in the text stays inside the one line', Pos(#10, Line) = Length(Line));
+
+  Root := GetTempDir + 'laz-claude-images-' + IntToStr(GetProcessID);
+  ForceDirectories(Root);
+  Try
+    Check('no refs gives no pictures', ClaudeImagesFromRefs(Root, '', Images, ErrorText) And (Length(Images) = 0) And
+      (ErrorText = ''));
+    Check('an empty ref list gives no pictures', ClaudeImagesFromRefs(Root, '[]', Images, ErrorText) And
+      (Length(Images) = 0));
+    Check('a missing upload copy fails the send', (Not ClaudeImagesFromRefs(Root,
+      '[{"id":"img1","name":"red.png","upload":".assistant/images/img1-upload.png","upload_mime":"image/png"}]',
+      Images, ErrorText)) And (Length(Images) = 0) And (Pos(AssistantImageSendFailedPrefix, ErrorText) = 1));
+    Check('a broken ref list fails the send', (Not ClaudeImagesFromRefs(Root, '{not json', Images, ErrorText)) And
+      (Pos(AssistantImageSendFailedPrefix, ErrorText) = 1));
+  Finally
+    RemoveDir(Root);
+  End;
+End;
+
 {$IFDEF UNIX}
 Const
   { Stands in for claude. Answers auth status as a subscription; --model picks the behaviour. }
@@ -94,6 +174,7 @@ Const
     '  exit 0' + LineEnding +
     'fi' + LineEnding +
     'model=""' + LineEnding +
+    'printf ''%s\n'' "$@" > args.txt' + LineEnding +
     'while [ $# -gt 0 ]; do' + LineEnding +
     '  if [ "$1" = "--model" ]; then model="$2"; fi' + LineEnding +
     '  shift' + LineEnding +
@@ -107,7 +188,7 @@ Const
     '    echo $! > child.pid' + LineEnding +
     '    wait ;;' + LineEnding +
     '  *)' + LineEnding +
-    '    cat > /dev/null' + LineEnding +
+    '    cat > stdin.txt' + LineEnding +
     '    printf ''%s\n'' ''{"type":"system","subtype":"init","apiKeySource":"none","session_id":"s1"}''' + LineEnding +
     '    printf ''%s\n'' ''{"type":"assistant","message":{"content":[{"type":"text","text":"fake answer"}]}}''' + LineEnding +
     '    printf ''%s\n'' ''{"type":"result","subtype":"success","is_error":false,"result":"fake answer"}'' ;;' +
@@ -200,7 +281,8 @@ Var
   Scope: TClaudeToolScope;
   {$IFDEF UNIX}
   Handle: THandle;
-  FakeDirectory, FakeClaude, LargePrompt: String;
+  FakeDirectory, FakeClaude, LargePrompt, PictureLine: String;
+  Pictures: TClaudeImageArray;
   Run: TAssistantClaudeRun;
   Snapshot: TClaudeRunSnapshot;
   ChildPid: Integer;
@@ -485,6 +567,29 @@ Begin
   Finally
     Run.Free;
   End;
+  Check('a text-only turn sends its prompt as plain text',
+    WholeFileText(IncludeTrailingPathDelimiter(FakeDirectory) + 'stdin.txt') = 'hello');
+  Check('a text-only turn passes no input format',
+    Pos('--input-format', WholeFileText(IncludeTrailingPathDelimiter(FakeDirectory) + 'args.txt')) = 0);
+
+  SetLength(Pictures, 1);
+  Pictures[0].MediaType := 'image/png';
+  Pictures[0].Data := 'iVBORw0KGgo=';
+  PictureLine := ClaudeUserMessageLine('look', Pictures);
+  TurnSettings.StreamInput := True;
+  Run := TAssistantClaudeRun.Create(TurnSettings, PictureLine);
+  Try
+    Snapshot := WaitForRun(Run, 20000);
+    Check('a picture turn completes', Snapshot.Done And (Snapshot.ErrorText = ''));
+  Finally
+    Run.Free;
+  End;
+  TurnSettings.StreamInput := False;
+  Check('a picture turn sends its one message line as stdin',
+    WholeFileText(IncludeTrailingPathDelimiter(FakeDirectory) + 'stdin.txt') = PictureLine);
+  Check('a picture turn passes the stream-json input format',
+    Pos('--input-format' + #10 + 'stream-json' + #10, WholeFileText(IncludeTrailingPathDelimiter(FakeDirectory) +
+    'args.txt')) > 0);
 
   { The fake exits before reading stdin. A 1 MB prompt cannot fit the pipe, so the write hits a closed pipe. }
   SetLength(LargePrompt, 1024 * 1024);
@@ -517,9 +622,15 @@ Begin
   If (ChildPid > 0) And (FpKill(ChildPid, 0) = 0) Then
     FpKill(ChildPid, SIGKILL);
   DeleteFile(IncludeTrailingPathDelimiter(FakeDirectory) + 'child.pid');
+  DeleteFile(IncludeTrailingPathDelimiter(FakeDirectory) + 'args.txt');
+  DeleteFile(IncludeTrailingPathDelimiter(FakeDirectory) + 'stdin.txt');
   DeleteFile(FakeClaude);
   RemoveDir(FakeDirectory);
   {$ENDIF}
+
+  TestImageInput;
+  Stream := FoldFixture('image-input.jsonl');
+  Check('the captured picture turn answers', Stream.Finished And (Not Stream.IsError) And (Stream.Text <> ''));
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');
