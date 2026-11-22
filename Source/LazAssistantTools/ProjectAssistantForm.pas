@@ -5385,8 +5385,7 @@ Begin
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
-  SubmitText := ClaudePromptWithToolNotes(ClaudeToolScopeForMode(ActiveMode),
-    BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext));
+  SubmitText := BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext);
   FPendingTurnAttachments := RefsJson;
   FClaudeLaunchImages := RefsJson;
   FClaudeSubmitText := SubmitText;

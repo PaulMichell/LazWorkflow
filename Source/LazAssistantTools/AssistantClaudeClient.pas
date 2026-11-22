@@ -110,7 +110,9 @@ Const
   { How long Claude Code waits for one MCP tool call, as MCP_TOOL_TIMEOUT. Its own limit is about 60 s, and an
     approval dialog may stay open longer while the user decides. Shorter than the form's one-hour turn limit. }
   ClaudeMCPToolTimeoutMs = 1800000;
-  { Sent at the head of every turn that has the Lazarus tools. Read also opens a picture, but the IDE cannot show it. }
+  { Appended to the system prompt of a turn that has the Lazarus tools. Read also opens a picture, but the IDE cannot
+    show it. Claude Code records the system prompt on a session's first request and reuses it on resume, so the note
+    is not repeated in the conversation. }
   ClaudeReadImageNote = 'When the user should see which picture you looked at, open it with the Lazarus read_image ' +
     'tool rather than Read: read_image shows the picture in the conversation.';
 
@@ -120,12 +122,11 @@ Function DetectClaudeExecutable: String;
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 /// Tool arguments that hold a turn to Scope. None has no tools. Every other scope reads with Claude Code's own
 /// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile, whose broker run
-/// enforces the scope's writes. An empty MCPConfigFile loads no server, which leaves reading only.
+/// enforces the scope's writes, and appends ClaudeReadImageNote to the system prompt. An empty MCPConfigFile
+/// loads no server and adds no note, which leaves reading only.
 Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
 /// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
 Function ClaudeToolDisplayName(Const ToolName: String): String;
-/// Prompt with the note on the Lazarus read_image tool in front of it. Unchanged for None, which has no tools.
-Function ClaudePromptWithToolNotes(Scope: TClaudeToolScope; Const Prompt: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
 /// leave those choices to Claude Code. No --permission-mode is passed: the turn has no Claude Code tool that
 /// needs approval, and the approval setting is applied by the broker to the Lazarus tools.
@@ -226,6 +227,8 @@ Begin
           Args.Add('--mcp-config=' + MCPConfigFile);
           { The only --allowedTools list. Whether a second one adds to it or replaces it is not known. }
           Args.Add('--allowedTools=mcp__' + MCPServerName + '__*');
+          { In the system prompt, not the user's message: read_image exists only with the server. }
+          Args.Add('--append-system-prompt=' + ClaudeReadImageNote);
         End;
     End;
   { Only the server named above, never one from the user's or the project's Claude Code settings. }
@@ -244,14 +247,6 @@ Begin
   Separator := Pos('__', Rest);
   If (Separator > 1) And (Separator + 2 <= Length(Rest)) Then
     Result := Copy(Rest, Separator + 2, MaxInt);
-End;
-
-Function ClaudePromptWithToolNotes(Scope: TClaudeToolScope; Const Prompt: String): String;
-Begin
-  Result := Prompt;
-  If Scope = ctsNone Then
-    Exit;
-  Result := ClaudeReadImageNote + LineEnding + LineEnding + Prompt;
 End;
 
 Function NewClaudeSessionId: String;

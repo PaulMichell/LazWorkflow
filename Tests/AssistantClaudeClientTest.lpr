@@ -459,9 +459,11 @@ Begin
       Begin
         Args.Clear;
         AppendClaudeModeArguments(Scope, '/tmp/lazarus-mcp-x.json', Args);
-        Check('turns outside chat read with Claude Code and act through the Lazarus server', (Args.Count = 4) And
+        Check('turns outside chat read with Claude Code and act through the Lazarus server', (Args.Count = 5) And
           (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--mcp-config=/tmp/lazarus-mcp-x.json') And
-          (Args[2] = '--allowedTools=mcp__lazarus__*') And (Args[3] = '--strict-mcp-config'));
+          (Args[2] = '--allowedTools=mcp__lazarus__*') And (Args[4] = '--strict-mcp-config'));
+        Check('a turn with the Lazarus tools is told in its system prompt to show pictures with read_image',
+          (Args[3] = '--append-system-prompt=' + ClaudeReadImageNote) And (Pos('read_image', ClaudeReadImageNote) > 0));
         Check('turns outside chat have no Claude Code edit, write or shell tool',
           (Pos('Edit', Args.Text) = 0) And (Pos('Write', Args.Text) = 0) And (Pos('Bash', Args.Text) = 0));
       End;
@@ -473,12 +475,6 @@ Begin
     Check('a Claude Code tool keeps its name', ClaudeToolDisplayName('Read') = 'Read');
     Check('a malformed MCP name is left alone', (ClaudeToolDisplayName('mcp__lazarus__') = 'mcp__lazarus__') And
       (ClaudeToolDisplayName('mcp____x') = 'mcp____x'));
-    Check('a Chat prompt has no tool note', ClaudePromptWithToolNotes(ctsNone, 'Hello') = 'Hello');
-    Check('a turn with tools is told to show pictures with read_image',
-      (ClaudePromptWithToolNotes(ctsRead, 'Hello') = ClaudeReadImageNote + LineEnding + LineEnding + 'Hello') And
-      (Pos('read_image', ClaudeReadImageNote) > 0) And
-      (Pos('read_image', ClaudePromptWithToolNotes(ctsMarkdown, 'Hello')) > 0) And
-      (Pos('read_image', ClaudePromptWithToolNotes(ctsProject, 'Hello')) > 0));
     Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = ctsRead);
   Finally
     Args.Free;
@@ -631,6 +627,14 @@ Begin
   TestImageInput;
   Stream := FoldFixture('image-input.jsonl');
   Check('the captured picture turn answers', Stream.Finished And (Not Stream.IsError) And (Stream.Text <> ''));
+  { The capture server's tool answered with text then an image; Claude Code echoes the image as base64 in the stream. }
+  Stream := FoldFixture('mcp-image.jsonl');
+  Check('the captured tool picture turn answers from the picture', Stream.Finished And (Not Stream.IsError) And
+    (Pos('green triangle', Stream.Text) > 0));
+  Check('the tool call with a picture result is recorded once and done', (Length(Stream.Tools) = 1) And
+    Stream.Tools[0].Done And (Not Stream.Tools[0].IsError));
+  Check('the trace keeps the tool text, not the echoed picture data',
+    (Length(Stream.Tools) = 1) And (Stream.Tools[0].Output = 'The picture follows.'));
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');
