@@ -98,6 +98,9 @@ Function MonitorHeadBodyPrefix(Const Body: String): String;
 { The state lane keeps the open text until the phone has acknowledged this head.
   Queuing the log is not delivery. }
 Function MonitorHeadBodyForPhone(PhoneAcked, Head: Int64; Const Body: String): String;
+{ Running block when it has text. Otherwise the latest block that has text, so an empty tool
+  does not hide the tail the desktop is already showing. BlockId is the block that owns Body. }
+Function MonitorVisibleHeadBlock(Const Blocks: TAssistantMonitorBlockArray; Out BlockId, Body: String): Boolean;
 { Head identity plus that prefix. The log acknowledgement is not this sequence. }
 Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;
   TurnRunning: Boolean; Const Body: String): String;
@@ -615,6 +618,41 @@ Begin
     Result := MonitorHeadBodyPrefix(Body)
   Else
     Result := '';
+End;
+
+Function MonitorVisibleHeadBlock(Const Blocks: TAssistantMonitorBlockArray; Out BlockId, Body: String): Boolean;
+Var
+  Index, RunningIndex, TextIndex: Integer;
+Begin
+  BlockId := '';
+  Body := '';
+  Result := False;
+  RunningIndex := -1;
+  TextIndex := -1;
+  For Index := 0 To High(Blocks) Do
+    Begin
+      If (Blocks[Index].BlockId <> '') And (Blocks[Index].Body <> '') Then
+        TextIndex := Index;
+      If Blocks[Index].Running And (Blocks[Index].BlockId <> '') Then
+        RunningIndex := Index;
+    End;
+  If (RunningIndex >= 0) And (Blocks[RunningIndex].Body <> '') Then
+    Begin
+      BlockId := Blocks[RunningIndex].BlockId;
+      Body := Blocks[RunningIndex].Body;
+      Exit(True);
+    End;
+  If TextIndex >= 0 Then
+    Begin
+      BlockId := Blocks[TextIndex].BlockId;
+      Body := Blocks[TextIndex].Body;
+      Exit(True);
+    End;
+  If RunningIndex >= 0 Then
+    Begin
+      BlockId := Blocks[RunningIndex].BlockId;
+      Result := True;
+    End;
 End;
 
 Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;

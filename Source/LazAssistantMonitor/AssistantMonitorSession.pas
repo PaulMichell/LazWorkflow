@@ -240,6 +240,8 @@ Type
     Procedure HandleBye;
     Procedure HandleCommand(Kind: Integer; Const Id: String; Const PayloadJson: TMonitorPayload);
     Procedure HandleResume(Const Id: String; Const PayloadJson: TMonitorPayload);
+    { Caller holds the session lock. Rewrites the remembered head for the current ack. }
+    Procedure RememberFreshLogHead;
     { Caller holds the session lock. The same record for a resume and for the baseline pushed when the mirror is ready. }
     Function HostSyncStatus: TMonitorSyncStatus;
     Function CommandStatesFor(Const Id: String; Const Commands: TStringArray): String;
@@ -1661,6 +1663,9 @@ Begin
   If (Not Source.Found) And Assigned(FMirror) And (FConversationId <> '') Then
     FMirror.CaptureResume('', Source);
   Status := HostSyncStatus;
+  { A previous phone's ack must not hide the tail from this connection. Refresh before publish. }
+  FPhoneAcked := ResumeMsg.Cursor;
+  RememberFreshLogHead;
   PublishRememberedState;
   { The tool id and the conversation id are escaped by the AssistantMonitorSync writers. }
   PublishState('status', MonitorResumeStatusValueJson(Status), True);
@@ -1670,7 +1675,6 @@ Begin
   Answer := MonitorSyncResumeAnswer(Source, ResumeMsg.ConversationId, ResumeMsg.Epoch, Id, ResumeMsg.Cursor, Status);
   QueueResumeAnswer(Answer);
   LogFillSeen := False;
-  FPhoneAcked := ResumeMsg.Cursor;
   If Answer.Replay Then
     Begin
       FLogResume := True;
@@ -2619,13 +2623,42 @@ Begin
   End;
 End;
 
+Procedure TMonitorSession.RememberFreshLogHead;
+Var
+  Head: Int64;
+  OpenBlockId, OpenTurnId, OpenBody, SentBody, Json: String;
+  TurnRunning: Boolean;
+  Blocks: TAssistantMonitorBlockArray;
+Begin
+  If (Not Assigned(FMirror)) Or (Not Assigned(FOutbox)) Then
+    Exit;
+  Head := FMirror.Head;
+  If Head < 0 Then
+    Exit;
+  OpenBlockId := '';
+  OpenTurnId := '';
+  OpenBody := '';
+  SetLength(Blocks, 0);
+  If FMirror.CopyLiveHead(OpenTurnId, Blocks) Then
+    MonitorVisibleHeadBlock(Blocks, OpenBlockId, OpenBody);
+  TurnRunning := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+  SentBody := MonitorHeadBodyForPhone(FPhoneAcked, Head, OpenBody);
+  FAnnouncedHead := Head;
+  FAnnouncedOpenBlock := OpenBlockId;
+  FAnnouncedTurnId := OpenTurnId;
+  FAnnouncedTurnRunning := TurnRunning;
+  FAnnouncedHeadBody := SentBody;
+  FAnnouncedHeadValid := True;
+  Json := MonitorHeadSnapshotJson(Head, FConversationId, FEpoch, OpenBlockId, OpenTurnId, TurnRunning, SentBody);
+  RememberState('head', Json, True);
+End;
+
 Procedure TMonitorSession.AnnounceLogHead;
 Var
   Head: Int64;
   OpenBlockId, OpenTurnId, OpenBody, SentBody, Json: String;
   TurnRunning, Changed: Boolean;
   Blocks: TAssistantMonitorBlockArray;
-  Index: Integer;
 Begin
   If (Not Assigned(FMirror)) Or (Not Assigned(FOutbox)) Then
     Exit;
@@ -2638,19 +2671,7 @@ Begin
   Json := '';
   SetLength(Blocks, 0);
   If FMirror.CopyLiveHead(OpenTurnId, Blocks) Then
-    Begin
-      For Index := 0 To High(Blocks) Do
-        If Blocks[Index].Running And (Blocks[Index].BlockId <> '') Then
-          Begin
-            OpenBlockId := Blocks[Index].BlockId;
-            OpenBody := Blocks[Index].Body;
-          End;
-      If (OpenBlockId = '') And (Length(Blocks) > 0) Then
-        Begin
-          OpenBlockId := Blocks[High(Blocks)].BlockId;
-          OpenBody := Blocks[High(Blocks)].Body;
-        End;
-    End;
+    MonitorVisibleHeadBlock(Blocks, OpenBlockId, OpenBody);
   LockSession;
   Try
     TurnRunning := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;

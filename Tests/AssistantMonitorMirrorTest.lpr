@@ -874,7 +874,8 @@ End;
 
 Procedure TestHeadSnapshotStaysBounded;
 Var
-  Short, Long, Prefix: String;
+  Short, Long, Prefix, BlockId, Body: String;
+  Blocks: TAssistantMonitorBlockArray;
 Begin
   Short := MonitorHeadSnapshotJson(12, 'c1', 'stream-a', 'b-live', 't-live', True, 'Hello tail');
   Check('a head snapshot names the conversation, stream and revision', (Pos('"conversation_id":"c1"', Short) > 0) And
@@ -889,6 +890,20 @@ Begin
   Check('queuing the log does not clear that body', MonitorHeadBodyForPhone(4, 12, 'Hello tail') = 'Hello tail');
   Check('a caught-up phone does not repeat the body', MonitorHeadBodyForPhone(12, 12, 'Hello tail') = '');
   Check('a newer head after the ack carries the body again', MonitorHeadBodyForPhone(12, 13, 'grown') = 'grown');
+  SetLength(Blocks, 2);
+  Blocks[0].BlockId := 'b-text';
+  Blocks[0].Body := 'Hello tail';
+  Blocks[0].Running := False;
+  Blocks[1].BlockId := 'b-tool';
+  Blocks[1].Body := '';
+  Blocks[1].Running := True;
+  Check('an empty running block does not hide the tail', MonitorVisibleHeadBlock(Blocks, BlockId, Body) And
+    (BlockId = 'b-text') And (Body = 'Hello tail'));
+  Blocks[1].Body := 'tool out';
+  Check('a running block with text is the head', MonitorVisibleHeadBlock(Blocks, BlockId, Body) And
+    (BlockId = 'b-tool') And (Body = 'tool out'));
+  SetLength(Blocks, 0);
+  Check('no blocks is not a head', Not MonitorVisibleHeadBlock(Blocks, BlockId, Body));
 End;
 
 { State can leave while the credit window still holds the phone short of the head. }
