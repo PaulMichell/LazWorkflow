@@ -554,10 +554,15 @@ class SyncApplier(
   }
 
   /** Resume from the durable cursor when the open turn has been behind the announced head for the budget. */
+  /** One resume from the durable cursor. Later ticks back off, then reconnect once. */
   private suspend fun openTurnRecovery(now: Long): List<SyncEffect> {
-    val recovered = recover(follow.conversationId, follow.streamId)
+    val conversationId = follow.conversationId
+    val streamId = follow.streamId
+    val seq = durableCursor(conversationId)?.seq ?: 0L
+    val issued = if (conversationId.isEmpty()) null else resume.onGap(SyncGap(conversationId, streamId, seq), now)
     follow.suppressUntil(now)
-    val effects = recovered.toMutableList()
+    val effects = mutableListOf<SyncEffect>()
+    if (issued != null) effects += issued
     if (follow.markBehind()) effects += SyncEffect.OpenBehind(true)
     return effects
   }
@@ -696,8 +701,13 @@ class SyncApplier(
     val now = nowMs()
     when (key) {
       "head" -> {
-        follow.noteHeadJson(valueJson, now)
         val snapshot = headSnapshot(valueJson)
+        if (snapshot != null && snapshot.streamId.isNotEmpty() && follow.streamId.isNotEmpty() &&
+          snapshot.streamId != follow.streamId) {
+          fetches.clear()
+          fetchRevision.clear()
+        }
+        follow.noteHeadJson(valueJson, now)
         val accepted = if (snapshot == null) null else acceptHeadBody(paintedSeq, paintedBody, snapshot)
         if (snapshot != null && accepted != null && store.publishHead(
           hostId, snapshot.conversationId, snapshot.turnId, snapshot.blockId, accepted, snapshot.running, snapshot.seq, now

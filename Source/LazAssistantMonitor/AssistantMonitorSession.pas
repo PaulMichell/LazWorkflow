@@ -1701,6 +1701,7 @@ End;
 Function TMonitorSession.HostSyncStatus: TMonitorSyncStatus;
 Begin
   Result := Default(TMonitorSyncStatus);
+  { Sending owns the turn, including a quiet tool. PlanAgentRunning owns the plan, including the gap between items. }
   Result.Busy := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
   Result.Sending := FHostFlags.Sending;
   Result.PlanRunning := FHostFlags.PlanAgentRunning;

@@ -382,6 +382,14 @@ fun acceptHeadBody(paintedSeq: Long, storedBody: String, snapshot: HeadSnapshot)
   return body
 }
 
+/** Sending owns the turn. Plan running owns the plan, including the quiet gap between items. */
+fun authoritativeBusy(sending: Boolean, planRunning: Boolean): Boolean = sending || planRunning
+
+/** A refresh must not enable Send while that activity is still true. */
+fun authoritativeCanSend(canSend: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
+  return canSend && !sending && !planRunning
+}
+
 /** A late fetch or an older reply must not wipe a head that has already painted. */
 fun retainHeadBody(paintedBody: String, paintedSeq: Long, paintedBlock: String, blockId: String, candidate: String, fetchRevision: Long): String {
   if (paintedBlock.isEmpty() || blockId != paintedBlock || paintedSeq < 0L || paintedBody.isEmpty()) return candidate
@@ -398,10 +406,12 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
   return when (key) {
     "status" -> {
       val started = value.textField("started_at")?.let { startedAtMillis(it) }
+      val sending = value.flagField("sending") ?: ui.view.sending
       val planRunning = value.flagField("plan_running") ?: ui.planRunning
+      val busy = authoritativeBusy(sending, planRunning)
       val namedElapsed = value.intField("plan_elapsed_ms")?.toLong()?.coerceAtLeast(0L)
       ui.copy(
-        statusBusy = value.flagField("busy") ?: ui.statusBusy,
+        statusBusy = busy,
         planRunning = planRunning,
         planRunElapsedMs = when {
           !planRunning -> -1L
@@ -409,18 +419,18 @@ fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
           else -> ui.planRunElapsedMs
         },
         activityStartedMs = when {
-          value.flagField("busy") == false && value.flagField("sending") == false -> 0L
+          !busy -> 0L
           started != null -> started
           else -> ui.activityStartedMs
         },
         view = ui.view.copy(
-          busy = value.flagField("busy") ?: ui.view.busy,
-          sending = value.flagField("sending") ?: ui.view.sending,
-          planRunning = value.flagField("plan_running") ?: ui.view.planRunning,
+          busy = busy,
+          sending = sending,
+          planRunning = planRunning,
           phase = value.textField("phase") ?: ui.view.phase,
           statusText = value.textField("status_text") ?: ui.view.statusText,
-          canSend = value.flagField("can_send") ?: ui.view.canSend,
-          canSteer = value.flagField("can_steer") ?: ui.view.canSteer,
+          canSend = authoritativeCanSend(value.flagField("can_send") ?: ui.view.canSend, sending, planRunning),
+          canSteer = if (busy) value.flagField("can_steer") ?: ui.view.canSteer else false,
           canStop = value.flagField("can_stop") ?: ui.view.canStop,
           canChangeMode = value.flagField("can_change_mode") ?: ui.view.canChangeMode,
           errorText = value.textField("error_text") ?: ui.view.errorText

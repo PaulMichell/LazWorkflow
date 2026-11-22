@@ -53,16 +53,16 @@ class StallTraceTest {
     assertEquals(0L, trace.single().ageMs)
 
     clock.now = 1_100L
-    val quiet = applier.offerFrame(SyncFrame.State("status", """{"busy":true,"sending":false,"plan_running":false}"""), 1)
+    val quiet = applier.offerFrame(SyncFrame.State("status", """{"busy":true,"sending":true,"plan_running":false}"""), 1)
     var ui = applyStateValue(
       MonitorUi(conversationId = "c1", hostEpoch = "stream-a", hostCursor = store.seq, syncHead = 12L),
       "status",
-      """{"busy":true,"sending":false,"plan_running":false,"phase":"tool","status_text":"read_file"}"""
+      """{"busy":true,"sending":true,"plan_running":false,"phase":"tool","status_text":"read_file"}"""
     )
     trace += sample(clock.now, "status", store, 12L, quiet.map { it.toString() }, "status")
     assertTrue(ui.statusBusy)
     assertTrue(ui.view.busy)
-    assertFalse(ui.view.sending)
+    assertTrue(ui.view.sending)
     assertEquals("Hi", store.body)
     assertEquals("Hi", shownBody(store))
 
@@ -122,8 +122,8 @@ class StallTraceTest {
     assertEquals("Hi", store.body)
     clock.now = 2_000L + SyncRecoveryBudgetMs - 1
     val recovered = applier.tick()
-    assertTrue(recovered.contains(SyncEffect.Reconnect))
-    assertTrue(recovered.any { it is SyncEffect.Resume && it.conversationId == "c1" && it.streamId == "stream-a" })
+    assertTrue(recovered.none { it == SyncEffect.Reconnect })
+    assertTrue(recovered.any { it is SyncEffect.Resume && it.conversationId == "c1" && it.streamId == "stream-a" && !it.hold })
     assertEquals("Hi", shownBody(store))
 
     clock.now = 3_000L

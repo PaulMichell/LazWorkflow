@@ -349,8 +349,8 @@ class SyncApplierTest {
     assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
     clock.now = SyncRecoveryBudgetMs
     val recovered = applier.tick()
-    assertTrue(recovered.contains(SyncEffect.Reconnect))
-    assertEquals(SyncEffect.Resume("c1", "stream-a", 3L, true), recovered.first { it is SyncEffect.Resume })
+    assertTrue(recovered.none { it == SyncEffect.Reconnect })
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 3L), recovered.first { it is SyncEffect.Resume })
     assertEquals(3L, store.seq("c1"))
   }
 
@@ -390,8 +390,8 @@ class SyncApplierTest {
     assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
     clock.now = SyncRecoveryBudgetMs
     val recovered = applier.tick()
-    assertTrue(recovered.contains(SyncEffect.Reconnect))
-    assertEquals(SyncEffect.Resume("c1", "stream-a", 2L, true), recovered.first { it is SyncEffect.Resume })
+    assertTrue(recovered.none { it == SyncEffect.Reconnect })
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 2L), recovered.first { it is SyncEffect.Resume })
   }
 
   @Test

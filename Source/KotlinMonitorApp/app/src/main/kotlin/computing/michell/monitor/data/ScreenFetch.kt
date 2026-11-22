@@ -104,6 +104,20 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   }
 
   /** Head demand asks for nothing older. Browsing replaces the previous viewport. */
+  /** A different host, conversation or stream owns none of the fetches already in flight. */
+  fun invalidate(): List<FetchGrant> {
+    owed.clear()
+    inFlight.clear()
+    stale.clear()
+    applied.clear()
+    knownTurns.clear()
+    visible = emptySet()
+    planWanted = false
+    planFlying = false
+    planHeld = false
+    return emptyList()
+  }
+
   fun noteReading(atHead: Boolean, indices: Set<Int>): List<FetchGrant> {
     followingHead = atHead
     visible = if (atHead) emptySet() else indices

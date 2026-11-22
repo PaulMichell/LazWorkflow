@@ -320,17 +320,19 @@ internal fun finishedStatusText(text: String): String {
   return trimmed
 }
 
-/** A worked footer, or a host that is no longer sending, ends the steer. The next tap is Send. */
+/**
+ * Turn activity is sending. Plan activity is planRunning, including the gap between items.
+ * A worked footer must not clear a quiet tool or that gap. An idle host clears Busy even
+ * when the history that would show the finish has not arrived.
+ */
 internal fun settleFinishedTurn(view: WireView, blocks: List<WireBlock>): WireView {
-  val finished = hasWorkedFooter(blocks)
-  val hostIdle = !view.sending && !view.busy && !view.planRunning
-  if (!finished && !hostIdle) return view
+  if (view.sending || view.busy || view.planRunning) return view
   val settled = view.copy(
     sending = false,
     busy = false,
     canSteer = false,
     canStop = false,
-    canSend = !view.planRunning,
+    canSend = true,
     phase = if (view.phase.endsWith("…")) "" else view.phase,
     statusText = finishedStatusText(view.statusText)
   )
@@ -359,8 +361,9 @@ fun sendActionEnabled(
   syncing: Boolean = false
 ): Boolean {
   if (!syncing && (disconnected || phase != LinkPhase.Live)) return false
-  if (view.canSteer || view.canSend) return true
-  if (view.sending || view.busy || view.planRunning || planRunning) return false
+  // A recovered canSend must not start another turn while the host is still working.
+  if (view.sending || view.busy || view.planRunning || planRunning) return view.canSteer
+  if (view.canSend || view.canSteer) return true
   return true
 }
 
@@ -1439,6 +1442,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       return
     }
     if (hostId == watchedHost && conversationId == watchedConversation && contentWatch?.isActive == true) return
+    if (hostId != watchedHost || conversationId != watchedConversation) screenFetch.invalidate()
     watchedHost = hostId
     watchedConversation = conversationId
     contentWatch?.cancel()
