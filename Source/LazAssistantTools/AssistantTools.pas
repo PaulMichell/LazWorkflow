@@ -61,6 +61,10 @@ Function AssistantCheckedAddUnitPath(Const RelativeOrAbsolute: String; Out Resol
 Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolListDirectory(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+/// read_image for a tool result that carries the picture: the same path checks and image store as read_image,
+/// then the stored upload copy (at most 2048 pixels a side and 4 MiB) as its MIME type and base64 data.
+Function AssistantReadImageUpload(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
+  Out Ref: TAssistantImageRef; Out MimeType, Base64: String): Boolean;
 Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
@@ -4608,6 +4612,42 @@ Begin
   SetLength(ImageRefs, 1);
   ImageRefs[0] := ImageRefFromStored(Stored);
   Result := True;
+End;
+
+Function AssistantReadImageUpload(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
+  Out Ref: TAssistantImageRef; Out MimeType, Base64: String): Boolean;
+Const
+  DataPrefix = 'data:';
+  Base64Marker = ';base64,';
+Var
+  Refs: TAssistantImageRefArray;
+  DataUri: String;
+  Marker: Integer;
+Begin
+  Result := False;
+  Ref := Default(TAssistantImageRef);
+  MimeType := '';
+  Base64 := '';
+  If Not ToolReadImage(ArgumentsJson, ResultText, ErrorText, Refs) Then Exit;
+  Ref := Refs[0];
+  { The data URI applies the 4 MiB upload ceiling and refuses a stored MIME type that is not one. }
+  If Not AssistantImageDataUri(ProjectRootPath, Ref, DataUri, ErrorText) Then
+    Begin
+      ResultText := '';
+      Exit;
+    End;
+  Marker := Pos(Base64Marker, DataUri);
+  If (Copy(DataUri, 1, Length(DataPrefix)) = DataPrefix) And (Marker > Length(DataPrefix) + 1) Then
+    Begin
+      MimeType := Copy(DataUri, Length(DataPrefix) + 1, Marker - Length(DataPrefix) - 1);
+      Base64 := Copy(DataUri, Marker + Length(Base64Marker), MaxInt);
+    End;
+  Result := (MimeType <> '') And (Base64 <> '');
+  If Not Result Then
+    Begin
+      ResultText := '';
+      ErrorText := 'Image could not be prepared for upload.';
+    End;
 End;
 
 Function RejectedCommandProgram(Const ProgramName: String): Boolean;

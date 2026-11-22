@@ -17,7 +17,7 @@ Unit AssistantToolBroker;
 Interface
 
 Uses
-  Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets, AssistantConversation;
+  Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets, AssistantConversation, AssistantImages, AssistantMCPProtocol;
 
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
@@ -94,6 +94,9 @@ Type
     FReceipts: TObjectList;
     FChangeBusy: Boolean;
     FChangeRun, FChangeIdentity: String;
+    { Pictures read_image stored in this run, kept until the next BeginRun so the trace can show them. }
+    FImages: TAssistantImageRefArray;
+    Function ReadImage(Const Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
     Function ChangeCurrent: Boolean;
     Function ExecuteChanges(Const Tool: String; Args: TJSONObject; Out ResultText, ErrorText: String): Boolean;
     Function ExecuteRename(Const RunId, Tool: String; Args: TJSONObject;
@@ -114,7 +117,13 @@ Type
     Function BeginRun(WriteScope: TAssistantWriteScope; Mode: TAssistantMode): String; Overload;
     Procedure Cancel;
     Function Execute(Const RunId, Tool, Arguments: String;
-      Out ResultText, ErrorText: String): Boolean;
+      Out ResultText, ErrorText: String): Boolean; Overload;
+    /// Same call, with the pictures a successful read_image returns for the MCP result.
+    Function Execute(Const RunId, Tool, Arguments: String;
+      Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean; Overload;
+    /// The pictures read_image stored in this run whose id appears in ResultText, as attachment JSON.
+    /// Empty when there are none. The trace shows them on the tool's block.
+    Function ReadImagesJson(Const ResultText: String): String;
     Function ToolsJson: String;
     /// Catalogue for Scope. Does not start a run or change the open run, its build, or a prepared change set.
     Function ToolsJsonForScope(Scope: TAssistantWriteScope): String;
@@ -483,6 +492,7 @@ Begin
   FMode := Mode;
   FRevision := 0;
   SetLength(FSnapshots, 0);
+  SetLength(FImages, 0);
   FRenamePreview := Default(TLocalRenamePreview);
   FreeAndNil(FPrepared);
   Result := FRunId;
@@ -1172,6 +1182,50 @@ End;
 Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
     Out ResultText, ErrorText: String): Boolean;
 Var
+  Images: TMCPToolImages;
+Begin
+  Result := Execute(RunId, Tool, Arguments, ResultText, ErrorText, Images);
+End;
+
+{ The Grok tool's path checks and image store. The picture goes back as the upload copy, and its ref is kept for
+  the trace. }
+Function TAssistantToolBroker.ReadImage(Const Arguments: String; Out ResultText, ErrorText: String;
+  Out Images: TMCPToolImages): Boolean;
+Var
+  Ref: TAssistantImageRef;
+  MimeType, Base64: String;
+Begin
+  Images := Nil;
+  Result := AssistantReadImageUpload(Arguments, ResultText, ErrorText, Ref, MimeType, Base64);
+  If Not Result Then
+    Exit;
+  SetLength(Images, 1);
+  Images[0].MimeType := MimeType;
+  Images[0].Data := Base64;
+  SetLength(FImages, Length(FImages) + 1);
+  FImages[High(FImages)] := Ref;
+End;
+
+Function TAssistantToolBroker.ReadImagesJson(Const ResultText: String): String;
+Var
+  Found: TAssistantImageRefArray;
+  I: Integer;
+Begin
+  Found := Nil;
+  For I := 0 To High(FImages) Do
+    If (FImages[I].Id <> '') And (Pos(FImages[I].Id, ResultText) > 0) Then
+      Begin
+        SetLength(Found, Length(Found) + 1);
+        Found[High(Found)] := FImages[I];
+      End;
+  Result := '';
+  If Length(Found) > 0 Then
+    Result := AssistantImageRefsToJson(Found);
+End;
+
+Function TAssistantToolBroker.Execute(Const RunId, Tool, Arguments: String;
+    Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+Var
   Data, Node, BuildReply: TJSONData;
   Args: TJSONObject;
   Path, Text, Revision, NewText, ActualPath, ActualText, Detail: String;
@@ -1183,6 +1237,7 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  Images := Nil;
   Semantic := (Tool = 'lazarus_find_declaration') Or (Tool = 'lazarus_find_references') Or (Tool = 'lazarus_symbol_context');
   If GetCurrentThreadID <> FOwner Then
     Begin
@@ -1672,6 +1727,16 @@ Begin
           Result := FAdapter.SearchInProject(Arguments, ResultText, ErrorText);
           Exit;
         End;
+      If Tool = 'lazarus_read_image' Then
+        Begin
+          If Not FAdapter.CanInspectFiles Then
+            Begin
+              ErrorText := 'Project file inspection unavailable.';
+              Exit;
+            End;
+          Result := ReadImage(Arguments, ResultText, ErrorText, Images);
+          Exit;
+        End;
       If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
         (Tool = 'lazarus_open_buffer') Then
           Begin
@@ -1927,6 +1992,11 @@ Begin
     ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
     '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Returns the requested text. ' +
     'Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
+    '{"type":"function","name":"lazarus_read_image","description":"Look at a project still image (PNG, JPEG, GIF, BMP and ' +
+    'similar) and show it to the user in the conversation. Returns the picture and one line: name, width x height, id. ' +
+    'Refuses a path outside the project, a symbolic link that leaves it, and a file over 8 MiB or the pixel limits. ' +
+    'The returned copy is at most 2048 pixels a side and 4 MiB. Use it rather than Read when the user should see ' +
+    'which picture was looked at.","inputSchema":' + ReadSchema + '},' +
     '{"type":"function","name":"lazarus_search_in_project","description":"Search project text with the same rules as search_in_project. ' +
     'Unsaved editor buffers are preferred over disk. Returns path:line:text unless files_only is true, which returns paths only. ' +
     'Does not return file text beyond the matching line. max_results is required, from 1 to 200.","inputSchema":' + SearchSchema + '},' +

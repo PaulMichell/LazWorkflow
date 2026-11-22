@@ -17,7 +17,7 @@ Unit AssistantMCPBridge;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantToolBroker, AssistantClaudeClient, AssistantConversation;
+  Classes, SysUtils, AssistantToolBroker, AssistantClaudeClient, AssistantConversation, AssistantMCPProtocol;
 
 Const
   MCPRunCancelledText = 'The Claude run was stopped before this tool ran.';
@@ -44,7 +44,7 @@ Type
     /// The broker's catalogue for this run's scope, to hand to TMCPListener.
     Function ToolsJSON: String;
     /// A TMCPToolExecutor. Safe from any thread; blocks until the IDE thread has run the call or the run is cancelled.
-    Function Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+    Function Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
     Property Broker: TAssistantToolBroker Read FBroker;
     Property RunId: String Read FRunId;
     /// Calls waiting for the IDE thread.
@@ -75,6 +75,7 @@ Type
     RunId, Tool, Arguments: String;
     Succeeded: Boolean;
     ResultText, ErrorText: String;
+    Images: TMCPToolImages;
     Finished: PRTLEvent;
     Constructor Create(CallBroker: TAssistantToolBroker; Const CallRunId, CallTool, CallArguments: String);
     Destructor Destroy; Override;
@@ -226,6 +227,7 @@ Var
   Skip: Boolean;
   CallSucceeded: Boolean;
   CallResult, CallError: String;
+  CallImages: TMCPToolImages;
 Begin
   Try
     EnterCriticalSection(CallLock);
@@ -238,13 +240,15 @@ Begin
       Exit;
     CallResult := '';
     CallError := '';
+    CallImages := Nil;
     Try
-      CallSucceeded := Broker.Execute(RunId, Tool, Arguments, CallResult, CallError);
+      CallSucceeded := Broker.Execute(RunId, Tool, Arguments, CallResult, CallError, CallImages);
     Except
       On E: Exception Do
         Begin
           CallSucceeded := False;
           CallError := 'The tool raised ' + E.ClassName + ': ' + E.Message;
+          CallImages := Nil;
         End;
     End;
     EnterCriticalSection(CallLock);
@@ -255,6 +259,7 @@ Begin
           Succeeded := CallSucceeded;
           ResultText := CallResult;
           ErrorText := CallError;
+          Images := CallImages;
           Done := True;
         End;
     Finally
@@ -354,7 +359,8 @@ Begin
   Result := FBroker.ToolsJson;
 End;
 
-Function TMCPBrokerBridge.Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TMCPBrokerBridge.Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+  Out Images: TMCPToolImages): Boolean;
 Var
   Call: TMCPPendingCall;
   CallRunId: String;
@@ -362,6 +368,7 @@ Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
+  Images := Nil;
   If GetCurrentThreadId = MainThreadID Then
     Begin
       EnterCriticalSection(Lock);
@@ -375,7 +382,7 @@ Begin
       If CallRunId = '' Then
         ErrorText := MCPRunCancelledText
       Else
-        Result := FBroker.Execute(CallRunId, Tool, Arguments, ResultText, ErrorText);
+        Result := FBroker.Execute(CallRunId, Tool, Arguments, ResultText, ErrorText, Images);
       Exit;
     End;
   EnterCriticalSection(Lock);
@@ -404,6 +411,7 @@ Begin
       Result := Call.Succeeded;
       ResultText := Call.ResultText;
       ErrorText := Call.ErrorText;
+      Images := Call.Images;
     End
   Else
     ErrorText := MCPRunCancelledText;

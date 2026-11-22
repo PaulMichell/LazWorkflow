@@ -391,6 +391,12 @@ Begin
     Check('a Claude Code tool keeps its name', ClaudeToolDisplayName('Read') = 'Read');
     Check('a malformed MCP name is left alone', (ClaudeToolDisplayName('mcp__lazarus__') = 'mcp__lazarus__') And
       (ClaudeToolDisplayName('mcp____x') = 'mcp____x'));
+    Check('a Chat prompt has no tool note', ClaudePromptWithToolNotes(ctsNone, 'Hello') = 'Hello');
+    Check('a turn with tools is told to show pictures with read_image',
+      (ClaudePromptWithToolNotes(ctsRead, 'Hello') = ClaudeReadImageNote + LineEnding + LineEnding + 'Hello') And
+      (Pos('read_image', ClaudeReadImageNote) > 0) And
+      (Pos('read_image', ClaudePromptWithToolNotes(ctsMarkdown, 'Hello')) > 0) And
+      (Pos('read_image', ClaudePromptWithToolNotes(ctsProject, 'Hello')) > 0));
     Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = ctsRead);
   Finally
     Args.Free;

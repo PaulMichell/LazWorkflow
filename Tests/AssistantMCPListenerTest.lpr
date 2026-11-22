@@ -39,7 +39,7 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Function CallCount: Integer;
-    Function Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+    Function Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
   End;
 
   TReply = Record
@@ -92,7 +92,7 @@ Begin
   End;
 End;
 
-Function TToolProbe.Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TToolProbe.Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
 Begin
   EnterCriticalSection(Lock);
   Try
@@ -101,6 +101,7 @@ Begin
     LeaveCriticalSection(Lock);
   End;
   ErrorText := '';
+  Images := Nil;
   If Tool = 'lazarus_project_info' Then
     Begin
       RTLEventSetEvent(SlowEntered);

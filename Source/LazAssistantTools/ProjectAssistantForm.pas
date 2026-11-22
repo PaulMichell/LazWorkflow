@@ -5364,7 +5364,7 @@ Begin
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
   ShowChatSurfaceKeepMode;
-  SubmitText := BuildSubmitApiText(ApiText, WithContext);
+  SubmitText := ClaudePromptWithToolNotes(ClaudeToolScopeForMode(ActiveMode), BuildSubmitApiText(ApiText, WithContext));
   FPendingTurnAttachments := '';
   FClaudeSubmitText := SubmitText;
   FClaudeFreshRetried := False;
@@ -5465,6 +5465,7 @@ Var
   I: Integer;
   Step: TClaudeToolStep;
   Block: TTraceBlock;
+  ImagesJson: String;
 Begin
   If (Not FSending) Or (Not Assigned(FTrace)) Then
     Exit;
@@ -5493,6 +5494,13 @@ Begin
       Block.Running := False;
       Block.Ok := Not Step.IsError;
       Block.Body := Step.Output;
+      { The broker kept the picture it sent; its id is in the result line, as for a Grok read_image. }
+      If (Not Step.IsError) And (Step.Name = 'mcp__lazarus__read_image') And Assigned(FCodexBroker) Then
+        Begin
+          ImagesJson := FCodexBroker.ReadImagesJson(Step.Output);
+          If ImagesJson <> '' Then
+            FTrace.AttachBlockImages(Block, ImagesJson);
+        End;
       If Step.IsError Then
         Begin
           Block.Collapsed := False;

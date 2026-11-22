@@ -108,6 +108,9 @@ Const
   { How long Claude Code waits for one MCP tool call, as MCP_TOOL_TIMEOUT. Its own limit is about 60 s, and an
     approval dialog may stay open longer while the user decides. Shorter than the form's one-hour turn limit. }
   ClaudeMCPToolTimeoutMs = 1800000;
+  { Sent at the head of every turn that has the Lazarus tools. Read also opens a picture, but the IDE cannot show it. }
+  ClaudeReadImageNote = 'When the user should see which picture you looked at, open it with the Lazarus read_image ' +
+    'tool rather than Read: read_image shows the picture in the conversation.';
 
 /// The claude program on PATH, or empty.
 Function DetectClaudeExecutable: String;
@@ -119,6 +122,8 @@ Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
 /// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
 Function ClaudeToolDisplayName(Const ToolName: String): String;
+/// Prompt with the note on the Lazarus read_image tool in front of it. Unchanged for None, which has no tools.
+Function ClaudePromptWithToolNotes(Scope: TClaudeToolScope; Const Prompt: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
 /// leave those choices to Claude Code. No --permission-mode is passed: the turn has no Claude Code tool that
 /// needs approval, and the approval setting is applied by the broker to the Lazarus tools.
@@ -237,6 +242,14 @@ Begin
   Separator := Pos('__', Rest);
   If (Separator > 1) And (Separator + 2 <= Length(Rest)) Then
     Result := Copy(Rest, Separator + 2, MaxInt);
+End;
+
+Function ClaudePromptWithToolNotes(Scope: TClaudeToolScope; Const Prompt: String): String;
+Begin
+  Result := Prompt;
+  If Scope = ctsNone Then
+    Exit;
+  Result := ClaudeReadImageNote + LineEnding + LineEnding + Prompt;
 End;
 
 Function NewClaudeSessionId: String;

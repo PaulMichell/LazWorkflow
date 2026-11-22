@@ -21,7 +21,8 @@ Const
     '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}]';
 
 Type
-  TCallOutcome = (coSucceed, coFail, coRaise);
+  { coImage succeeds with one picture; coFailImage fails but still hands one back, which must not be sent. }
+  TCallOutcome = (coSucceed, coFail, coRaise, coImage, coFailImage);
 
   TToolProbe = Class
   Public
@@ -29,27 +30,43 @@ Type
     Calls: Integer;
     LastTool: String;
     LastArguments: String;
-    Function Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+    Function Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
   End;
+
+Const
+  { A 1 x 1 PNG. }
+  PixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 Var
   Requests: TStringList;
   Probe: TToolProbe;
 
-Function TToolProbe.Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TToolProbe.Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
 Begin
   Inc(Calls);
   LastTool := Tool;
   LastArguments := Arguments;
   ResultText := '';
   ErrorText := '';
+  Images := Nil;
+  If Outcome In [coImage, coFailImage] Then
+    Begin
+      SetLength(Images, 1);
+      Images[0].MimeType := 'image/png';
+      Images[0].Data := PixelPng;
+    End;
   Case Outcome Of
     coSucceed:
       Begin
         ResultText := 'Unit Main;' + LineEnding + 'revision r1';
         Result := True;
       End;
-    coFail:
+    coImage:
+      Begin
+        ResultText := 'dot.png, 1 x 1, img-1';
+        Result := True;
+      End;
+    coFail, coFailImage:
       Begin
         ErrorText := 'No open buffer for Main.pas.';
         Result := False;
@@ -339,6 +356,46 @@ Begin
   Check('MCPToolName keeps an unprefixed name', MCPToolName('read') = 'read');
 End;
 
+Procedure CheckImageResult;
+Const
+  CallImage = '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"read_buffer","arguments":{"path":"dot.png"}}}';
+Var
+  Response: TJSONObject;
+  Content: TJSONArray;
+  Item: TJSONObject;
+  HasBody: Boolean;
+Begin
+  Probe.Outcome := coImage;
+  Response := Answer(CallImage, HasBody);
+  Try
+    Check('an image result gets a body', HasBody And Assigned(Response) And Assigned(Response.Find('result')));
+    Content := TJSONArray(Response.FindPath('result.content'));
+    Check('an image result has a text item and an image item', (Content Is TJSONArray) And (Content.Count = 2));
+    Check('the text item comes first and names the picture', (Content.Objects[0].Get('type', '') = 'text') And
+      (Content.Objects[0].Get('text', '') = 'dot.png, 1 x 1, img-1'));
+    Item := Content.Objects[1];
+    Check('the second item is an image', Item.Get('type', '') = 'image');
+    Check('the image item carries the base64 data', Item.Get('data', '') = PixelPng);
+    Check('the image item carries the MIME type', Item.Get('mimeType', '') = 'image/png');
+    Check('the image item has only type, data and mimeType', Item.Count = 3);
+    Check('an image result is not an error', Response.FindPath('result.isError').AsBoolean = False);
+  Finally
+    Response.Free;
+  End;
+
+  Probe.Outcome := coFailImage;
+  Response := Answer(CallImage, HasBody);
+  Try
+    Content := TJSONArray(Response.FindPath('result.content'));
+    Check('a failed call sends no picture', (Content Is TJSONArray) And (Content.Count = 1) And
+      (Content.Objects[0].Get('type', '') = 'text'));
+    Check('a failed call with a picture is still an error', Response.FindPath('result.isError').AsBoolean);
+  Finally
+    Response.Free;
+  End;
+  Probe.Outcome := coSucceed;
+End;
+
 Procedure CheckMalformed(Const Name, Request: String; Code: Integer);
 Var
   Response: TJSONObject;
@@ -401,6 +458,7 @@ Begin
     LoadRequests;
     CheckRecordedRequests;
     CheckVariants;
+    CheckImageResult;
     CheckMalformedRequests;
     WriteLn('All MCP protocol checks passed.');
   Finally

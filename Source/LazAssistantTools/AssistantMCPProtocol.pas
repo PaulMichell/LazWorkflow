@@ -6,7 +6,9 @@ Unit AssistantMCPProtocol;
   comes out; a tools/call is passed to the caller's executor, which runs it wherever the broker lives.
 
   Claude Code names MCP tools mcp__<server>__<tool>. The server is called lazarus and the broker's lazarus_ prefix
-  is dropped from the listing, so lazarus_read_buffer reaches Claude as mcp__lazarus__read_buffer. }
+  is dropped from the listing, so lazarus_read_buffer reaches Claude as mcp__lazarus__read_buffer.
+
+  A tool result is a text item, followed by one image item for each picture a successful call returns. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -16,8 +18,17 @@ Unit AssistantMCPProtocol;
 Interface
 
 Type
-  { Runs one broker tool with its arguments as a JSON object. False is a tool failure, explained in ErrorText. }
-  TMCPToolExecutor = Function(Const Tool, Arguments: String; Out ResultText, ErrorText: String): Boolean Of Object;
+  { One picture in a tool result: the MCP image content item's mimeType and its base64 data. }
+  TMCPToolImage = Record
+    MimeType: String;
+    Data: String;
+  End;
+  TMCPToolImages = Array Of TMCPToolImage;
+
+  { Runs one broker tool with its arguments as a JSON object. False is a tool failure, explained in ErrorText.
+    Images are sent only with a successful result. }
+  TMCPToolExecutor = Function(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+    Out Images: TMCPToolImages): Boolean Of Object;
 
 Const
   MCPServerName = 'lazarus';
@@ -181,7 +192,10 @@ Function CallTool(Id: TJSONData; Params: TJSONObject; Const ToolsJSON: String; E
 Var
   Arguments: TJSONData;
   ArgumentText, Tool, ResultText, ErrorText, Shown: String;
+  Images: TMCPToolImages;
+  Content: TJSONArray;
   Succeeded: Boolean;
+  I: Integer;
 Begin
   If Not Assigned(Params) Or Not (Params.Find('name') Is TJSONString) Then
     Begin
@@ -211,8 +225,9 @@ Begin
     End;
   ResultText := '';
   ErrorText := '';
+  Images := Nil;
   Try
-    Succeeded := Executor(Tool, ArgumentText, ResultText, ErrorText);
+    Succeeded := Executor(Tool, ArgumentText, ResultText, ErrorText, Images);
   Except
     On E: Exception Do
       Begin
@@ -228,9 +243,12 @@ Begin
     Shown := ResultText
   Else
     Shown := 'The tool failed.';
-  Result := Envelope(Id, 'result', TJSONObject.Create([
-    'content', TJSONArray.Create([TJSONObject.Create(['type', 'text', 'text', Shown])]),
-    'isError', Not Succeeded]));
+  Content := TJSONArray.Create([TJSONObject.Create(['type', 'text', 'text', Shown])]);
+  If Succeeded Then
+    For I := 0 To High(Images) Do
+      If (Images[I].Data <> '') And (Images[I].MimeType <> '') Then
+        Content.Add(TJSONObject.Create(['type', 'image', 'data', Images[I].Data, 'mimeType', Images[I].MimeType]));
+  Result := Envelope(Id, 'result', TJSONObject.Create(['content', Content, 'isError', Not Succeeded]));
 End;
 
 Function MCPHandleMessage(Const RequestText, ToolsJSON: String; Executor: TMCPToolExecutor; Out ResponseText: String): Boolean;

@@ -9,10 +9,10 @@ Program AssistantMCPBridgeTest;
 
 Uses
   {$IFDEF UNIX}
-  cthreads,
+  cthreads, BaseUnix,
   {$ENDIF}
-  Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient,
-  AssistantMCPListener,
+  Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, base64, fpimage, fpwritepng, FileUtil,
+  AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener, AssistantMCPProtocol, AssistantImages,
   AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget;
 
 Const
@@ -837,9 +837,11 @@ End;
 Procedure CheckDirectCall;
 Var
   ResultText, ErrorText: String;
+  Images: TMCPToolImages;
 Begin
   Check('a call on the main thread runs at once',
-    Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText) And (Pos(BufferText, ResultText) > 0));
+    Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
+    (Pos(BufferText, ResultText) > 0) And (Length(Images) = 0));
 End;
 
 Procedure CheckCancel;
@@ -848,6 +850,7 @@ Var
   Reads: Integer;
   Started: QWord;
   ResultText, ErrorText: String;
+  Images: TMCPToolImages;
 Begin
   Reads := Workspace.Reads;
   { The main thread does not serve its queue here, as when the IDE is busy, so the call stays waiting. }
@@ -881,7 +884,8 @@ Begin
     Client.Free;
   End;
   Check('a main-thread call after Cancel is refused',
-    Not Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText) And (ErrorText = MCPRunCancelledText));
+    Not Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
+    (ErrorText = MCPRunCancelledText));
 End;
 
 Procedure CheckNextRun;
@@ -1077,6 +1081,127 @@ Begin
   DeleteFile(Root + 'UnitOne.pas');
   RemoveDir(ExcludeTrailingPathDelimiter(Root));
   AssistantTarget.SelectProject;
+End;
+
+Procedure WritePng(Const Path: String; Width, Height: Integer);
+Var
+  Img: TFPMemoryImage;
+  Writer: TFPWriterPNG;
+  X, Y: Integer;
+Begin
+  Img := TFPMemoryImage.Create(Width, Height);
+  Writer := TFPWriterPNG.Create;
+  Try
+    For Y := 0 To Height - 1 Do
+      For X := 0 To Width - 1 Do
+        Img.Colors[X, Y] := FPColor((X * 37) And $FFFF, (Y * 101) And $FFFF, ((X + Y) * 53) And $FFFF);
+    Img.SaveToFile(Path, Writer);
+  Finally
+    Writer.Free;
+    Img.Free;
+  End;
+End;
+
+{ The pixel size of a returned upload copy, or 0 x 0 when the data is not a still image. }
+Procedure MeasureReturned(Const Image: TMCPToolImage; Out Width, Height: Integer);
+Var
+  Decoded: String;
+  Data: TBytes;
+  Mime: String;
+Begin
+  Width := 0;
+  Height := 0;
+  Decoded := DecodeStringBase64(Image.Data);
+  SetLength(Data, Length(Decoded));
+  If Decoded <> '' Then
+    Move(Decoded[1], Data[0], Length(Decoded));
+  If Not MeasureStillImage(Data, Mime, Width, Height) Then
+    Begin
+      Width := 0;
+      Height := 0;
+    End;
+End;
+
+Procedure CheckReadImage;
+Var
+  Root, Outside, ResultText, ErrorText, Json: String;
+  Images: TMCPToolImages;
+  Stream: TFileStream;
+  Width, Height: Integer;
+Begin
+  Workspace.AllowInspect := True;
+  Bridge.BeginRun(ctsNone);
+  Check('a Chat run does not list read_image', Pos('lazarus_read_image', Bridge.ToolsJSON) = 0);
+  Check('a Chat run refuses read_image', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
+    ResultText, ErrorText, Images) And (Length(Images) = 0));
+  Bridge.BeginRun(ctsRead);
+  Check('a read run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+  Bridge.BeginRun(ctsMarkdown);
+  Check('a Markdown run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+  Bridge.BeginRun(ctsProject);
+  Check('a project run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+
+  Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-image-' + IntToStr(GetProcessID);
+  ForceDirectories(Root);
+  Outside := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-image-outside-' + IntToStr(GetProcessID) + '.png';
+  Check('select the read_image target', AssistantTarget.SelectFolder(Root, ErrorText));
+  Root := AssistantTarget.Root;
+  WritePng(Root + 'dot.png', 4, 3);
+  WritePng(Outside, 4, 3);
+  WritePng(Root + 'wide.png', 3000, 4);
+  Bridge.BeginRun(ctsRead);
+
+  Check('read_image returns one picture', Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
+    ResultText, ErrorText, Images) And (Length(Images) = 1));
+  Check('the picture is a PNG upload copy', (Images[0].MimeType = 'image/png') And (Images[0].Data <> ''));
+  MeasureReturned(Images[0], Width, Height);
+  Check('the returned data is the picture', (Width = 4) And (Height = 3));
+  Check('the text line names the picture and its size', (Pos('dot.png', ResultText) = 1) And (Pos('4 x 3', ResultText) > 0));
+  Json := Broker.ReadImagesJson(ResultText);
+  Check('the run keeps the picture for the trace', (Json <> '') And (Pos('dot.png', Json) > 0));
+  Check('a result naming no stored picture shows none', Broker.ReadImagesJson('Unit Main;') = '');
+
+  Check('a path outside the project is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+    '{"path":"' + StringToJSONString(Outside) + '"}', ResultText, ErrorText, Images) And (ErrorText <> '') And
+    (Length(Images) = 0));
+  Check('a parent path is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+    '{"path":"../' + ExtractFileName(Outside) + '"}', ResultText, ErrorText, Images) And (Length(Images) = 0));
+  Check('an empty path is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":""}',
+    ResultText, ErrorText, Images) And (Length(Images) = 0));
+  Check('a missing file is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"none.png"}',
+    ResultText, ErrorText, Images) And (Length(Images) = 0));
+  {$IFDEF UNIX}
+  Check('make a link that leaves the project', FpSymlink(PChar(Outside), PChar(Root + 'link.png')) = 0);
+  Check('a symbolic link that leaves the project is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+    '{"path":"link.png"}', ResultText, ErrorText, Images) And (Length(Images) = 0) And
+    ((Pos('symbolic link', LowerCase(ErrorText)) > 0) Or (Pos('outside the active project', LowerCase(ErrorText)) > 0)));
+  {$ENDIF}
+
+  Stream := TFileStream.Create(Root + 'huge.png', fmCreate);
+  Try
+    Stream.Size := AssistantImageMaxFileBytes + 1;
+  Finally
+    Stream.Free;
+  End;
+  Check('a file over 8 MiB is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"huge.png"}',
+    ResultText, ErrorText, Images) And (ErrorText <> '') And (Length(Images) = 0));
+
+  Check('a picture wider than the upload ceiling is read', Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+    '{"path":"wide.png"}', ResultText, ErrorText, Images) And (Length(Images) = 1));
+  MeasureReturned(Images[0], Width, Height);
+  Check('the returned copy is at most 2048 pixels a side', (Width > 0) And (Width <= AssistantImageUploadMaxSide) And
+    (Height <= AssistantImageUploadMaxSide));
+  Check('the returned copy is at most 4 MiB', Length(DecodeStringBase64(Images[0].Data)) <= AssistantImageUploadMaxBytes);
+
+  Check('the bridge hands the picture back', Bridge.Execute('lazarus_read_image', '{"path":"dot.png"}', ResultText,
+    ErrorText, Images) And (Length(Images) = 1) And (Images[0].MimeType = 'image/png'));
+  Bridge.BeginRun(ctsRead);
+  Check('a new run forgets the last run''s pictures', Broker.ReadImagesJson(ResultText) = '');
+
+  DeleteFile(Outside);
+  DeleteDirectory(ExcludeTrailingPathDelimiter(Root), False);
+  AssistantTarget.SelectProject;
+  Workspace.AllowInspect := False;
 End;
 
 Procedure CheckMarkdownSection;
@@ -1395,6 +1520,7 @@ Begin
     CheckNamedTests;
     CheckFormComponent;
     CheckPathTools;
+    CheckReadImage;
     CheckMarkdownSection;
     CheckCall;
     CheckDirectCall;
