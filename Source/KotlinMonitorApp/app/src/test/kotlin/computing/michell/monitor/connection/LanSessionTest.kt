@@ -2690,7 +2690,7 @@ private fun waitUntil(timeoutMs: Long = 5_000, condition: () -> Boolean) {
   }
 }
 
-private class ScriptedLink(
+internal class ScriptedLink(
   override val peerFingerprint: String = "",
   private val rejectWrite: (ByteArray) -> Unit = {}
 ) : TlsLink {

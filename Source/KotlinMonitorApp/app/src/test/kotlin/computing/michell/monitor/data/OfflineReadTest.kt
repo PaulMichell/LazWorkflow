@@ -7,6 +7,17 @@ package computing.michell.monitor.data
 
 import androidx.room3.RoomDatabase
 import androidx.room3.withWriteTransaction
+import computing.michell.monitor.connection.HostStore
+import computing.michell.monitor.connection.LanSession
+import computing.michell.monitor.connection.MemoryStringMap
+import computing.michell.monitor.connection.ScriptedLink
+import computing.michell.monitor.connection.TlsConnector
+import computing.michell.monitor.protocol.HelloOkMessage
+import computing.michell.monitor.protocol.encodeHelloOk
+import computing.michell.monitor.protocol.encodePairOk
+import computing.michell.monitor.protocol.tryEncodeFrame
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import computing.michell.monitor.connection.CatalogueResult
 import computing.michell.monitor.connection.SessionPort
 import computing.michell.monitor.protocol.MonitorEvent
@@ -38,6 +49,62 @@ import org.junit.Test
 import java.io.File
 
 class OfflineReadTest {
+  @Test
+  fun legacyConversationsSurviveSwitchAndExplicitRecovery() = runBlocking {
+    val linuxId = "ab".repeat(16)
+    val macId = "cd".repeat(16)
+    val linuxPin = "12".repeat(32)
+    val macPin = "34".repeat(32)
+    for (overwritten in listOf(false, true)) {
+      val room = openRoom()
+      val preferences = MemoryStringMap()
+      preferences.values.putAll(mapOf(
+        "host_address" to "desktop", "port" to if (overwritten) "56123" else "56122",
+        "fingerprint" to linuxPin, "host_id" to linuxId,
+        "client_id" to if (overwritten) "" else "linux-client",
+        "session_token" to if (overwritten) "" else "linux-token"
+      ))
+      try {
+        val clock = RoomClock(1_000L)
+        val writer = SyncApplier(linuxId, RoomSyncStore(room.database), clock)
+        commit(writer, listOf(turn(1, "turn"), block(2, "turn", "answer"), append(3, "answer", 0, "Linux answer")), clock)
+        val store = HostStore(preferences)
+        val migrated = store.load()
+        assertEquals("Linux answer", room.database.sync().loadBlocks(migrated.hostId, "c1").single().body)
+        assertEquals(overwritten, migrated.uncertainPin)
+        val link = ScriptedLink(macPin)
+        val session = LanSession(store, TlsConnector { _, _, _ -> link })
+        try {
+          if (overwritten) {
+            session.connect("desktop", 56123)
+            withTimeout(5000) { while (!session.status.value.banner.contains("fresh pairing code")) delay(10) }
+          }
+          session.connect("desktop", 56123, "123456")
+          withTimeout(5000) { while (link.frames().size < 2) delay(10) }
+          link.push(tryEncodeFrame(encodeHelloOk("hello", HelloOkMessage(
+            "12".repeat(16), "MacBook", "", 0, "", "", "", macId))).bytes)
+          link.push(tryEncodeFrame(encodePairOk("pair", "mac-client", "mac-token")).bytes)
+          withTimeout(5000) { while (!store.load().paired) delay(10) }
+        } finally {
+          session.close()
+        }
+        val restarted = HostStore(preferences)
+        val database = room.reopen()
+        assertEquals(macId, restarted.load().hostId)
+        assertEquals(macPin, restarted.load().fingerprint)
+        assertTrue(database.sync().loadBlocks(macId, "c1").isEmpty())
+        assertEquals("Linux answer", database.sync().loadBlocks(linuxId, "c1").single().body)
+        if (!overwritten) {
+          restarted.select("desktop", 56122)
+          assertEquals(migrated, restarted.load())
+          assertEquals("Linux answer", database.sync().loadBlocks(restarted.load().hostId, "c1").single().body)
+        }
+      } finally {
+        room.delete()
+      }
+    }
+  }
+
   @Test
   fun threeSlicesSurviveCloseWithNoSocket() = runBlocking {
     val room = openRoom()
