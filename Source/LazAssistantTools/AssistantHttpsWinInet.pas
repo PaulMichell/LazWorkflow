@@ -4,7 +4,8 @@ Unit AssistantHttpsWinInet;
 
   The LCL has no HTTP client. TFPHTTPClient is the cross-platform transport.
   WinINet stays until a Windows run shows OpenSSL streaming is enough.
-  This body is inside WINDOWS so the unit compiles on Linux. }
+  The monitor listener is a TLS server, so this unit also finds an OpenSSL pair
+  outside the exe directory. This body is inside WINDOWS so the unit compiles on Linux. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -38,7 +39,7 @@ Implementation
 
 {$IFDEF WINDOWS}
 Uses
-  Classes, Windows, WinInet, Forms, WorkflowLog, AssistantHttps;
+  Classes, Windows, WinInet, Forms, openssl, WorkflowLog, AssistantHttps;
 
 Type
   TBytesPointer = ^TBytes;
@@ -65,33 +66,75 @@ Begin
     Dirs.Add(Clean);
 End;
 
+Procedure AddPathDirs(Dirs: TStringList);
+Var
+  PathText, Piece: String;
+  StartAt, SplitAt: Integer;
+Begin
+  PathText := SysUtils.GetEnvironmentVariable('PATH');
+  StartAt := 1;
+  While StartAt <= Length(PathText) Do
+    Begin
+      SplitAt := Pos(';', Copy(PathText, StartAt, MaxInt));
+      If SplitAt < 1 Then
+        Begin
+          Piece := Copy(PathText, StartAt, MaxInt);
+          StartAt := Length(PathText) + 1;
+        End
+      Else
+        Begin
+          Piece := Copy(PathText, StartAt, SplitAt - 1);
+          StartAt := StartAt + SplitAt;
+        End;
+      If (Length(Piece) >= 2) And (Piece[1] = '"') And (Piece[Length(Piece)] = '"') Then
+        Piece := Copy(Piece, 2, Length(Piece) - 2);
+      AddSearchDir(Dirs, Piece);
+    End;
+End;
+
+Procedure AddKnownOpenSslDirs(Dirs: TStringList);
+Var
+  Root: String;
+Begin
+  Root := SysUtils.GetEnvironmentVariable('ProgramFiles');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'Git\mingw64\bin');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'OpenSSL-Win64\bin');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'OpenSSL\bin');
+  Root := SysUtils.GetEnvironmentVariable('ProgramW6432');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'Git\mingw64\bin');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'OpenSSL-Win64\bin');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'OpenSSL\bin');
+  Root := SysUtils.GetEnvironmentVariable('LOCALAPPDATA');
+  AddSearchDir(Dirs, IncludeTrailingPathDelimiter(Root) + 'Programs\Git\mingw64\bin');
+End;
+
+{ WinINet cannot accept the monitor TLS socket. InitSSLInterface's short names only see the exe directory and PATH,
+  and a Git or OpenSSL install is often in neither. A full path loads that pair. }
 Procedure PreloadOpenSslFromDirs;
 Const
-  {$IFDEF WIN64}
-  PairCount = 4;
+  PairCount = 6;
   SslNames: Array[0..PairCount - 1] Of String = (
-    'libssl-1_1-x64.dll', 'libssl-3-x64.dll', 'libssl32.dll', 'ssleay32.dll');
+    'libssl-3-x64.dll', 'libssl-3.dll', 'libssl-1_1-x64.dll', 'libssl-1_1.dll', 'libssl32.dll', 'ssleay32.dll');
   CryptoNames: Array[0..PairCount - 1] Of String = (
-    'libcrypto-1_1-x64.dll', 'libcrypto-3-x64.dll', 'libeay32.dll', 'libeay32.dll');
-  {$ELSE}
-  PairCount = 4;
-  SslNames: Array[0..PairCount - 1] Of String = (
-    'libssl-1_1.dll', 'libssl-3.dll', 'libssl32.dll', 'ssleay32.dll');
-  CryptoNames: Array[0..PairCount - 1] Of String = (
-    'libcrypto-1_1.dll', 'libcrypto-3.dll', 'libeay32.dll', 'libeay32.dll');
-  {$ENDIF}
+    'libcrypto-3-x64.dll', 'libcrypto-3.dll', 'libcrypto-1_1-x64.dll', 'libcrypto-1_1.dll', 'libeay32.dll', 'libeay32.dll');
 Var
   Dirs: TStringList;
   D, I: Integer;
   SslPath, CryptoPath: String;
-  HSsl, HCrypto: HMODULE;
 Begin
+  If IsSSLloaded Then
+    Exit;
   Dirs := TStringList.Create;
   Try
+    Dirs.CaseSensitive := False;
     AddSearchDir(Dirs, ExtractFilePath(ParamStr(0)));
     If Assigned(Application) Then
       AddSearchDir(Dirs, ExtractFilePath(Application.ExeName));
     AddSearchDir(Dirs, ExpandFileName(ExtractFilePath(ParamStr(0)) + 'openssl'));
+    If Assigned(Application) Then
+      AddSearchDir(Dirs, ExpandFileName(ExtractFilePath(Application.ExeName) + 'openssl'));
+    AddPathDirs(Dirs);
+    AddKnownOpenSslDirs(Dirs);
     For D := 0 To Dirs.Count - 1 Do
       For I := 0 To PairCount - 1 Do
         Begin
@@ -99,18 +142,12 @@ Begin
           CryptoPath := IncludeTrailingPathDelimiter(Dirs[D]) + CryptoNames[I];
           If (Not FileExistsNonEmpty(SslPath)) Or (Not FileExistsNonEmpty(CryptoPath)) Then
             Continue;
-          HCrypto := LoadLibrary(PChar(CryptoPath));
-          HSsl := LoadLibrary(PChar(SslPath));
-          If (HSsl <> 0) And (HCrypto <> 0) Then
+          If InitSSLInterface(SslPath, CryptoPath) Then
             Begin
-              WorkflowLogger.Info('AssistantHttps',
-                'Preloaded OpenSSL from ' + Dirs[D] + ' (' + SslNames[I] + ')');
+              WorkflowLogger.Info('AssistantHttps', 'Loaded OpenSSL from ' + SslPath);
               Exit;
             End;
-          If HSsl <> 0 Then
-            FreeLibrary(HSsl);
-          If HCrypto <> 0 Then
-            FreeLibrary(HCrypto);
+          WorkflowLogger.Warning('AssistantHttps', 'OpenSSL pair did not initialise: ' + SslPath);
         End;
   Finally
     Dirs.Free;
