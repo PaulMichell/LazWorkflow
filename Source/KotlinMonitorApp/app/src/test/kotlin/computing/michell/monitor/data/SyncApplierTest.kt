@@ -432,6 +432,80 @@ class SyncApplierTest {
     assertTrue(applier.tick().none { it == SyncEffect.Reconnect })
   }
 
+  @Test
+  fun aBaselineAtTheHeadIsCaughtUpWhileTheDesktopIsIdle() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    applier.adoptConnection(1)
+    val announced = applier.offerFrame(head(9, running = false), 1)
+    assertTrue(announced.contains(SyncEffect.OpenBehind(true)))
+    applier.offerFrame(baselineBegin("c1", "stream-a"), 1)
+    val ended = applier.offerFrame(SyncFrame.SnapshotEnd("c1", "stream-a", 9L), 1)
+    assertTrue(ended.contains(SyncEffect.OpenBehind(false)))
+    assertEquals(9L, backing.seq("c1"))
+    repeat(6) { step ->
+      clock.now = (step + 1) * SyncRecoveryBudgetMs
+      val quiet = applier.tick()
+      assertTrue(quiet.none { it is SyncEffect.Resume })
+      assertTrue(quiet.none { it == SyncEffect.Reconnect })
+      assertTrue(quiet.none { it == SyncEffect.OpenBehind(true) })
+    }
+  }
+
+  @Test
+  fun aRoomCursorAtTheHeadIsCaughtUpOnReconnect() = runBlocking {
+    val store = MemorySyncStore()
+    store.seed("c1", "stream-a", 9L)
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", store, clock)
+    applier.adoptConnection(1)
+    val announced = applier.offerFrame(head(9, running = false), 1)
+    assertTrue(announced.none { it == SyncEffect.OpenBehind(true) })
+    applier.offerFrame(SyncFrame.ResumeOk("c1", "stream-a", 9L), 1)
+    repeat(6) { step ->
+      clock.now = (step + 1) * SyncRecoveryBudgetMs
+      val quiet = applier.tick()
+      assertTrue(quiet.none { it is SyncEffect.Resume })
+      assertTrue(quiet.none { it == SyncEffect.Reconnect })
+    }
+  }
+
+  @Test
+  fun aBaselineBehindARunningHeadStillResumes() = runBlocking {
+    val backing = MemorySyncStore()
+    val clock = TestClock(0L)
+    val applier = SyncApplier("host-1", baselineStore(backing), clock)
+    applier.adoptConnection(1)
+    applier.offerFrame(head(20), 1)
+    applier.offerFrame(baselineBegin("c1", "stream-a"), 1)
+    val ended = applier.offerFrame(SyncFrame.SnapshotEnd("c1", "stream-a", 9L), 1)
+    assertTrue(ended.none { it == SyncEffect.OpenBehind(false) })
+    clock.now = SyncRecoveryBudgetMs - 1
+    assertTrue(applier.tick().none { it is SyncEffect.Resume })
+    clock.now = SyncRecoveryBudgetMs
+    assertEquals(SyncEffect.Resume("c1", "stream-a", 9L), applier.tick().first { it is SyncEffect.Resume })
+  }
+
+  /** Commits a baseline into the backing store at the frame's seq, as Room does. */
+  private fun baselineStore(backing: MemorySyncStore): SyncStore = object : SyncStore {
+    override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {
+      return backing.apply(hostId, events, nowMs)
+    }
+
+    override suspend fun cursorOf(hostId: String, conversationId: String): AppliedCursor? {
+      return backing.cursorOf(hostId, conversationId)
+    }
+
+    override suspend fun commitBaseline(hostId: String, commit: BaselineCommit, nowMs: Long): BaselinePlan {
+      backing.seed(commit.conversationId, commit.streamId, commit.seq)
+      return BaselinePlan(
+        backing.conversations.getValue(commit.conversationId),
+        emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList()
+      )
+    }
+  }
+
   private fun head(seq: Long, running: Boolean = true, block: String = "b-open"): SyncFrame.State {
     return SyncFrame.State(
       "head",

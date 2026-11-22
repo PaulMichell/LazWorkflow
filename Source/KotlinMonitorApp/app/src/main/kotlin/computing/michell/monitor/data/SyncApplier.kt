@@ -671,12 +671,15 @@ class SyncApplier(
         }
         committed[plan.conversation.id] = AppliedCursor(plan.conversation.id, plan.conversation.streamId, plan.conversation.seq)
         noteDurableProgress(nowMs())
+        // The baseline holds every event through its seq. An idle desktop sends nothing after it.
+        follow.noteCommitted(plan.conversation.id, plan.conversation.streamId, plan.conversation.seq, nowMs())
+        val behind = if (follow.consumeChanged()) listOf(SyncEffect.OpenBehind(follow.openBehind)) else emptyList()
         plan.fetches.map { fetch ->
           SyncEffect.FetchBlock(
             fetch.conversationId, fetch.blockId, fetch.offset, fetch.prefixHash, fetch.requestId,
             fetch.blockId == plan.openBlockId
           )
-        } + listOf(SyncEffect.FetchReady, SyncEffect.CacheReady)
+        } + listOf(SyncEffect.FetchReady, SyncEffect.CacheReady) + behind
       }
       is SyncFrame.BlockData -> applyBlockData(frame)
       is SyncFrame.PlanData -> listOf(SyncEffect.PlanPiece(
@@ -723,6 +726,10 @@ class SyncApplier(
           fetchRevision.clear()
         }
         follow.noteHeadJson(valueJson, now)
+        // A Room cursor already at the head is caught up. A resume from it replays no events.
+        if (follow.openBehind) {
+          durableCursor(follow.conversationId)?.let { follow.noteCommitted(it.conversationId, it.streamId, it.seq, now) }
+        }
         val accepted = if (snapshot == null) null else acceptHeadBody(paintedSeq, paintedBody, snapshot)
         if (snapshot != null && accepted != null && store.publishHead(
           hostId, snapshot.conversationId, snapshot.turnId, snapshot.blockId, accepted, snapshot.running, snapshot.seq, now
@@ -862,6 +869,19 @@ private class OpenTurnFollow {
       seqBehindSince = -1L
       arm(now)
     }
+    return refresh()
+  }
+
+  /**
+   * A durable cursor through `seq` covers the open turn as well: a baseline, or a Room row on reconnect.
+   * Only this conversation and stream. It raises the applied sequence and never restarts a running clock.
+   */
+  fun noteCommitted(conversationId: String, streamId: String, seq: Long, now: Long): Boolean {
+    if (conversationId.isEmpty() || conversationId != this.conversationId) return false
+    if (streamId.isNotEmpty() && this.streamId.isNotEmpty() && streamId != this.streamId) return false
+    if (seq <= openTurnAppliedSeq) return false
+    openTurnAppliedSeq = seq
+    arm(now)
     return refresh()
   }
 
