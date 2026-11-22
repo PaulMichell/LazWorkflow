@@ -307,12 +307,21 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
         dao.insertConversation(ConversationRecord(conversationId, hostId, "", "", "", seq, nowMs, false))
       }
       val existing = dao.loadBlock(hostId, conversationId, blockId)
+      val storedTurns = dao.loadTurns(hostId, conversationId)
       val turn = existing?.turn?.takeIf { id -> id.isNotEmpty() }
         ?: turnId.takeIf { id -> id.isNotEmpty() }
-        ?: dao.loadTurns(hostId, conversationId).lastOrNull()?.turnId
+        ?: storedTurns.lastOrNull()?.turnId
         ?: "head-$blockId"
-      if (existing == null && dao.loadTurnsById(hostId, conversationId, listOf(turn)).isEmpty()) {
-        dao.insertTurns(listOf(TurnRecord(hostId, conversationId, turn, 0, "", "", "", "", 0, "")))
+      // Ordinal 0 sorts above snapshot turns, so a reader at the tail never sees the head.
+      val after = (storedTurns.filter { row -> row.turnId != turn }.maxOfOrNull { row -> row.ordinal } ?: -1) + 1
+      val current = storedTurns.firstOrNull { row -> row.turnId == turn }
+      if (current == null) {
+        dao.insertTurns(listOf(TurnRecord(hostId, conversationId, turn, after, "", "", "", "", 0, "")))
+      } else if (current.ordinal < after) {
+        dao.updateTurn(
+          hostId, conversationId, turn, after, current.mode, current.prompt, current.createdAt, current.outcome,
+          current.durationMs, current.errorText
+        )
       }
       val row = existing?.copy(turn = turn, body = body, state = if (running) "running" else "ok")
         ?: BlockRecord(hostId, conversationId, turn, blockId, existing?.ordinal ?: 0, "answer", "", body, if (running) "running" else "ok")
@@ -723,6 +732,10 @@ class SyncApplier(
           paintedBody = accepted
           paintedConversation = snapshot.conversationId
           paintedRunning = snapshot.running
+          try {
+            android.util.Log.d("MonitorHead", "painted bytes=${accepted.length}")
+          } catch (_: RuntimeException) {
+          }
         }
       }
       "status" -> follow.noteStatusJson(valueJson, now)

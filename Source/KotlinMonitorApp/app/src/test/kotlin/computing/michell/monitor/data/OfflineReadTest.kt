@@ -332,6 +332,30 @@ class OfflineReadTest {
     }
   }
 
+  @Test
+  fun aHeadSortsAfterAnOlderTurn() = runBlocking {
+    val room = openRoom()
+    try {
+      val dao = room.database.sync()
+      dao.insertHost(HostRecord("host-1", "", ""))
+      dao.insertConversation(ConversationRecord("c1", "host-1", "", "Older", "", 1, 1, false))
+      dao.insertTurns(listOf(TurnRecord("host-1", "c1", "t-old", 4, "", "old", "", "", 0, "")))
+      dao.saveBlocks(listOf(BlockRecord("host-1", "c1", "t-old", "b-old", 0, "answer", "", "older text", "ok")))
+      val store = RoomSyncStore(room.database)
+      val applier = SyncApplier("host-1", store, RoomClock(1_000L))
+      applier.adoptConnection(1)
+      val body = "Hello tail"
+      val json = """{"seq":12,"conversation_id":"c1","stream_id":"stream-a","open_block":"b-live","turn_id":"t-live",""" +
+        """"running":true,"body":"$body","body_bytes":${body.length},"full_bytes":${body.length},"hash":"${prefixHash(body)}"}"""
+      applier.offerFrame(SyncFrame.State("head", json), 1)
+      val document = documentFromRows(dao.loadTurns("host-1", "c1"), dao.loadBlocks("host-1", "c1"))
+      assertEquals("t-live", document.turns.last().id)
+      assertEquals("Hello tail", document.live?.response)
+    } finally {
+      room.delete()
+    }
+  }
+
 }
 
 private class RoomClock(var now: Long) : () -> Long {
