@@ -222,7 +222,7 @@ Begin
         Fail('Codex outgoing queue limit exceeded.');
         Exit;
       End;
-  If FOutgoing.Count = 0 Then FWriteStarted := GetTickCount64;
+  If FOutgoing.Count = 0 Then FWriteStarted := 0;
   FOutgoing.Add(JsonLine + #10);
   Inc(FWriteBytes, Length(JsonLine) + 1);
   Result := True;
@@ -300,11 +300,6 @@ Var
   Closed, Again: Boolean;
 Begin
   If (FOutgoing.Count = 0) Or Not Assigned(FProcess) Then Exit;
-  If GetTickCount64 - FWriteStarted >= FWriteTimeout Then
-    Begin
-      Fail('Codex stdin write timed out.');
-      Exit;
-    End;
   Frame := FOutgoing[0];
   { Unix: a dead child must not raise SIGPIPE. Windows: one overlapped write, so this poll does not wait. }
   If Not WritePipeNoBlock(InputHandle, Frame[FWriteOffset], Length(Frame) - FWriteOffset + 1, FWriteSlot, N, Closed,
@@ -317,16 +312,21 @@ Begin
       Exit;
     End;
   If Again Then
-    Exit;
+    Begin
+      If FWriteStarted = 0 Then FWriteStarted := GetTickCount64
+      Else If GetTickCount64 - FWriteStarted >= FWriteTimeout Then
+        Fail('Codex stdin write timed out.');
+      Exit;
+    End;
   If N > 0 Then
     Begin
+      FWriteStarted := 0;
       Inc(FWriteOffset, N);
       If FWriteOffset > Length(Frame) Then
         Begin
           Dec(FWriteBytes, Length(Frame));
           FOutgoing.Delete(0);
           FWriteOffset := 1;
-          FWriteStarted := GetTickCount64;
         End;
     End
   Else If Closed Then

@@ -605,7 +605,14 @@ Begin
 End;
 
 Function TMonitorLinkThread.BuildSsl: Boolean;
+{$IFDEF DARWIN}
+Const
+  DarwinSoNoSigPipe = $1022; { SO_NOSIGPIPE in sys/socket.h }
+{$ENDIF}
 Var
+{$IFDEF DARWIN}
+  Enabled: cint;
+{$ENDIF}
   Raw: PSSL_CTX;
   Context: TSSLContext;
   SocketSsl: TSSL;
@@ -616,6 +623,16 @@ Begin
   SocketSsl := Nil;
   If SocketHandle < 0 Then
     Exit;
+{$IFDEF DARWIN}
+  { OpenSSL may write during handshake, application I/O and shutdown. A peer
+    disconnect must reach OpenSSL as EPIPE without signalling the IDE. }
+  Enabled := 1;
+  If fpSetSockOpt(SocketHandle, SOL_SOCKET, DarwinSoNoSigPipe, @Enabled, SizeOf(Enabled)) <> 0 Then
+    Begin
+      MonitorLog(2, 'cannot protect monitor socket from SIGPIPE: ' + IntToStr(SocketError));
+      Exit;
+    End;
+{$ENDIF}
   Try
     Try
       If Assigned(SslTLSMethod) Then

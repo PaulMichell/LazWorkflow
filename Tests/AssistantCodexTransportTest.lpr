@@ -53,6 +53,7 @@ Begin
   Try
     Start('echo');
     Check('queue request', Transport.Queue('{"id":1,"params":{"text":"**x**"}}'));
+    Sleep(150); { The owner can be delayed before its first write attempt. }
     PumpUntilFrame;
     Check('fragmented round trip', Frame = '{"id":1,"params":{"text":"**x**"}}');
     Transport.Cancel;

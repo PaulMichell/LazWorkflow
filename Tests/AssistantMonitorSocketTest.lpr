@@ -369,8 +369,12 @@ Var
 {$ENDIF}
 Begin
   {$IFDEF UNIX}
+  {$IFDEF LINUX}
   Value := 4096;
   Result := fpSetSockOpt(Handle, IPPROTO_TCP, TCP_WINDOW_CLAMP, @Value, SizeOf(Value)) = 0;
+  {$ELSE}
+  Result := True;
+  {$ENDIF}
   Value := 4096;
   Result := Result And (fpSetSockOpt(Handle, SOL_SOCKET, SO_RCVBUF, @Value, SizeOf(Value)) = 0);
   {$ELSE}
@@ -385,8 +389,12 @@ Var
 {$ENDIF}
 Begin
   {$IFDEF UNIX}
+  {$IFDEF LINUX}
   Value := 1048576;
   Result := fpSetSockOpt(Handle, IPPROTO_TCP, TCP_WINDOW_CLAMP, @Value, SizeOf(Value)) = 0;
+  {$ELSE}
+  Result := True;
+  {$ENDIF}
   Value := 262144;
   Result := Result And (fpSetSockOpt(Handle, SOL_SOCKET, SO_RCVBUF, @Value, SizeOf(Value)) = 0);
   {$ELSE}
