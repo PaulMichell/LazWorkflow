@@ -3,11 +3,11 @@ Unit AssistantMonitorForm;
 { Remote Monitor options dialog (c) 2026 Michell Computing.
 
   Static layout. The listener outlives the dialog. The phone connects to the
-  shown endpoint. Pairing codes are single-use and expire after two minutes.
+  shown endpoint, which is the default-route address rather than a virtual
+  adapter such as WSL. Pairing codes are single-use and expire after two minutes.
   Require pairing code, on by default, can be turned off so any phone that reaches
   the endpoint pairs without one. The change reaches a running listener at once.
-  LCL has no adapter list, and this tree's FCL does not declare getifaddrs, so
-  the layouts below are read through explicit libc and iphlpapi externals.
+  LCL has no adapter list. Adapter enumeration lives in AssistantMonitorSettings.
 
   LoadFields sets FieldsLoading while it fills the controls. Setting
   RemoteApprovalCheck.Checked fires its OnClick, and that handler must not
@@ -93,216 +93,9 @@ Uses
   AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorBridge,
   AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
 
-Const
-  AfInet = 2;
-  {$IFDEF WINDOWS}
-  WinErrorBufferOverflow = 111;
-  WinSkipAnycast = $0002;
-  WinSkipMulticast = $0004;
-  WinSkipDns = $0008;
-  {$ENDIF}
-
-Type
-  PMonitorSocketIn = ^TMonitorSocketIn;
-  { Darwin and the BSDs put a one-byte sa_len before a one-byte sa_family. A Word family never matches, so the
-    endpoint list stays empty. Linux and Windows keep the two-byte family. }
-  TMonitorSocketIn = Packed Record
-    {$IF DEFINED(DARWIN) OR DEFINED(BSD)}
-    Len: Byte;
-    Family: Byte;
-    {$ELSE}
-    Family: Word;
-    {$ENDIF}
-    Port: Word;
-    Address: Array[0..3] Of Byte;
-    Zero: Array[0..7] Of Byte;
-  End;
-
-{$IFDEF UNIX}
-  PMonitorIfAddrs = ^TMonitorIfAddrs;
-  TMonitorIfAddrs = Record
-    Next: PMonitorIfAddrs;
-    Name: PAnsiChar;
-    Flags: Cardinal;
-    {$IFDEF CPU64}
-    FlagPad: Cardinal;
-    {$ENDIF}
-    Address: PMonitorSocketIn;
-    Netmask: Pointer;
-    Broadcast: Pointer;
-    Data: Pointer;
-  End;
-{$ENDIF}
-
-{$IFDEF WINDOWS}
-  PWinSocketAddress = ^TWinSocketAddress;
-  TWinSocketAddress = Record
-    SockAddr: PMonitorSocketIn;
-    SockLen: Integer;
-  End;
-  PWinUnicast = ^TWinUnicast;
-  TWinUnicast = Record
-    Alignment: UInt64;
-    Next: PWinUnicast;
-    Address: TWinSocketAddress;
-  End;
-  PWinAdapter = ^TWinAdapter;
-  TWinAdapter = Record
-    Alignment: UInt64;
-    Next: PWinAdapter;
-    AdapterName: PAnsiChar;
-    FirstUnicast: PWinUnicast;
-  End;
-{$ENDIF}
-
-{$IFDEF UNIX}
-Function getifaddrs(Out List: PMonitorIfAddrs): Integer; Cdecl; External 'c';
-Procedure freeifaddrs(List: PMonitorIfAddrs); Cdecl; External 'c';
-{$ENDIF}
-
-{$IFDEF WINDOWS}
-Function GetAdaptersAddresses(Family, Flags: Cardinal; Reserved: Pointer; Addresses: PWinAdapter;
-  Var Size: Cardinal): Cardinal; StdCall; External 'iphlpapi.dll' Name 'GetAdaptersAddresses';
-{$ENDIF}
-
-Function IPv4Text(Const Address: Array Of Byte): String;
-Begin
-  Result := IntToStr(Address[0]) + '.' + IntToStr(Address[1]) + '.' + IntToStr(Address[2]) + '.' +
-    IntToStr(Address[3]);
-End;
-
 Function IsLoopback(Const Address: String): Boolean;
 Begin
   Result := Copy(Address, 1, 4) = '127.';
-End;
-
-Function IsPrivate10(Const Address: String): Boolean;
-Begin
-  Result := Copy(Address, 1, 3) = '10.';
-End;
-
-Function IsPrivate172(Const Address: String): Boolean;
-Var
-  Dot, Second: Integer;
-Begin
-  Result := False;
-  If Copy(Address, 1, 4) <> '172.' Then
-    Exit;
-  Dot := Pos('.', Copy(Address, 5, MaxInt));
-  If Dot < 2 Then
-    Exit;
-  Second := StrToIntDef(Copy(Address, 5, Dot - 1), -1);
-  Result := (Second >= 16) And (Second <= 31);
-End;
-
-Function IsPrivate192(Const Address: String): Boolean;
-Begin
-  Result := Copy(Address, 1, 8) = '192.168.';
-End;
-
-Function PreferredAddress(Addresses: TStrings): String;
-Var
-  I: Integer;
-
-  Function FirstMatch(Kind: Integer): String;
-  Var
-    Index: Integer;
-    Address: String;
-  Begin
-    Result := '';
-    For Index := 0 To Addresses.Count - 1 Do
-      Begin
-        Address := Addresses[Index];
-        If ((Kind = 0) And IsPrivate10(Address)) Or ((Kind = 1) And IsPrivate172(Address)) Or
-          ((Kind = 2) And IsPrivate192(Address)) Then
-          Exit(Address);
-      End;
-  End;
-
-Begin
-  Result := '';
-  If Not Assigned(Addresses) Then
-    Exit;
-  For I := Addresses.Count - 1 DownTo 0 Do
-    If IsLoopback(Addresses[I]) Then
-      Addresses.Delete(I);
-  Result := FirstMatch(0);
-  If Result = '' Then
-    Result := FirstMatch(1);
-  If Result = '' Then
-    Result := FirstMatch(2);
-End;
-
-Function CollectIPv4: TStringList;
-{$IFDEF UNIX}
-Var
-  List, Cursor: PMonitorIfAddrs;
-{$ENDIF}
-{$IFDEF WINDOWS}
-Var
-  Size, Status: Cardinal;
-  Buffer: PWinAdapter;
-  Adapter: PWinAdapter;
-  Unicast: PWinUnicast;
-{$ENDIF}
-Begin
-  Result := TStringList.Create;
-{$IFDEF UNIX}
-  List := Nil;
-  If getifaddrs(List) = 0 Then
-    Try
-      Cursor := List;
-      While Assigned(Cursor) Do
-        Begin
-          If Assigned(Cursor^.Address) And (Cursor^.Address^.Family = AfInet) Then
-            Result.Add(IPv4Text(Cursor^.Address^.Address));
-          Cursor := Cursor^.Next;
-        End;
-    Finally
-      freeifaddrs(List);
-    End;
-{$ENDIF}
-{$IFDEF WINDOWS}
-  Size := 0;
-  Buffer := Nil;
-  Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Nil, Size);
-  If (Status = WinErrorBufferOverflow) And (Size > 0) Then
-    Begin
-      GetMem(Buffer, Size);
-      Try
-        Status := GetAdaptersAddresses(AfInet, WinSkipAnycast Or WinSkipMulticast Or WinSkipDns, Nil, Buffer, Size);
-        If Status = 0 Then
-          Begin
-            Adapter := Buffer;
-            While Assigned(Adapter) Do
-              Begin
-                Unicast := Adapter^.FirstUnicast;
-                While Assigned(Unicast) Do
-                  Begin
-                    If Assigned(Unicast^.Address.SockAddr) And (Unicast^.Address.SockAddr^.Family = AfInet) Then
-                      Result.Add(IPv4Text(Unicast^.Address.SockAddr^.Address));
-                    Unicast := Unicast^.Next;
-                  End;
-                Adapter := Adapter^.Next;
-              End;
-          End;
-      Finally
-        FreeMem(Buffer);
-      End;
-    End;
-{$ENDIF}
-End;
-
-Function ProposeBindAddress: String;
-Var
-  Found: TStringList;
-Begin
-  Found := CollectIPv4;
-  Try
-    Result := PreferredAddress(Found);
-  Finally
-    Found.Free;
-  End;
 End;
 
 Function ListenerRunning: Boolean;
@@ -343,7 +136,7 @@ Var
   I: Integer;
 Begin
   Current := AddressEdit.Text;
-  Found := CollectIPv4;
+  Found := MonitorInterfaceAddresses;
   Try
     AddressEdit.Items.BeginUpdate;
     Try
@@ -395,7 +188,7 @@ End;
 Procedure TAssistantMonitorForm.LoadFields;
 Var
   Settings: TMonitorSettings;
-  ErrorText, Proposed: String;
+  ErrorText: String;
 Begin
   FieldsLoading := True;
   Try
@@ -405,13 +198,12 @@ Begin
     BindAllCheck.Checked := Settings.BindAll;
     RemoteApprovalCheck.Checked := Settings.RemoteApproval;
     RequirePairCodeCheck.Checked := Settings.RequirePairCode;
-    If Settings.BindAddress <> '' Then
+    { A stored address that is not on an adapter is kept. One that exists only on a virtual adapter,
+      such as WSL 172.29.0.1, is not reachable from the LAN and is replaced by the default-route address. }
+    If (Settings.BindAddress <> '') And MonitorBindAddressReachesLan(Settings.BindAddress) Then
       AddressEdit.Text := Settings.BindAddress
     Else
-      Begin
-        Proposed := ProposeBindAddress;
-        AddressEdit.Text := Proposed;
-      End;
+      AddressEdit.Text := MonitorPreferredBindAddress;
     If ErrorText <> '' Then
       StatusMemo.Text := ErrorText;
     FillAddressChoices;
