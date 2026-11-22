@@ -182,6 +182,46 @@ class ScreenFetchTest {
     root.deleteRecursively()
   }
 
+  @Test
+  fun theHeadLayoutDoesNotRequestOlderBodies() {
+    val fetch = ScreenFetch()
+    val older = (0..4).map { index -> turn(index, "t-$index", deferred = true, running = false) }
+    val live = turn(5, "t-live", deferred = true, running = true)
+    val first = fetch.replaceBoard("c1", older, live)
+    assertEquals(listOf("b-5"), first.filterIsInstance<FetchGrant.Block>().map { grant -> grant.fetch.blockId })
+    assertTrue(fetch.noteReading(true, setOf(3, 4, 5)).isEmpty())
+    assertTrue(fetch.isFlying("b-5"))
+    assertFalse(fetch.isFlying("b-0"))
+    assertFalse(fetch.isFlying("b-4"))
+    assertTrue(fetch.noteReading(true, emptySet()).isEmpty())
+    assertTrue(fetch.staleBlockIds().isEmpty())
+    assertTrue(fetch.staleTurnIndices().isEmpty())
+  }
+
+  @Test
+  fun rapidScrollingKeepsOneViewportAndALiveUpdateDoesNotAskAgain() {
+    val fetch = ScreenFetch()
+    val older = (0..6).map { index -> turn(index, "t-$index", deferred = true, running = false) }
+    val live = turn(7, "t-live", deferred = true, running = true)
+    assertEquals(1, fetch.replaceBoard("c1", older, live).size)
+    var grants = 0
+    for (index in 0..3) grants += fetch.noteReading(false, setOf(index)).size
+    assertEquals(4, grants)
+    assertTrue(fetch.isFlying("b-3"))
+    assertFalse(fetch.isFlying("b-0"))
+    assertFalse(fetch.isFlying("b-1"))
+    assertFalse(fetch.isFlying("b-2"))
+    val again = fetch.replaceBoard("c1", older, live)
+    assertTrue(again.none { grant -> grant is FetchGrant.Block && grant.fetch.blockId == "b-7" })
+    assertTrue(fetch.isFlying("b-7"))
+    val back = fetch.noteReading(true, emptySet())
+    assertFalse(fetch.isFlying("b-3"))
+    assertTrue(back.none { grant -> grant is FetchGrant.Block && !grant.open && grant.fetch.blockId != "b-7" })
+    assertTrue(fetch.staleBlockIds().contains("b-3"))
+    assertTrue(fetch.setConnected(false).isEmpty())
+    assertEquals(listOf("b-7"), fetch.setConnected(true).filterIsInstance<FetchGrant.Block>().map { grant -> grant.fetch.blockId })
+  }
+
   private fun turn(index: Int, id: String, deferred: Boolean, running: Boolean): WireTurn {
     val block = WireBlock("answer", "b-$index", "", "", "", "stored", running, true, 0, emptyList(), deferred = deferred)
     return WireTurn(index, id, "build", "", "prompt", "", live = running, blocks = listOf(block))

@@ -44,9 +44,79 @@ fun recentFetches(slots: List<VirtualSlot>, loaded: Set<Int>, window: Int = Rece
   return slots.takeLast(window).map { slot -> slot.turnIndex }.filter { index -> index >= 0 && index !in loaded }.distinct()
 }
 
-/** Recent turns the screen may report as visible until 5.4. Not every history index. */
+/** Recent turns. Not the empty-layout fallback: the head reports no older indices. */
 fun prefetchRecent(slots: List<VirtualSlot>, window: Int = RecentTurnWindow): Set<Int> {
   return slots.takeLast(window).map { slot -> slot.turnIndex }.filter { index -> index >= 0 }.toSet()
+}
+
+/** What the reader is looking at. The head carries no older viewport demand. */
+data class ReadingDemand(
+  val followingHead: Boolean,
+  val visible: Set<Int>,
+  val anchorIndex: Int,
+  val anchorOffset: Int
+)
+
+/**
+ * First layout and a programmatic return to the tail are head demand.
+ * A finger scroll into history is the visible turn indices and the row to keep.
+ */
+fun readingDemand(followingHead: Boolean, visible: Set<Int>, anchorIndex: Int, anchorOffset: Int): ReadingDemand {
+  if (followingHead) return ReadingDemand(true, emptySet(), anchorIndex, anchorOffset)
+  return ReadingDemand(false, visible.filter { index -> index >= 0 }.toSet(), anchorIndex, anchorOffset)
+}
+
+/** The row the reader had, after bodies arrive and the list is rebuilt. */
+fun retainedAnchor(rows: List<ConversationRow>, key: String, offset: Int): Pair<Int, Int>? {
+  if (key.isEmpty()) return null
+  val index = rows.indexOfFirst { row -> row.key == key }
+  if (index < 0) return null
+  return index to offset
+}
+
+/**
+ * A history result discarded on the way back to the head must not repaint that head.
+ * Cached rows stay. The live tail is not a discarded history result.
+ */
+fun boardForReader(
+  followingHead: Boolean,
+  incoming: BoardContent,
+  shown: BoardContent,
+  staleBlockIds: Set<String>,
+  staleTurnIndices: Set<Int>
+): BoardContent {
+  if (!followingHead || (staleBlockIds.isEmpty() && staleTurnIndices.isEmpty())) return incoming
+  if (shown.conversationId.isNotEmpty() && incoming.conversationId.isNotEmpty() &&
+    shown.conversationId != incoming.conversationId) return incoming
+  val kept = (shown.turns + listOfNotNull(shown.live)).associateBy { turn -> turn.id.ifEmpty { "index:${turn.turnIndex}" } }
+  val keptIndex = (shown.turns + listOfNotNull(shown.live)).associateBy { turn -> turn.turnIndex }
+  return incoming.copy(
+    turns = incoming.turns.mapNotNull { turn ->
+      shownTurn(turn, kept, keptIndex, staleBlockIds, staleTurnIndices)
+    },
+    live = incoming.live?.let { turn -> keepStaleBlocks(turn, kept[turn.id], staleBlockIds) }
+  )
+}
+
+private fun shownTurn(
+  turn: WireTurn,
+  kept: Map<String, WireTurn>,
+  keptIndex: Map<Int, WireTurn>,
+  staleBlockIds: Set<String>,
+  staleTurnIndices: Set<Int>
+): WireTurn? {
+  val previous = kept[turn.id] ?: keptIndex[turn.turnIndex]
+  if (turn.turnIndex in staleTurnIndices && previous == null) return null
+  return keepStaleBlocks(turn, previous, staleBlockIds)
+}
+
+private fun keepStaleBlocks(turn: WireTurn, previous: WireTurn?, staleBlockIds: Set<String>): WireTurn {
+  if (turn.blocks.none { block -> block.blockId in staleBlockIds }) return turn
+  val old = previous?.blocks?.associateBy { block -> block.blockId }.orEmpty()
+  return turn.copy(blocks = turn.blocks.map { block ->
+    if (block.blockId !in staleBlockIds) block
+    else old[block.blockId] ?: block.copy(body = previous?.response.orEmpty(), deferred = true)
+  })
 }
 
 /** A finished turn must not keep a running thought in the middle of the transcript. */

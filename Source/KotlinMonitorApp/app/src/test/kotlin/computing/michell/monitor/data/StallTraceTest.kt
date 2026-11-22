@@ -110,7 +110,7 @@ class StallTraceTest {
     val scrolled = screen.noteVisible(setOf(0))
     trace += sample(clock.now, "scroll", store, 12L, scrolled.map { it.toString() }, "status")
     assertFalse(following)
-    assertEquals("b1", scrolled.filterIsInstance<FetchGrant.Block>().single().fetch.blockId)
+    assertEquals("b0", scrolled.filterIsInstance<FetchGrant.Block>().single().fetch.blockId)
     assertEquals("Hi", shownBody(store))
 
     clock.now = 2_000L

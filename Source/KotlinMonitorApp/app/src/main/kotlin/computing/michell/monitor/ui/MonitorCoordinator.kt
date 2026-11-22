@@ -237,9 +237,9 @@ class MonitorCoordinator(
     local = local.copy(settingsOpen = open, banner = if (open) "" else local.banner)
   }
 
-  fun noteVisibleTurns(current: MonitorUi, indices: Set<Int>): List<MonitorEffect> = synchronized(gate) {
+  fun noteReading(current: MonitorUi, demand: ReadingDemand): List<MonitorEffect> = synchronized(gate) {
     visibleTurns.clear()
-    visibleTurns.addAll(indices)
+    visibleTurns.addAll(demand.visible)
     emptyList()
   }
 

@@ -888,6 +888,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private val finalWatch = DictationFinalWatch(viewModelScope, onExpired = ::abandonAwaitingFinal)
 
   private val screenFetch = computing.michell.monitor.data.ScreenFetch(initiallyConnected = false)
+  private var followingHead = true
+  private var shownForHead = BoardContent()
 
   init {
     session.recordIncident = { snapshot, secrets -> incidentRingState.value = incidentRing.record(snapshot, secrets) }
@@ -1455,7 +1457,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           val current = storedBoardState.value
           val nextHasRows = board.turns.isNotEmpty() || board.live != null
           val currentHasRows = current.turns.isNotEmpty() || current.live != null
-          if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = board
+          val displayed = boardForReader(
+            followingHead, board, shownForHead, screenFetch.staleBlockIds(), screenFetch.staleTurnIndices()
+          )
+          if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = displayed
+          if (followingHead) shownForHead = displayed
           sendFetchGrants(screenFetch.replaceBoard(conversationId, board.turns, board.live))
           if (row != null) {
             coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
@@ -1669,9 +1675,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     return RetentionLimits(if (cap < 1) DefaultConversationCap else cap, budget)
   }
 
-  fun noteVisibleTurns(indices: Set<Int>) {
-    coordinator.noteVisibleTurns(uiState.value, indices)
-    sendFetchGrants(screenFetch.noteVisible(indices))
+  fun noteReading(demand: ReadingDemand) {
+    followingHead = demand.followingHead
+    if (demand.followingHead) shownForHead = storedBoardState.value
+    coordinator.noteReading(uiState.value, demand)
+    sendFetchGrants(screenFetch.noteReading(demand.followingHead, demand.visible))
   }
 
   fun noteViewWidth(px: Int) {

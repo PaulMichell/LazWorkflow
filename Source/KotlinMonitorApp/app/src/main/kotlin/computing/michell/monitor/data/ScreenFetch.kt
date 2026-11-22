@@ -2,15 +2,15 @@ package computing.michell.monitor.data
 
 /* Which bodies to ask for, and no others (c) 2026 Michell Computing.
 
-   The running block owns one slot. A plan fetch may use the other. History
-   fills only what is on screen, plus one turn of prefetch, and only when a
-   slot remains. A newer revision drops the previous flight and asks again.
+   The running block owns one slot. A plan fetch may use the other. At the
+   head, older bodies are not requested. While browsing, history fills only
+   the visible turns, in the slots that remain. A return to the head drops
+   that demand. A newer revision drops the previous flight and asks again.
    An applied body frees the slot before the board watch republishes. */
 
 import computing.michell.monitor.protocol.WireTurn
 
 const val FetchCap = 2
-const val PrefetchTurns = 1
 
 sealed class FetchGrant {
   data class Block(val fetch: BlockFetch, val open: Boolean) : FetchGrant()
@@ -42,7 +42,9 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   /** Applied, and not yet cleared by a board that no longer marks the block deferred. */
   private val applied = HashSet<String>()
   private val knownTurns = HashSet<Int>()
+  private val stale = HashSet<String>()
   private var visible = emptySet<Int>()
+  private var followingHead = true
   private var planPath = ""
   private var planRevision = ""
   private var planOffset = 0L
@@ -101,9 +103,24 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
     return release()
   }
 
-  fun noteVisible(indices: Set<Int>): List<FetchGrant> {
-    visible = indices
+  /** Head demand asks for nothing older. Browsing replaces the previous viewport. */
+  fun noteReading(atHead: Boolean, indices: Set<Int>): List<FetchGrant> {
+    followingHead = atHead
+    visible = if (atHead) emptySet() else indices
+    if (atHead) dropHistoryDemand() else dropUnwanted()
     return release()
+  }
+
+  fun noteVisible(indices: Set<Int>): List<FetchGrant> = noteReading(false, indices)
+
+  fun staleBlockIds(): Set<String> {
+    return stale.filter { key -> !key.startsWith("turn:") && !key.startsWith("plan:") }.toSet()
+  }
+
+  fun staleTurnIndices(): Set<Int> {
+    return stale.mapNotNull { key ->
+      if (key.startsWith("turn:")) key.removePrefix("turn:").toIntOrNull() else null
+    }.toSet()
   }
 
   fun notePlan(path: String, revision: String, filePresent: Boolean, fileRevision: String, fileLength: Long, showing: Boolean): List<FetchGrant> {
@@ -157,6 +174,44 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   }
 
   private fun planKey(): String = "plan:" + planPath
+
+  private fun dropHistoryDemand() {
+    val history = inFlight.filter { key -> historyKey(key) }
+    for (key in history) {
+      inFlight.remove(key)
+      stale += key
+    }
+  }
+
+  /** A rapid scroll keeps only the turns now on screen. The cap is not a queue of old viewports. */
+  private fun dropUnwanted() {
+    val wanted = wantedTurns()
+    val gone = inFlight.filter { key ->
+      if (!historyKey(key)) return@filter false
+      val index = turnIndexOf(key)
+      index == null || index !in wanted
+    }
+    for (key in gone) {
+      inFlight.remove(key)
+      stale += key
+    }
+    stale.removeAll { key ->
+      val index = turnIndexOf(key)
+      index != null && index in wanted
+    }
+  }
+
+  private fun historyKey(key: String): Boolean {
+    if (key.startsWith("plan:")) return false
+    return owed[key]?.open != true
+  }
+
+  private fun turnIndexOf(key: String): Int? {
+    if (key.startsWith("turn:")) return key.removePrefix("turn:").toIntOrNull()
+    val row = owed[key] ?: return null
+    if (row.turnIndex < 0) return null
+    return row.turnIndex
+  }
 
   private fun release(): List<FetchGrant> {
     if (!connected) return emptyList()
@@ -219,14 +274,7 @@ class ScreenFetch(initiallyConnected: Boolean = true) {
   }
 
   private fun wantedTurns(): Set<Int> {
-    if (visible.isEmpty()) return emptySet()
-    val ahead = visible.max() + PrefetchTurns
-    val wanted = HashSet<Int>(visible)
-    var index = visible.max() + 1
-    while (index <= ahead) {
-      wanted += index
-      index += 1
-    }
-    return wanted
+    if (followingHead || visible.isEmpty()) return emptySet()
+    return visible
   }
 }

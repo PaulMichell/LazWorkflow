@@ -114,7 +114,7 @@ fun ConversationScreen(
   onSend: () -> Unit,
   onStop: () -> Unit,
   onNew: () -> Unit,
-  onVisibleTurns: (Set<Int>) -> Unit,
+  onReading: (ReadingDemand) -> Unit,
   onViewWidth: (Int) -> Unit,
   dictation: DictationState,
   onDictateOn: (Int, Int, Boolean) -> Unit,
@@ -137,7 +137,7 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    ConversationPane(shown, phase, bitmaps, onVisibleTurns, onViewWidth, Modifier.weight(1f).fillMaxWidth())
+    ConversationPane(shown, phase, bitmaps, onReading, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
     }
@@ -186,7 +186,7 @@ private fun ConversationPane(
   ui: MonitorUi,
   phase: LinkPhase,
   bitmaps: Map<String, Bitmap>,
-  onVisibleTurns: (Set<Int>) -> Unit,
+  onReading: (ReadingDemand) -> Unit,
   onViewWidth: (Int) -> Unit,
   modifier: Modifier
 ) {
@@ -197,7 +197,9 @@ private fun ConversationPane(
   val listState = rememberLazyListState()
   var followHead by remember { mutableStateOf(true) }
   val programmatic = remember { mutableStateOf(false) }
-  val reportVisible = rememberUpdatedState(onVisibleTurns)
+  val reportReading = rememberUpdatedState(onReading)
+  var anchorKey by remember { mutableStateOf("") }
+  var anchorOffset by remember { mutableStateOf(0) }
   // The pending bubble is drawn after the rows, so the head is one past them while it shows.
   val pendingShown = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
   val headIndex = if (pendingShown) rows.size else rows.lastIndex
@@ -240,13 +242,35 @@ private fun ConversationPane(
       programmatic.value = false
     }
   }
-  LaunchedEffect(listState, rows) {
-    snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { item -> item.index } }
-      .collect { indices ->
-        val visible = indices.mapNotNull { index -> rows.getOrNull(index)?.turnIndex }.filter { index -> index >= 0 }.toSet()
-        if (visible.isEmpty()) reportVisible.value(prefetchRecent(virtualSlots(ui.turns, ui.live, showLive)))
-        else reportVisible.value(visible)
+  LaunchedEffect(rows, followHead) {
+    if (followHead || anchorKey.isEmpty()) return@LaunchedEffect
+    val place = retainedAnchor(rows, anchorKey, anchorOffset) ?: return@LaunchedEffect
+    if (listState.firstVisibleItemIndex == place.first && listState.firstVisibleItemScrollOffset == place.second) return@LaunchedEffect
+    programmatic.value = true
+    try {
+      listState.scrollToItem(place.first, place.second)
+    } finally {
+      programmatic.value = false
+    }
+  }
+  LaunchedEffect(listState, rows, followHead) {
+    snapshotFlow {
+      val info = listState.layoutInfo
+      val first = info.visibleItemsInfo.firstOrNull()
+      info.visibleItemsInfo.map { item -> item.index } to (first?.index to (first?.offset ?: 0))
+    }.collect { (indices, anchor) ->
+      val firstIndex = anchor.first
+      val firstRow = if (firstIndex == null) null else rows.getOrNull(firstIndex)
+      if (!followHead && firstRow != null) {
+        anchorKey = firstRow.key
+        anchorOffset = anchor.second
       }
+      val visible = indices.mapNotNull { index -> rows.getOrNull(index)?.turnIndex }.filter { index -> index >= 0 }.toSet()
+      val place = retainedAnchor(rows, anchorKey, anchorOffset)
+      reportReading.value(readingDemand(
+        followHead, visible, place?.first ?: firstIndex ?: 0, place?.second ?: anchor.second
+      ))
+    }
   }
   LazyColumn(
     state = listState,
