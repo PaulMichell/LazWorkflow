@@ -18,8 +18,63 @@ signatures and `commands_changed` events are removed. Session IDs, message IDs a
 | `denied.jsonl` | as above, `--tools Read,Write` | A denied `Write`: the turn still ends `success`, with `permission_denials`. |
 | `maxturns.jsonl` | as above, `--max-turns 1` | `error_max_turns`: `is_error`, no `result`, reason in `errors`. |
 | `badresume.jsonl` | `--resume` with an unknown session | `error_during_execution`, `errors: ["No conversation found …"]`. |
+| `image-input.jsonl` | `-p --input-format stream-json --output-format stream-json --verbose --session-id <uuid> --tools=`; stdin is one user message with a text block and a base64 PNG `image` block | Not yet captured (see Images). Whether the turn describes the picture. |
+| `image-resume.jsonl` | as above, `--resume <same uuid>`; stdin is one text-only user message | Not yet captured. Whether the model still knows the earlier picture without it being sent again. |
+| `mcp-image.jsonl` | `-p --output-format stream-json --verbose --tools=Read,Grep,Glob --mcp-config=<file> --allowedTools=mcp__capture__*`; prompt as plain text | Not yet captured. A tool result with an MCP `image` item (`data`, `mimeType`): whether it reaches the model, and how the stream shows it. |
 
-To refresh: rerun the commands in an empty scratch directory, redact as above, and keep the file names.
+To refresh: rerun the commands in an empty scratch directory, redact as above, and keep the file names. The three image
+files come from the capture program below.
+
+## Images
+
+`CaptureClaudeImages.lpr` captures the three image files, and probes how stdin must be closed and what size and
+format Claude Code accepts. Its work is in `Tests/ClaudeCaptureProgram.pas` and `Tests/ClaudeCaptureSupport.pas`;
+`Tests/ClaudeCaptureTest.lpr` checks those without starting claude, so the runner keeps them compiling.
+
+The program checks `claude auth status` (through `ReadClaudeAccount`) and stops unless Claude Code is on a claude.ai
+subscription. Every turn gets the environment of `BuildClaudeEnvironment`, the one IDE turns get. It never reads or
+copies Claude sign-in files, and never passes `--bare`, `--max-budget-usd` or `--betas`. Each turn runs in an empty
+scratch directory in the system temporary directory, so Claude Code finds no project instructions; the directory is
+removed at the end. The only pictures are synthetic and drawn by the program: a red circle on yellow (256 × 256) for
+input, a green triangle on white for the MCP result, and 1600 × 1600 random noise for the size probe.
+
+Build and run from the repository root, signed in to the subscription, with `<Lazarus>` the Lazarus checkout and
+`<cpu-os>` such as `x86_64-linux`:
+
+```sh
+mkdir -p Temporary/ClaudeCapture
+fpc -MObjFPC -FUTemporary/ClaudeCapture -FETemporary/ClaudeCapture -FuTests -FuSource/LazAssistantTools \
+  -FuSource/LazWorkflowCommon -Fu<Lazarus>/components/lazutils/lib/<cpu-os> \
+  Tests/Fixtures/Claude/CaptureClaudeImages.lpr
+Temporary/ClaudeCapture/CaptureClaudeImages --output-dir Temporary/ClaudeCapture/Run
+```
+
+Options: `--claude <path>` (default: `claude` on `PATH`), `--model <name>` (default `haiku`, as for the other
+fixtures; `--model ''` leaves it to Claude Code), `--timeout <seconds>` per turn (default 300), and `--case <name>`,
+which may repeat. Without `--case` every case runs:
+
+| Case | What it sends | What it shows |
+|------|---------------|---------------|
+| `image-input` | One stream-json user message: a text block, then `{"type":"image","source":{"type":"base64","media_type":"image/png","data":…}}`. Stdin is closed after the line. | Whether stream-json input works in print mode and the picture is described. If this shape gets no successful result, `image-input-sdk` tries again with the Agent SDK's extra `parent_tool_use_id: null` and `session_id: ""`; the resume turn then uses whichever shape worked. |
+| `image-resume` | `--resume` on that session, one text-only stream-json message. Runs `image-input` first. | Whether the session still holds the picture. |
+| `mcp-image` | The prompt as plain text. Claude Code starts this same program with `--mcp-server <log>` as the stdio server `capture`, whose tool `show_picture` returns a text item and an `image` item. | Whether the picture reaches the model, and the `tool_result` the stream shows. |
+| `stdin-open` | A text-only stream-json message, with stdin left open until 15 s after the `result` event. | Whether one stream-json turn ends by itself or waits for stdin to close. |
+| `limits-large` | The noise picture, over 5 MB as a PNG: the Anthropic API's documented limit is 5 MB per image, 8000 pixels a side, and JPEG, PNG, GIF or WebP. | What Claude Code does with an image over the size limit: refuses it, shrinks it, or passes the API's error on. |
+| `limits-format` | The input picture declared as `image/bmp`. | How a format outside the accepted list is refused. |
+
+The probe turns pass `--no-session-persistence`. Everything goes to `--output-dir`, which must be under `Temporary/`:
+`<case>.jsonl` (stdout as received), `<case>.stderr.txt`, `<case>.input.txt` (the exact stdin), the pictures,
+`mcp-config.json`, `mcp-server.log` (each request, and each reply with image data shortened), and `summary.md`. The
+summary gives, for each case, the command, the stdin with image data shortened, when the `result` event came, when
+stdin was closed and when the process ended, whether the answer names the expected colour and shape, and one line per
+stream event. Record the accepted shape, the resume and MCP findings, the limits and the stdin rule from it.
+
+To make the fixtures: copy `image-input.jsonl` (or `image-input-sdk.jsonl` if only that shape worked),
+`image-resume.jsonl` and `mcp-image.jsonl` here and redact them as at the top of this file. Replace the scratch
+directory path with `/work`, and the path of the capture program and its log in the `init` event's `mcp_servers` with
+`/work/CaptureClaudeImages`. Keep the base64 data of the synthetic pictures as captured; they are small and contain no
+user material. Commit no other picture, and no prompt other than the program's own. Leave the probe output in
+`Temporary/`: record its findings in the plan instead.
 
 ## MCP requests
 
