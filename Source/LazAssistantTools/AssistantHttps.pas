@@ -336,10 +336,10 @@ Function OpenSSLMissingHint: String;
 Begin
   {$IFDEF WINDOWS}
   Result :=
-    'Could not load OpenSSL for HTTPS streaming.' + LineEnding +
-    'WinINet streaming should be used on Windows; if you still see this message, ' +
-    'rebuild LazAssistantTools. Optional: install OpenSSL Light and copy ' +
-    'libssl-1_1-x64.dll + libcrypto-1_1-x64.dll next to lazarus.exe.';
+    'Could not load OpenSSL.' + LineEnding +
+    'Windows chat streaming uses WinINet and does not need it. The monitor listener does, ' +
+    'because WinINet cannot accept the phone TLS socket.' + LineEnding +
+    'Install OpenSSL or Git, or copy libssl-3-x64.dll and libcrypto-3-x64.dll next to lazarus.exe.';
   {$ELSE}
   Result :=
     'Could not initialize OpenSSL. Install libssl development packages ' +
