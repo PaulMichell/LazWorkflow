@@ -18,9 +18,11 @@ signatures and `commands_changed` events are removed. Session IDs, message IDs a
 | `denied.jsonl` | as above, `--tools Read,Write` | A denied `Write`: the turn still ends `success`, with `permission_denials`. |
 | `maxturns.jsonl` | as above, `--max-turns 1` | `error_max_turns`: `is_error`, no `result`, reason in `errors`. |
 | `badresume.jsonl` | `--resume` with an unknown session | `error_during_execution`, `errors: ["No conversation found …"]`. |
-| `image-input.jsonl` | `-p --input-format stream-json --output-format stream-json --verbose --session-id <uuid> --tools=`; stdin is one user message with a text block and a base64 PNG `image` block | Not yet captured (see Images). Whether the turn describes the picture. |
-| `image-resume.jsonl` | as above, `--resume <same uuid>`; stdin is one text-only user message | Not yet captured. Whether the model still knows the earlier picture without it being sent again. |
-| `mcp-image.jsonl` | `-p --output-format stream-json --verbose --tools=Read,Grep,Glob --mcp-config=<file> --allowedTools=mcp__capture__*`; prompt as plain text | Not yet captured. A tool result with an MCP `image` item (`data`, `mimeType`): whether it reaches the model, and how the stream shows it. |
+| `image-input.jsonl` | `-p --input-format stream-json --output-format stream-json --verbose --session-id <uuid> --tools=`; stdin is one user message with a text block and a base64 PNG `image` block | The plain user-message shape is accepted and the turn describes the picture (a red circle on yellow). |
+| `image-resume.jsonl` | as above, `--resume <same uuid>`; stdin is one text-only user message | The resumed session still knows the earlier picture without it being sent again. |
+| `mcp-image.jsonl` | `-p --output-format stream-json --verbose --tools=Read,Grep,Glob --mcp-config=<file> --allowedTools=mcp__capture__*`; prompt as plain text | An MCP `image` item (`data`, `mimeType`) reaches the model (a green triangle on white). The stream's `tool_result` shows it in API form, `{"type":"image","source":{"type":"base64",…}}`, in both `content` and `tool_use_result`. |
+
+The three image files were captured on 22 November 2026 from Claude Code 2.1.322, otherwise as above.
 
 To refresh: rerun the commands in an empty scratch directory, redact as above, and keep the file names. The three image
 files come from the capture program below.
