@@ -62,9 +62,12 @@ Procedure SetDocumentRelativePath(Const RelativePath: String);
 Procedure RememberDocumentRelativePath(Const RelativePath: String);
 { Current document, or a new report path when none is remembered. }
 Function DocumentPathForTurn: String;
-Function AssistantDocumentDirective(Const DocumentPath: String): String;
-/// Plan-mode user prefix. Names write_markdown and the plan path.
-Function AssistantPlanDirective(Const PlanPath: String): String;
+/// Document-mode user prefix. OffersImages names write_image; pass False for a turn without it, such as Claude.
+Function AssistantDocumentDirective(Const DocumentPath: String; OffersImages: Boolean = True): String;
+/// Plan-mode user prefix. Names write_markdown and the plan path. OffersImages as for the document directive.
+Function AssistantPlanDirective(Const PlanPath: String; OffersImages: Boolean = True): String;
+/// The directives' sentence on images and other non-Markdown documents.
+Function AssistantDirectiveImageSentence(OffersImages: Boolean): String;
 Function ResolvePlanPath(Const RelativeOrAbsolute: String; Out Resolved: String;
   Out ErrorText: String): Boolean;
 { Same rules as ResolvePlanPath, but Root is explicit and an empty path does not fall back. }
@@ -321,7 +324,17 @@ Begin
     End;
 End;
 
-Function AssistantDocumentDirective(Const DocumentPath: String): String;
+Function AssistantDirectiveImageSentence(OffersImages: Boolean): String;
+Begin
+  If OffersImages Then
+    Result := 'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. '
+  Else
+    { No tool name: Grok writes text files with write_file, the Lazarus tools over MCP with create_file. }
+    Result := 'This turn cannot generate images; say so, and do not invent a path or a PNG. ' +
+      'SVG and other text documents (.html, .txt, and the same family) are written as text files. ';
+End;
+
+Function AssistantDocumentDirective(Const DocumentPath: String; OffersImages: Boolean): String;
 Begin
   Result :=
     '[SYSTEM DIRECTIVE — Document mode] When this request produces or revises a document, write it with ' +
@@ -331,18 +344,17 @@ Begin
     'Use free Markdown. The user''s prompt decides the layout. ' +
     'Do not use the assistant plan format. Do not add the line "' + AssistantPlanGeneratedLine + '". ' +
     'Do not add Status lines. Do not call set_active_plan. Do not edit source files. ' +
-    'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. ' +
+    AssistantDirectiveImageSentence(OffersImages) +
     'Do not write the active plan. ' +
     'If the user asks for a new document, use a new Documents/Report-YYYYMMDD-HHMMSS.md path and do not overwrite this file. ' +
     'A question that does not ask for a document or a change does not need a write.';
 End;
 
-Function AssistantPlanDirective(Const PlanPath: String): String;
+Function AssistantPlanDirective(Const PlanPath: String; OffersImages: Boolean): String;
 Begin
   Result :=
     '[SYSTEM DIRECTIVE — Plan mode] Write the plan into the project Markdown file ' +
-    'using the write_markdown tool (path: "' + PlanPath +
-    '"). Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file. ' +
+    'using the write_markdown tool (path: "' + PlanPath + '"). ' + AssistantDirectiveImageSentence(OffersImages) +
     'Chat reply must be a short summary only, not the full plan body. ' +
     'Use the assistant plan format: an H1 title, then `' + AssistantPlanGeneratedLine +
     '`, numbered ## sections without Status, and ### items with Status.';

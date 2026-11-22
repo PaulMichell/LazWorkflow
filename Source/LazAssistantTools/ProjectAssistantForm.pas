@@ -8323,10 +8323,12 @@ Begin
       PlanRel := GetActivePlanRelativePath;
       If PlanRel = '' Then
         PlanRel := DefaultPlanRelativePath;
-      Result := AssistantPlanDirective(PlanRel) + LineEnding + LineEnding + ModelText;
+      Result := AssistantPlanDirective(PlanRel, AssistantTurnOffersImageOutput(amPlan)) + LineEnding + LineEnding +
+        ModelText;
     End
   Else If ActiveMode = amDocument Then
-    Result := AssistantDocumentDirective(DocumentPathForTurn) + LineEnding + LineEnding + ModelText;
+    Result := AssistantDocumentDirective(DocumentPathForTurn, AssistantTurnOffersImageOutput(amDocument)) +
+      LineEnding + LineEnding + ModelText;
   { Chat keeps the harness no-tools sentence. Do not paraphrase it into the user text. }
   WithContext := (ActiveMode <> amChat) And Assigned(AssistantChatConfig) And
     AssistantChatConfig.IncludeIDEContext;

@@ -2,7 +2,7 @@ Program AssistantConnectionsTest;
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads, {$ENDIF}Interfaces, Classes, SysUtils, AssistantConnections, AssistantCodexProfile, AssistantConfig,
   AssistantXaiProvider,
-  WorkflowSettings, AssistantConversation, AssistantTools, AssistantHarness{$IFDEF UNIX}, BaseUnix{$ENDIF};
+  WorkflowSettings, AssistantConversation, AssistantTools, AssistantHarness, AssistantPlan{$IFDEF UNIX}, BaseUnix{$ENDIF};
 Const ModelList = '{"data":[{"model":"model-one","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]},{"model":"model-two","supportedReasoningEfforts":[{"reasoningEffort":"medium"}]}]}';
 Const ClaudeModelList = '[{"value":"default","displayName":"Default","supportedEffortLevels":["low","high"]}]';
 Procedure Check(Const Name: String; OK: Boolean);
@@ -354,6 +354,32 @@ Begin
         (Not ExecuteAssistantToolForMode('write_image', '{"path":"icons/dot.png","prompt":"a dot"}', Root, amBuild,
           Prompt, ErrorText)) And (ErrorText = 'Unknown tool: write_image') And (Prompt = '') And
         (Not FileExists(IncludeTrailingPathDelimiter(Root) + 'icons' + PathDelim + 'dot.png')));
+      Policy := TStringList.Create;
+      Try
+        Policy.Text := '{"assistant":{"active_connection":"claude-saved","connections":[' +
+          '{"id":"claude-saved","name":"Claude saved","backend":"claude","model":"default","image_output":true}]}}';
+        Policy.SaveToFile(WorkflowSettingsPath);
+      Finally Policy.Free; End;
+      Prompt := WorkflowAssistantHarness.BuildSystemPrompt(amPlan, Names, Root, '');
+      Check('a Claude profile saved with image_output does not offer image output',
+        ReadActiveProfileCall(Call) And Call.ImageOutput And (Call.Backend = 'claude') And
+        (Not ActiveProfileImageOutput) And (Not AssistantTurnOffersImageOutput(amPlan)) And
+        (Not AssistantTurnOffersImageOutput(amDocument)) And (Not AssistantTurnOffersImageOutput(amBuild)) And
+        (Pos('write_image', BuildAssistantToolsJsonForMode(amBuild)) = 0) And
+        (Pos('<image_output>', Prompt) = 0) And (Pos('cannot write image files', Prompt) > 0));
+      Policy := TStringList.Create;
+      Try
+        Policy.LoadFromFile(WorkflowSettingsPath);
+        Check('the saved Claude image_output flag is ignored, not rewritten', Pos('"image_output":true', Policy.Text) > 0);
+      Finally Policy.Free; End;
+      Prompt := AssistantPlanDirective('Documents/Plan.md', False) + AssistantDocumentDirective('Documents/Notes.md', False);
+      Check('Plan and Document directives without image output do not name write_image',
+        (Pos('write_image', Prompt) = 0) And (Pos('write_file', Prompt) = 0) And
+        (Pos('This turn cannot generate images', Prompt) > 0) And (Pos('SVG and other text documents', Prompt) > 0) And
+        (Pos('write_markdown', Prompt) > 0) And (Pos('Documents/Plan.md', Prompt) > 0) And (Pos('Documents/Notes.md', Prompt) > 0));
+      Prompt := AssistantPlanDirective('Documents/Plan.md') + AssistantDocumentDirective('Documents/Notes.md', True);
+      Check('Plan and Document directives with image output still name write_image',
+        (Pos('Images use write_image.', Prompt) > 0) And (Pos('cannot generate images', Prompt) = 0));
     Finally
       Names.Free;
     End;

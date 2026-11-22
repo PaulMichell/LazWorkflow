@@ -72,7 +72,7 @@ Function AssistantBackendCanDraw(Const Backend: String): Boolean;
 /// Sets the Grok image model when drawing is turned on and none is stored.
 /// Does not copy the chat model. Other backends are left unchanged.
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
-/// ImageOutput on the active saved profile. False when no profile is selected.
+/// ImageOutput on the active saved profile, for a backend that can draw. False when no profile is selected.
 Function ActiveProfileImageOutput: Boolean;
 /// True for a Plan, Document, or Build turn whose active profile can generate images.
 /// Inspect and Chat never offer write_image.
@@ -197,8 +197,9 @@ Function ActiveProfileImageOutput: Boolean;
 Var
   Profile: TAssistantProfileCall;
 Begin
+  { A Claude or Codex row saved with image_output is ignored here, not rewritten: those backends cannot draw. }
   If ReadActiveProfileCall(Profile) Then
-    Result := Profile.ImageOutput
+    Result := Profile.ImageOutput And AssistantBackendCanDraw(Profile.Backend)
   Else
     Result := False;
 End;

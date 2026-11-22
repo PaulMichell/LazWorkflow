@@ -5,7 +5,8 @@ Program AssistantWriteImageTest;
   Flag off: the tool is absent and a call is unknown. Flag on: the schema
   requires prompt, has optional shape, and has no image_id. A Grok mock posts
   grok-imagine-image-2.0 and writes a fixture PNG. An OpenAI-compatible mock
-  posts a different image model. Claude and Codex do not post. Path escape, a
+  posts a different image model. Claude and Codex with the flag on are not
+  offered the tool, and a call is unknown and does not post. Path escape, a
   symlink out of the project, bad magic, overwrite without the flag, a missing
   prompt, a missing image model, and Plan or Document calls are refused. An
   inapplicable shape is omitted. A missing extension, or one that does not
@@ -605,13 +606,14 @@ Begin
     ClaudeItem.KeyValue := 'test-key';
     Store.ActiveId := ClaudeItem.Id;
     Check('Claude profile saved', Store.Save);
-    Check('Claude with the flag on still offers the tool',
-      Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amBuild)) > 0);
+    { Decision 2026-11-22: a saved image_output flag is ignored for a backend that cannot draw. }
+    Check('Claude with the flag on does not offer the tool',
+      Pos('write_image', BuildAssistantToolsJsonForMode(amBuild)) = 0);
     BeginWriteImageTurn;
     MockCalls := 0;
-    CheckNoted('Claude with the flag on does not post', Note,
+    CheckNoted('Claude with the flag on is an unknown tool and does not post', Note,
       (Not CallWrite(amBuild, ArgsFor('icons/claude.png', 'a red dot', '1:1'), Reply, Note)) And
-      (MockCalls = 0) And (Pos('no image endpoint', Note) > 0) And
+      (MockCalls = 0) And (Note = 'Unknown tool: write_image') And
       (Not FileExists(ProjectFile(Project, 'icons/claude.png'))));
 
     CodexItem := Store.AddStored('codex-draw', 'Codex draw', 'codex');
@@ -623,9 +625,9 @@ Begin
     Check('Codex profile saved', Store.Save);
     BeginWriteImageTurn;
     MockCalls := 0;
-    CheckNoted('Codex with the flag on does not post', Note,
+    CheckNoted('Codex with the flag on is an unknown tool and does not post', Note,
       (Not CallWrite(amBuild, ArgsFor('icons/codex.png', 'a red dot', ''), Reply, Note)) And
-      (MockCalls = 0) And (Pos('no image endpoint', Note) > 0) And
+      (MockCalls = 0) And (Note = 'Unknown tool: write_image') And
       (Not FileExists(ProjectFile(Project, 'icons/codex.png'))));
 
     EmptyModel := Store.AddStored('empty-model', 'Empty model', 'openai-compatible');
