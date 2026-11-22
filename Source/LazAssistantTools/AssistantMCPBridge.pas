@@ -31,6 +31,11 @@ Type
     Pending: TList;
     Cancelled: Boolean;
     Function GetPendingCount: Integer;
+    { Queues one broker call to the IDE thread and waits for it, or for Cancel. Not on the IDE thread. }
+    Function QueueCall(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+    { run_command over MCP: starts the job on the IDE thread, then waits here, off the IDE thread, polling
+      command_status until the program ends, so the call returns its output as Grok's run_command does. }
+    Function RunCommandToEnd(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
   Public
     { The broker is borrowed and must outlive the bridge. Create, BeginRun, Cancel and ToolsJSON run on the IDE thread. }
     Constructor Create(ToolBroker: TAssistantToolBroker);
@@ -60,7 +65,7 @@ Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
 Implementation
 
 Uses
-  fpjson;
+  fpjson, jsonparser;
 
 Type
   { One queued call, shared by the waiting listener thread and the queued Run. The last Release frees it. }
@@ -362,7 +367,6 @@ End;
 Function TMCPBrokerBridge.Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
   Out Images: TMCPToolImages): Boolean;
 Var
-  Call: TMCPPendingCall;
   CallRunId: String;
 Begin
   Result := False;
@@ -385,6 +389,75 @@ Begin
         Result := FBroker.Execute(CallRunId, Tool, Arguments, ResultText, ErrorText, Images);
       Exit;
     End;
+  If Tool = 'lazarus_run_command' Then
+    Result := RunCommandToEnd(Arguments, ResultText, ErrorText)
+  Else
+    Result := QueueCall(Tool, Arguments, ResultText, ErrorText, Images);
+End;
+
+Function TMCPBrokerBridge.RunCommandToEnd(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Const
+  PollMs = 250;
+Var
+  Started, Status, JobId, StatusArguments: String;
+  Images: TMCPToolImages;
+  Data: TJSONData;
+  Done: Boolean;
+Begin
+  Result := QueueCall('lazarus_run_command', Arguments, Started, ErrorText, Images);
+  ResultText := Started;
+  If Not Result Then
+    Exit;
+  JobId := '';
+  Try
+    Data := GetJSON(Started);
+    Try
+      If Data Is TJSONObject Then
+        JobId := TJSONObject(Data).Get('job_id', '');
+    Finally
+      Data.Free;
+    End;
+  Except
+    JobId := '';
+  End;
+  { A reply without a job is returned as it came. }
+  If JobId = '' Then
+    Exit;
+  StatusArguments := '{"job_id":"' + StringToJSONString(JobId) + '"}';
+  Repeat
+    Sleep(PollMs);
+    { Cancel ends the run: this call then fails with MCPRunCancelledText, and the broker has stopped the program. }
+    If Not QueueCall('lazarus_command_status', StatusArguments, Status, ErrorText, Images) Then
+      Begin
+        ResultText := '';
+        Result := False;
+        Exit;
+      End;
+    Done := True;
+    Try
+      Data := GetJSON(Status);
+      Try
+        Done := (Not (Data Is TJSONObject)) Or TJSONObject(Data).Get('done', False);
+      Finally
+        Data.Free;
+      End;
+    Except
+      Done := True;
+    End;
+  Until Done;
+  ResultText := Status;
+  Result := True;
+End;
+
+Function TMCPBrokerBridge.QueueCall(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+  Out Images: TMCPToolImages): Boolean;
+Var
+  Call: TMCPPendingCall;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  Images := Nil;
   EnterCriticalSection(Lock);
   Try
     If Cancelled Then

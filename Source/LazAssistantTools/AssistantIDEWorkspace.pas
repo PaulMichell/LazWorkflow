@@ -4,8 +4,11 @@ Unit AssistantIDEWorkspace;
   that is open in the editor changes that buffer (Undo kept), moves its caret to the change and saves it; the
   tab is not activated. A file that is not open is read and written on disk and never opened as a tab.
 
-  Size note: exceeds the 1000 line preference. Buffer, build, test and Git adapters share the run's target
-  checks; splitting them would duplicate those checks. Reviewed 2026-11-10. (c) 2026 Michell Computing. }
+  run_command runs as a job in its own session, so the IDE thread only checks, approves and starts it.
+
+  Size note: exceeds the 1000 line preference. Buffer, build, test, command and Git adapters share the run's target
+  checks; splitting them would duplicate those checks. Reviewed 2026-11-10; command, run, and open adapters added
+  2026-11-22. (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -20,7 +23,7 @@ Uses
 Type
   TAssistantIDEWorkspace = Class(TAssistantWorkspaceAdapter)
   Private
-    FBuild, FTests: IAssistantBuildJob;
+    FBuild, FTests, FCommand: IAssistantBuildJob;
     FTestBuildId, FTestCommand, FTestExecutable, FTestOptions: String;
     FBuildInputs, FBuildRoots: TBuildInputs;
     FDependencyEvidence: String;
@@ -71,6 +74,17 @@ Type
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Override;
     Procedure CancelBuild; Override;
+    Function CanRunCommands: Boolean; Override;
+    Function CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer; Out Command, ErrorText: String): Boolean; Override;
+    Function StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+      Out ResultText, ErrorText: String): Boolean; Override;
+    Function RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Procedure CancelRunCommand; Override;
+    Function CanRunProject: Boolean; Override;
+    Function RunProject(Out ResultText, ErrorText: String): Boolean; Override;
+    Function CanOpenEditors: Boolean; Override;
+    Function OpenFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Function OpenMarkdown(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Override;
     Function Identity: String; Override;
     Function ReadBuffer(Const Path: String; Out CanonicalPath, Text, ErrorText: String): Boolean; Override;
     Function ReplaceBuffer(Const Path, ExpectedText, NewText: String; Out ErrorText: String): Boolean; Override;
@@ -179,7 +193,155 @@ End;
 Destructor TAssistantIDEWorkspace.Destroy;
 Begin
   CancelBuild;
+  CancelRunCommand;
   Inherited Destroy;
+End;
+
+Function TAssistantIDEWorkspace.CanRunCommands: Boolean;
+Begin
+  Result := AssistantTarget.Available And (ProjectRootPath <> '');
+End;
+
+Function TAssistantIDEWorkspace.CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer;
+  Out Command, ErrorText: String): Boolean;
+Var
+  Resolved, WorkDir: String;
+  List: TStringList;
+  TimeoutSeconds, I: Integer;
+  Root: TJSONObject;
+  Items: TJSONArray;
+Begin
+  Result := False;
+  Command := '';
+  ErrorText := '';
+  If Assigned(FCommand) And Not FCommand.Snapshot.Done Then
+    Begin
+      ErrorText := 'A command is already running. Wait for it, or poll command_status.';
+      Exit;
+    End;
+  List := TStringList.Create;
+  Try
+    If Not AssistantCheckRunCommand(Arguments, MaxTimeoutSeconds, Resolved, WorkDir, List, TimeoutSeconds, ErrorText) Then
+      Exit;
+    { The job refuses an empty argument; say so before the approval rather than after it. }
+    For I := 0 To List.Count - 1 Do
+      If List[I] = '' Then
+        Begin
+          ErrorText := 'Empty arguments are not supported.';
+          Exit;
+        End;
+    Root := TJSONObject.Create;
+    Try
+      Root.Add('program', Resolved);
+      Items := TJSONArray.Create;
+      For I := 0 To List.Count - 1 Do
+        Items.Add(List[I]);
+      Root.Add('arguments', Items);
+      Root.Add('working_directory', WorkDir);
+      Root.Add('timeout_seconds', TimeoutSeconds);
+      Command := Root.AsJSON;
+    Finally
+      Root.Free;
+    End;
+    Result := True;
+  Finally
+    List.Free;
+  End;
+End;
+
+Function TAssistantIDEWorkspace.StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+  Out ResultText, ErrorText: String): Boolean;
+Var
+  Command: String;
+  Data, Items: TJSONData;
+  List: TStringList;
+  I: Integer;
+Begin
+  Result := False;
+  ResultText := '';
+  If Not CheckRunCommand(Arguments, MaxTimeoutSeconds, Command, ErrorText) Then
+    Exit;
+  If Command <> ExpectedCommand Then
+    Begin
+      ErrorText := 'The command changed during approval.';
+      Exit;
+    End;
+  Data := GetJSON(Command);
+  List := TStringList.Create;
+  Try
+    Items := Data.FindPath('arguments');
+    For I := 0 To Items.Count - 1 Do
+      List.Add(Items.Items[I].AsString);
+    Try
+      FCommand := StartAssistantCommand(Data.FindPath('program').AsString, Data.FindPath('working_directory').AsString,
+        List, Cardinal(Data.FindPath('timeout_seconds').AsInteger) * 1000);
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := 'The command could not start: ' + E.Message;
+          Exit;
+        End;
+    End;
+    ResultText := '{"started":true,"job_id":"' + JsonEscapeText(FCommand.Snapshot.JobId) + '"}';
+    Result := True;
+  Finally
+    List.Free;
+    Data.Free;
+  End;
+End;
+
+Function TAssistantIDEWorkspace.RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Value: TBuildJobSnapshot;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  If Not Assigned(FCommand) Then
+    Begin
+      ErrorText := 'No command has been started.';
+      Exit;
+    End;
+  Value := FCommand.Snapshot;
+  If JobId <> Value.JobId Then
+    Begin
+      ErrorText := 'That job_id is not the latest command.';
+      Exit;
+    End;
+  ResultText := AssistantCommandStatusJSON(Value);
+  Result := True;
+End;
+
+Procedure TAssistantIDEWorkspace.CancelRunCommand;
+Begin
+  { The job stays, so command_status can still report it as cancelled. }
+  If Assigned(FCommand) Then
+    FCommand.Cancel;
+End;
+
+Function TAssistantIDEWorkspace.CanRunProject: Boolean;
+Begin
+  Result := AssistantTarget.Available;
+End;
+
+Function TAssistantIDEWorkspace.RunProject(Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolRunProject(ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.CanOpenEditors: Boolean;
+Begin
+  Result := AssistantTarget.Available And (ProjectRootPath <> '');
+End;
+
+Function TAssistantIDEWorkspace.OpenFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolOpenFile(Arguments, ResultText, ErrorText);
+End;
+
+Function TAssistantIDEWorkspace.OpenMarkdown(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  Result := ToolOpenMarkdown(Arguments, ResultText, ErrorText);
 End;
 
 Procedure TAssistantIDEWorkspace.CancelBuild;

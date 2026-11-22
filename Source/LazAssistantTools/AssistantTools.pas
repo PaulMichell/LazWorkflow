@@ -65,6 +65,15 @@ Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorT
 /// then the stored upload copy (at most 2048 pixels a side and 4 MiB) as its MIME type and base64 data.
 Function AssistantReadImageUpload(Const ArgumentsJson: String; Out ResultText, ErrorText: String;
   Out Ref: TAssistantImageRef; Out MimeType, Base64: String): Boolean;
+/// run_command's checks without running it: one program and its arguments, no shell or Python, a working directory
+/// inside the project, and a timeout from 1 to MaxTimeoutSeconds (600 by default, or the maximum if lower).
+/// Resolved is the program's full path. Arguments is cleared and then filled.
+Function AssistantCheckRunCommand(Const ArgumentsJson: String; MaxTimeoutSeconds: Integer; Out Resolved, WorkDir: String;
+  Arguments: TStrings; Out TimeoutSeconds: Integer; Out ErrorText: String): Boolean;
+/// Grok's run_project: start the active project's built executable without a shell or debugger.
+Function ToolRunProject(Out ResultText, ErrorText: String): Boolean;
+Function ToolOpenFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function ToolOpenMarkdown(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function OpenEditorReuse(Const Resolved: String; Out Note: String): Boolean;
 { Active plan relative path for tools / UI (empty if unset). }
 Function GetActivePlanRelativePath: String;
@@ -4660,17 +4669,22 @@ Begin
     (Name = 'cmd') Or (Name = 'powershell') Or (Name = 'pwsh');
 End;
 
-Function ToolRunCommand(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Function AssistantCheckRunCommand(Const ArgumentsJson: String; MaxTimeoutSeconds: Integer; Out Resolved, WorkDir: String;
+  Arguments: TStrings; Out TimeoutSeconds: Integer; Out ErrorText: String): Boolean;
 Var
   Data, Node, Item: TJSONData;
-  ProgramName, WorkDir, Resolved, OutputText: String;
-  Args: Array Of String;
-  I, ExitCode, TimeoutSec, Bytes: Integer;
-  TimeoutMs: QWord;
+  ProgramName, Range: String;
+  I, Bytes: Integer;
 Begin
   Result := False;
-  ResultText := '';
+  Resolved := '';
+  WorkDir := '';
   ErrorText := '';
+  TimeoutSeconds := 600;
+  If TimeoutSeconds > MaxTimeoutSeconds Then
+    TimeoutSeconds := MaxTimeoutSeconds;
+  Range := 'timeout_seconds must be 1 to ' + IntToStr(MaxTimeoutSeconds) + '.';
+  Arguments.Clear;
   Data := Nil;
   Try
     Try
@@ -4702,19 +4716,18 @@ Begin
         Exit;
       End;
     Node := TJSONObject(Data).Find('timeout_seconds');
-    TimeoutSec := 600;
     If Assigned(Node) Then
       Begin
         If Not (Node.JSONType In [jtNumber, jtString]) Then
           Begin
-            ErrorText := 'timeout_seconds must be 1 to 3600.';
+            ErrorText := Range;
             Exit;
           End;
-        TimeoutSec := Node.AsInteger;
+        TimeoutSeconds := Node.AsInteger;
       End;
-    If (TimeoutSec < 1) Or (TimeoutSec > 3600) Then
+    If (TimeoutSeconds < 1) Or (TimeoutSeconds > MaxTimeoutSeconds) Then
       Begin
-        ErrorText := 'timeout_seconds must be 1 to 3600.';
+        ErrorText := Range;
         Exit;
       End;
     WorkDir := Trim(TJSONObject(Data).Get('working_directory', ''));
@@ -4738,10 +4751,6 @@ Begin
         ErrorText := 'At most 128 arguments are supported.';
         Exit;
       End;
-    If Assigned(Node) Then
-      SetLength(Args, TJSONArray(Node).Count)
-    Else
-      SetLength(Args, 0);
     Bytes := 0;
     If Assigned(Node) Then
       For I := 0 To TJSONArray(Node).Count - 1 Do
@@ -4763,7 +4772,7 @@ Begin
               ErrorText := 'Arguments must fit 32 KiB.';
               Exit;
             End;
-          Args[I] := Item.AsString;
+          Arguments.Add(Item.AsString);
         End;
     If (Pos(PathDelim, ProgramName) > 0) Or FilenameIsAbsolute(ProgramName) Then
       Begin
@@ -4791,8 +4800,32 @@ Begin
         ErrorText := 'Program not found: ' + ProgramName;
         Exit;
       End;
-    TimeoutMs := QWord(TimeoutSec) * 1000;
-    If Not RunProcessCapture(Resolved, WorkDir, Args, OutputText, ExitCode, ErrorText, TimeoutMs) Then
+    Result := True;
+  Finally
+    Data.Free;
+    If Not Result Then
+      Arguments.Clear;
+  End;
+End;
+
+Function ToolRunCommand(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Resolved, WorkDir, OutputText: String;
+  List: TStringList;
+  Args: Array Of String;
+  I, ExitCode, TimeoutSec: Integer;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  List := TStringList.Create;
+  Try
+    If Not AssistantCheckRunCommand(ArgumentsJson, 3600, Resolved, WorkDir, List, TimeoutSec, ErrorText) Then
+      Exit;
+    SetLength(Args, List.Count);
+    For I := 0 To List.Count - 1 Do
+      Args[I] := List[I];
+    If Not RunProcessCapture(Resolved, WorkDir, Args, OutputText, ExitCode, ErrorText, QWord(TimeoutSec) * 1000) Then
       Exit;
     If Length(OutputText) > AssistantToolMaxReadChars Then
       OutputText := Copy(OutputText, 1, AssistantToolMaxReadChars) + LineEnding + '… (output truncated)';
@@ -4801,7 +4834,7 @@ Begin
       'Exit code: ' + IntToStr(ExitCode) + LineEnding + LineEnding + OutputText;
     Result := True;
   Finally
-    Data.Free;
+    List.Free;
   End;
 End;
 

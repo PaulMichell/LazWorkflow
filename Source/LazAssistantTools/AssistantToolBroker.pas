@@ -19,6 +19,11 @@ Interface
 Uses
   Classes, SysUtils, fpjson, Contnrs, AssistantChangeSets, AssistantConversation, AssistantImages, AssistantMCPProtocol;
 
+Const
+  { The longest run_command allowed through the broker. Claude Code waits at most ClaudeMCPToolTimeoutMs (30 minutes)
+    for one tool call, and the MCP bridge holds the call until the command ends. }
+  BrokerCommandMaxSeconds = 1500;
+
 Type
   TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
   TAssistantWorkspaceAdapter = Class
@@ -69,6 +74,20 @@ Type
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Virtual;
     Procedure CancelBuild; Virtual;
+    { run_command, with Grok's checks, as a job off the IDE thread. Command is the checked command as JSON; the start
+      checks the arguments again and refuses a command that no longer matches it. One command runs at a time. }
+    Function CanRunCommands: Boolean; Virtual;
+    Function CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer; Out Command, ErrorText: String): Boolean; Virtual;
+    Function StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+      Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Procedure CancelRunCommand; Virtual;
+    { Grok's run_project, open_file and open_markdown. }
+    Function CanRunProject: Boolean; Virtual;
+    Function RunProject(Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function CanOpenEditors: Boolean; Virtual;
+    Function OpenFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
+    Function OpenMarkdown(Const Arguments: String; Out ResultText, ErrorText: String): Boolean; Virtual;
   End;
   TBrokerSnapshot = Record
     Path, Text, Revision: String;
@@ -444,6 +463,69 @@ Procedure TAssistantWorkspaceAdapter.CancelBuild;
 Begin
 End;
 
+Function TAssistantWorkspaceAdapter.CanRunCommands: Boolean;
+Begin
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer;
+  Out Command, ErrorText: String): Boolean;
+Begin
+  Command := '';
+  ErrorText := 'Running a command is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Running a command is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Running a command is unavailable.';
+  Result := False;
+End;
+
+Procedure TAssistantWorkspaceAdapter.CancelRunCommand;
+Begin
+End;
+
+Function TAssistantWorkspaceAdapter.CanRunProject: Boolean;
+Begin
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.RunProject(Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Running the project is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.CanOpenEditors: Boolean;
+Begin
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.OpenFile(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Opening an editor is unavailable.';
+  Result := False;
+End;
+
+Function TAssistantWorkspaceAdapter.OpenMarkdown(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Begin
+  ResultText := '';
+  ErrorText := 'Opening a Markdown window is unavailable.';
+  Result := False;
+End;
+
 Constructor TAssistantToolBroker.Create(Adapter: TAssistantWorkspaceAdapter);
 Begin
   Inherited Create;
@@ -485,6 +567,7 @@ Begin
   If Not Assigned(FAdapter) Then Raise Exception.Create('Workspace adapter required');
   If CreateGUID(Id) <> 0 Then Raise Exception.Create('Unable to create run identity');
   FAdapter.CancelBuild;
+  FAdapter.CancelRunCommand;
   FRunId := GUIDToString(Id);
   FIdentity := FAdapter.Identity;
   FCancelled := False;
@@ -503,6 +586,7 @@ Begin
   If GetCurrentThreadID <> FOwner Then Raise Exception.Create('Broker requires IDE thread');
   FCancelled := True;
   FAdapter.CancelBuild;
+  FAdapter.CancelRunCommand;
   SetLength(FSnapshots, 0);
   FRenamePreview := Default(TLocalRenamePreview);
   FreeAndNil(FPrepared);
@@ -1690,6 +1774,60 @@ Begin
           Result := FAdapter.RunGit(FMode, Arguments, ResultText, ErrorText);
           Exit;
         End;
+      If (Tool = 'lazarus_run_command') Or (Tool = 'lazarus_command_status') Then
+        Begin
+          If (FWriteScope <> awsProject) Or Not FAdapter.CanRunCommands Then
+            Begin
+              ErrorText := 'Running a command requires Build mode.';
+              Exit;
+            End;
+          If Tool = 'lazarus_command_status' Then
+            Begin
+              Node := Args.Find('job_id');
+              If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
+                Begin
+                  ErrorText := 'job_id must be a nonempty string.';
+                  Exit;
+                End;
+              Result := FAdapter.RunCommandStatus(Node.AsString, ResultText, ErrorText);
+              Exit;
+            End;
+          If Not FAdapter.CheckRunCommand(Arguments, BrokerCommandMaxSeconds, Text, ErrorText) Then Exit;
+          { The approval names the resolved program, its arguments and the working directory. }
+          If Not Approve(RunId, Tool, '', '', Text, ErrorText) Then Exit;
+          Result := FAdapter.StartRunCommand(Arguments, Text, BrokerCommandMaxSeconds, ResultText, ErrorText);
+          Exit;
+        End;
+      If Tool = 'lazarus_run_project' Then
+        Begin
+          If (FWriteScope <> awsProject) Or Not FAdapter.CanRunProject Then
+            Begin
+              ErrorText := 'Running the project requires Build mode.';
+              Exit;
+            End;
+          If Not Approve(RunId, Tool, '', '', 'Start the active project executable.', ErrorText) Then Exit;
+          Result := FAdapter.RunProject(ResultText, ErrorText);
+          Exit;
+        End;
+      If (Tool = 'lazarus_open_file') Or (Tool = 'lazarus_open_markdown') Then
+        Begin
+          If Not FAdapter.CanOpenEditors Then
+            Begin
+              ErrorText := 'Opening an editor is unavailable.';
+              Exit;
+            End;
+          Node := Args.Find('path');
+          If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+            Begin
+              ErrorText := 'A project-relative path is required.';
+              Exit;
+            End;
+          If Tool = 'lazarus_open_file' Then
+            Result := FAdapter.OpenFile(Arguments, ResultText, ErrorText)
+          Else
+            Result := FAdapter.OpenMarkdown(Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If Tool = 'lazarus_project_info' Then
         Begin
           ResultText := FAdapter.Describe;
@@ -2099,6 +2237,38 @@ Begin
     ',"inputSchema":' + RenamePathSchema + '}' +
     ',{"type":"function","name":"lazarus_add_unit_to_project","description":' + Quoted(AddUnitDescription) +
     ',"inputSchema":' + AddUnitSchema + '}';
+  If (Scope = awsProject) And FAdapter.CanRunCommands Then Result := Result +
+    ',{"type":"function","name":"lazarus_run_command","description":' + Quoted(
+    'Run one program with its arguments, for a one-off check such as building and running a test program. No shell is ' +
+    'used, and Python and shells are refused. The program may be a name on PATH (fpc, instantfpc, lazbuild) or a path; ' +
+    'the working directory defaults to the project root and must stay inside it. Build mode only, and the approval ' +
+    'setting applies. Over MCP the call returns when the program ends: the outcome (exited, failed or cancelled), ' +
+    'exit_code, and the last 48000 characters of its combined output. Called directly it returns a job_id to poll ' +
+    'with command_status. timeout_seconds is 1 to ' + IntToStr(BrokerCommandMaxSeconds) + ', default 600. ' +
+    'Stop ends the program. A saved, repeatable test belongs in Tests/ and runs through start_tests.') +
+    ',"inputSchema":{"type":"object","properties":{"program":{"type":"string"},"arguments":{"type":"array","items":' +
+    '{"type":"string"},"maxItems":128},"working_directory":{"type":"string"},"timeout_seconds":{"type":"integer",' +
+    '"minimum":1,"maximum":' + IntToStr(BrokerCommandMaxSeconds) + '}},"required":["program"],"additionalProperties":false}}' +
+    ',{"type":"function","name":"lazarus_command_status","description":' + Quoted(
+    'Poll a run_command job by its job_id: done, outcome (running, exited, failed or cancelled), exit_code, any ' +
+    'error, and the last 48000 characters of output.') +
+    ',"inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],' +
+    '"additionalProperties":false}}';
+  If (Scope = awsProject) And FAdapter.CanRunProject Then Result := Result +
+    ',{"type":"function","name":"lazarus_run_project","description":' + Quoted(
+    'Start the active project''s built executable directly, with no shell and no debugger, and return at once with its ' +
+    'process id. The executable must already be built and must be inside the project. Build mode only, and the ' +
+    'approval setting applies. It does not capture output; use run_command for that.') +
+    ',"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}';
+  If FAdapter.CanOpenEditors Then Result := Result +
+    ',{"type":"function","name":"lazarus_open_file","description":' + Quoted(
+    'Open a project file in the Lazarus source editor and bring it forward, so the user can see it. Reuses an open ' +
+    'tab. Markdown files use open_markdown instead. Does not change the file.') +
+    ',"inputSchema":' + ReadSchema + '}' +
+    ',{"type":"function","name":"lazarus_open_markdown","description":' + Quoted(
+    'Open a project Markdown file in its live viewer window, so the user can see it. During a plan run the viewer ' +
+    'is not opened and the plan summary updates instead. Does not change the file.') +
+    ',"inputSchema":' + ReadSchema + '}';
   Result := Result + ']';
 End;
 End.

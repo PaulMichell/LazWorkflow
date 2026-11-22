@@ -13,7 +13,7 @@ Uses
   {$ENDIF}
   Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, base64, fpimage, fpwritepng, FileUtil,
   AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener, AssistantMCPProtocol, AssistantImages,
-  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget;
+  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget, AssistantBuildJob;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -53,6 +53,27 @@ Type
     Function AddUnitToProject(Const Arguments, ResolvedPath: String; AddToUses: Boolean; Out ResultText, ErrorText: String): Boolean; Override;
     Function ReadChangeBuffer(Const Path: String; Out CanonicalPath, Text, Stamp, ErrorText: String): Boolean; Override;
     Function ApproveReplace(Const Tool, Path, OldText, NewText: String): Boolean;
+  Public
+    { A fake run_command job: done after DoneAfterPolls status calls, or never when it is zero. }
+    AllowCommands: Boolean;
+    CommandStarts, StatusPolls, DoneAfterPolls, CommandCancels: Integer;
+    StatusThread: TThreadID;
+    Function CanRunCommands: Boolean; Override;
+    Function CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer; Out Command, ErrorText: String): Boolean; Override;
+    Function StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+      Out ResultText, ErrorText: String): Boolean; Override;
+    Function RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean; Override;
+    Procedure CancelRunCommand; Override;
+  End;
+
+  { Calls the bridge as a listener thread would, so the call is queued to the main thread. }
+  TBridgeCallThread = Class(TThread)
+  Protected
+    Procedure Execute; Override;
+  Public
+    Tool, Arguments, ResultText, ErrorText: String;
+    Succeeded, Done: Boolean;
+    Constructor Create(Const NewTool, NewArguments: String);
   End;
 
   TClientThread = Class(TThread)
@@ -336,6 +357,71 @@ End;
 Function TMemoryWorkspace.Describe: String;
 Begin
   Result := 'Test project';
+End;
+
+Function TMemoryWorkspace.CanRunCommands: Boolean;
+Begin
+  Result := AllowCommands;
+End;
+
+Function TMemoryWorkspace.CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer;
+  Out Command, ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Command := '{"checked":' + Arguments + ',"max":' + IntToStr(MaxTimeoutSeconds) + '}';
+  Result := Pos('"refuse"', Arguments) = 0;
+  If Not Result Then
+    ErrorText := 'Refused by the check.';
+End;
+
+Function TMemoryWorkspace.StartRunCommand(Const Arguments, ExpectedCommand: String; MaxTimeoutSeconds: Integer;
+  Out ResultText, ErrorText: String): Boolean;
+Begin
+  ErrorText := '';
+  Inc(CommandStarts);
+  StatusPolls := 0;
+  ResultText := '{"started":true,"job_id":"job-' + IntToStr(CommandStarts) + '"}';
+  Result := True;
+End;
+
+Function TMemoryWorkspace.RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean;
+Var
+  Finished: Boolean;
+Begin
+  ErrorText := '';
+  Inc(StatusPolls);
+  StatusThread := GetCurrentThreadId;
+  Finished := (DoneAfterPolls > 0) And (StatusPolls >= DoneAfterPolls);
+  If Finished Then
+    ResultText := '{"job_id":"' + JobId + '","done":true,"outcome":"exited","exit_code":0,"output":"hello"}'
+  Else
+    ResultText := '{"job_id":"' + JobId + '","done":false,"outcome":"running","exit_code":0,"output":""}';
+  Result := True;
+End;
+
+Procedure TMemoryWorkspace.CancelRunCommand;
+Begin
+  Inc(CommandCancels);
+End;
+
+Constructor TBridgeCallThread.Create(Const NewTool, NewArguments: String);
+Begin
+  Tool := NewTool;
+  Arguments := NewArguments;
+  ResultText := '';
+  ErrorText := '';
+  Succeeded := False;
+  Done := False;
+  FreeOnTerminate := False;
+  Inherited Create(False);
+End;
+
+Procedure TBridgeCallThread.Execute;
+Var
+  Images: TMCPToolImages;
+Begin
+  Succeeded := Bridge.Execute(Tool, Arguments, ResultText, ErrorText, Images);
+  Done := True;
 End;
 
 Constructor TClientThread.Create(Const NewURL, NewToken: String);
@@ -1505,6 +1591,149 @@ Begin
   Check('a refused form edit leaves both buffers unchanged', (Workspace.PasText = BeforePas) And (Workspace.LfmText = BeforeLfm));
 End;
 
+Function WaitForCall(Call: TBridgeCallThread): Boolean;
+Var
+  Started: QWord;
+Begin
+  Started := GetTickCount64;
+  While Not Call.Done And (GetTickCount64 - Started < WaitMs) Do
+    CheckSynchronize(10);
+  Result := Call.Done;
+End;
+
+Procedure CheckCommands;
+Const
+  Echo = '{"program":"echo","arguments":["hello"]}';
+Var
+  Call: TBridgeCallThread;
+  Started: QWord;
+  ResultText, ErrorText: String;
+  Images: TMCPToolImages;
+  Cancels: Integer;
+Begin
+  Workspace.AllowCommands := True;
+  Try
+    Bridge.BeginRun(ctsRead);
+    Check('a read run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
+    Check('a read run refuses run_command',
+      Not Bridge.Execute('lazarus_run_command', Echo, ResultText, ErrorText, Images) And
+      (ErrorText = 'Running a command requires Build mode.'));
+    Bridge.BeginRun(ctsMarkdown);
+    Check('a Markdown run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
+    Bridge.BeginRun(ctsProject);
+    Check('a project run lists run_command and command_status',
+      (Pos('"lazarus_run_command"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_command_status"', Bridge.ToolsJSON) > 0));
+    Check('run_command states the broker''s timeout ceiling',
+      Pos('"maximum":' + IntToStr(BrokerCommandMaxSeconds), Bridge.ToolsJSON) > 0);
+    Check('run_project and the open tools stay hidden when the workspace has none',
+      (Pos('lazarus_run_project', Bridge.ToolsJSON) = 0) And (Pos('lazarus_open_file', Bridge.ToolsJSON) = 0));
+
+    Broker.OnApproval := @Workspace.ApproveReplace;
+    Workspace.DoneAfterPolls := 3;
+    Check('a main-thread run_command returns the started job',
+      Bridge.Execute('lazarus_run_command', Echo, ResultText, ErrorText, Images) And
+      (Pos('"job_id":"job-1"', ResultText) > 0));
+    Check('the approval names the checked command and its ceiling',
+      (Workspace.ApprovedTool = 'lazarus_run_command') And (Workspace.ApprovedPath = '') And
+      (Pos('"checked":', Workspace.ApprovedNew) > 0) And
+      (Pos('"max":' + IntToStr(BrokerCommandMaxSeconds), Workspace.ApprovedNew) > 0));
+    Check('a refused check starts nothing',
+      Not Bridge.Execute('lazarus_run_command', '{"program":"refuse"}', ResultText, ErrorText, Images) And
+      (ErrorText = 'Refused by the check.') And (Workspace.CommandStarts = 1));
+    Check('command_status needs a job_id',
+      Not Bridge.Execute('lazarus_command_status', '{}', ResultText, ErrorText, Images) And
+      (ErrorText = 'job_id must be a nonempty string.'));
+
+    Call := TBridgeCallThread.Create('lazarus_run_command', Echo);
+    Try
+      Check('a listener-thread run_command returns when the program ends', WaitForCall(Call) And Call.Succeeded);
+      Check('it returns the final status with the output',
+        (Pos('"done":true', Call.ResultText) > 0) And (Pos('"output":"hello"', Call.ResultText) > 0));
+      Check('it polled command_status until the job was done', Workspace.StatusPolls = 3);
+      Check('command_status ran on the main thread', Workspace.StatusThread = MainThreadID);
+      Check('no call is left waiting after run_command', Bridge.PendingCount = 0);
+    Finally
+      Call.WaitFor;
+      Call.Free;
+    End;
+
+    Workspace.DoneAfterPolls := 0;
+    Call := TBridgeCallThread.Create('lazarus_run_command', Echo);
+    Try
+      Started := GetTickCount64;
+      While (Workspace.StatusPolls < 2) And (GetTickCount64 - Started < WaitMs) Do
+        CheckSynchronize(10);
+      Check('a running command keeps the call open', (Workspace.StatusPolls >= 2) And Not Call.Done);
+      Cancels := Workspace.CommandCancels;
+      Bridge.Cancel;
+      Check('Cancel ends a waiting run_command with the cancel error',
+        WaitForCall(Call) And Not Call.Succeeded And (Call.ErrorText = MCPRunCancelledText));
+      Check('Cancel stops the command', Workspace.CommandCancels > Cancels);
+    Finally
+      Call.WaitFor;
+      Call.Free;
+    End;
+  Finally
+    Broker.OnApproval := Nil;
+    Workspace.AllowCommands := False;
+    CheckSynchronize(0);
+  End;
+End;
+
+Function WaitForJob(Const Job: IAssistantBuildJob): TBuildJobSnapshot;
+Var
+  Started: QWord;
+Begin
+  Started := GetTickCount64;
+  Result := Job.Snapshot;
+  While Not Result.Done And (GetTickCount64 - Started < WaitMs) Do
+    Begin
+      Sleep(20);
+      Result := Job.Snapshot;
+    End;
+End;
+
+Procedure CheckCommandJob;
+Var
+  Arguments: TStringList;
+  Job: IAssistantBuildJob;
+  Value: TBuildJobSnapshot;
+  Status: String;
+Begin
+  Arguments := TStringList.Create;
+  Try
+    Arguments.Add('hello');
+    Arguments.Add('world');
+    Job := StartAssistantCommand('/bin/echo', GetTempDir(False), Arguments, 10000);
+    Value := WaitForJob(Job);
+    Status := AssistantCommandStatusJSON(Value);
+    Check('a command job finishes', Value.Done And (Value.Kind = 'command'));
+    Check('a command job reports it exited with code 0',
+      (JsonPath(Status, 'outcome') = 'exited') And (JsonPath(Status, 'exit_code') = '0'));
+    Check('a command job returns its output', Pos('hello world', JsonPath(Status, 'output')) > 0);
+    Check('a command job names the program', JsonPath(Status, 'command.executable') = '/bin/echo');
+
+    Arguments.Clear;
+    Arguments.Add('5');
+    Job := StartAssistantCommand('/bin/sleep', GetTempDir(False), Arguments, 200);
+    Value := WaitForJob(Job);
+    Status := AssistantCommandStatusJSON(Value);
+    Check('a command past its timeout fails as timed out',
+      Value.Done And (JsonPath(Status, 'outcome') = 'failed') And (JsonPath(Status, 'error') = 'The command timed out.'));
+
+    Job := StartAssistantCommand('/bin/sleep', GetTempDir(False), Arguments, 10000);
+    Sleep(100);
+    Job.Cancel;
+    Value := WaitForJob(Job);
+    Check('a cancelled command job reports cancelled',
+      Value.Done And (JsonPath(AssistantCommandStatusJSON(Value), 'outcome') = 'cancelled'));
+    Check('a running command job reports running',
+      JsonPath(AssistantCommandStatusJSON(Default(TBuildJobSnapshot)), 'outcome') = 'running');
+  Finally
+    Arguments.Free;
+  End;
+End;
+
 Begin
   Workspace := TMemoryWorkspace.Create;
   Broker := TAssistantToolBroker.Create(Workspace);
@@ -1522,6 +1751,8 @@ Begin
     CheckPathTools;
     CheckReadImage;
     CheckMarkdownSection;
+    CheckCommands;
+    CheckCommandJob;
     CheckCall;
     CheckDirectCall;
     CheckCancel;

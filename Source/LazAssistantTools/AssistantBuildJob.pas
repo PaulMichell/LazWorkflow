@@ -42,6 +42,12 @@ Function StartAssistantTest(Const Executable, Directory, BuildId: String; Argume
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint: String = ''; Const ReportFormat: String = 'exit-code'; MinimumTests: Integer = 1): IAssistantBuildJob;
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal = 600000; Const IDEProfile: String = ''; Const WidgetSet: String = ''): IAssistantBuildJob;
+/// One program for run_command, in its own session, with no observed inputs. Its Kind is command. Raises on an
+/// empty or NUL-containing argument.
+Function StartAssistantCommand(Const Executable, Directory: String; Arguments: TStrings; TimeoutMs: Cardinal): IAssistantBuildJob;
+/// A command job's status: outcome (running, exited, failed or cancelled), exit code, the command, any error, and
+/// the last 48000 characters of its combined output.
+Function AssistantCommandStatusJSON(Const Value: TBuildJobSnapshot): String;
 { Packages under Folder, using the same collection as run_compile. PackagePath, when set, must be one of those
   packages. A folder with no package is an error, not a missing-file error. }
 Function ResolveFolderPackages(Const Folder, PackagePath: String; Packages: TStrings; Out ErrorText: String): Boolean;
@@ -413,7 +419,10 @@ Begin
         If Value.Cancelled Then Break;
         If GetTickCount64 >= Deadline Then
           Begin
-            Value.ErrorText := 'Build/test command timed out.';
+            If Value.Kind = 'command' Then
+              Value.ErrorText := 'The command timed out.'
+            Else
+              Value.ErrorText := 'Build/test command timed out.';
             Break;
           End;
         If Not P.Running And (P.Output.NumBytesAvailable = 0) Then Break;
@@ -617,6 +626,57 @@ Function StartAssistantTest(Const Executable, Directory, BuildId: String; Argume
     Const Inputs: TBuildInputs; TimeoutMs: Cardinal; Const ExpectedFingerprint, ReportFormat: String; MinimumTests: Integer): IAssistantBuildJob;
 Begin
   Result := StartCommand(Executable, Directory, 'test', BuildId, ExpectedFingerprint, ReportFormat, MinimumTests, Arguments, Inputs, TimeoutMs);
+End;
+
+Function StartAssistantCommand(Const Executable, Directory: String; Arguments: TStrings; TimeoutMs: Cardinal): IAssistantBuildJob;
+Var
+  NoInputs: TBuildInputs;
+Begin
+  NoInputs := Nil;
+  Result := StartCommand(Executable, Directory, 'command', '', '', 'exit-code', 0, Arguments, NoInputs, TimeoutMs);
+End;
+
+Function AssistantCommandStatusJSON(Const Value: TBuildJobSnapshot): String;
+Const
+  MaxOutputChars = 48000;
+Var
+  Root: TJSONObject;
+  Outcome, Output: String;
+  Truncated: Boolean;
+Begin
+  If Not Value.Done Then
+    Outcome := 'running'
+  Else If Value.Cancelled Then
+    Outcome := 'cancelled'
+  Else If Value.ErrorText <> '' Then
+    Outcome := 'failed'
+  Else
+    Outcome := 'exited';
+  Output := Value.OutputText;
+  Truncated := Value.OutputTruncated;
+  If Length(Output) > MaxOutputChars Then
+    Begin
+      { The end of the output carries the result and the errors, so keep that and cut at a character boundary. }
+      Output := Copy(Output, Length(Output) - MaxOutputChars + 1, MaxOutputChars);
+      While (Output <> '') And ((Byte(Output[1]) And $C0) = $80) Do
+        Delete(Output, 1, 1);
+      Truncated := True;
+    End;
+  Root := TJSONObject.Create;
+  Try
+    Root.Add('job_id', Value.JobId);
+    Root.Add('done', Value.Done);
+    Root.Add('outcome', Outcome);
+    Root.Add('exit_code', Value.ExitCode);
+    If (Value.Command <> '') And (Length(Value.Command) <= 65536) Then
+      Root.Add('command', GetJSON(Value.Command));
+    Root.Add('error', Value.ErrorText);
+    Root.Add('output_truncated', Truncated);
+    Root.Add('output', Output);
+    Result := Root.AsJSON;
+  Finally
+    Root.Free;
+  End;
 End;
 
 Function StartAssistantBuild(Const Executable, ProjectFile, BuildMode: String;
