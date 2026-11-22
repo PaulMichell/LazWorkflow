@@ -190,6 +190,7 @@ Type
     FAnnouncedHead: Int64;
     FAnnouncedOpenBlock: String;
     FAnnouncedTurnRunning: Boolean;
+    FAnnouncedHeadBody: String;
     FAnnouncedHeadValid: Boolean;
     FMirror: TMonitorMirror;
     FPlanFetch: TMonitorPlanFetch;
@@ -672,6 +673,7 @@ Begin
   FAnnouncedHead := -1;
   FAnnouncedOpenBlock := '';
   FAnnouncedTurnRunning := False;
+  FAnnouncedHeadBody := '';
   FAnnouncedHeadValid := False;
   SetLength(FClients, 0);
   FHostFlags.Sending := False;
@@ -2545,6 +2547,7 @@ Begin
     FAnnouncedHead := -1;
     FAnnouncedOpenBlock := '';
     FAnnouncedTurnRunning := False;
+    FAnnouncedHeadBody := '';
     FAnnouncedHeadValid := False;
     FMirror.BeginStream(FEpoch, FConversationId, FProjectRoot, FTitle);
     NoteFillChanged;
@@ -2615,8 +2618,8 @@ End;
 Procedure TMonitorSession.AnnounceLogHead;
 Var
   Head: Int64;
-  OpenBlockId, Json: String;
-  TurnRunning, Changed: Boolean;
+  OpenBlockId, OpenBody, SentBody, Json: String;
+  TurnRunning, Changed, Behind: Boolean;
   Blocks: TAssistantMonitorBlockArray;
   Index: Integer;
 Begin
@@ -2626,28 +2629,42 @@ Begin
   If Head < 0 Then
     Exit;
   OpenBlockId := '';
+  OpenBody := '';
   Json := '';
   SetLength(Blocks, 0);
   If CopyLiveBlocks(Blocks) Then
     Begin
       For Index := 0 To High(Blocks) Do
         If Blocks[Index].Running And (Blocks[Index].BlockId <> '') Then
-          OpenBlockId := Blocks[Index].BlockId;
+          Begin
+            OpenBlockId := Blocks[Index].BlockId;
+            OpenBody := Blocks[Index].Body;
+          End;
       If (OpenBlockId = '') And (Length(Blocks) > 0) Then
-        OpenBlockId := Blocks[High(Blocks)].BlockId;
+        Begin
+          OpenBlockId := Blocks[High(Blocks)].BlockId;
+          OpenBody := Blocks[High(Blocks)].Body;
+        End;
     End;
   LockSession;
   Try
     TurnRunning := FHostFlags.Sending Or FHostFlags.PlanAgentRunning;
+    { The log lane is still short of this head. The state lane carries a bounded copy. }
+    Behind := FQueuedLogSeq < Head;
+    If Behind Then
+      SentBody := MonitorHeadBodyPrefix(OpenBody)
+    Else
+      SentBody := '';
     Changed := (Not FAnnouncedHeadValid) Or (Head <> FAnnouncedHead) Or (OpenBlockId <> FAnnouncedOpenBlock) Or
-      (TurnRunning <> FAnnouncedTurnRunning);
+      (TurnRunning <> FAnnouncedTurnRunning) Or (SentBody <> FAnnouncedHeadBody);
     If Not Changed Then
       Exit;
     FAnnouncedHead := Head;
     FAnnouncedOpenBlock := OpenBlockId;
     FAnnouncedTurnRunning := TurnRunning;
+    FAnnouncedHeadBody := SentBody;
     FAnnouncedHeadValid := True;
-    Json := MonitorLogHeadValueJson(Head, FConversationId, FEpoch, OpenBlockId, TurnRunning);
+    Json := MonitorHeadSnapshotJson(Head, FConversationId, FEpoch, OpenBlockId, '', TurnRunning, SentBody);
   Finally
     UnlockSession;
   End;

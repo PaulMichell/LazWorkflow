@@ -93,6 +93,11 @@ Function MonitorStatusValueJson(Const View: TAssistantMonitorView): String;
 Function MonitorResumeStatusValueJson(Const Status: TMonitorSyncStatus): String;
 /// Desktop log head. The phone compares this with the open turn it has applied. Not a content commit.
 Function MonitorLogHeadValueJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId: String; TurnRunning: Boolean): String;
+{ A prefix of Body, at most MonitorHeadBodyBytes of UTF-8. Empty when Body is empty. }
+Function MonitorHeadBodyPrefix(Const Body: String): String;
+{ Head identity plus that prefix. The log acknowledgement is not this sequence. }
+Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;
+  TurnRunning: Boolean; Const Body: String): String;
 Function MonitorApprovalValueJson(Active: Boolean; Const ToolId: String): String;
 Function MonitorSessionValueJson(Const View: TAssistantMonitorView): String;
 Function MonitorModeValueJson(Const View: TAssistantMonitorView): String;
@@ -107,6 +112,10 @@ Function MonitorPlanChoicesValueJson(Paths, Captions: TStrings): String;
 Function MonitorPlanValueJson(Const Path, Title: String; Running: Boolean; Const Revision: String;
   Const Rows: Array Of TAssistantMonitorPlanRow): String;
 Function MonitorTasksValueJson(Const Rows: Array Of TAssistantMonitorTaskRow): String;
+
+Const
+  { UTF-8 bytes of the open block carried on the state lane while the log is behind. }
+  MonitorHeadBodyBytes = 4096;
 
 Implementation
 
@@ -582,8 +591,38 @@ End;
 
 Function MonitorLogHeadValueJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId: String; TurnRunning: Boolean): String;
 Begin
+  Result := MonitorHeadSnapshotJson(Head, ConversationId, StreamId, OpenBlockId, '', TurnRunning, '');
+End;
+
+Function MonitorHeadBodyPrefix(Const Body: String): String;
+Var
+  Raw: RawByteString;
+  Cut: Integer;
+Begin
+  Result := '';
+  If Body = '' Then Exit;
+  Raw := UTF8String(Body);
+  Cut := MonitorUtf8CutLength(Raw, MonitorHeadBodyBytes);
+  Result := String(Copy(Raw, 1, Cut));
+End;
+
+Function MonitorHeadSnapshotJson(Head: Int64; Const ConversationId, StreamId, OpenBlockId, TurnId: String;
+  TurnRunning: Boolean; Const Body: String): String;
+Var
+  Sent: String;
+  SentBytes, FullBytes: Integer;
+Begin
+  Sent := MonitorHeadBodyPrefix(Body);
   Result := '{"seq":' + IntToStr(Head) + ',"conversation_id":' + Quoted(ConversationId) + ',"stream_id":' + Quoted(StreamId) +
-    ',"open_block":' + Quoted(OpenBlockId) + ',"running":' + MonitorBoolean(TurnRunning) + '}';
+    ',"open_block":' + Quoted(OpenBlockId) + ',"turn_id":' + Quoted(TurnId) + ',"running":' + MonitorBoolean(TurnRunning);
+  If Sent <> '' Then
+    Begin
+      SentBytes := Length(UTF8String(Sent));
+      FullBytes := Length(UTF8String(Body));
+      Result := Result + ',"body":' + Quoted(Sent) + ',"body_bytes":' + IntToStr(SentBytes) + ',"full_bytes":' +
+        IntToStr(FullBytes) + ',"hash":' + Quoted(Fnv1a64(UTF8String(Sent)));
+    End;
+  Result := Result + '}';
 End;
 
 Function MonitorApprovalValueJson(Active: Boolean; Const ToolId: String): String;

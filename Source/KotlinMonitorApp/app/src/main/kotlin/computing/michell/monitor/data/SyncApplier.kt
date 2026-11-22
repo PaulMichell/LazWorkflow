@@ -99,9 +99,23 @@ interface SyncStore {
   suspend fun pendingFetches(hostId: String): List<BlockFetch> = emptyList()
   suspend fun noteRevisionChanged(hostId: String, ref: String, nowMs: Long): BlockFetch? = null
   suspend fun commitTurnPage(hostId: String, conversationId: String, turn: computing.michell.monitor.protocol.WireTurn, nowMs: Long) {}
+  /** Paints the open block without moving the contiguous cursor. False when there is nowhere to put it. */
+  suspend fun publishHead(
+    hostId: String,
+    conversationId: String,
+    turnId: String,
+    blockId: String,
+    body: String,
+    running: Boolean,
+    seq: Long,
+    nowMs: Long
+  ): Boolean = false
 }
 
 class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
+  private var paintedSeq = -1L
+  private var paintedBlock = ""
+  private var paintedBody = ""
   override suspend fun apply(hostId: String, events: List<MonitorEvent>, nowMs: Long): SyncApplyResult {
     return database.withWriteTransaction {
       val dao = database.sync()
@@ -237,18 +251,24 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
       val block = dao.loadBlock(hostId, conversationId, blockId)
       val held = dao.loadHeld(hostId, conversationId, listOf(blockId)).map { it.toHeld() }
       val finished = finishFetch(block, repair, held, pieces, revision, hasRevision, totalBytes, ref, nowMs)
+      var reported = finished
       when (finished) {
         is FetchFinish.Applied -> {
-          if (block != null) dao.saveBlocks(listOf(block.copy(body = finished.body)))
+          val kept = retainHeadBody(
+            paintedBody, paintedSeq, paintedBlock, blockId, finished.body, if (hasRevision) revision else paintedSeq
+          )
+          val keptFinish = finished.copy(body = kept, missingBody = finished.missingBody && kept == finished.body)
+          reported = keptFinish
+          if (block != null) dao.saveBlocks(listOf(block.copy(body = kept)))
           val next = repair.copy(
             revision = finished.revision,
-            expectedLength = utf8Length(finished.body),
-            missingBody = finished.missingBody,
-            hash = prefixHash(finished.body),
-            fetchedBody = if (block == null) finished.body else "",
+            expectedLength = utf8Length(kept),
+            missingBody = keptFinish.missingBody,
+            hash = prefixHash(kept),
+            fetchedBody = if (block == null) kept else "",
             requestId = finished.requestId
           )
-          if (finished.missingBody || block == null) dao.upsertRepairs(listOf(next.toRecord()))
+          if (keptFinish.missingBody || block == null) dao.upsertRepairs(listOf(next.toRecord()))
           else dao.deleteRepair(hostId, located, blockId)
           for (seq in finished.dropSeqs) dao.deleteHeldSeq(hostId, located, blockId, seq)
         }
@@ -264,7 +284,37 @@ class RoomSyncStore(private val database: MonitorDatabase) : SyncStore {
         }
         FetchFinish.Ignore -> { }
       }
-      finished
+      reported
+    }
+  }
+
+  override suspend fun publishHead(
+    hostId: String,
+    conversationId: String,
+    turnId: String,
+    blockId: String,
+    body: String,
+    running: Boolean,
+    seq: Long,
+    nowMs: Long
+  ): Boolean {
+    if (hostId.isEmpty() || conversationId.isEmpty() || blockId.isEmpty() || body.isEmpty()) return false
+    if (seq < paintedSeq && blockId == paintedBlock) return false
+    return database.withWriteTransaction {
+      val dao = database.sync()
+      if (dao.loadConversation(hostId, conversationId) == null) return@withWriteTransaction false
+      val existing = dao.loadBlock(hostId, conversationId, blockId)
+      val turn = existing?.turn?.takeIf { id -> id.isNotEmpty() }
+        ?: turnId.takeIf { id -> id.isNotEmpty() }
+        ?: dao.loadTurns(hostId, conversationId).lastOrNull()?.turnId
+      if (turn.isNullOrEmpty()) return@withWriteTransaction false
+      val row = existing?.copy(turn = turn, body = body, state = if (running) "running" else "ok")
+        ?: BlockRecord(hostId, conversationId, turn, blockId, existing?.ordinal ?: 0, "answer", "", body, if (running) "running" else "ok")
+      dao.saveBlocks(listOf(row))
+      paintedSeq = seq
+      paintedBlock = blockId
+      paintedBody = body
+      true
     }
   }
 
@@ -322,6 +372,12 @@ class SyncApplier(
   private val committed = HashMap<String, AppliedCursor>()
   /** Open-turn sequence versus the announced head. Not reset by an older commit or a ping. */
   private val follow = OpenTurnFollow()
+  /** Body painted from the state lane. Not a log acknowledgement. */
+  private var paintedSeq = -1L
+  private var paintedBlock = ""
+  private var paintedBody = ""
+  private var paintedConversation = ""
+  private var paintedRunning = false
   /** Physical connection currently allowed to apply. Zero means none. */
   private var generation = 0
   /** Dispatcher of the last tick. Tests check that the flush job is not Main. */
@@ -639,7 +695,20 @@ class SyncApplier(
   private suspend fun applyState(key: String, valueJson: String): List<SyncEffect> {
     val now = nowMs()
     when (key) {
-      "head" -> follow.noteHeadJson(valueJson, now)
+      "head" -> {
+        follow.noteHeadJson(valueJson, now)
+        val snapshot = headSnapshot(valueJson)
+        val accepted = if (snapshot == null) null else acceptHeadBody(paintedSeq, paintedBody, snapshot)
+        if (snapshot != null && accepted != null && store.publishHead(
+          hostId, snapshot.conversationId, snapshot.turnId, snapshot.blockId, accepted, snapshot.running, snapshot.seq, now
+        )) {
+          paintedSeq = snapshot.seq
+          paintedBlock = snapshot.blockId
+          paintedBody = accepted
+          paintedConversation = snapshot.conversationId
+          paintedRunning = snapshot.running
+        }
+      }
       "status" -> follow.noteStatusJson(valueJson, now)
     }
     try {
@@ -682,7 +751,13 @@ class SyncApplier(
       return emptyList()
     }
     fetches.remove(key)
-    if (finished is FetchFinish.Applied) follow.noteBodyApplied(frame.blockId, nowMs())
+    if (finished is FetchFinish.Applied) {
+      val kept = retainHeadBody(paintedBody, paintedSeq, paintedBlock, frame.blockId, finished.body, frame.revision)
+      if (kept != finished.body && paintedConversation.isNotEmpty()) {
+        store.publishHead(hostId, paintedConversation, "", frame.blockId, kept, paintedRunning, paintedSeq, nowMs())
+      }
+      follow.noteBodyApplied(frame.blockId, nowMs())
+    }
     val effects = when (finished) {
       is FetchFinish.Again -> {
         mutableListOf<SyncEffect>(SyncEffect.FetchBlock(conversationId, frame.blockId, finished.offset, finished.prefixHash, finished.requestId))

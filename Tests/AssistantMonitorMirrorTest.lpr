@@ -16,7 +16,7 @@ Program AssistantMonitorMirrorTest;
 
 Uses
   SysUtils, fpjson, jsonparser, AssistantSessionObserve, AssistantMonitorMirror, AssistantMonitorFrames,
-  AssistantMonitorOutbox, AssistantMonitorSync;
+  AssistantMonitorOutbox, AssistantMonitorSync, AssistantMonitorText;
 
 Const
   { The euro sign, three bytes in UTF-8. }
@@ -872,6 +872,21 @@ Begin
   End;
 End;
 
+Procedure TestHeadSnapshotStaysBounded;
+Var
+  Short, Long, Prefix: String;
+Begin
+  Short := MonitorHeadSnapshotJson(12, 'c1', 'stream-a', 'b-live', 't-live', True, 'Hello tail');
+  Check('a head snapshot names the conversation, stream and revision', (Pos('"conversation_id":"c1"', Short) > 0) And
+    (Pos('"stream_id":"stream-a"', Short) > 0) And (Pos('"seq":12', Short) > 0));
+  Check('a short body rides on the state value', Pos('"body":"Hello tail"', Short) > 0);
+  Check('the hash is the sent prefix', Pos('"hash":"' + Fnv1a64('Hello tail') + '"', Short) > 0);
+  Long := StringOfChar('x', MonitorHeadBodyBytes + 40);
+  Prefix := MonitorHeadBodyPrefix(Long);
+  Check('the state-lane body is bounded', (Length(Prefix) = MonitorHeadBodyBytes) And (Length(Prefix) < Length(Long)));
+  Check('an empty body does not pretend to be a snapshot', Pos('"body":', MonitorHeadSnapshotJson(1, 'c1', 'stream-a', 'b', '', False, '')) = 0);
+End;
+
 { State can leave while the credit window still holds the phone short of the head. }
 Procedure TestStatePublishesAheadOfTheCreditWindow;
 Var
@@ -1003,6 +1018,7 @@ End;
 
 Begin
   FailCount := 0;
+  TestHeadSnapshotStaysBounded;
   TestStatePublishesAheadOfTheCreditWindow;
   TestIndexedTailTiming;
   TestEventFields;

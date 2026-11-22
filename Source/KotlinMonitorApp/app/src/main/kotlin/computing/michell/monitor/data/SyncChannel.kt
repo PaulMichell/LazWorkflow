@@ -338,6 +338,59 @@ fun joinPieces(pieces: Map<Int, String>, start: Int): String? {
   return out.toString()
 }
 
+data class HeadSnapshot(
+  val seq: Long,
+  val conversationId: String,
+  val streamId: String,
+  val blockId: String,
+  val turnId: String,
+  val running: Boolean,
+  val body: String?,
+  val bodyBytes: Int,
+  val fullBytes: Int,
+  val hash: String
+)
+
+/** The state-lane head. A missing body is only a sequence announcement. */
+fun headSnapshot(valueJson: String): HeadSnapshot? {
+  val value = jsonObject(valueJson) ?: return null
+  val seq = value.longField("seq") ?: return null
+  return HeadSnapshot(
+    seq,
+    value.textField("conversation_id").orEmpty(),
+    value.textField("stream_id").orEmpty(),
+    value.textField("open_block").orEmpty(),
+    value.textField("turn_id").orEmpty(),
+    value.flagField("running") == true,
+    value.textField("body"),
+    value.intField("body_bytes") ?: 0,
+    value.intField("full_bytes") ?: 0,
+    value.textField("hash").orEmpty()
+  )
+}
+
+/**
+ * A newer head may paint. An older snapshot may not. An equal revision must not
+ * shorten a body the phone already has.
+ */
+fun acceptHeadBody(paintedSeq: Long, storedBody: String, snapshot: HeadSnapshot): String? {
+  val body = snapshot.body ?: return null
+  if (snapshot.blockId.isEmpty() || snapshot.seq < paintedSeq) return null
+  if (snapshot.bodyBytes > 0 && utf8Length(body) != snapshot.bodyBytes) return null
+  if (snapshot.hash.isNotEmpty() && prefixHash(body) != snapshot.hash) return null
+  if (snapshot.seq == paintedSeq && storedBody.length > body.length && storedBody.startsWith(body)) return null
+  return body
+}
+
+/** A late fetch or an older reply must not wipe a head that has already painted. */
+fun retainHeadBody(paintedBody: String, paintedSeq: Long, paintedBlock: String, blockId: String, candidate: String, fetchRevision: Long): String {
+  if (paintedBlock.isEmpty() || blockId != paintedBlock || paintedSeq < 0L || paintedBody.isEmpty()) return candidate
+  if (candidate.startsWith(paintedBody)) return candidate
+  if (paintedBody.startsWith(candidate)) return paintedBody
+  if (fetchRevision > paintedSeq) return candidate
+  return paintedBody
+}
+
 /** Latest value of one key. It does not move the content cursor. */
 fun applyStateValue(ui: MonitorUi, key: String, valueJson: String): MonitorUi {
   if (key == "approval") return applyApprovalState(ui, valueJson)
