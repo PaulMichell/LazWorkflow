@@ -16,7 +16,23 @@ Interface
 Implementation
 
 Uses
-  AssistantCapabilities;
+  AssistantCapabilities, AssistantConnections, fpjson;
+
+Procedure ApplyCodexConfig(Item: TAssistantConnection; Config: TJSONObject);
+Begin
+  If Not Assigned(Item) Or Not Assigned(Config) Then
+    Exit;
+  If Config.Find('runtime') <> Nil Then
+    Item.Runtime := Config.Get('runtime', Item.Runtime);
+  If Config.Find('models_json') <> Nil Then
+    Item.CachedModelsJson := Config.Get('models_json', Item.CachedModelsJson);
+End;
+
+Procedure CollectCodexConfig(Item: TAssistantConnection; Config: TJSONObject);
+Begin
+  If Not Assigned(Item) Or Not Assigned(Config) Then
+    Exit;
+End;
 
 Function ChatGPTCapabilitySet: TAssistantCapabilitySet;
 Begin
@@ -42,6 +58,7 @@ Begin
   { Each turn is an ephemeral thread. Earlier turns arrive as a bounded recap. }
   Info.Continuity := acoRecapOnly;
   RegisterAssistantBackend(Info);
+  RegisterConnectionConfig('codex', @ApplyCodexConfig, @CollectCodexConfig);
 End;
 
 Initialization

@@ -24,10 +24,66 @@ Begin
   Else
     Result := Copy(ToolsJson, StartAt, NextTool);
 End;
+Procedure TestConfigRoundTrip;
+Var
+  Dir, Saved: String;
+  Store: TAssistantConnections;
+  Policy: TStringList;
+Begin
+  Dir := GetTempDir + 'laz-config-roundtrip';
+  ForceDirectories(Dir);
+  SetWorkflowSettingsDirectory(Dir);
+  DeleteFile(WorkflowSettingsPath);
+  Store := TAssistantConnections.Create(Dir);
+  Policy := TStringList.Create;
+  Try
+    Policy.Text := '{"assistant":{"active_connection":"g1","connections":[' +
+      '{"id":"g1","name":"Grok row","backend":"grok","model":"grok-4.5","thinking":"low","approval":"ask",' +
+      '"api_base":"https://api.x.ai/v1","search_mode":"auto","image_output":true,"image_model":"grok-imagine"},' +
+      '{"id":"c1","name":"Codex row","backend":"codex","model":"gpt-5","runtime":"/bin/codex","models_json":"[]"},' +
+      '{"id":"l1","name":"Claude row","backend":"claude","model":"sonnet","runtime":"/bin/claude","thinking":"high"},' +
+      '{"id":"o1","name":"Compatible row","backend":"openai-compatible","model":"local","api_base":"https://example.test/v1",' +
+      '"preset":"custom","key_source":"env","key_env":"LOCAL_KEY","wire_api":"chat-completions"}]}}';
+    Policy.SaveToFile(WorkflowSettingsPath);
+    Store.Load;
+    Check('old Grok row opens', (Store.Count = 4) And (Store[0].Model = 'grok-4.5') And
+      (Store[0].ApiBase = 'https://api.x.ai/v1') And (Store[0].SearchMode = 'auto') And Store[0].ImageOutput);
+    Check('old Grok row migrated into config', Assigned(Store[0].BackendConfig) And
+      (Store[0].BackendConfig.Get('api_base', '') = 'https://api.x.ai/v1'));
+    Check('old Codex row opens', (Store[1].Runtime = '/bin/codex') And
+      (Store[1].BackendConfig.Get('runtime', '') = '/bin/codex'));
+    Check('old Claude row opens', (Store[2].Runtime = '/bin/claude') And (Store[2].Model = 'sonnet'));
+    Check('old compatible row opens', (Store[3].ApiBase = 'https://example.test/v1') And (Store[3].KeyEnv = 'LOCAL_KEY'));
+    Check('save migrated rows', Store.Save);
+    Policy.LoadFromFile(WorkflowSettingsPath);
+    Saved := Policy.Text;
+    Check('save writes the backend config object', Pos('"config"', Saved) > 0);
+    Store.Load;
+    Check('Grok round-trip', (Store[0].Model = 'grok-4.5') And (Store[0].ApiBase = 'https://api.x.ai/v1') And
+      Store[0].ImageOutput And (Store[0].ImageModel = 'grok-imagine'));
+    Check('Codex round-trip', (Store[1].Runtime = '/bin/codex') And (Store[1].Model = 'gpt-5'));
+    Check('Claude round-trip', (Store[2].Runtime = '/bin/claude') And (Store[2].ReasoningEffort = 'high'));
+    Check('compatible round-trip', (Store[3].Preset = 'custom') And (Store[3].WireApi = 'chat-completions') And
+      (Store[3].KeyEnv = 'LOCAL_KEY'));
+    Policy.Text := '{"assistant":{"active_connection":"l2","connections":[' +
+      '{"id":"l2","name":"Claude config","backend":"claude","model":"haiku","thinking":"low","approval":"ask",' +
+      '"config":{"runtime":"/only/config/claude","models_json":"[]"}}]}}';
+    Policy.SaveToFile(WorkflowSettingsPath);
+    Store.Load;
+    Check('config-only Claude row opens', (Store.Count = 1) And (Store[0].Runtime = '/only/config/claude') And
+      (Store[0].Model = 'haiku'));
+  Finally
+    Policy.Free;
+    Store.Free;
+    DeleteFile(WorkflowSettingsPath);
+  End;
+End;
+
 Var Root, Profile, Id, ErrorText, PolicyText, ToolsJson, Prompt: String; Guid: TGuid;
   Store: TAssistantConnections; Item: TAssistantConnection; Raised: Boolean; I: Integer; Policy, Names: TStringList;
   Call: TAssistantProfileCall;
 Begin
+  TestConfigRoundTrip;
   CreateGUID(Guid); Root := GetTempDir + 'laz-connections-' + GUIDToString(Guid); ForceDirectories(Root);
   SetWorkflowSettingsDirectory(Root);
   Policy := TStringList.Create;

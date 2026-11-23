@@ -15,7 +15,7 @@ Unit AssistantConnections;
 Interface
 
 Uses
-  Classes, SysUtils, Contnrs, AssistantConversation;
+  Classes, SysUtils, Contnrs, fpjson, AssistantConversation;
 
 Const
   AssistantOpenRouterApiBase = 'https://openrouter.ai/api/v1';
@@ -28,9 +28,11 @@ Const
   AssistantGrokImageModel = 'grok-imagine-image-2.0';
 
 Type
+  { Common identity plus the fields callers already read. Backend-specific values are owned by
+    BackendConfig. Load migrates a flat file into that object. }
   TAssistantConnection = Class
-    Id, Name, Backend, Runtime, Model, ReasoningEffort, ApprovalMode: String;
-    SearchMode, AnswerVerbosity, Preset, ApiBase: String;
+    Id, Name, Backend, Model, ReasoningEffort, ApprovalMode: String;
+    Runtime, SearchMode, AnswerVerbosity, Preset, ApiBase: String;
     KeySource, KeyEnv, KeyValue, WireApi: String;
     CachedModelsJson: String;
     SearchCitations: Boolean;
@@ -39,10 +41,16 @@ Type
     { Image endpoint id. Not copied from Model, and not limited to the chat picker. }
     ImageModel: String;
     MaxOutputTokens: Integer;
+    { Backend-owned object. Not the OAuth token store. }
+    BackendConfig: TJSONObject;
     Constructor Create;
+    Destructor Destroy; Override;
     /// True when the registry delivers context compaction. OpenAI-compatible is false: it has no history to compact.
     Function CanCompactContext: Boolean;
   End;
+
+  TConnectionConfigProc = Procedure(Item: TAssistantConnection; Config: TJSONObject);
+
   TAssistantConnections = Class
   Private
     FItems: TObjectList;
@@ -88,16 +96,232 @@ Type
 
 /// Reads the saved active profile. Does not rewrite the live config.
 Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
+Procedure RegisterConnectionConfig(Const BackendId: String; Apply, Collect: TConnectionConfigProc);
+Procedure ApplyRegisteredConnectionConfig(Item: TAssistantConnection; Config: TJSONObject);
+Procedure CollectRegisteredConnectionConfig(Item: TAssistantConnection; Config: TJSONObject);
+/// Copies a flat connection object into BackendConfig when the file has no config object.
+Procedure MigrateConnectionConfig(Source: TJSONObject; Item: TAssistantConnection);
+/// Applies BackendConfig onto the typed fields. A missing key leaves the field unchanged.
+Procedure ApplyConnectionConfig(Item: TAssistantConnection);
+/// Writes the typed backend fields into BackendConfig. Common identity stays off this object.
+Procedure CollectConnectionConfig(Item: TAssistantConnection);
+Function CloneConnectionConfig(Item: TAssistantConnection): TJSONObject;
 
 Implementation
 
 Uses
-  AssistantConfig, WorkflowSettings, fpjson, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend,
+  AssistantConfig, WorkflowSettings, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend,
   AssistantClaudeBackend, AssistantCompatibleBackend;
+
+Type
+  TConnectionConfigHook = Record
+    BackendId: String;
+    Apply, Collect: TConnectionConfigProc;
+  End;
+
+Var
+  ConfigHooks: Array Of TConnectionConfigHook;
+
+Procedure RegisterConnectionConfig(Const BackendId: String; Apply, Collect: TConnectionConfigProc);
+Var
+  N: Integer;
+Begin
+  N := Length(ConfigHooks);
+  SetLength(ConfigHooks, N + 1);
+  ConfigHooks[N].BackendId := BackendId;
+  ConfigHooks[N].Apply := Apply;
+  ConfigHooks[N].Collect := Collect;
+End;
+
+Function HookFor(Const BackendId: String): Integer;
+Var
+  I: Integer;
+Begin
+  Result := -1;
+  For I := 0 To High(ConfigHooks) Do
+    If ConfigHooks[I].BackendId = BackendId Then
+      Exit(I);
+End;
+
+Procedure ApplyRegisteredConnectionConfig(Item: TAssistantConnection; Config: TJSONObject);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Index := HookFor(Item.Backend);
+  If (Index >= 0) And Assigned(ConfigHooks[Index].Apply) Then
+    ConfigHooks[Index].Apply(Item, Config);
+End;
+
+Procedure CollectRegisteredConnectionConfig(Item: TAssistantConnection; Config: TJSONObject);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Index := HookFor(Item.Backend);
+  If (Index >= 0) And Assigned(ConfigHooks[Index].Collect) Then
+    ConfigHooks[Index].Collect(Item, Config);
+End;
+
+Function ConfigText(Config: TJSONObject; Const Name, Fallback: String): String;
+Begin
+  If Assigned(Config) And Assigned(Config.Find(Name)) Then
+    Result := Config.Get(Name, Fallback)
+  Else
+    Result := Fallback;
+End;
+
+Procedure PutValue(Config: TJSONObject; Const Name: String; Value: TJSONData);
+Var
+  Index: Integer;
+Begin
+  If Not Assigned(Config) Or Not Assigned(Value) Then
+    Exit;
+  Index := Config.IndexOfName(Name);
+  If Index >= 0 Then
+    Config.Delete(Index);
+  Config.Add(Name, Value);
+End;
+
+Procedure PutText(Config: TJSONObject; Const Name, Value: String);
+Begin
+  PutValue(Config, Name, TJSONString.Create(Value));
+End;
+
+Procedure PutBool(Config: TJSONObject; Const Name: String; Value: Boolean);
+Begin
+  PutValue(Config, Name, TJSONBoolean.Create(Value));
+End;
+
+Procedure PutInt(Config: TJSONObject; Const Name: String; Value: Integer);
+Begin
+  PutValue(Config, Name, TJSONIntegerNumber.Create(Value));
+End;
+
+Procedure MigrateConnectionConfig(Source: TJSONObject; Item: TAssistantConnection);
+Var
+  Node: TJSONData;
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  If Not Assigned(Item.BackendConfig) Then
+    Item.BackendConfig := TJSONObject.Create;
+  If Not Assigned(Source) Then
+    Exit;
+  Node := Source.Find('config');
+  If Node Is TJSONObject Then
+    Begin
+      Item.BackendConfig.Free;
+      Item.BackendConfig := TJSONObject(TJSONObject(Node).Clone);
+      Exit;
+    End;
+  { Old file: the flat keys become the backend object. A later config object wins. }
+  If Source.Find('runtime') <> Nil Then
+    PutText(Item.BackendConfig, 'runtime', Source.Get('runtime', ''));
+  If Source.Find('models_json') <> Nil Then
+    PutText(Item.BackendConfig, 'models_json', Source.Get('models_json', ''));
+  If Source.Find('search_mode') <> Nil Then
+    PutText(Item.BackendConfig, 'search_mode', Source.Get('search_mode', ''));
+  If Source.Find('search_citations') <> Nil Then
+    PutBool(Item.BackendConfig, 'search_citations', Source.Get('search_citations', False));
+  If Source.Find('answer_verbosity') <> Nil Then
+    PutText(Item.BackendConfig, 'answer_verbosity', Source.Get('answer_verbosity', ''));
+  If Source.Find('max_output_tokens') <> Nil Then
+    PutInt(Item.BackendConfig, 'max_output_tokens', Source.Get('max_output_tokens', 0));
+  If Source.Find('preset') <> Nil Then
+    PutText(Item.BackendConfig, 'preset', Source.Get('preset', ''));
+  If Source.Find('api_base') <> Nil Then
+    PutText(Item.BackendConfig, 'api_base', Source.Get('api_base', ''));
+  If Source.Find('key_source') <> Nil Then
+    PutText(Item.BackendConfig, 'key_source', Source.Get('key_source', ''));
+  If Source.Find('key_env') <> Nil Then
+    PutText(Item.BackendConfig, 'key_env', Source.Get('key_env', ''));
+  If Source.Find('key_value') <> Nil Then
+    PutText(Item.BackendConfig, 'key_value', Source.Get('key_value', ''));
+  If Source.Find('wire_api') <> Nil Then
+    PutText(Item.BackendConfig, 'wire_api', Source.Get('wire_api', ''));
+  If Source.Find('image_output') <> Nil Then
+    PutBool(Item.BackendConfig, 'image_output', Source.Get('image_output', False));
+  If Source.Find('image_model') <> Nil Then
+    PutText(Item.BackendConfig, 'image_model', Source.Get('image_model', ''));
+End;
+
+Procedure ApplyConnectionConfig(Item: TAssistantConnection);
+Var
+  Config: TJSONObject;
+Begin
+  If Not Assigned(Item) Or Not Assigned(Item.BackendConfig) Then
+    Exit;
+  Config := Item.BackendConfig;
+  If Config.Find('runtime') <> Nil Then
+    Item.Runtime := ConfigText(Config, 'runtime', Item.Runtime);
+  If Config.Find('models_json') <> Nil Then
+    Item.CachedModelsJson := ConfigText(Config, 'models_json', Item.CachedModelsJson);
+  If Config.Find('search_mode') <> Nil Then
+    Item.SearchMode := ConfigText(Config, 'search_mode', Item.SearchMode);
+  If Config.Find('search_citations') <> Nil Then
+    Item.SearchCitations := Config.Get('search_citations', Item.SearchCitations);
+  If Config.Find('answer_verbosity') <> Nil Then
+    Item.AnswerVerbosity := ConfigText(Config, 'answer_verbosity', Item.AnswerVerbosity);
+  If Config.Find('max_output_tokens') <> Nil Then
+    Item.MaxOutputTokens := Config.Get('max_output_tokens', Item.MaxOutputTokens);
+  If Config.Find('preset') <> Nil Then
+    Item.Preset := ConfigText(Config, 'preset', Item.Preset);
+  If Config.Find('api_base') <> Nil Then
+    Item.ApiBase := ConfigText(Config, 'api_base', Item.ApiBase);
+  If Config.Find('key_source') <> Nil Then
+    Item.KeySource := ConfigText(Config, 'key_source', Item.KeySource);
+  If Config.Find('key_env') <> Nil Then
+    Item.KeyEnv := ConfigText(Config, 'key_env', Item.KeyEnv);
+  If Config.Find('key_value') <> Nil Then
+    Item.KeyValue := ConfigText(Config, 'key_value', Item.KeyValue);
+  If Config.Find('wire_api') <> Nil Then
+    Item.WireApi := ConfigText(Config, 'wire_api', Item.WireApi);
+  If Config.Find('image_output') <> Nil Then
+    Item.ImageOutput := Config.Get('image_output', Item.ImageOutput);
+  If Config.Find('image_model') <> Nil Then
+    Item.ImageModel := ConfigText(Config, 'image_model', Item.ImageModel);
+  ApplyRegisteredConnectionConfig(Item, Config);
+End;
+
+Procedure CollectConnectionConfig(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  If Not Assigned(Item.BackendConfig) Then
+    Item.BackendConfig := TJSONObject.Create;
+  PutText(Item.BackendConfig, 'runtime', Item.Runtime);
+  PutText(Item.BackendConfig, 'models_json', Item.CachedModelsJson);
+  PutText(Item.BackendConfig, 'search_mode', Item.SearchMode);
+  PutBool(Item.BackendConfig, 'search_citations', Item.SearchCitations);
+  PutText(Item.BackendConfig, 'answer_verbosity', Item.AnswerVerbosity);
+  PutInt(Item.BackendConfig, 'max_output_tokens', Item.MaxOutputTokens);
+  PutText(Item.BackendConfig, 'preset', Item.Preset);
+  PutText(Item.BackendConfig, 'api_base', Item.ApiBase);
+  PutText(Item.BackendConfig, 'key_source', Item.KeySource);
+  PutText(Item.BackendConfig, 'key_env', Item.KeyEnv);
+  PutText(Item.BackendConfig, 'key_value', Item.KeyValue);
+  PutText(Item.BackendConfig, 'wire_api', Item.WireApi);
+  PutBool(Item.BackendConfig, 'image_output', Item.ImageOutput);
+  PutText(Item.BackendConfig, 'image_model', Item.ImageModel);
+  CollectRegisteredConnectionConfig(Item, Item.BackendConfig);
+End;
+
+Function CloneConnectionConfig(Item: TAssistantConnection): TJSONObject;
+Begin
+  CollectConnectionConfig(Item);
+  If Assigned(Item) And Assigned(Item.BackendConfig) Then
+    Result := TJSONObject(Item.BackendConfig.Clone)
+  Else
+    Result := TJSONObject.Create;
+End;
 
 Constructor TAssistantConnection.Create;
 Begin
   Inherited Create;
+  BackendConfig := TJSONObject.Create;
   ApprovalMode := 'ask';
   SearchMode := 'off';
   SearchCitations := False;
@@ -111,6 +335,12 @@ Begin
   KeyEnv := '';
   KeyValue := '';
   WireApi := '';
+End;
+
+Destructor TAssistantConnection.Destroy;
+Begin
+  FreeAndNil(BackendConfig);
+  Inherited Destroy;
 End;
 
 Function TAssistantConnection.CanCompactContext: Boolean;
@@ -186,6 +416,24 @@ Begin
         If Obj.Find('image_output') <> Nil Then
           Profile.ImageOutput := Obj.Get('image_output', False);
         Profile.ImageModel := Obj.Get('image_model', '');
+        { A migrated file keeps those keys on the backend object. Flat keys still win when config is absent. }
+        If Obj.Find('config') Is TJSONObject Then
+          Begin
+            If TJSONObject(Obj.Find('config')).Find('api_base') <> Nil Then
+              Profile.ApiBase := TJSONObject(Obj.Find('config')).Get('api_base', Profile.ApiBase);
+            If TJSONObject(Obj.Find('config')).Find('preset') <> Nil Then
+              Profile.Preset := TJSONObject(Obj.Find('config')).Get('preset', Profile.Preset);
+            If TJSONObject(Obj.Find('config')).Find('key_source') <> Nil Then
+              Profile.KeySource := TJSONObject(Obj.Find('config')).Get('key_source', Profile.KeySource);
+            If TJSONObject(Obj.Find('config')).Find('key_env') <> Nil Then
+              Profile.KeyEnv := TJSONObject(Obj.Find('config')).Get('key_env', Profile.KeyEnv);
+            If TJSONObject(Obj.Find('config')).Find('key_value') <> Nil Then
+              Profile.KeyValue := TJSONObject(Obj.Find('config')).Get('key_value', Profile.KeyValue);
+            If TJSONObject(Obj.Find('config')).Find('image_output') <> Nil Then
+              Profile.ImageOutput := TJSONObject(Obj.Find('config')).Get('image_output', Profile.ImageOutput);
+            If TJSONObject(Obj.Find('config')).Find('image_model') <> Nil Then
+              Profile.ImageModel := TJSONObject(Obj.Find('config')).Get('image_model', Profile.ImageModel);
+          End;
         { image_delivery is not applied. An old file still opens. }
         Exit(True);
       End;

@@ -19,7 +19,7 @@ Interface
 
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, Menus,
-  ButtonPanel, ComCtrls, Spin, Grids, AssistantConnections, AssistantCodexSettings,
+  ButtonPanel, ComCtrls, Spin, Grids, AssistantConnections, AssistantCodexSettings, AssistantSettingsPages,
   SpellCheckerSettingsFrame, AssistantTestSettingsFrame;
 
 Type
@@ -237,9 +237,6 @@ Type
     Procedure StartPlanUsageRefresh(Item: TAssistantConnection);
     Procedure PlanUsageTimerTimer(Sender: TObject);
     Procedure ReleasePlanUsageRefresh;
-    Procedure LoadGrokConnection(Item: TAssistantConnection);
-    Procedure LoadCompatibleConnection(Item: TAssistantConnection);
-    Procedure LoadClaudeConnection(Item: TAssistantConnection);
     Procedure FillClaudeModels(Const SelectedModel: String);
     Procedure FillClaudeEffort(Const SelectedEffort: String);
     Function ClaudeEffort: String;
@@ -250,6 +247,14 @@ Type
     Procedure RefreshCompatibleModels;
   Public
     Destructor Destroy; Override;
+    Procedure LoadGrokConnection(Item: TAssistantConnection);
+    Procedure LoadCompatibleConnection(Item: TAssistantConnection);
+    Procedure LoadClaudeConnection(Item: TAssistantConnection);
+    Procedure LoadCodexConnection(Item: TAssistantConnection);
+    Procedure StoreGrokConnection(Item: TAssistantConnection);
+    Procedure StoreCodexConnection(Item: TAssistantConnection);
+    Procedure StoreCompatibleConnection(Item: TAssistantConnection);
+    Procedure StoreClaudeConnection(Item: TAssistantConnection);
     Procedure LoadFromConfig;
     Procedure SaveToConfig;
     Procedure RefreshAuthStatus;
@@ -267,6 +272,7 @@ Uses
   AssistantWorkTarget, AssistantConfig, AssistantService, GrokOAuth, AssistantSkills, AssistantHttps, WorkflowLog,
   AssistantConversation, ProjectAssistantForm, AssistantXaiProvider, AssistantCompatibleClient, AssistantClaudeClient, AssistantClaudeStream,
   AssistantUsage, AssistantAccountUsage, AssistantAccountWorker,
+  AssistantGrokSettings, AssistantClaudeSettings, AssistantCompatibleSettings,
   LCLIntf, LazIDEIntf, FileUtil, LazFileUtils;
 
 Procedure AddFallbackModels(List: TStrings);
@@ -319,16 +325,7 @@ End;
 
 Function KindCaption(Const Backend: String): String;
 Begin
-  If Backend = 'grok' Then
-    Result := 'Grok account'
-  Else If Backend = 'codex' Then
-    Result := 'ChatGPT (Codex app)'
-  Else If Backend = 'openai-compatible' Then
-    Result := 'OpenAI-compatible endpoint'
-  Else If Backend = 'claude' Then
-    Result := 'Claude account'
-  Else
-    Result := '';
+  Result := AssistantSettingsKindCaption(Backend);
 End;
 
 Function ApprovalIndex(Const Mode: String): Integer;
@@ -420,11 +417,18 @@ Begin
 End;
 
 Procedure TAssistantSettingsForm.ShowConnectionKind(Const Backend: String);
+Var
+  I: Integer;
+  Page: TAssistantSettingsPage;
+  Host: TComponent;
 Begin
-  GrokPanel.Visible := Backend = 'grok';
-  CodexPanel.Visible := Backend = 'codex';
-  CompatiblePanel.Visible := Backend = 'openai-compatible';
-  ClaudePanel.Visible := Backend = 'claude';
+  For I := 0 To AssistantSettingsPageCount - 1 Do
+    Begin
+      Page := AssistantSettingsPageAt(I);
+      Host := FindComponent(Page.PanelName);
+      If Host Is TControl Then
+        TControl(Host).Visible := Page.BackendId = Backend;
+    End;
   EmptyConnectionLabel.Visible := Backend = '';
   KindValueLabel.Caption := KindCaption(Backend);
   ConnectionNameEdit.Enabled := Backend <> '';
@@ -729,6 +733,7 @@ End;
 Procedure TAssistantSettingsForm.StoreConnection;
 Var
   Item: TAssistantConnection;
+  Page: TAssistantSettingsPage;
 Begin
   If (Not Assigned(Connections)) Or (SelectedConnection < 0) Or (SelectedConnection >= Connections.Count) Then
     Exit;
@@ -748,65 +753,80 @@ Begin
       Item.ImageOutput := ImageOutputCheck.Checked;
       Item.ImageModel := Trim(ImageModelCombo.Text);
     End;
-  If Item.Backend = 'grok' Then
-    Begin
-      Item.ApiBase := Trim(ApiBaseEdit.Text);
-      If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
-        Item.Model := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
-      If ThinkingCombo.ItemIndex >= 0 Then
-        Item.ReasoningEffort := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex]);
-      Item.ApprovalMode := ApprovalFromIndex(ApprovalCombo.ItemIndex);
-      Case SearchCombo.ItemIndex Of
-        1: Item.SearchMode := 'auto';
-        2: Item.SearchMode := 'on';
-      Else
-        Item.SearchMode := 'off';
-      End;
-      Item.SearchCitations := CitationsCheck.Checked;
-      Case VerbosityCombo.ItemIndex Of
-        0: Item.AnswerVerbosity := 'low';
-        2: Item.AnswerVerbosity := 'high';
-      Else
-        Item.AnswerVerbosity := 'medium';
-      End;
-      Item.MaxOutputTokens := MaxOutputEdit.Value;
-    End
-  Else If Item.Backend = 'codex' Then
-    Begin
-      Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text);
-      Item.Model := Trim(CodexFrame.ModelCombo.Text);
-      Item.ReasoningEffort := CodexFrame.ReasoningEffort;
-      Item.ApprovalMode := CodexFrame.ApprovalMode;
-      Item.CachedModelsJson := CodexFrame.CachedModelsJson;
-    End
-  Else If Item.Backend = 'openai-compatible' Then
-    Begin
-      If PresetCombo.ItemIndex = 0 Then
-        Item.Preset := 'openrouter'
-      Else
-        Item.Preset := 'custom';
-      Item.ApiBase := Trim(CompatibleBaseEdit.Text);
-      If KeySourceCombo.ItemIndex = 1 Then
-        Item.KeySource := 'stored'
-      Else
-        Item.KeySource := 'env';
-      Item.KeyEnv := Trim(KeyEnvEdit.Text);
-      Item.KeyValue := KeyValueEdit.Text;
-      Item.WireApi := AssistantWireChatCompletions;
-      Item.Model := Trim(CompatibleModelCombo.Text);
-      Item.MaxOutputTokens := CompatibleMaxOutputEdit.Value;
-      Item.ApprovalMode := ApprovalFromIndex(CompatibleApprovalCombo.ItemIndex);
-    End
-  Else If Item.Backend = 'claude' Then
-    Begin
-      Item.Runtime := Trim(ClaudeRuntimeEdit.Text);
-      Item.Model := Trim(ClaudeModelCombo.Text);
-      If Item.Model = '' Then
-        Item.Model := ClaudeDefaultModel;
-      Item.ReasoningEffort := ClaudeEffort;
-      Item.CachedModelsJson := ClaudeModelsJson;
-      Item.ApprovalMode := ApprovalFromIndex(ClaudeApprovalCombo.ItemIndex);
-    End;
+  Page := FindAssistantSettingsPage(Item.Backend);
+  If Assigned(Page) Then
+    Page.Store(Self, Item);
+End;
+
+Procedure TAssistantSettingsForm.StoreGrokConnection(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Item.ApiBase := Trim(ApiBaseEdit.Text);
+  If (ModelList.ItemIndex >= 0) And (ModelList.ItemIndex < ModelList.Items.Count) Then
+    Item.Model := XaiModelIdFromDisplay(ModelList.Items[ModelList.ItemIndex]);
+  If ThinkingCombo.ItemIndex >= 0 Then
+    Item.ReasoningEffort := EffortFromCaption(ThinkingCombo.Items[ThinkingCombo.ItemIndex]);
+  Item.ApprovalMode := ApprovalFromIndex(ApprovalCombo.ItemIndex);
+  Case SearchCombo.ItemIndex Of
+    1: Item.SearchMode := 'auto';
+    2: Item.SearchMode := 'on';
+  Else
+    Item.SearchMode := 'off';
+  End;
+  Item.SearchCitations := CitationsCheck.Checked;
+  Case VerbosityCombo.ItemIndex Of
+    0: Item.AnswerVerbosity := 'low';
+    2: Item.AnswerVerbosity := 'high';
+  Else
+    Item.AnswerVerbosity := 'medium';
+  End;
+  Item.MaxOutputTokens := MaxOutputEdit.Value;
+End;
+
+Procedure TAssistantSettingsForm.StoreCodexConnection(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Item.Runtime := Trim(CodexFrame.RuntimeEdit.Text);
+  Item.Model := Trim(CodexFrame.ModelCombo.Text);
+  Item.ReasoningEffort := CodexFrame.ReasoningEffort;
+  Item.ApprovalMode := CodexFrame.ApprovalMode;
+  Item.CachedModelsJson := CodexFrame.CachedModelsJson;
+End;
+
+Procedure TAssistantSettingsForm.StoreCompatibleConnection(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  If PresetCombo.ItemIndex = 0 Then
+    Item.Preset := 'openrouter'
+  Else
+    Item.Preset := 'custom';
+  Item.ApiBase := Trim(CompatibleBaseEdit.Text);
+  If KeySourceCombo.ItemIndex = 1 Then
+    Item.KeySource := 'stored'
+  Else
+    Item.KeySource := 'env';
+  Item.KeyEnv := Trim(KeyEnvEdit.Text);
+  Item.KeyValue := KeyValueEdit.Text;
+  Item.WireApi := AssistantWireChatCompletions;
+  Item.Model := Trim(CompatibleModelCombo.Text);
+  Item.MaxOutputTokens := CompatibleMaxOutputEdit.Value;
+  Item.ApprovalMode := ApprovalFromIndex(CompatibleApprovalCombo.ItemIndex);
+End;
+
+Procedure TAssistantSettingsForm.StoreClaudeConnection(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Item.Runtime := Trim(ClaudeRuntimeEdit.Text);
+  Item.Model := Trim(ClaudeModelCombo.Text);
+  If Item.Model = '' Then
+    Item.Model := ClaudeDefaultModel;
+  Item.ReasoningEffort := ClaudeEffort;
+  Item.CachedModelsJson := ClaudeModelsJson;
+  Item.ApprovalMode := ApprovalFromIndex(ClaudeApprovalCombo.ItemIndex);
 End;
 
 { Latest completed turn, then the plan summary when that connection has one. }
@@ -1000,10 +1020,29 @@ Begin
   ShowConnectionUsage(Item, ClaudeUsageLabel);
 End;
 
+Procedure TAssistantSettingsForm.LoadCodexConnection(Item: TAssistantConnection);
+Begin
+  If Not Assigned(Item) Then
+    Exit;
+  Try
+    CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort,
+      Item.ApprovalMode, Item.CachedModelsJson);
+  Except
+    On E: Exception Do
+      CodexFrame.ConnectionStatus.Caption := E.Message;
+  End;
+  NotifyOpenProjectAssistantFormsAccountUsage;
+  ShowCodexPlanUsage(Item);
+  EnsureUsageTimer;
+  If Assigned(FPlanUsageTimer) Then
+    FPlanUsageTimer.Interval := 1000;
+End;
+
 Procedure TAssistantSettingsForm.ConnectionChanged(Sender: TObject);
 Var
   Item: TAssistantConnection;
   NewSelection: Integer;
+  Page: TAssistantSettingsPage;
 Begin
   If FApplyingConnection Then
     Exit;
@@ -1033,27 +1072,9 @@ Begin
     Try
       ConnectionNameEdit.Text := Item.Name;
       ShowConnectionKind(Item.Backend);
-      If Item.Backend = 'grok' Then
-        LoadGrokConnection(Item)
-      Else If Item.Backend = 'codex' Then
-        Begin
-          Try
-            CodexFrame.LoadConnection(Connections.ProfileDir(Item), Item.Runtime, Item.Model, Item.ReasoningEffort,
-              Item.ApprovalMode, Item.CachedModelsJson);
-          Except
-            On E: Exception Do
-              CodexFrame.ConnectionStatus.Caption := E.Message;
-          End;
-          NotifyOpenProjectAssistantFormsAccountUsage;
-          ShowCodexPlanUsage(Item);
-          EnsureUsageTimer;
-          If Assigned(FPlanUsageTimer) Then
-            FPlanUsageTimer.Interval := 1000;
-        End
-      Else If Item.Backend = 'openai-compatible' Then
-        LoadCompatibleConnection(Item)
-      Else If Item.Backend = 'claude' Then
-        LoadClaudeConnection(Item);
+      Page := FindAssistantSettingsPage(Item.Backend);
+      If Assigned(Page) Then
+        Page.Load(Self, Item);
       ApplyImageCapability(Item);
     Finally
       FLoading := False;
@@ -1068,6 +1089,7 @@ Procedure TAssistantSettingsForm.AddKind(Const Backend, DisplayName: String);
 Var
   Item: TAssistantConnection;
   Id: String;
+  Page: TAssistantSettingsPage;
 Begin
   If CodexFrame.Busy Then
     Exit;
@@ -1086,24 +1108,9 @@ Begin
       If Not Assigned(Item) Then
         Exit;
       Item.ApprovalMode := 'ask';
-      If Backend = 'grok' Then
-        Begin
-          Item.ApiBase := AssistantConfigDefaultApiBase;
-          If Assigned(AssistantChatConfig) And (AssistantChatConfig.ApiBase <> '') Then
-            Item.ApiBase := AssistantChatConfig.ApiBase;
-          Item.Model := AssistantConfigDefaultModel;
-          Item.ReasoningEffort := 'high';
-          Item.SearchMode := 'off';
-          Item.AnswerVerbosity := 'medium';
-        End
-      Else If Backend = 'openai-compatible' Then
-        Begin
-          Item.Preset := 'custom';
-          Item.KeySource := 'env';
-          Item.WireApi := AssistantWireChatCompletions;
-        End
-      Else If Backend = 'claude' Then
-        Item.Runtime := DetectClaudeExecutable;
+      Page := FindAssistantSettingsPage(Backend);
+      If Assigned(Page) Then
+        Page.ApplyNew(Self, Item);
     End;
   SelectedConnection := -1;
   RefreshConnections;
@@ -1441,8 +1448,7 @@ Begin
     Screen.Cursor := crDefault;
   End;
   ClaudeModelsJson := ModelsJson;
-  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) And
-    (Connections[SelectedConnection].Backend = 'claude') Then
+  If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
     Connections[SelectedConnection].CachedModelsJson := ModelsJson;
   FillClaudeModels(Trim(ClaudeModelCombo.Text));
   FillClaudeEffort(Effort);
@@ -2004,31 +2010,24 @@ Procedure TAssistantSettingsForm.ImageOutputCheckClick(Sender: TObject);
 Var
   Backend, KeptText: String;
   KeptIndex: Integer;
+  Page: TAssistantSettingsPage;
 Begin
   KeptIndex := -1;
   KeptText := '';
   Backend := '';
+  Page := Nil;
   If Assigned(Connections) And (SelectedConnection >= 0) And (SelectedConnection < Connections.Count) Then
     Begin
       Backend := Connections[SelectedConnection].Backend;
-      If Backend = 'grok' Then
-        Begin
-          KeptIndex := ModelList.ItemIndex;
-          If (KeptIndex >= 0) And (KeptIndex < ModelList.Items.Count) Then
-            KeptText := ModelList.Items[KeptIndex];
-        End
-      Else If Backend = 'codex' Then
-        Begin
-          KeptIndex := CodexFrame.ModelCombo.ItemIndex;
-          KeptText := CodexFrame.ModelCombo.Text;
-        End
-      Else If Backend = 'openai-compatible' Then
-        Begin
-          KeptIndex := CompatibleModelCombo.ItemIndex;
-          KeptText := CompatibleModelCombo.Text;
-        End
-      Else If Backend = 'claude' Then
-        KeptText := ClaudeModelCombo.Text;
+      Page := FindAssistantSettingsPage(Backend);
+      If Assigned(Page) Then
+        KeptText := Page.ModelText(Self);
+      If Assigned(Page) And (Page.BackendId = 'grok') Then
+        KeptIndex := ModelList.ItemIndex
+      Else If Assigned(Page) And (Page.BackendId = 'codex') Then
+        KeptIndex := CodexFrame.ModelCombo.ItemIndex
+      Else If Assigned(Page) And (Page.BackendId = 'openai-compatible') Then
+        KeptIndex := CompatibleModelCombo.ItemIndex;
     End;
   If FLoading Then
     Exit;
@@ -2040,34 +2039,8 @@ Begin
       ApplyImageOutputTurnedOn(Connections[SelectedConnection]);
     End;
   { Turning the flag on must not replace the chat model with the image model. }
-  If Backend = 'grok' Then
-    Begin
-      If ModelList.ItemIndex <> KeptIndex Then
-        ModelList.ItemIndex := KeptIndex;
-    End
-  Else If Backend = 'codex' Then
-    Begin
-      If CodexFrame.ModelCombo.Text <> KeptText Then
-        Begin
-          CodexFrame.ModelCombo.ItemIndex := KeptIndex;
-          If CodexFrame.ModelCombo.Text <> KeptText Then
-            CodexFrame.ModelCombo.Text := KeptText;
-        End;
-    End
-  Else If Backend = 'openai-compatible' Then
-    Begin
-      If CompatibleModelCombo.Text <> KeptText Then
-        Begin
-          CompatibleModelCombo.ItemIndex := KeptIndex;
-          If CompatibleModelCombo.Text <> KeptText Then
-            CompatibleModelCombo.Text := KeptText;
-        End;
-    End
-  Else If Backend = 'claude' Then
-    Begin
-      If ClaudeModelCombo.Text <> KeptText Then
-        ClaudeModelCombo.Text := KeptText;
-    End;
+  If Assigned(Page) Then
+    Page.RestoreModelText(Self, KeptText, KeptIndex);
 End;
 
 Initialization

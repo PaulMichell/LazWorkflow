@@ -16,7 +16,23 @@ Interface
 Implementation
 
 Uses
-  AssistantCapabilities;
+  AssistantCapabilities, AssistantConnections, fpjson;
+
+Procedure ApplyClaudeConfig(Item: TAssistantConnection; Config: TJSONObject);
+Begin
+  If Not Assigned(Item) Or Not Assigned(Config) Then
+    Exit;
+  If Config.Find('runtime') <> Nil Then
+    Item.Runtime := Config.Get('runtime', Item.Runtime);
+  If Config.Find('models_json') <> Nil Then
+    Item.CachedModelsJson := Config.Get('models_json', Item.CachedModelsJson);
+End;
+
+Procedure CollectClaudeConfig(Item: TAssistantConnection; Config: TJSONObject);
+Begin
+  If Not Assigned(Item) Or Not Assigned(Config) Then
+    Exit;
+End;
 
 Function ClaudeCapabilitySet: TAssistantCapabilitySet;
 Begin
@@ -41,6 +57,7 @@ Begin
   { Claude Code keeps the session. A recap is only for a session it no longer has. }
   Info.Continuity := acoRuntimeSession;
   RegisterAssistantBackend(Info);
+  RegisterConnectionConfig('claude', @ApplyClaudeConfig, @CollectClaudeConfig);
 End;
 
 Initialization

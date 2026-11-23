@@ -868,6 +868,8 @@ Begin
   { Codex and Claude both cache the model list their program reported. }
   If (Item.Backend = 'codex') Or (Item.Backend = 'claude') Then
     Result.Add('models_json', Item.CachedModelsJson);
+  { Backend-owned object. Flat keys remain so an older reader still opens the file. }
+  Result.Add('config', CloneConnectionConfig(Item));
 End;
 
 Procedure ReadConnection(Obj: TJSONObject; Item: TAssistantConnection);
@@ -908,6 +910,9 @@ Begin
   Item.KeyEnv := Obj.Get('key_env', Item.KeyEnv);
   Item.KeyValue := Obj.Get('key_value', Item.KeyValue);
   Item.WireApi := Obj.Get('wire_api', Item.WireApi);
+  { Flat keys first, then the backend object. An old file has no config object and still opens. }
+  MigrateConnectionConfig(Obj, Item);
+  ApplyConnectionConfig(Item);
   NormalizeConnection(Item);
 End;
 

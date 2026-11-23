@@ -66,7 +66,68 @@ Implementation
 {$R *.lfm}
 
 Uses
-  Dialogs, LCLIntf, Process, FileUtil, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils;
+  Dialogs, LCLIntf, Process, FileUtil, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils,
+  AssistantSettingsPages, AssistantConnections, AssistantSettingsForm;
+
+Type
+  TCodexSettingsPage = Class(TAssistantSettingsPage)
+    Function BackendId: String; Override;
+    Function KindCaption: String; Override;
+    Function PanelName: String; Override;
+    Procedure Load(Host: TComponent; Item: TAssistantConnection); Override;
+    Procedure Store(Host: TComponent; Item: TAssistantConnection); Override;
+    Function ModelText(Host: TComponent): String; Override;
+    Procedure RestoreModelText(Host: TComponent; Const Text: String; Index: Integer); Override;
+    Function Busy(Host: TComponent): Boolean; Override;
+  End;
+
+Function TCodexSettingsPage.BackendId: String;
+Begin
+  Result := 'codex';
+End;
+
+Function TCodexSettingsPage.KindCaption: String;
+Begin
+  Result := 'ChatGPT (Codex app)';
+End;
+
+Function TCodexSettingsPage.PanelName: String;
+Begin
+  Result := 'CodexPanel';
+End;
+
+Procedure TCodexSettingsPage.Load(Host: TComponent; Item: TAssistantConnection);
+Begin
+  TAssistantSettingsForm(Host).LoadCodexConnection(Item);
+End;
+
+Procedure TCodexSettingsPage.Store(Host: TComponent; Item: TAssistantConnection);
+Begin
+  TAssistantSettingsForm(Host).StoreCodexConnection(Item);
+End;
+
+Function TCodexSettingsPage.ModelText(Host: TComponent): String;
+Begin
+  Result := TAssistantSettingsForm(Host).CodexFrame.ModelCombo.Text;
+End;
+
+Procedure TCodexSettingsPage.RestoreModelText(Host: TComponent; Const Text: String; Index: Integer);
+Var
+  Combo: TComboBox;
+Begin
+  Combo := TAssistantSettingsForm(Host).CodexFrame.ModelCombo;
+  If Combo.Text <> Text Then
+    Begin
+      Combo.ItemIndex := Index;
+      If Combo.Text <> Text Then
+        Combo.Text := Text;
+    End;
+End;
+
+Function TCodexSettingsPage.Busy(Host: TComponent): Boolean;
+Begin
+  Result := TAssistantSettingsForm(Host).CodexFrame.Busy;
+End;
 
 Type
   TWorkerReaper = Class(TThread)
@@ -559,5 +620,6 @@ End;
 Initialization
 
 RegisterClass(TCodexConnectionFrame);
+RegisterAssistantSettingsPage(TCodexSettingsPage.Create);
 
 End.
