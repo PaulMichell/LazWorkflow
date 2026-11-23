@@ -804,10 +804,36 @@ End;
 
 Procedure TMonitorMirror.ObserveTurn(Const Turn: TAssistantMonitorTurn);
 Var
-  Index, BlockIndex, Match, Kept, Emitted: Integer;
+  Index, BlockIndex, Match, Kept, Emitted, ImagesSent: Integer;
   Stored, Local: TAssistantMonitorTurn;
   Found, IdleCopy: Boolean;
   EventJson: String;
+
+  { The phone files a picture under the row that shows it. A turn-level picture with no row has no block_id. }
+  Function ImageAddedJson(Const Image: TAssistantMonitorImage): String;
+  Var
+    Probe, Slot: Integer;
+    BlockId: String;
+  Begin
+    BlockId := '';
+    For Probe := 0 To High(Local.Blocks) Do
+      Begin
+        For Slot := 0 To High(Local.Blocks[Probe].Images) Do
+          If Local.Blocks[Probe].Images[Slot].Id = Image.Id Then
+            Begin
+              BlockId := Local.Blocks[Probe].BlockId;
+              Break;
+            End;
+        If BlockId <> '' Then
+          Break;
+      End;
+    Result := '{"image_id":"' + JsonEscapeText(Image.Id) + '","turn_id":"' + JsonEscapeText(Local.Id) + '","name":"' +
+      JsonEscapeText(Image.Name) + '","mime":"' + JsonEscapeText(Image.Mime) + '","width":' + IntToStr(Image.Width) +
+      ',"height":' + IntToStr(Image.Height) + ',"bytes":0,"missing":' + MonitorBoolean(Image.Missing);
+    If BlockId <> '' Then
+      Result := Result + ',"block_id":"' + JsonEscapeText(BlockId) + '"';
+    Result := Result + '}';
+  End;
 
   { The stored block with this id. Hint is checked first, because blocks rarely move. }
   Function StoredBlock(Const BlockId: String; Hint: Integer): Integer;
@@ -1023,19 +1049,21 @@ Begin
                 Local.Blocks[BlockIndex].Running := True;
           End;
       End;
-    If Not FObservePending Then
+    { Local becomes the stored copy, which says what the phone has. A notice this pass did not send stays off it,
+      so the next pass sends it. Recording it as sent lost the picture for good. }
+    ImagesSent := 0;
     For Index := 0 To High(Local.Images) Do
       Begin
         Found := False;
         For BlockIndex := 0 To High(Stored.Images) Do
           If Stored.Images[BlockIndex].Id = Local.Images[Index].Id Then
             Found := True;
-        If Not Found Then
-          EmitLocked('image_added', '{"image_id":"' + JsonEscapeText(Local.Images[Index].Id) + '","turn_id":"' +
-            JsonEscapeText(Local.Id) + '","name":"' + JsonEscapeText(Local.Images[Index].Name) + '","mime":"' +
-            JsonEscapeText(Local.Images[Index].Mime) + '","width":' + IntToStr(Local.Images[Index].Width) +
-            ',"height":' + IntToStr(Local.Images[Index].Height) + ',"bytes":0,"missing":' + MonitorBoolean(Local.Images[Index].Missing) + '}');
+        If (Not Found) And (Not EmitLocked('image_added', ImageAddedJson(Local.Images[Index]))) Then
+          Continue;
+        Local.Images[ImagesSent] := Local.Images[Index];
+        Inc(ImagesSent);
       End;
+    SetLength(Local.Images, ImagesSent);
     { A partial pass keeps the emitted prefix as the live cursor. The next tick appends the suffix. }
     If FObservePending Then
       Begin

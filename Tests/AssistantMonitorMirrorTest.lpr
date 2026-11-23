@@ -303,6 +303,71 @@ Begin
   End;
 End;
 
+{ The image_added events from First on, and the block_id each one names. }
+Function ImageNotices(Const Events: TMonitorMirrorEventArray; First: Integer; Out BlockIds: String): Integer;
+Var
+  Index: Integer;
+  Data: TJSONData;
+Begin
+  Result := 0;
+  BlockIds := '';
+  For Index := First To High(Events) Do
+    If Events[Index].Kind = 'image_added' Then
+      Begin
+        Inc(Result);
+        Data := GetJSON(String(Events[Index].Data));
+        Try
+          BlockIds := BlockIds + TJSONObject(Data).Get('block_id', '') + ';';
+        Finally
+          Data.Free;
+        End;
+      End;
+End;
+
+{ A picture that arrives in a pass the credit window cuts short is sent by the next pass, with its row. Recording it
+  as sent before its notice went out lost it from the phone for good. }
+Procedure TestImageAfterBudget;
+Var
+  Log: TMonitorMirror;
+  Turn: TAssistantMonitorTurn;
+  Events: TMonitorMirrorEventArray;
+  First: Integer;
+  BlockIds: String;
+Begin
+  Log := TMonitorMirror.Create;
+  Try
+    Log.BeginStream('ab12cd34', 'conversation-a', '/work/One', 'One');
+    Turn := SampleTurn('turn-picture', 'start', 1);
+    SetLength(Turn.Images, 0);
+    Turn.Live := True;
+    Turn.Blocks[0].Running := True;
+    Check('the opening pass finishes', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    First := Length(Events);
+    Turn.Blocks[0].Body := 'start' + StringOfChar('a', MonitorCreditWindowBytes + MonitorAppendSliceBytes);
+    SetLength(Turn.Blocks[0].Images, 1);
+    Turn.Blocks[0].Images[0].Id := 'picture-1';
+    Turn.Blocks[0].Images[0].Name := 'shot.png';
+    Turn.Blocks[0].Images[0].Mime := 'image/png';
+    SetLength(Turn.Images, 1);
+    Turn.Images[0] := Turn.Blocks[0].Images[0];
+    Check('the growth needs a second pass', Not Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    Check('the cut pass sends no picture notice', ImageNotices(Events, First, BlockIds) = 0);
+    First := Length(Events);
+    Check('the second pass finishes', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    Check('the second pass sends the picture notice', ImageNotices(Events, First, BlockIds) = 1);
+    Check('the notice names the row that shows the picture', BlockIds = 'turn-picture-block;');
+    First := Length(Events);
+    Check('a later pass finishes', Log.ObserveTurnLimited(Turn, MonitorCreditWindowBytes));
+    Log.CopyEvents(Events);
+    Check('the picture notice is not sent twice', ImageNotices(Events, First, BlockIds) = 0);
+  Finally
+    Log.Free;
+  End;
+End;
+
 Procedure TestBodyEscape;
 Var
   Page: String;
@@ -1047,6 +1112,7 @@ Begin
   TestBodyEscape;
   TestLargeAppend;
   TestBoundedLiveAppend;
+  TestImageAfterBudget;
   TestLiveBlocks;
   TestObserveLeavesCallerAlone;
   TestTurnLifecycle;
