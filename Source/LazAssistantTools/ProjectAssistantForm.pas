@@ -187,8 +187,6 @@ Type
     Procedure ApplyTarget(Const Directory: String);
   Private
 
-    FUseCodex: Boolean;
-    FUseClaude: Boolean;
     FCanCompactContext: Boolean;
     FActiveConnectionId: String;
     FAccountUsageSlot: TAccountUsageSlot;
@@ -1473,7 +1471,7 @@ Begin
         AddModel('grok-4');
         AddModel('grok-3');
       End
-    Else If FActiveBackend = 'codex' Then
+    Else If (FActiveBackend = 'codex') Then
       CollectCodexModelIds(FCodexModelsJson, Models);
     AddModel(FActiveModel);
     Beyond := False;
@@ -1540,7 +1538,7 @@ Begin
         End;
       Exit;
     End;
-  If FActiveBackend = 'codex' Then
+  If (FActiveBackend = 'codex') Then
     Begin
       AddLevel('', 'Model default');
       Efforts := TStringList.Create;
@@ -1716,7 +1714,7 @@ Begin
   Current := LowerCase(Trim(FActiveApproval));
   If (Current <> 'ask') And (Current <> 'auto') And (Current <> 'always') Then
     Current := 'ask';
-  If FActiveBackend = 'codex' Then
+  If (FActiveBackend = 'codex') Then
     Begin
       AddMode('ask', 'Ask before file changes and builds');
       AddMode('auto', 'Auto: allow project tools');
@@ -2150,7 +2148,7 @@ Procedure TProjectAssistantForm.ApplySkillStatus;
 Begin
   If Not Assigned(StatusFooter) Then
     Exit;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       { Claude Code keeps its own tools. Do not describe this assistant's skill list. }
       StatusFooter.SetSkillText('Claude Code');
@@ -2180,12 +2178,12 @@ Begin
   Runtime := '';
   Model := '';
   SignedIn := False;
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     Begin
       Runtime := FCodexRuntime;
       Model := FCodexModel;
     End
-  Else If FUseClaude Then
+  Else If (FActiveBackend = 'claude') Then
     Begin
       Runtime := FClaudeRuntime;
       Model := FClaudeModel;
@@ -3174,10 +3172,10 @@ Var
   Tools: String;
 Begin
   Tools := '';
-  If FActiveBackend = 'claude' Then
+  If (FActiveBackend = 'claude') Then
     Tools := ClaudeBuildToolsJson;
   Result := PlanWorkPrompt(PlanRel, SectionTitle, StatusText, SectionBody, ParentTitle, ContinueSameItem,
-    FActiveBackend = 'claude', Tools);
+    (FActiveBackend = 'claude'), Tools);
 End;
 
 Procedure TProjectAssistantForm.BuildWorkOnSelectedPackage;
@@ -3244,7 +3242,7 @@ Begin
   ForceModeAndLock(amBuild);
   ShowChatSurfaceKeepMode;
   SetBuildStatusFeedback('Working on: ' + Title);
-  PrepareClaudePlanItemSession(FClaudePlanItem, ContinueSame, FPlanAgentRunning, FUseClaude);
+  PrepareClaudePlanItemSession(FClaudePlanItem, ContinueSame, FPlanAgentRunning, (FActiveBackend = 'claude'));
   SubmitUserText(Prompt, True);
   If Not FSending Then
     Begin
@@ -3611,7 +3609,7 @@ Begin
   Threshold := PlanContextThreshold;
   If FContextLimit > 0 Then
     Begin
-      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+      If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
         FContextUsed := AssistantClient.EstimatedPromptTokens;
       Pct := (FContextUsed * 100) Div FContextLimit;
       If Pct >= Threshold Then
@@ -3621,7 +3619,7 @@ Begin
               { Compact this conversation and keep walking packages. Do not start a new chat yet. }
               FContextWarnShown := False;
               MaybeWarnHighContextUsage;
-              If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+              If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
                 FContextUsed := AssistantClient.EstimatedPromptTokens;
               Pct := (FContextUsed * 100) Div FContextLimit;
             End;
@@ -4562,7 +4560,7 @@ Begin
   Else
     Turn.ThinkingMs := 0;
   Turn.Model := FModelName;
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
     Turn.Skill := AssistantClient.ActiveSkill
   Else
     Turn.Skill := '';
@@ -4585,7 +4583,7 @@ Begin
     Begin
       FTurnRecorded := True;
       StoredTurnId := Turn.Id;
-      If (Not FUseClaude) And Assigned(AssistantClient) Then
+      If (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
         AssistantClient.NoteMessagesStored;
       RefreshHistoryCombo;
     End
@@ -4702,8 +4700,6 @@ Var
 Begin
   PreviousId := FActiveConnectionId;
   Try
-    FUseCodex := False;
-    FUseClaude := False;
     FCanCompactContext := False;
     FActiveConnectionId := '';
     FActiveBackend := '';
@@ -4726,8 +4722,6 @@ Begin
     Connections := TAssistantConnections.Create(LazarusIDE.GetPrimaryConfigPath);
     Try
       Connections.Load; Item := Connections.Active;
-      FUseCodex := Assigned(Item) And (Item.Backend = 'codex');
-      FUseClaude := Assigned(Item) And (Item.Backend = 'claude');
       FCanCompactContext := Assigned(Item) And Item.CanCompactContext;
       If Assigned(Item) Then
         Begin
@@ -4752,7 +4746,7 @@ Begin
                 FActiveApproval := AssistantChatConfig.ApprovalMode;
             End;
         End;
-      If FUseCodex Then
+      If (FActiveBackend = 'codex') Then
         Begin
           FCodexRuntime := Item.Runtime; FCodexModel := Item.Model;
           FCodexProfile := Connections.ProfileDir(Item);
@@ -4760,7 +4754,7 @@ Begin
           FCodexEffort := Item.ReasoningEffort; FCodexApproval := Item.ApprovalMode;
           FCodexModelsJson := Item.CachedModelsJson;
         End
-      Else If FUseClaude Then
+      Else If (FActiveBackend = 'claude') Then
         Begin
           FClaudeRuntime := Item.Runtime;
           FClaudeModel := Item.Model;
@@ -4771,8 +4765,6 @@ Begin
   Except
     On E: Exception Do
       Begin
-        FUseCodex := False;
-        FUseClaude := False;
         FCanCompactContext := False;
         FActiveConnectionId := '';
         FActiveBackend := '';
@@ -4914,9 +4906,9 @@ Begin
     Exit(True);
   If (Not FSending) Or FUserCancelled Or (csDestroying In ComponentState) Then
     Exit;
-  If (Not FUseCodex) And (Not FUseClaude) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') Then
     Exit;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       If Not FClaudeLaunchReady Then
         Exit;
@@ -4955,7 +4947,7 @@ Begin
     FTransportWaitMs := FReconnectIntervalMs;
   If FTransportWaitMs = 0 Then
     FTransportWaitMs := AssistantReconnectIntervalMs;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     FTransportBackend := 'claude'
   Else
     FTransportBackend := 'codex';
@@ -5138,7 +5130,7 @@ Begin
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
     Begin
       SettingsActionExecute(Nil);
-      If Not FUseCodex Then Exit;
+      If FActiveBackend <> 'codex' Then Exit;
       If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
     End;
   If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
@@ -5242,7 +5234,7 @@ Begin
   If (FClaudeRuntime = '') Or (FClaudeModel = '') Then
     Begin
       SettingsActionExecute(Nil);
-      If Not FUseClaude Then Exit;
+      If FActiveBackend <> 'claude' Then Exit;
       If (FClaudeRuntime = '') Or (FClaudeModel = '') Then Exit;
     End;
   { This turn's pictures only. A resumed session already holds earlier ones, so they are not sent again. }
@@ -5649,8 +5641,8 @@ Begin
     End
   Else If Assigned(AssistantClient) Then
     FModelName := AssistantClient.Model;
-  If FUseCodex Then FModelName := 'ChatGPT / ' + FCodexModel;
-  If FUseClaude Then FModelName := 'Claude / ' + FClaudeModel;
+  If (FActiveBackend = 'codex') Then FModelName := 'ChatGPT / ' + FCodexModel;
+  If (FActiveBackend = 'claude') Then FModelName := 'Claude / ' + FClaudeModel;
   ApplyDisplayPreferences;
   UpdateStatusFooter;
 End;
@@ -5804,7 +5796,7 @@ End;
 
 Procedure TProjectAssistantForm.SyncCodexUsageIdle;
 Begin
-  SetCodexAccountUsageIdle(FUseCodex And (Not FSending) And (Not FPlanAgentRunning) And (Not FReviewInProgress));
+  SetCodexAccountUsageIdle((FActiveBackend = 'codex') And (Not FSending) And (Not FPlanAgentRunning) And (Not FReviewInProgress));
 End;
 
 Procedure TProjectAssistantForm.NoteAccountConnectionChanged;
@@ -5835,7 +5827,7 @@ Begin
   If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
     Exit;
   SyncCodexUsageIdle;
-  If FUseCodex And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
+  If (FActiveBackend = 'codex') And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
     Exit;
   Worker := TAccountUsageWorker.CreateForProject(FAccountUsageSlot, FActiveConnectionId, FActiveBackend, FActiveModel, FAccountApiBase,
     FAccountKeySource, FAccountKeyEnv, FAccountKeyValue, FAccountPreset, FAccountWire, FCodexRuntime, FCodexProfile);
@@ -5861,7 +5853,7 @@ Begin
       Exit;
     If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
       Exit;
-    If FUseCodex And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
+    If (FActiveBackend = 'codex') And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
       Exit;
     Due := FAccountUsageWanted;
     If Not Due Then
@@ -5923,7 +5915,7 @@ Var
   Pct: Integer;
   StatusText, CentreText, ModelText, EffortText, PermissionText, ModelHint, EffortHint, BlockReason: String;
 Begin
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) And (Not FSending) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) And (Not FSending) Then
     Begin
       FContextUsed := AssistantClient.EstimatedPromptTokens;
       If AssistantClient.MaxPromptTokens > 0 Then
@@ -5941,9 +5933,9 @@ Begin
         FStatusPhase := AssistantPhaseWaiting;
       StatusText := FormatElapsedStatus(AssistantProgressPhase(FStatusPhase));
     End
-  Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
-    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
-    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
+  Else If ((FActiveBackend = 'codex') And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    ((FActiveBackend = 'claude') And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
     StatusText := AssistantStatusReady + PlanRunElapsedSuffix { Between plan items the run total stays in view. }
   Else
     StatusText := AssistantStatusOffline;
@@ -5966,9 +5958,9 @@ Begin
   CentreText := Format('Context %d%%', [Pct]);
   If Pct >= 95 Then
     CentreText := CentreText + ' ⚠';
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     CentreText := CodexContextCaption(FCodexContextUsage, FContextUsed)
-  Else If FUseClaude Then
+  Else If (FActiveBackend = 'claude') Then
     CentreText := Format('Context ~%d tokens', [FContextUsed]);
   ApplyModelStatus;
   StatusFooter.SetModelText(ModelText);
@@ -5993,13 +5985,13 @@ Begin
   If Assigned(SendAction) And SendAction.Enabled Then
     SendAction.Hint := '';
   RefreshAttachAction;
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     FContextStatusHint := CodexContextDetails(FCodexContextUsage, FContextUsed) + LineEnding + 'Click for details.'
-  Else If FUseClaude Then
+  Else If (FActiveBackend = 'claude') Then
     FContextStatusHint := 'Estimated context. Click for the estimate. Provider allowance is on Credits.';
   RefreshCentreStatus;
   ApplySkillStatus;
-  If (Not FUseCodex) And (Not FUseClaude) And (Not FSending) And (Pct >= PlanContextThreshold) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And (Not FSending) And (Pct >= PlanContextThreshold) Then
     MaybeWarnHighContextUsage;
   AssistantSessionObserve.AssistantSessionObserve(asnStatus);
 End;
@@ -6050,9 +6042,9 @@ Var
   WasSending: Boolean;
 Begin
   WasSending := FSending;
-  If (Not FUseCodex) And IsSending And (Not FSending) Then
+  If (FActiveBackend <> 'codex') And IsSending And (Not FSending) Then
     AssistantBeginQuietIdeSession
-  Else If (Not FUseCodex) And (Not IsSending) And FSending Then
+  Else If (FActiveBackend <> 'codex') And (Not IsSending) And FSending Then
     AssistantEndQuietIdeSession;
   FSending := IsSending;
   If WasSending And (Not IsSending) Then
@@ -6709,10 +6701,10 @@ Function TProjectAssistantForm.ComposerAttachAllowed(Out Reason: String): Boolea
 Begin
   Reason := '';
   { One capability check. Codex reads inputModalities; Grok reads the same kind of list. A missing list allows attach. }
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     { Claude Code's model list names no input modalities, so it is unknown, which allows attach. }
     Result := AssistantImageAttachAllowed(aiiUnknown, Reason)
-  Else If FUseCodex Then
+  Else If (FActiveBackend = 'codex') Then
     Result := AssistantImageAttachAllowed(CodexModelImageInput(FCodexModelsJson, FCodexModel), Reason)
   Else If Assigned(AssistantClient) Then
     Result := AssistantClient.ImagesAttachAllowed(Reason)
@@ -7801,9 +7793,9 @@ Var
   Item: TAssistantUsageRecord;
 Begin
   { Codex has no usage parser. A Claude turn reports its own usage in the stream. }
-  If FUseCodex Or (FActiveConnectionId = '') Then
+  If (FActiveBackend = 'codex') Or (FActiveConnectionId = '') Then
     Exit;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       HasUsage := FClaudeUsageReported;
       FClaudeUsageReported := False;
@@ -7890,7 +7882,7 @@ Procedure TProjectAssistantForm.ContinueCodexAfterFinish(Data: PtrInt);
 Begin
   If csDestroying In ComponentState Then
     Exit;
-  If (Not FSending) Or FUserCancelled Or (Not FUseCodex) Then
+  If (Not FSending) Or FUserCancelled Or (FActiveBackend <> 'codex') Then
     Exit;
   If LaunchStoredCodexRun Or (Not FSending) Then
     Exit;
@@ -7951,11 +7943,11 @@ Begin
   ReasonN := 0;
   HasReasoning := False;
   Native := False;
-  If (Not FUseClaude) And (Not FUseCodex) And Assigned(AssistantClient) Then
+  If (FActiveBackend <> 'claude') And (FActiveBackend <> 'codex') And Assigned(AssistantClient) Then
     Native := AssistantClient.TakeReportedUsage(InN, OutN, ReasonN, HasReasoning);
   If Native Then
     AssistantClient.NoteReportedUsage(InN, OutN, ReasonN, HasReasoning);
-  RememberPlanItemUsage(FPlanItemUsage, FTrace, FBuildWorkSectionTitle, FUseClaude, FUseCodex, FClaudeUsageReported,
+  RememberPlanItemUsage(FPlanItemUsage, FTrace, FBuildWorkSectionTitle, (FActiveBackend = 'claude'), (FActiveBackend = 'codex'), FClaudeUsageReported,
     FClaudeHasCached, Native, FClaudeInputTokens, FClaudeOutputTokens, FClaudeCachedInputTokens, InN, OutN,
     CurrentStreamDurationMs);
 End;
@@ -7978,9 +7970,9 @@ Begin
       Exit;
     End;
   { Only a live process finish cancels its broker. A late HTTP finish must not. }
-  If FSending And FUseCodex And (Assigned(FCodexRun) Or FCodexLaunchReady) Then
+  If FSending And (FActiveBackend = 'codex') And (Assigned(FCodexRun) Or FCodexLaunchReady) Then
     ReleaseCodexRun;
-  If FSending And FUseClaude And (Assigned(FClaudeRun) Or FClaudeLaunchReady) Then
+  If FSending And (FActiveBackend = 'claude') And (Assigned(FClaudeRun) Or FClaudeLaunchReady) Then
     ReleaseClaudeProcess;
   ClearTransportWait;
   FCodexLaunchReady := False;
@@ -7988,12 +7980,12 @@ Begin
   ResolvedError := ErrorText;
   If IsAssistantProgressStatus(ResolvedError) Then
     ResolvedError := '';
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
     AssistantClient.ToolsEnabled := ActiveMode <> amChat;
   { Second IsFinished (or Stop after finish) must not append another conversation row. }
   If Not FSending Then
     Begin
-      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+      If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       Exit;
     End;
@@ -8001,7 +7993,7 @@ Begin
     Begin
       FUserCancelled := False;
       FStreamingActive := False;
-      If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+      If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
         AssistantClient.MarkStreamComplete;
       If FBuildWorkSectionIndex >= 0 Then
         SetBuildStatusFeedback(Format('"%s" cancelled — still in progress.',
@@ -8030,7 +8022,7 @@ Begin
       { Full conversation for the API lives on AssistantClient (all prior turns). }
       FinishFacts := CurrentTurnFinishFacts(Truncated, ToolRoundCap, HadTools);
       FLastTurnFinish := ClassifyAssistantTurnFinish(FinishFacts);
-      If FUseCodex And FLastTurnFinish.Unfinished And (Not FinishFacts.PlanItemBlockedWithUserAction) Then
+      If (FActiveBackend = 'codex') And FLastTurnFinish.Unfinished And (Not FinishFacts.PlanItemBlockedWithUserAction) Then
         Begin
           Answer := AssistantDecideContinuation(FinishFacts, False, False, FContinuationCount, FContinuationCap,
             FBuildWorkSectionTitle);
@@ -8058,7 +8050,7 @@ Begin
         End;
       { Item 3.3: an empty finished reply becomes one trace summary before Ready. Existing text is kept. }
       EnsureFinalAssistantSummary;
-      If (Not FUseClaude) And Assigned(AssistantClient) And (FLiveContent <> '') Then
+      If (FActiveBackend <> 'claude') And Assigned(AssistantClient) And (FLiveContent <> '') Then
         AssistantClient.AddMessage(amrAssistant, FLiveContent);
       FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
       If FLiveThinking <> '' Then
@@ -8115,7 +8107,7 @@ Begin
       RefreshComposerImages;
     End;
   FComposerImagesSent := False;
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
     AssistantClient.MarkStreamComplete;
   { Validation evidence can auto-complete when the root is not a Git repository.
     In a repository the model sets Status, and that plan file is committed before the item counts as complete.
@@ -8241,7 +8233,7 @@ Begin
   ReleaseCodexRun;
   ReleaseClaudeProcess;
   { CancelStream pumps CheckSynchronize so Queue/Synchronize cannot deadlock. }
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) Then
+  If (FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantClient) Then
     Begin
       AssistantClient.CancelStream;
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;
@@ -8250,7 +8242,7 @@ Begin
     Begin
       If (FLiveContent <> '') Or (FLiveThinking <> '') Then
         Begin
-          If (Not FUseClaude) And Assigned(AssistantClient) And (FLiveContent <> '') Then
+          If (FActiveBackend <> 'claude') And Assigned(AssistantClient) And (FLiveContent <> '') Then
             AssistantClient.AddMessage(amrAssistant, FLiveContent);
           FContextUsed := FContextUsed + Length(FLiveContent) Div 4 + 20;
         End;
@@ -8416,12 +8408,12 @@ Begin
         InputMemo.Text := DisplayText;
       Exit;
     End;
-  If AutoSend And FUseClaude Then
+  If AutoSend And (FActiveBackend = 'claude') Then
     Begin
       Result := StartClaudeReply(DisplayText, ApiText);
       Exit;
     End;
-  If AutoSend And FUseCodex Then
+  If AutoSend And (FActiveBackend = 'codex') Then
     Begin
       Result := StartCodexReply(DisplayText, ApiText);
       Exit;
@@ -8640,7 +8632,7 @@ Begin
         AddModel('grok-4');
         AddModel('grok-3');
       End
-    Else If FActiveBackend = 'codex' Then
+    Else If (FActiveBackend = 'codex') Then
       CollectCodexModelIds(FCodexModelsJson, Models);
     AddModel(FActiveModel);
     If Models.Count = 0 Then
@@ -8697,7 +8689,7 @@ Begin
         End;
       Exit;
     End;
-  If FActiveBackend = 'codex' Then
+  If (FActiveBackend = 'codex') Then
     Begin
       AddLevel('', 'Model default');
       Efforts := TStringList.Create;
@@ -8736,7 +8728,7 @@ Begin
       AddFooterItem(FFooterMenu, 'No connection is selected', 0, '', False, False, Nil, False);
       Exit;
     End;
-  If FActiveBackend = 'codex' Then
+  If (FActiveBackend = 'codex') Then
     Begin
       AddMode('ask', 'Ask before file changes and builds');
       AddMode('auto', 'Auto: allow project tools');
@@ -9059,12 +9051,12 @@ Var
   Pct: Integer;
   Body: String;
 Begin
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     Begin
       RunAssistantModal(CodexContextDetails(FCodexContextUsage, FContextUsed), mtInformation, [mbOK], 0);
       Exit;
     End;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       RunAssistantModal('Claude Code keeps the session. This assistant does not send its tool list or compact the transcript.',
         mtInformation, [mbOK], 0);
@@ -9102,12 +9094,12 @@ Var
   Turns: Integer;
   SignedIn: String;
 Begin
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     Begin
       RunAssistantModal('ChatGPT preview uses a separate subscription sign-in profile. Open Settings → Connections to check the account and available models.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       RunAssistantModal(ClaudeKeepsSessionText + LineEnding + LineEnding +
         'This assistant does not send its tool list or skill list.', mtInformation, [mbOK], 0);
@@ -9162,7 +9154,7 @@ Var
   Host: TControl;
   Item: TMenuItem;
 Begin
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       RunAssistantModal('Claude Code keeps the session. This assistant does not send its skill list.', mtInformation, [mbOK], 0);
       Exit;
@@ -9316,7 +9308,7 @@ Begin
         Begin
           ParseAssistantImageRefs(FComposerImagesJson, Refs);
           Refs := LimitAssistantImageRefs(Refs);
-          If FUseCodex Then
+          If (FActiveBackend = 'codex') Then
             Begin
               If (Not Assigned(FCodexRun)) Or
                 (Not FCodexRun.Steer(AssistantImageModelText(UserText, Length(Refs)), AssistantImageRefsToJson(Refs))) Then
@@ -9539,12 +9531,12 @@ Begin
     Exit;
   If FSending Then
     Exit;
-  If FUseClaude Then
+  If (FActiveBackend = 'claude') Then
     Begin
       StartClaudeReply(DisplayLabel, ApiText);
       Exit;
     End;
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     Begin
       StartCodexReply(DisplayLabel, ApiText);
       Exit;
@@ -10779,9 +10771,9 @@ Begin
       View.StartedAt := FTurnStartedAt;
       View.StatusText := FormatElapsedStatus(View.Phase);
     End
-  Else If (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
-    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
-    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
+  Else If ((FActiveBackend = 'codex') And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    ((FActiveBackend = 'claude') And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn) Then
     View.StatusText := AssistantStatusReady
   Else
     View.StatusText := AssistantStatusOffline;
@@ -10791,9 +10783,9 @@ Begin
   If View.Model = '' Then
     View.Model := 'Model';
   View.Backend := FActiveBackend;
-  View.SignedIn := (FUseCodex And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
-    (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
-    ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn);
+  View.SignedIn := ((FActiveBackend = 'codex') And (FCodexRuntime <> '') And (FCodexModel <> '')) Or
+    ((FActiveBackend = 'claude') And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
+    ((FActiveBackend <> 'codex') And (FActiveBackend <> 'claude') And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn);
   View.ApprovalCaption := ApprovalModeCaption(StrToApprovalMode(FActiveApproval));
   If AssistantShowsEffort(FActiveBackend) Then
     View.Effort := EffortBarCaption(FActiveEffort)
@@ -10806,9 +10798,9 @@ Begin
     Pct := 0;
   If Pct > 999 Then
     Pct := 999;
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     View.ContextText := CodexContextCaption(FCodexContextUsage, FContextUsed)
-  Else If FUseClaude Then
+  Else If (FActiveBackend = 'claude') Then
     View.ContextText := Format('Context ~%d tokens', [FContextUsed])
   Else
     Begin
@@ -11294,7 +11286,7 @@ Begin
       ErrorText := 'This connection cannot steer.';
       Exit;
     End;
-  If FUseCodex Then
+  If (FActiveBackend = 'codex') Then
     Begin
       If Not Assigned(FCodexRun) Or Not FCodexRun.Steer(Trim(MessageText)) Then
         Begin
