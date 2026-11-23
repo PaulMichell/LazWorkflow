@@ -355,6 +355,14 @@
         <Filename Value="../Source/LazAssistantTools/AssistantHistoryTrace.pas"/>
         <UnitName Value="AssistantHistoryTrace"/>
       </Item>
+      <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantComposerSend.pas"/>
+        <UnitName Value="AssistantComposerSend"/>
+      </Item>
+      <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantPlanRunHost.pas"/>
+        <UnitName Value="AssistantPlanRunHost"/>
+      </Item>
 
 
       <Item>
