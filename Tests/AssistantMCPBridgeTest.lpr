@@ -13,7 +13,8 @@ Uses
   {$ENDIF}
   Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, base64, fpimage, fpwritepng, FileUtil,
   AssistantToolBroker, AssistantClaudeClient, AssistantMCPListener, AssistantMCPProtocol, AssistantImages,
-  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget, AssistantBuildJob;
+  AssistantMCPBridge, AssistantSearchUtil, AssistantTestSettings, AssistantLfm, AssistantWorkTarget, AssistantBuildJob,
+  AssistantConversation, AssistantHarness;
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
@@ -1601,6 +1602,48 @@ Begin
   Result := Call.Done;
 End;
 
+{ Grok's todo_write through the broker: Plan and Build only, the harness list, and a new run starts empty. }
+Procedure CheckTodoWrite;
+Const
+  Two = '{"todos":[{"id":"read","content":"Read the unit","status":"in_progress"},' +
+    '{"id":"fix","content":"Fix the call"}]}';
+Var
+  ResultText, ErrorText: String;
+  Images: TMCPToolImages;
+Begin
+  Bridge.BeginRun(ctsRead);
+  Check('a read run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
+  Check('a read run refuses todo_write',
+    Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    (ErrorText = 'todo_write requires Plan or Build mode.'));
+  Bridge.BeginRun(ctsMarkdown, amDocument);
+  Check('a Document run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
+  Check('a Document run refuses todo_write',
+    Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    (ErrorText = 'todo_write requires Plan or Build mode.'));
+  Bridge.BeginRun(ctsMarkdown, amPlan);
+  Check('a Plan run lists todo_write', Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0);
+  Bridge.BeginRun(ctsProject);
+  Check('a project run lists todo_write with its statuses',
+    (Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0) And
+    (Pos('"enum":["pending","in_progress","completed","cancelled"]', Bridge.ToolsJSON) > 0));
+  Check('todo_write returns the whole list',
+    Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    (Pos('- [>] read: Read the unit (in_progress)', ResultText) > 0) And
+    (Pos('- [ ] fix: Fix the call (pending)', ResultText) > 0));
+  Check('a merge updates one item by id and keeps the other',
+    Bridge.Execute('lazarus_todo_write', '{"merge":true,"todos":[{"id":"read","status":"completed"}]}',
+    ResultText, ErrorText, Images) And
+    (Pos('- [x] read: Read the unit (completed)', ResultText) > 0) And
+    (Pos('- [ ] fix: Fix the call (pending)', ResultText) > 0));
+  Check('todo_write without todos is refused',
+    Not Bridge.Execute('lazarus_todo_write', '{}', ResultText, ErrorText, Images) And
+    (ErrorText = 'todo_write requires a todos array.'));
+  Check('the list is the one Grok''s todo_write keeps', WorkflowAssistantHarness.TodoCount = 2);
+  Bridge.BeginRun(ctsProject);
+  Check('a new run starts with no checklist', WorkflowAssistantHarness.TodoCount = 0);
+End;
+
 Procedure CheckCommands;
 Const
   Echo = '{"program":"echo","arguments":["hello"]}';
@@ -1751,6 +1794,7 @@ Begin
     CheckPathTools;
     CheckReadImage;
     CheckMarkdownSection;
+    CheckTodoWrite;
     CheckCommands;
     CheckCommandJob;
     CheckCall;

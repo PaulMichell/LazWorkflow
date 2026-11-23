@@ -54,6 +54,8 @@ Function ToolListPlans(Out ResultText, ErrorText: String): Boolean;
 Function ToolGetActivePlan(Out ResultText, ErrorText: String): Boolean;
 Function ToolSetActivePlan(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Function ToolReadMarkdownSection(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
+{ The turn's short checklist, kept by WorkflowAssistantHarness. The result is the whole list as text. }
+Function ToolTodoWrite(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 { Native path gate: control characters, project resolution, protected paths and target scope. }
 Function AssistantCheckedProjectPath(Const RelativeOrAbsolute: String; Out Resolved, ErrorText: String): Boolean;
 { Native add-unit gate, including the package-target refusal. }

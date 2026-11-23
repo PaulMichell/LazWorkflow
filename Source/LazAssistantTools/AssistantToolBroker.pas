@@ -126,6 +126,8 @@ Type
     Function SnapshotRevision(Const Path: String): String;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
     Function CanWritePath(Const Path: String): Boolean;
+    { Grok offers todo_write in Plan and Build only. }
+    Function TodoWriteOffered(Scope: TAssistantWriteScope): Boolean;
     Function Remember(Const Path, Text: String): String;
   Public
     Constructor Create(Adapter: TAssistantWorkspaceAdapter);
@@ -153,7 +155,7 @@ Type
 Implementation
 
 Uses
-  jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools;
+  jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools, AssistantHarness;
 
 Const
   MaxBufferBytes = 1048576;
@@ -578,7 +580,15 @@ Begin
   SetLength(FImages, 0);
   FRenamePreview := Default(TLocalRenamePreview);
   FreeAndNil(FPrepared);
+  { The checklist belongs to one turn, as it does for Grok. }
+  If Assigned(WorkflowAssistantHarness) Then
+    WorkflowAssistantHarness.ClearTurnTodos;
   Result := FRunId;
+End;
+
+Function TAssistantToolBroker.TodoWriteOffered(Scope: TAssistantWriteScope): Boolean;
+Begin
+  Result := (Scope = awsProject) Or ((Scope = awsMarkdown) And (FMode = amPlan));
 End;
 
 Procedure TAssistantToolBroker.Cancel;
@@ -1624,6 +1634,16 @@ Begin
             Result := ToolGetActivePlan(ResultText, ErrorText);
           Exit;
         End;
+      If Tool = 'lazarus_todo_write' Then
+        Begin
+          If Not TodoWriteOffered(FWriteScope) Then
+            Begin
+              ErrorText := 'todo_write requires Plan or Build mode.';
+              Exit;
+            End;
+          Result := ToolTodoWrite(Arguments, ResultText, ErrorText);
+          Exit;
+        End;
       If (Tool = 'lazarus_delete_path') Or (Tool = 'lazarus_rename_path') Or (Tool = 'lazarus_add_unit_to_project') Then
         Begin
           If FWriteScope <> awsProject Then
@@ -2228,6 +2248,15 @@ Begin
     ',{"type":"function","name":"lazarus_set_active_plan","description":' +
     Quoted('Set the canonical active plan Markdown path for this project. Plan mode only.') +
     ',"inputSchema":' + SetActivePlanSchema + '}';
+  If TodoWriteOffered(Scope) Then Result := Result +
+    ',{"type":"function","name":"lazarus_todo_write","description":' + Quoted(
+    'Replace or update this turn''s short checklist. The whole list is returned and shown on the tool''s row in the ' +
+    'conversation. It ends with the turn and is not a plan Status: line. status is pending, in_progress, completed or ' +
+    'cancelled. merge true updates items by id and adds new ones; false or absent replaces the list.') +
+    ',"inputSchema":{"type":"object","properties":{"merge":{"type":"boolean"},"todos":{"type":"array","items":' +
+    '{"type":"object","properties":{"id":{"type":"string"},"content":{"type":"string"},"status":{"type":"string",' +
+    '"enum":["pending","in_progress","completed","cancelled"]}},"additionalProperties":false}}},"required":["todos"],' +
+    '"additionalProperties":false}}';
   If Scope = awsProject Then Result := Result +
     ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
     ',"inputSchema":' + FormComponentSchema + '}' +
