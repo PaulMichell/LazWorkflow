@@ -107,7 +107,7 @@ Function AssistantEventsAbsolutePath(Const RelOrAbs, ProjectRoot: String): Strin
 Implementation
 
 Uses
-  fpjson, jsonparser, AssistantRecovery;
+  fpjson, jsonparser, AssistantRecovery, AssistantToolWire;
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
 Begin
@@ -624,55 +624,8 @@ Begin
 End;
 
 Function CompletionsToolsToResponsesTools(Const ToolsJson: String): String;
-Var
-  Data: TJSONData;
-  Arr, OutArr: TJSONArray;
-  Item, Func, Flat: TJSONObject;
-  I: Integer;
-  Name: String;
 Begin
-  Result := ToolsJson;
-  If Trim(ToolsJson) = '' Then
-    Exit;
-  Data := Nil;
-  OutArr := Nil;
-  Try
-    Try
-      Data := GetJSON(ToolsJson);
-      If Not (Data Is TJSONArray) Then
-        Exit;
-      Arr := TJSONArray(Data);
-      OutArr := TJSONArray.Create;
-      For I := 0 To Arr.Count - 1 Do
-        Begin
-          If Not (Arr.Items[I] Is TJSONObject) Then
-            Continue;
-          Item := TJSONObject(Arr.Items[I]);
-          Func := Item.FindPath('function') As TJSONObject;
-          If Assigned(Func) Then
-            Begin
-              Flat := TJSONObject.Create;
-              Flat.Add('type', 'function');
-              Name := Func.Get('name', '');
-              If Name <> '' Then
-                Flat.Add('name', Name);
-              If Func.Find('description') <> Nil Then
-                Flat.Add('description', Func.Get('description', ''));
-              If Assigned(Func.Find('parameters')) Then
-                Flat.Add('parameters', Func.Find('parameters').Clone);
-              OutArr.Add(Flat);
-            End
-          Else
-            OutArr.Add(Item.Clone);
-        End;
-      Result := OutArr.AsJSON;
-    Except
-      Result := ToolsJson;
-    End;
-  Finally
-    OutArr.Free;
-    Data.Free;
-  End;
+  Result := OpenAIToolsToResponses(ToolsJson);
 End;
 
 End.

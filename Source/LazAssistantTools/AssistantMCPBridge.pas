@@ -397,7 +397,7 @@ Begin
         End;
       Exit;
     End;
-  If Tool = 'lazarus_run_command' Then
+  If Tool = 'run_command' Then
     Result := RunCommandToEnd(Arguments, CallId, ResultText, ErrorText)
   Else
     Result := QueueCall(Tool, Arguments, CallId, ResultText, ErrorText, Images);
@@ -412,7 +412,7 @@ Var
   Data: TJSONData;
   Done: Boolean;
 Begin
-  Result := QueueCall('lazarus_run_command', Arguments, CallId, Started, ErrorText, Images);
+  Result := QueueCall('run_command', Arguments, CallId, Started, ErrorText, Images);
   ResultText := Started;
   If Not Result Then
     Exit;
@@ -435,7 +435,7 @@ Begin
   Repeat
     Sleep(PollMs);
     { Cancel ends the run: this call then fails with MCPRunCancelledText, and the broker has stopped the program. }
-    If Not QueueCall('lazarus_command_status', StatusArguments, CallId, Status, ErrorText, Images) Then
+    If Not QueueCall('command_status', StatusArguments, CallId, Status, ErrorText, Images) Then
       Begin
         ResultText := '';
         Result := False;

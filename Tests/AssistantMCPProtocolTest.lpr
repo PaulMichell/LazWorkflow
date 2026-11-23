@@ -15,9 +15,9 @@ Uses
 
 Const
   { Two entries in the shape TAssistantToolBroker.ToolsJson publishes. }
-  BrokerTools = '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project.",' +
+  BrokerTools = '[{"type":"function","name":"get_project_info","description":"Describe the selected Lazarus project.",' +
     '"inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text.","inputSchema":' +
+    '{"type":"function","name":"read_file","description":"Read current IDE text.","inputSchema":' +
     '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}]';
 
 Type
@@ -212,8 +212,8 @@ Begin
     Tools := TJSONArray(Response.FindPath('result.tools'));
     Check('tools/list lists both tools', (Tools Is TJSONArray) And (Tools.Count = 2));
     Tool := Tools.Objects[1];
-    Check('tools/list drops the lazarus_ prefix', (Tools.Objects[0].Get('name', '') = 'project_info') And
-      (Tool.Get('name', '') = 'read_buffer'));
+    Check('tools/list uses the catalogue names', (Tools.Objects[0].Get('name', '') = 'get_project_info') And
+      (Tool.Get('name', '') = 'read_file'));
     Check('tools/list keeps the description', Tool.Get('description', '') = 'Read current IDE text.');
     Check('tools/list keeps the input schema', (Tool.Find('inputSchema') Is TJSONObject) And
       (TJSONObject(Tool.Find('inputSchema')).Get('type', '') = 'object') And
@@ -231,7 +231,7 @@ Begin
     Check('tools/call gets a body', HasBody And Assigned(Response));
     Check('tools/call keeps its id', SameId(Response, Request));
     Check('tools/call runs the executor once', Probe.Calls = 1);
-    Check('tools/call restores the broker name', Probe.LastTool = 'lazarus_read_buffer');
+    Check('tools/call uses the catalogue name', Probe.LastTool = 'read_file');
     Check('tools/call passes the arguments object', StringReplace(Probe.LastArguments, ' ', '', [rfReplaceAll]) = '{"path":"Main.pas"}');
     Content := TJSONArray(Response.FindPath('result.content'));
     Check('tools/call returns one content item', (Content Is TJSONArray) And (Content.Count = 1));
@@ -319,15 +319,15 @@ Begin
     Response.Free;
   End;
 
-  Response := Answer('{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"project_info"}}', HasBody);
+  Response := Answer('{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_project_info"}}', HasBody);
   Try
-    Check('missing arguments become an empty object', Assigned(Response.Find('result')) And (Probe.LastTool = 'lazarus_project_info') And
+    Check('missing arguments become an empty object', Assigned(Response.Find('result')) And (Probe.LastTool = 'get_project_info') And
       (StringReplace(Probe.LastArguments, ' ', '', [rfReplaceAll]) = '{}'));
   Finally
     Response.Free;
   End;
 
-  Response := Answer('{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_buffer","arguments":["Main.pas"]}}', HasBody);
+  Response := Answer('{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_file","arguments":["Main.pas"]}}', HasBody);
   Try
     Check('array arguments are invalid params', ErrorCode(Response) = MCPInvalidParams);
   Finally
@@ -342,7 +342,7 @@ Begin
   End;
 
   Check('no executor is an internal error, not a crash',
-    MCPHandleMessage('{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"read_buffer"}}', BrokerTools, Nil, ResponseText) And
+    MCPHandleMessage('{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"read_file"}}', BrokerTools, Nil, ResponseText) And
     (Pos(IntToStr(MCPInternalError), ResponseText) > 0));
 
   Check('an empty catalogue lists no tools',
@@ -359,7 +359,7 @@ End;
 
 Procedure CheckImageResult;
 Const
-  CallImage = '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"read_buffer","arguments":{"path":"dot.png"}}}';
+  CallImage = '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"dot.png"}}}';
 Var
   Response: TJSONObject;
   Content: TJSONArray;

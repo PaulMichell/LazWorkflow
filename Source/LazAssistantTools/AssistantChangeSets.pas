@@ -238,7 +238,7 @@ Begin
     Root.Add('error', Error);
     Root.Add('saved', False);
     Root.Add('durable', False);
-    Root.Add('recovery', 'Use lazarus_revert_changes for confirmed unchanged assistant edits; inspect conflicts/unknown outcomes and use editor Undo as needed. Receipt lasts until the assistant panel closes.');
+    Root.Add('recovery', 'Use revert_changes for confirmed unchanged assistant edits; inspect conflicts/unknown outcomes and use editor Undo as needed. Receipt lasts until the assistant panel closes.');
     Files := TJSONArray.Create;
     Root.Add('files', Files);
     For I := 0 To High(Items) Do

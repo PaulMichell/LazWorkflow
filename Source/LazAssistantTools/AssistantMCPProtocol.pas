@@ -5,8 +5,8 @@ Unit AssistantMCPProtocol;
   Pure text and JSON: no sockets and no IDE units. The listener hands each request body here and sends back what
   comes out; a tools/call is passed to the caller's executor, which runs it wherever the broker lives.
 
-  Claude Code names MCP tools mcp__<server>__<tool>. The server is called lazarus and the broker's lazarus_ prefix
-  is dropped from the listing, so lazarus_read_buffer reaches Claude as mcp__lazarus__read_buffer.
+  Claude Code names MCP tools mcp__<server>__<tool>. The server is called lazarus. The tool name in the
+  listing is the catalogue name, so read_file reaches Claude as mcp__lazarus__read_file.
 
   A tool result is a text item, followed by one image item for each picture a successful call returns. }
 
@@ -35,7 +35,7 @@ Const
   MCPServerVersion = '1.0';
   { Used when initialize names no version. }
   MCPDefaultProtocolVersion = '2025-06-18';
-  MCPBrokerToolPrefix = 'lazarus_';
+  MCPBrokerToolPrefix = '';
 
   MCPParseError = -32700;
   MCPInvalidRequest = -32600;
@@ -43,7 +43,7 @@ Const
   MCPInvalidParams = -32602;
   MCPInternalError = -32603;
 
-/// The MCP name for a broker tool: the broker prefix is dropped.
+/// The MCP name for a broker tool. Catalogue names are already the names Claude calls.
 Function MCPToolName(Const BrokerName: String): String;
 /// The broker's tools as an MCP tools/list result, from TAssistantToolBroker.ToolsJson.
 Function MCPToolsListResult(Const ToolsJSON: String): String;

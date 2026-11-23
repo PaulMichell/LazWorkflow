@@ -230,7 +230,7 @@ Begin
   Result := '';
   Data := Nil;
   Try
-    Data := GetJSON(CallText(Call('read_buffer', '{"path":"Main.pas"}', 10000, Status)));
+    Data := GetJSON(CallText(Call('read_file', '{"path":"Main.pas"}', 10000, Status)));
     Result := Data.FindPath('revision').AsString;
   Except
     Result := '';
@@ -250,11 +250,11 @@ Begin
     Begin
       { A modal dialog's message loop keeps serving queued calls, so the read can run while this one waits. }
       Lister := TClientThread.Create(Listener.URL, Listener.Token, ListBody);
-      Reader := TClientThread.Create(Listener.URL, Listener.Token, CallBody(7, 'read_buffer', '{"path":"Main.pas"}'));
+      Reader := TClientThread.Create(Listener.URL, Listener.Token, CallBody(7, 'read_file', '{"path":"Main.pas"}'));
       Try
         While GetTickCount64 - Started < HoldMs Do
           CheckSynchronize(10);
-        ListedDuringHold := Lister.Done And (Lister.Status = 200) And (Pos('replace_buffer', Lister.Body) > 0);
+        ListedDuringHold := Lister.Done And (Lister.Status = 200) And (Pos('write_file', Lister.Body) > 0);
         ReadDuringHold := Reader.Done And (Pos(OriginalText, CallText(Reader.Body)) > 0);
       Finally
         Lister.WaitFor;
@@ -289,7 +289,7 @@ Begin
     Broker.OnApproval := @Setting.Decide;
     AssistantChatConfig.ApprovalMode := 'auto';
     Replaces := Workspace.Replaces;
-    Body := Call('replace_buffer', '{"path":"Main.pas","revision":"' + Revision + '","text":"unit Main; { auto }"}',
+    Body := Call('write_file', '{"path":"Main.pas","revision":"' + Revision + '","text":"unit Main; { auto }"}',
       10000, Status);
     Check('Auto still passes the edit through the approval hook', Setting.Asked = 1);
     Check('Auto applies a project edit without asking', (Status = 200) And (Pos('isError: ', CallText(Body)) = 0) And
@@ -297,7 +297,7 @@ Begin
     Check('the approval names the path and the changed lines',
       (Pos('"path":"Main.pas"', Setting.Summary) > 0) And (Pos('lines 1-1 of 1 replaced by 1', Setting.Summary) > 0));
     AssistantChatConfig.ApprovalMode := 'always';
-    Body := Call('replace_buffer', '{"path":"Main.pas","revision":"' + Revision + '","text":"unit Main; { always }"}',
+    Body := Call('write_file', '{"path":"Main.pas","revision":"' + Revision + '","text":"unit Main; { always }"}',
       10000, Status);
     Check('Always applies a project edit without asking', (Status = 200) And (Workspace.Text = 'unit Main; { always }'));
   Finally
@@ -314,7 +314,7 @@ Var
 Begin
   Approver.Answer := True;
   Approver.Hold := True;
-  Body := Call('replace_buffer', '{"path":"Main.pas","revision":"' + Revision + '","text":"' + ApprovedText + '"}',
+  Body := Call('write_file', '{"path":"Main.pas","revision":"' + Revision + '","text":"' + ApprovedText + '"}',
     HoldMs + 30000, Status);
   Error := CallText(Body);
   Check('the approval is asked once', Approver.Asked = 1);
@@ -335,7 +335,7 @@ Begin
   Approver.Answer := False;
   Approver.Hold := False;
   Approver.Asked := 0;
-  Body := Call('replace_buffer', '{"path":"Main.pas","revision":"' + Revision + '","text":"' + DeclinedText + '"}',
+  Body := Call('write_file', '{"path":"Main.pas","revision":"' + Revision + '","text":"' + DeclinedText + '"}',
     10000, Status);
   Check('the decline is asked', Approver.Asked = 1);
   Check('a decline is answered with 200, not a dropped connection', Status = 200);

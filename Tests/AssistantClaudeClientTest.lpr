@@ -472,7 +472,7 @@ Begin
     AppendClaudeModeArguments(awsProject, '', '', Args);
     Check('without a config file a turn only reads and loads no server', (Args.Count = 2) And
       (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--strict-mcp-config'));
-    Check('a Lazarus tool is shown without the server prefix', ClaudeToolDisplayName('mcp__lazarus__read_buffer') = 'read_buffer');
+    Check('a Lazarus tool is shown without the server prefix', ClaudeToolDisplayName('mcp__lazarus__read_file') = 'read_file');
     Check('a Claude Code tool keeps its name', ClaudeToolDisplayName('Read') = 'Read');
     Check('a malformed MCP name is left alone', (ClaudeToolDisplayName('mcp__lazarus__') = 'mcp__lazarus__') And
       (ClaudeToolDisplayName('mcp____x') = 'mcp____x'));

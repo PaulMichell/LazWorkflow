@@ -523,17 +523,12 @@ End;
 Function ClaudeCompileSentence(Const ToolsJson: String): String;
 Begin
   Result := '';
-  If BrokerToolListed(ToolsJson, 'lazarus_start_build') Then
-    Begin
-      Result := 'Run lazarus_start_build after edits';
-      If BrokerToolListed(ToolsJson, 'lazarus_build_status') Then
-        Result := Result + ' and poll lazarus_build_status';
-      Result := Result + '. ';
-    End
+  If BrokerToolListed(ToolsJson, 'run_compile') Then
+    Result := 'Run run_compile after edits. '
   Else
     Result := 'Compile after edits when a build tool is offered. ';
-  If BrokerToolListed(ToolsJson, 'lazarus_start_tests') Then
-    Result := Result + 'Run lazarus_start_tests with only for named regression tests, adding gui true for GUI tests. ';
+  If BrokerToolListed(ToolsJson, 'run_tests') Then
+    Result := Result + 'Run run_tests with only for named regression tests, adding gui true for GUI tests. ';
   Result := Result + 'A clean compile does not mark this item complete.';
 End;
 
@@ -541,12 +536,12 @@ Function ClaudeCompletionRules(Const ToolsJson: String): String;
 Var
   UpdateTool, GitTool: String;
 Begin
-  If BrokerToolListed(ToolsJson, 'lazarus_update_markdown') Then
-    UpdateTool := 'lazarus_update_markdown'
+  If BrokerToolListed(ToolsJson, 'update_markdown') Then
+    UpdateTool := 'update_markdown'
   Else
     UpdateTool := 'the offered Markdown tool';
-  If BrokerToolListed(ToolsJson, 'lazarus_run_git') Then
-    GitTool := 'lazarus_run_git'
+  If BrokerToolListed(ToolsJson, 'run_git') Then
+    GitTool := 'run_git'
   Else
     GitTool := 'the offered Git tool';
   Result :=
@@ -567,29 +562,29 @@ Function ClaudeDiscoverSentence(Const ToolsJson: String): String;
 Var
   Found: String;
 Begin
-  Found := ListedTools(ToolsJson, ['lazarus_search_in_project', 'lazarus_read_file']);
+  Found := ListedTools(ToolsJson, ['search_in_project', 'read_file']);
   If Found = '' Then
     Result := '2. Discover with the offered project tools. '
   Else
     Result := '2. Discover with ' + Found + '. ';
   Result := Result + PlanSectionReadSentence + ' ';
-  If BrokerToolListed(ToolsJson, 'lazarus_read_markdown_section') Then
-    Result := Result + 'Use lazarus_read_markdown_section for this item''s section. ';
+  If BrokerToolListed(ToolsJson, 'read_markdown_section') Then
+    Result := Result + 'Use read_markdown_section for this item''s section. ';
   Result := Result + 'Apply authorized edits using the available project tools. ';
-  If BrokerToolListed(ToolsJson, 'lazarus_ensure_form_component') Then
-    Result := Result + 'Use lazarus_ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units. ';
-  If BrokerToolListed(ToolsJson, 'lazarus_replace_in_buffer') Then
-    Result := Result + 'Use lazarus_replace_in_buffer for surgical edits. ';
-  If BrokerToolListed(ToolsJson, 'lazarus_stage_patch') Then
-    Result := Result + 'Use lazarus_stage_patch to stage part of a file. ';
+  If BrokerToolListed(ToolsJson, 'ensure_form_component') Then
+    Result := Result + 'Use ensure_form_component for coordinated Pascal/LFM changes; do not create temporary probe units. ';
+  If BrokerToolListed(ToolsJson, 'replace_in_file') Then
+    Result := Result + 'Use replace_in_file for surgical edits. ';
+  If BrokerToolListed(ToolsJson, 'stage_patch') Then
+    Result := Result + 'Use stage_patch to stage part of a file. ';
   Result := TrimRight(Result);
 End;
 
 Function ClaudeContinueLead(Const ToolsJson: String): String;
 Begin
   Result := 'Edits already applied are in the project. Do not re-read a file you already have';
-  If BrokerToolListed(ToolsJson, 'lazarus_replace_in_buffer') Then
-    Result := Result + ' unless a later lazarus_replace_in_buffer failed.'
+  If BrokerToolListed(ToolsJson, 'replace_in_file') Then
+    Result := Result + ' unless a later replace_in_file failed.'
   Else
     Result := Result + '.';
   Result := Result + LineEnding + PlanSectionReadSentence + LineEnding + ClaudeCompileSentence(ToolsJson) +

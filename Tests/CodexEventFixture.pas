@@ -155,7 +155,7 @@ Begin
   Params.Add('threadId', 'fixture-thread');
   Params.Add('turnId', 'fixture-turn');
   Params.Add('callId', 'fixture-tool');
-  Params.Add('tool', 'lazarus_read_file');
+  Params.Add('tool', 'read_file');
   Args := TJSONObject.Create;
   Args.Add('path', 'missing-acceptance-fixture.pas');
   Params.Add('arguments', Args);

@@ -59,7 +59,7 @@ Var
 Begin
   ResetSeen;
   Summary := MCPApprovalSummary('Main.pas', 'old line', 'new line');
-  Check('claude approval is asked', Not ApproveBrokerToolCall('lazarus_replace_in_buffer', 'mcp-9', 'Main.pas',
+  Check('claude approval is asked', Not ApproveBrokerToolCall('replace_in_file', 'mcp-9', 'Main.pas',
     'old line', 'new line', ErrorText));
   Check('claude waiter ran', SeenCalls = 1);
   Check('claude id is the request id', SeenId = 'mcp-9');

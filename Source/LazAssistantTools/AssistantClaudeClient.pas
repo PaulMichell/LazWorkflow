@@ -137,7 +137,7 @@ Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfig
 /// True after this session id was given the harness prompt. A resume that returns false started before that.
 Procedure NoteClaudeHarnessDelivered(Const SessionId: String);
 Function ClaudeHarnessWasDelivered(Const SessionId: String): Boolean;
-/// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
+/// A tool name for the trace: mcp__lazarus__read_file is shown as read_file. Other names are unchanged.
 Function ClaudeToolDisplayName(Const ToolName: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
 /// leave those choices to Claude Code. No --permission-mode is passed: the turn has no Claude Code tool that

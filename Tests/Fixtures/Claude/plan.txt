@@ -2,10 +2,9 @@ tools:
 Read
 Grep
 Glob
-mcp__lazarus__project_info
-mcp__lazarus__read_buffer
-mcp__lazarus__list_directory
+mcp__lazarus__get_project_info
 mcp__lazarus__read_file
+mcp__lazarus__list_directory
 mcp__lazarus__read_image
 mcp__lazarus__search_in_project
 mcp__lazarus__open_buffer
@@ -15,10 +14,9 @@ mcp__lazarus__find_references
 mcp__lazarus__prepare_changes
 mcp__lazarus__change_status
 mcp__lazarus__preview_local_rename
-mcp__lazarus__replace_buffer
-mcp__lazarus__replace_in_buffer
-mcp__lazarus__save_buffer
-<if-can-create-file>
+mcp__lazarus__write_file
+mcp__lazarus__replace_in_file
+mcp__lazarus__save_file
 mcp__lazarus__write_markdown
 mcp__lazarus__update_markdown
 mcp__lazarus__list_plans

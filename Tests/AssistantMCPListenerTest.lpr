@@ -15,17 +15,17 @@ Uses
 
 Const
   { Two entries in the shape TAssistantToolBroker.ToolsJson publishes. }
-  BrokerTools = '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project.",' +
+  BrokerTools = '[{"type":"function","name":"get_project_info","description":"Describe the selected Lazarus project.",' +
     '"inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_read_buffer","description":"Read current IDE text.","inputSchema":' +
+    '{"type":"function","name":"read_file","description":"Read current IDE text.","inputSchema":' +
     '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}]';
   InitializeBody = '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",' +
     '"capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1"}}}';
   InitializedBody = '{"jsonrpc":"2.0","method":"notifications/initialized"}';
   ListBody = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}';
-  ReadBody = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_buffer","arguments":{"path":"Main.pas"}}}';
+  ReadBody = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"Main.pas"}}}';
   { project_info is the deliberately slow tool: the probe holds it until the test lets it go. }
-  SlowBody = '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_info","arguments":{}}}';
+  SlowBody = '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_project_info","arguments":{}}}';
   SlowWaitMs = 10000;
 
 Type
@@ -103,7 +103,7 @@ Begin
   End;
   ErrorText := '';
   Images := Nil;
-  If Tool = 'lazarus_project_info' Then
+  If Tool = 'get_project_info' Then
     Begin
       RTLEventSetEvent(SlowEntered);
       RTLEventWaitFor(SlowRelease, SlowWaitMs);
@@ -288,7 +288,7 @@ Begin
   Reply := Post(Listener.URL, Listener.Token, 'POST', ListBody);
   ListResult := ResultOf(Reply.Body);
   Check('tools/list gets 200 with a result', (Reply.Status = 200) And Assigned(ListResult));
-  Check('tools/list offers read_buffer', Pos('"name" : "read_buffer"', ListResult.AsJSON) > 0);
+  Check('tools/list offers read_file', Pos('"name" : "read_file"', ListResult.AsJSON) > 0);
   ListResult.Free;
 
   Calls := Probe.CallCount;
@@ -347,7 +347,7 @@ Begin
     Reply := Post(Listener.URL, Listener.Token, 'POST', InitializeBody);
     Check('a second client initializes while the slow call is pending', Reply.Status = 200);
     Reply := Post(Listener.URL, Listener.Token, 'POST', ListBody);
-    Check('a second client lists tools while the slow call is pending', (Reply.Status = 200) And (Pos('read_buffer', Reply.Body) > 0));
+    Check('a second client lists tools while the slow call is pending', (Reply.Status = 200) And (Pos('read_file', Reply.Body) > 0));
     Reply := Post(Listener.URL, Listener.Token, 'POST', ReadBody);
     Check('a second client calls a tool while the slow call is pending', Pos('Unit Main;', FirstText(Reply.Body)) = 1);
     Check('the second client was not held up', GetTickCount64 - Started < 3000);

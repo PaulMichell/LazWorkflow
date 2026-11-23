@@ -121,7 +121,8 @@ Type
 Implementation
 
 Uses
-  fpjson, jsonparser, AssistantProtocol, AssistantCodexProfile, AssistantCodexWire, AssistantCodexDiagnostics;
+  fpjson, jsonparser, AssistantProtocol, AssistantCodexProfile, AssistantCodexWire, AssistantCodexDiagnostics,
+  AssistantToolWire;
 
 Function Quote(Const S: String): String;
 Begin
@@ -150,55 +151,8 @@ Begin
 End;
 
 Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
-Var
-  Data, Fn, Schema: TJSONData;
-  Source, Converted: TJSONArray;
-  Item, FnObj, Tool: TJSONObject;
-  I: Integer;
 Begin
-  Result := '[]';
-  If Trim(CatalogueJson) = '' Then Exit;
-  Data := Nil;
-  Try
-    Try
-      Data := GetJSON(CatalogueJson);
-    Except
-      Exit;
-    End;
-    If Not (Data Is TJSONArray) Then Exit;
-    Source := TJSONArray(Data);
-    Converted := TJSONArray.Create;
-    Try
-      For I := 0 To Source.Count - 1 Do
-        Begin
-          If Not (Source[I] Is TJSONObject) Then Continue;
-          Item := TJSONObject(Source[I]);
-          Fn := Item.Find('function');
-          If Assigned(Fn) And (Fn Is TJSONObject) Then
-            Begin
-              FnObj := TJSONObject(Fn);
-              Tool := TJSONObject.Create;
-              Tool.Add('type', 'function');
-              Tool.Add('name', FnObj.Get('name', ''));
-              Tool.Add('description', FnObj.Get('description', ''));
-              Schema := CopyJson(FnObj.Find('parameters'));
-              If Not Assigned(Schema) Then Schema := GetJSON('{"type":"object","properties":{}}');
-              Tool.Add('inputSchema', Schema);
-              Converted.Add(Tool);
-            End
-          Else If Item.Get('name', '') <> '' Then
-            Begin
-              Schema := CopyJson(Item);
-              If Assigned(Schema) Then Converted.Add(Schema);
-            End;
-        End;
-      Result := Converted.AsJSON;
-    Finally
-      Converted.Free;
-    End;
-  Finally
-    Data.Free;
-  End;
+  Result := OpenAIToolsToCodex(CatalogueJson);
 End;
 
 Function CodexThreadStartParams(Const WorkingDirectory, Model, DynamicToolsJson, DeveloperInstructions: String): String;

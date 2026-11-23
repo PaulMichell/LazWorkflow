@@ -130,7 +130,8 @@ Uses
   CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers, AssistantFormSave,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
-  AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser;
+  AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser,
+  AssistantToolSpecs, AssistantToolWire;
 
 Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
 Function LoadProjectFileText(Const Resolved: String; Out Body: String; Out FromEditor: Boolean;
@@ -430,23 +431,9 @@ Begin
 End;
 
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
-Var
-  Name: String;
 Begin
-  Name := LowerCase(Trim(ToolName));
-  { Editors, forms, project API, compile, Markdown windows.
-    read_file must see the open buffer; disk-only reads made replace_in_file miss.
-    run_command stays on the caller thread. A process that reads stdin must not
-    occupy the IDE thread, or the window freezes on the last status line. }
-  Result := (Name = 'open_file') Or (Name = 'open_markdown') Or
-    (Name = 'add_unit_to_project') Or (Name = 'ensure_form_component') Or
-    (Name = 'write_file') Or (Name = 'replace_in_file') Or
-    (Name = 'write_markdown') Or (Name = 'update_markdown') Or
-    (Name = 'get_project_info') Or (Name = 'run_compile') Or (Name = 'run_git') Or (Name = 'stage_patch') Or
-    (Name = 'run_project') Or (Name = 'run_tests') Or
-    (Name = 'delete_path') Or (Name = 'rename_path') Or
-    (Name = 'set_active_plan') Or (Name = 'read_markdown_section') Or (Name = 'read_file') Or
-    (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references');
+  { Editors, forms, project API, compile, Markdown windows. run_command stays off this thread. }
+  Result := AssistantToolNeedsIdeThread(LowerCase(Trim(ToolName)));
 End;
 
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
@@ -454,520 +441,60 @@ Var
   Name: String;
 Begin
   Name := LowerCase(Trim(ToolName));
-  { Shared read tools for all project modes. }
-  If (Name = 'read_file') Or (Name = 'read_image') Or (Name = 'list_directory') Or
-    (Name = 'open_markdown') Or (Name = 'get_project_info') Or
-    (Name = 'grep') Or (Name = 'read_skill') Or (Name = 'spawn_subagent') Then
-    Begin
-      Result := Mode In [amInspect, amDocument, amPlan, amBuild];
-      Exit;
-    End;
-  { Document, Plan, and Build may write Markdown. Plan registry tools stay off Document. }
-  If (Name = 'write_markdown') Or (Name = 'update_markdown') Then
-    Begin
-      Result := Mode In [amDocument, amPlan, amBuild];
-      Exit;
-    End;
-  { Plan workspace tools — Plan and Build (Build uses them for Status: updates). }
-  If (Name = 'list_plans') Or (Name = 'set_active_plan') Or
-    (Name = 'get_active_plan') Or (Name = 'todo_write') Or (Name = 'read_markdown_section') Then
-    Begin
-      Result := Mode In [amPlan, amBuild];
-      Exit;
-    End;
-  { Open and search are read-only. Document may use them before writing a report. }
-  If (Name = 'search_in_project') Or (Name = 'open_file') Then
-    Begin
-      Result := Mode In [amInspect, amDocument, amBuild];
-      Exit;
-    End;
-  { CodeTools queries are read-only. Document and Plan do not get them. }
-  If (Name = 'find_declaration') Or (Name = 'symbol_context') Or (Name = 'find_references') Then
-    Begin
-      Result := Mode In [amInspect, amBuild];
-      Exit;
-    End;
-  { Inspect may read the repository. Staging and commits stay on Build. }
-  If Name = 'run_git' Then
-    Begin
-      Result := Mode In [amInspect, amBuild];
-      Exit;
-    End;
-  { Text documents in Plan and Document. Source edits, compile, and Git staging stay in Build. }
-  If (Name = 'write_file') Or (Name = 'replace_in_file') Then
-    Begin
-      Result := Mode In [amPlan, amDocument, amBuild];
-      Exit;
-    End;
-  { Build-mode source tools — never Inspect or Plan. }
-  If (Name = 'run_compile') Or (Name = 'stage_patch') Or
-    (Name = 'run_project') Or (Name = 'run_tests') Or (Name = 'run_command') Or
-    (Name = 'delete_path') Or (Name = 'rename_path') Or
-    (Name = 'add_unit_to_project') Or
-    (Name = 'ensure_form_component') Then
-    Begin
-      Result := Mode = amBuild;
-      Exit;
-    End;
   If Name = 'write_image' Then
     Begin
       Result := AssistantTurnOffersImageOutput(Mode);
       Exit;
     End;
-  Result := False;
+  Result := AssistantToolInMode(Name, Mode);
 End;
 
-Function BuildHarnessToolsJson: String;
+Procedure AddToolNames(Names: TStrings; Const Items: Array Of String);
+Var
+  I: Integer;
 Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"read_skill",' +
-      '"description":"Load the full body of an installed SKILL.md by name. ' +
-        'A file that was not added is not a skill.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"name":{"type":"string","description":"Skill directory name, e.g. free-pascal-engineer"}' +
-      '},"required":["name"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"grep",' +
-      '"description":"Search project text files; return path:line:text. Prefer before many read_file calls. ' +
-        'path may be a directory or a single file. glob accepts .pas, *.pas, and *.{pas,lfm}. ' +
-        'A pattern containing | is treated as a regular expression.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"pattern":{"type":"string","description":"Text or regex to find"},' +
-        '"query":{"type":"string","description":"Alias of pattern"},' +
-        '"path":{"type":"string","description":"Project-relative directory or file (empty = project root)"},' +
-        '"glob":{"type":"string","description":"Optional filter: .pas, *.pas, or *.{pas,lfm,sql}"},' +
-        '"regex":{"type":"boolean","description":"Treat pattern as a regular expression (default false; auto if pattern contains |)"},' +
-        '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
-      '},"required":[]}' +
-    '}}';
-End;
-
-Function BuildSpawnToolJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"spawn_subagent",' +
-      '"description":"Start a depth-1 child agent and wait for its summary. Parent only; a child cannot spawn. ' +
-        'At most 3 children run at once; extra spawn_subagent calls wait for a free slot. ' +
-        'Kinds: explore (read-only research), plan (Markdown only), general-purpose ' +
-        '(parent mode tools), pascal-naming, pascal-structure, pascal-review (read-only lenses). ' +
-        'Use for parallel explore or Review lenses. Do not spawn for syntax (use run_compile) or every edit.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"kind":{"type":"string","description":"explore | plan | general-purpose | pascal-naming | pascal-structure | pascal-review"},' +
-        '"subagent_type":{"type":"string","description":"Alias of kind"},' +
-        '"title":{"type":"string","description":"Short label shown in the parent trace"},' +
-        '"description":{"type":"string","description":"Alias of title"},' +
-        '"prompt":{"type":"string","description":"Full instructions for the child"},' +
-        '"files":{"type":"string","description":"Optional changed-file list the child should focus on"}' +
-      '},"required":["prompt"]}' +
-    '}}';
-End;
-
-Function BuildTodoToolJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"todo_write",' +
-      '"description":"Replace or merge the ephemeral in-turn todo list (dies with the turn; not plan Status:). ' +
-        'status: pending, in_progress, completed, cancelled.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"merge":{"type":"boolean","description":"If true, upsert by id; if false, replace the list (default false)"},' +
-        '"todos":{"type":"array","description":"Todo items","items":{"type":"object","properties":{' +
-          '"id":{"type":"string"},' +
-          '"content":{"type":"string"},' +
-          '"status":{"type":"string"}' +
-        '}}}' +
-      '},"required":["todos"]}' +
-    '}}';
-End;
-
-Function BuildReadToolsJson: String;
-Begin
-  Result :=
-    BuildHarnessToolsJson + ',' +
-    '{"type":"function","function":{' +
-      '"name":"read_file",' +
-      '"description":"Read a text file under the active Lazarus project. Uses the open editor buffer when ' +
-        'the file is open, otherwise disk. Page with start_line plus end_line or limit. If end_line is ' +
-        'smaller than start_line it is a line count. After truncation continue from the suggested line.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative or absolute file path"},' +
-        '"start_line":{"type":"integer","description":"1-based first line to include (default 1)"},' +
-        '"offset":{"type":"integer","description":"Alias of start_line"},' +
-        '"end_line":{"type":"integer","description":"1-based last line, or a line count if smaller than start_line"},' +
-        '"limit":{"type":"integer","description":"Max lines from start_line (preferred when paging by count)"},' +
-        '"max_chars":{"type":"integer","description":"Optional max characters to return from the selected range"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"read_image",' +
-      '"description":"Read a project image into the next model turn. Resolves a project-relative path in the ' +
-        'sandbox, refuses paths outside the root, symbolic links that leave the project, and files over the image ' +
-        'limits, then copies the accepted still image into the conversation store. The result text is the name, ' +
-        'dimensions, and id only. The picture is attached to the following user message, not written into the ' +
-        'result. A PNG is not a text edit: do not use write_file or replace_in_file on images.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative or absolute image path inside the project root"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"list_directory",' +
-      '"description":"List files and subdirectories under a project folder.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative directory (empty = project root)"}' +
-      '},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"open_markdown",' +
-      '"description":"Open a Markdown document in an Assistant Markdown viewer window.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Path to a .md file under the project"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"get_project_info",' +
-      '"description":"Return the active project path, main file, and project info file.",' +
-      '"parameters":{"type":"object","properties":{},"required":[]}' +
-    '}}';
-End;
-
-Function BuildPlanToolsJson: String;
-Begin
-  Result :=
-    BuildTodoToolJson + ',' +
-    '{"type":"function","function":{' +
-      '"name":"write_markdown",' +
-      '"description":"Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. A ### heading without Status is a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; commit the plan file after that change. Without a repository, complete needs no commit.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .md path (default Documents/Plan.md)"},' +
-        '"content":{"type":"string","description":"Full Markdown body to write"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after write (default true). Ignored during a plan run."}' +
-      '},"required":["content"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"update_markdown",' +
-      '"description":"Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when changing Status: lines or a single section. Rejects a Status: line under a ## heading. A ### heading without Status stays a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; commit the plan file after that change. Without a repository, complete needs no commit.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .md path (default: active plan)"},' +
-        '"old_text":{"type":"string","description":"Exact text to find"},' +
-        '"new_text":{"type":"string","description":"Replacement text"},' +
-        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after update (default true). Ignored during a plan run."}' +
-      '},"required":["old_text","new_text"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"list_plans",' +
-      '"description":"List plans registered in the project .assistant settings. Missing files are dropped. The project folders are not scanned.",' +
-      '"parameters":{"type":"object","properties":{},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"get_active_plan",' +
-      '"description":"Return the canonical active plan path for this project (from .assistant/config.json).",' +
-      '"parameters":{"type":"object","properties":{},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"set_active_plan",' +
-      '"description":"Set the canonical active plan Markdown path for this project.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .md path"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"read_markdown_section",' +
-      '"description":"Read one Markdown section. path is optional and defaults to the active plan. ' +
-        'heading is an ATX heading such as ### 3.2. Returns that section up to the next heading of the same or a higher level. ' +
-        'A ### item is one block. A ## heading includes its items.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative Markdown path. Omit for the active plan."},' +
-        '"heading":{"type":"string","description":"ATX heading, for example ### 3.2"}' +
-      '},"required":["heading"]}' +
-    '}}';
-End;
-
-Function BuildNavigationToolsJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"search_in_project",' +
-      '"description":"Search project source/text files (same engine as grep). Unsaved editor buffers are preferred over disk. ' +
-        'Inspect and Build may call it. Returns path:line:text.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"query":{"type":"string","description":"Text to find"},' +
-        '"path":{"type":"string","description":"Project-relative directory or file (empty = project root)"},' +
-        '"glob":{"type":"string","description":"Optional filter: .pas, *.pas, or *.{pas,lfm} (default: common text types)"},' +
-        '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}' +
-      '},"required":["query"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"open_file",' +
-      '"description":"Open a project source file in the Lazarus source editor. Does not modify the file.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative file path"}' +
-      '},"required":["path"]}' +
-    '}}';
-End;
-
-Function BuildSourceToolsJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"write_file",' +
-      '"description":"Create or overwrite a real project file. Never create empty files or ApiProbe/scratch/temp units — use search_in_project, list_directory, and read_file to discover APIs. Prefer replace_in_file for small edits.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative path e.g. Source/Foo.pas"},' +
-        '"content":{"type":"string","description":"Full non-empty contents (reject empty/probe files)"},' +
-        '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."},' +
-        '"add_to_project":{"type":"boolean","description":"Add Pascal unit to the active project (default true only for non-empty units)"}' +
-      '},"required":["path","content"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"replace_in_file",' +
-      '"description":"Exact text replacement in a project source/text file. old_text must match the open ' +
-        'editor buffer when the file is open (same source as read_file), including whitespace; keep it small ' +
-        'and unique. Saves the buffer to disk so Review/Git see the edit.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative file path"},' +
-        '"old_text":{"type":"string","description":"Exact text to find"},' +
-        '"new_text":{"type":"string","description":"Replacement text"},' +
-        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-        '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."}' +
-      '},"required":["path","old_text","new_text"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"run_compile",' +
-      '"description":"Compile the work target. A project or package uses that manifest. ' +
-        'A folder compiles every .lpk under the folder, or every .lpi when the folder has no package. ' +
-        'It does not compile the IDE active project. Default is quiet lazbuild. ' +
-        'Set ui=true only for a final IDE Messages check of a project or package.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"kind":{"type":"string","description":"compile (default) or build (rebuild-all when quiet)"},' +
-        '"ui":{"type":"boolean","description":"If true, use IDE DoBuildProject and Messages window (default false = quiet lazbuild)"}' +
-      '},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"add_unit_to_project",' +
-      '"description":"Register an existing Pascal unit file with the active Lazarus project (.lpi).",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .pas/.pp path"},' +
-        '"add_to_uses":{"type":"boolean","description":"Also add to main uses clause when possible (default false)"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"ensure_form_component",' +
-      '"description":"Add or update a published form component in BOTH the .pas unit and matching .lfm. Required when adding TTimer, TButton, etc. so events fire. Prefer this over hand-editing LFM alone.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Form unit path (.pas or .lfm), e.g. unit1.pas"},' +
-        '"name":{"type":"string","description":"Component name, e.g. ColorTimer"},' +
-        '"class_name":{"type":"string","description":"Component class, e.g. TTimer"},' +
-        '"properties":{"type":"string","description":"Optional JSON object of LFM properties, e.g. {\"Interval\":1000,\"OnTimer\":\"ColorTimerTimer\",\"Enabled\":true}. TTimer Interval is milliseconds (1000 = 1 second)."},' +
-        '"event_method":{"type":"string","description":"Optional event handler method name to declare/implement (e.g. ColorTimerTimer). Defaults from On* properties when omitted."},' +
-        '"uses_unit":{"type":"string","description":"Optional unit to add to interface Uses (e.g. ExtCtrls for TTimer)"}' +
-      '},"required":["path","name","class_name"]}' +
-    '}}';
-End;
-
-Function BuildRunToolsJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"run_project",' +
-      '"description":"Start the active project executable directly. No shell and no debugger. ' +
-        'The executable must already be built and must stay inside the project root.",' +
-      '"parameters":{"type":"object","properties":{},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"run_tests",' +
-      '"description":"Run the enabled test command for this target. Arguments are passed directly, not through a shell. ' +
-        'The executable and working directory must stay inside the project root.",' +
-      '"parameters":{"type":"object","properties":{},"required":[]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"run_command",' +
-      '"description":"Run one program and its arguments for a one-off check. No shell is used. ' +
-        'Python and shells are refused. A saved repeatable test is an InstantFPC program in Tests/, ' +
-        'not under Source/. Invoke it as instantfpc plus the script path.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"program":{"type":"string","description":"Program name on PATH, or a path. Example: instantfpc."},' +
-        '"arguments":{"type":"array","items":{"type":"string"},' +
-          '"description":"Arguments passed directly, not through a shell."},' +
-        '"working_directory":{"type":"string",' +
-          '"description":"Optional. Defaults to the project directory and must stay inside it."},' +
-        '"timeout_seconds":{"type":"integer","description":"1 to 3600. Default 600."}' +
-      '},"required":["program"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"delete_path",' +
-      '"description":"Delete one file, symbolic link, or empty directory inside the project root. ' +
-        'Refuses the project root, Git metadata, and the project or package file. Does not use a shell.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative or absolute path inside the project root"}' +
-      '},"required":["path"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"rename_path",' +
-      '"description":"Rename or move a file or directory inside the project root. Both paths must stay in the project. ' +
-        'Refuses the project root, Git metadata, and the project or package file. Does not use a shell.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Existing project path"},' +
-        '"new_path":{"type":"string","description":"New path inside the project root"}' +
-      '},"required":["path","new_path"]}' +
-    '}}';
-End;
-
-Function BuildDocumentFileToolsJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"write_file",' +
-      '"description":"Create or overwrite a text document in Plan or Document mode. ' +
-        'Allowed extensions are .txt, .text, .html, .htm, .csv, .tsv, .svg, .xml, .rtf, .adoc, .asciidoc, .rst, .tex, and .org. ' +
-        'Markdown still uses write_markdown. Images use write_image. Source, forms, and project files stay in Build.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative document path, for example Documents/Notes.html"},' +
-        '"content":{"type":"string","description":"Full non-empty text contents"},' +
-        '"open":{"type":"boolean","description":"Open a source tab after write (default false). Do not use this for Markdown."}' +
-      '},"required":["path","content"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"replace_in_file",' +
-      '"description":"Exact text replacement in a text document that Plan or Document may write. ' +
-        'The same extension rule as write_file. old_text must match the open editor buffer when the file is open.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative document path"},' +
-        '"old_text":{"type":"string","description":"Exact text to find"},' +
-        '"new_text":{"type":"string","description":"Replacement text"},' +
-        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"}' +
-      '},"required":["path","old_text","new_text"]}}}';
-End;
-
-Function BuildWriteImageToolJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"write_image",' +
-      '"description":"Draw one still image with this connection''s image model and save it. ' +
-        'It is not a copy of a read_image attachment. The path may omit an extension. ' +
-        'The image model chooses the format. A mismatched extension is saved with the matching extension instead of failing.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative path. Omit the extension to let the image model choose the format."},' +
-        '"prompt":{"type":"string","description":"What to draw."},' +
-        '"overwrite":{"type":"boolean","description":"Replace an existing file. Default false."},' +
-        '"shape":{"type":"string","description":"Short hint such as 1:1. Omit it to let the image model choose."}' +
-      '},"required":["path","prompt"]}}}';
-End;
-
-Function BuildDocumentToolsJson: String;
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"write_markdown",' +
-      '"description":"Create or overwrite a free-form Markdown document under the project (prefer Documents/). ' +
-        'Opens a live Markdown window. The user prompt decides the layout. Do not use the assistant plan format, ' +
-        'the plan identity line, or Status lines. Do not write the active plan. Omit path to use the current document, ' +
-        'or a new Documents/Report file when none exists.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .md path. Omit for the current document."},' +
-        '"content":{"type":"string","description":"Full Markdown body to write"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after write (default true)."}' +
-      '},"required":["content"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"update_markdown",' +
-      '"description":"Exact text replacement in the current Markdown document, or in path when given. ' +
-        'Prefer this for a section change. Do not use it on the active plan. Free format; no Status lines required.",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative .md path. Omit for the current document."},' +
-        '"old_text":{"type":"string","description":"Exact text to find"},' +
-        '"new_text":{"type":"string","description":"Replacement text"},' +
-        '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-        '"open":{"type":"boolean","description":"Open live viewer after update (default true)."}' +
-      '},"required":["old_text","new_text"]}' +
-    '}}';
-End;
-
-Function BuildSymbolToolsJson: String;
-Const
-  Shared = 'Read-only. Positions are 1-based. Columns are UTF-8 bytes. ' +
-    'No editor movement and no edit revision.';
-Begin
-  Result :=
-    '{"type":"function","function":{' +
-      '"name":"find_declaration",' +
-      '"description":"Resolve a Pascal identifier from the already open buffer. ' + Shared + '",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
-        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
-        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"}' +
-      '},"required":["path","line","column"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"symbol_context",' +
-      '"description":"Return the CodeTools hint and nearby source for a Pascal identifier. ' + Shared + '",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
-        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
-        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"}' +
-      '},"required":["path","line","column"]}' +
-    '}},' +
-    '{"type":"function","function":{' +
-      '"name":"find_references",' +
-      '"description":"Find Pascal references in an explicit search_paths list of 1 to 32 project files. ' +
-        'A truncated or partial search is not whole-project coverage. ' + Shared + '",' +
-      '"parameters":{"type":"object","properties":{' +
-        '"path":{"type":"string","description":"Project-relative Pascal source path"},' +
-        '"line":{"type":"integer","minimum":1,"description":"1-based line"},' +
-        '"column":{"type":"integer","minimum":1,"description":"1-based UTF-8 byte column"},' +
-        '"search_paths":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"},' +
-          '"description":"1 to 32 project files. A truncated or partial search is not whole-project coverage."},' +
-        '"max_results":{"type":"integer","minimum":1,"maximum":200,"description":"Optional result cap. Default 100."}' +
-      '},"required":["path","line","column","search_paths"]}' +
-    '}}';
+  For I := 0 To High(Items) Do
+    Names.Add(Items[I]);
 End;
 
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
 Var
-  Body: String;
+  Names: TStringList;
 Begin
-  Case Mode Of
-    amChat:
-      Begin
-        Result := '';
-        Exit;
-      End;
-    amDocument:
-      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildDocumentToolsJson + ',' +
-        BuildDocumentFileToolsJson;
-    amPlan:
-      Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildDocumentFileToolsJson;
-    amBuild:
-      Begin
-        Body := BuildReadToolsJson + ',' + BuildPlanToolsJson + ',' + BuildNavigationToolsJson + ',' +
-          BuildSymbolToolsJson + ',' + BuildSourceToolsJson + ',' + BuildRunToolsJson +
-          ',{"type":"function","function":{"name":"run_git","description":' +
-          '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}},' +
-          '{"type":"function","function":{"name":"stage_patch","description":' +
-          '"' + JsonEscapeText(AssistantStagePatchDescription) + '"' + ',"parameters":' + AssistantStagePatchSchema + '}}';
-        End;
-    amInspect:
-      Body := BuildReadToolsJson + ',' + BuildNavigationToolsJson + ',' + BuildSymbolToolsJson +
-        ',{"type":"function","function":{"name":"run_git","description":' +
-        '"' + JsonEscapeText(AssistantGitDescription) + '"' + ',"parameters":' + AssistantGitSchema + '}}';
-  Else
-    Body := '';
-  End;
-  If Body = '' Then
-    Begin
-      Result := '';
+  Result := '';
+  Names := TStringList.Create;
+  Try
+    Case Mode Of
+      amDocument:
+        AddToolNames(Names, ['read_skill', 'grep', 'read_file', 'read_image', 'list_directory', 'open_markdown',
+          'get_project_info', 'search_in_project', 'open_file', 'write_markdown', 'update_markdown', 'write_file',
+          'replace_in_file']);
+      amPlan:
+        AddToolNames(Names, ['read_skill', 'grep', 'read_file', 'read_image', 'list_directory', 'open_markdown',
+          'get_project_info', 'todo_write', 'write_markdown', 'update_markdown', 'list_plans', 'get_active_plan',
+          'set_active_plan', 'read_markdown_section', 'write_file', 'replace_in_file']);
+      amBuild:
+        AddToolNames(Names, ['read_skill', 'grep', 'read_file', 'read_image', 'list_directory', 'open_markdown',
+          'get_project_info', 'todo_write', 'write_markdown', 'update_markdown', 'list_plans', 'get_active_plan',
+          'set_active_plan', 'read_markdown_section', 'search_in_project', 'open_file', 'find_declaration',
+          'symbol_context', 'find_references', 'write_file', 'replace_in_file', 'run_compile', 'add_unit_to_project',
+          'ensure_form_component', 'run_project', 'run_tests', 'run_command', 'delete_path', 'rename_path', 'run_git',
+          'stage_patch']);
+      amInspect:
+        AddToolNames(Names, ['read_skill', 'grep', 'read_file', 'read_image', 'list_directory', 'open_markdown',
+          'get_project_info', 'search_in_project', 'open_file', 'find_declaration', 'symbol_context', 'find_references',
+          'run_git']);
+    Else
       Exit;
     End;
-  { Subagent sessions pass OfferWriteImage false and do not receive write_image. }
-  If OfferWriteImage And AssistantTurnOffersImageOutput(Mode) Then
-    Body := Body + ',' + BuildWriteImageToolJson;
-  If AllowSubagents Then
-    Body := Body + ',' + BuildSpawnToolJson;
-  Result := '[' + Body + ']';
+    If OfferWriteImage And AssistantTurnOffersImageOutput(Mode) Then
+      Names.Add('write_image');
+    If AllowSubagents Then
+      Names.Add('spawn_subagent');
+    Result := RenderAssistantToolNames(Names, twkOpenAI, False, EmptyToolRenderNotes);
+  Finally
+    Names.Free;
+  End;
 End;
 
 Function AssistantParentToolsJson(Mode: TAssistantMode): String;

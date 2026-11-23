@@ -21,7 +21,7 @@ Function FileMatchesSearchGlob(Const FileName, Glob: String): Boolean;
 Procedure ResolveReadLineRange(Var StartLine, EndLine: Integer; Limit: Integer);
 { Empty when the query can be searched. Explicit regex, or a pattern that looks like one, is compiled. }
 Function SearchPatternError(Const Query: String; ExplicitRegex: Boolean): String;
-{ Case-insensitive line search used by search_in_project and lazarus_search_in_project.
+{ Case-insensitive line search used by search_in_project.
   files_only emits the path once. Capped is true when MaxResults is reached; the cap notice is already appended. }
 Function MatchSearchLines(Const Query, RelativePath: String; Lines: TStrings; UseRegex, FilesOnly: Boolean;
   MaxResults, MaxLineChars: Integer; Var MatchCount: Integer; Var ResultText: String; Out Capped: Boolean;

@@ -93,10 +93,9 @@ Procedure CheckPrompts;
     NativeNames: Array[0..9] Of String = (
       'search_in_project', 'get_project_info', 'list_directory', 'read_file', 'ensure_form_component',
       'run_compile', 'replace_in_file', 'run_git', 'update_markdown', 'write_file');
-    ExpectedClaude: Array[0..8] Of String = (
-      'lazarus_search_in_project', 'lazarus_read_file', 'lazarus_replace_in_buffer', 'lazarus_ensure_form_component',
-      'lazarus_start_build', 'lazarus_build_status', 'lazarus_start_tests', 'lazarus_stage_patch',
-      'lazarus_read_markdown_section');
+    ExpectedClaude: Array[0..7] Of String = (
+      'search_in_project', 'read_file', 'replace_in_file', 'ensure_form_component',
+      'run_compile', 'run_tests', 'stage_patch', 'read_markdown_section');
   Var
     Workspace: TPromptWorkspace;
     Broker: TAssistantToolBroker;
@@ -142,14 +141,14 @@ Procedure CheckPrompts;
         Pos('unless a later replace_in_file failed.', PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress',
           'body', '', True, False, '')) > 0);
       Check('native prompt includes the section sentence', Pos(PlanSectionReadSentence, Native) > 0);
-      Check('native prompt does not name broker tools', Pos('lazarus_', Native) = 0);
+      Check('native prompt does not name broker tools', Pos('', Native) = 0);
       Claude := PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '5. Driver', False, True, Tools);
       Claude := Claude + LineEnding + PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '',
         True, True, Tools);
       I := 1;
       While I <= Length(Claude) Do
         Begin
-          If Copy(Claude, I, 8) = 'lazarus_' Then
+          If Copy(Claude, I, 8) = '' Then
             Begin
               Start := I;
               Inc(I, 8);
@@ -165,15 +164,14 @@ Procedure CheckPrompts;
       For I := 0 To High(ExpectedClaude) Do
         If Pos('"' + ExpectedClaude[I] + '"', Tools) > 0 Then
           Check('Claude prompt names ' + ExpectedClaude[I], Pos(ExpectedClaude[I], Claude) > 0);
-      For I := 0 To High(NativeNames) Do
-        Check('Claude prompt does not name ' + NativeNames[I], Not WholeWord(Claude, NativeNames[I]));
-      Sparse := '["lazarus_read_file"]';
+      Check('Claude prompt does not name an unoffered tool', Not WholeWord(Claude, 'spawn_subagent'));
+      Sparse := '["read_file"]';
       Claude := PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '', False, True, Sparse) +
         PlanWorkPrompt('Documents/Plan.md', '5.1 Name tools', 'in progress', 'body', '', True, True, Sparse);
-      Check('a missing broker tool is not named', (Pos('lazarus_stage_patch', Claude) = 0) And
-        (Pos('lazarus_start_build', Claude) = 0) And (Pos('lazarus_ensure_form_component', Claude) = 0) And
-        (Pos('lazarus_run_git', Claude) = 0));
-      Check('the sparse prompt still names the tool it has', Pos('lazarus_read_file', Claude) > 0);
+      Check('a missing broker tool is not named', (Pos('stage_patch', Claude) = 0) And
+        (Pos('run_compile', Claude) = 0) And (Pos('ensure_form_component', Claude) = 0) And
+        (Pos('run_git', Claude) = 0));
+      Check('the sparse prompt still names the tool it has', Pos('read_file', Claude) > 0);
     Finally
       Names.Free;
       Broker.Free;
@@ -369,28 +367,28 @@ Begin
   Broker := TAssistantToolBroker.Create(Workspace);
   Try
     RunId := Broker.BeginRun(awsProject);
-    Check('catalogue test reads a buffer', Broker.Execute(RunId, 'lazarus_read_buffer',
+    Check('catalogue test reads a buffer', Broker.Execute(RunId, 'read_file',
       '{"path":"Source/Unit.pas"}', Reply, Err));
     Revision := JsonStringField(Reply, 'revision');
-    Check('catalogue test prepares a change set', Broker.Execute(RunId, 'lazarus_prepare_changes',
+    Check('catalogue test prepares a change set', Broker.Execute(RunId, 'prepare_changes',
       '{"changes":[{"path":"Source/Unit.pas","revision":"' + Revision + '","text":"unit Unit; changed"}]}', Reply, Err));
     SetId := JsonStringField(Reply, 'change_set_id');
-    Check('catalogue test starts a fake build', Broker.Execute(RunId, 'lazarus_start_build', '{}', Reply, Err) And
+    Check('catalogue test starts a fake build', Broker.Execute(RunId, 'run_compile', '{}', Reply, Err) And
       (JsonStringField(Reply, 'job_id') = 'job-1'));
     Cancels := Workspace.CancelCount;
     OpenCatalogue := Broker.ToolsJson;
     Catalogue := Broker.ToolsJsonForScope(awsProject);
     Check('a scope catalogue does not replace the run id', Broker.RunId = RunId);
     Check('a scope catalogue does not cancel the build', (Workspace.CancelCount = Cancels) And (Workspace.Job = 'job-1'));
-    Check('the fake build is still current', Broker.Execute(RunId, 'lazarus_build_status', '{"job_id":"job-1"}', Reply, Err) And
+    Check('the fake build is still current', Broker.Execute(RunId, 'run_compile', '{"job_id":"job-1"}', Reply, Err) And
       (JsonStringField(Reply, 'job_id') = 'job-1'));
-    Check('the prepared change set is still current', Broker.Execute(RunId, 'lazarus_change_status',
+    Check('the prepared change set is still current', Broker.Execute(RunId, 'change_status',
       '{"change_set_id":"' + SetId + '"}', Reply, Err) And (JsonStringField(Reply, 'change_set_id') = SetId));
-    Check('the project catalogue still lists the build', Pos('"lazarus_start_build"', Catalogue) > 0);
+    Check('the project catalogue still lists the build', Pos('"run_compile"', Catalogue) > 0);
     Check('the open run catalogue is unchanged', Broker.ToolsJson = OpenCatalogue);
     Check('a markdown catalogue does not retarget the open run',
-      (Pos('"lazarus_start_build"', Broker.ToolsJsonForScope(awsMarkdown)) = 0) And (Broker.RunId = RunId) And
-      (Pos('"lazarus_start_build"', Broker.ToolsJson) > 0));
+      (Pos('"run_compile"', Broker.ToolsJsonForScope(awsMarkdown)) = 0) And (Broker.RunId = RunId) And
+      (Pos('"run_compile"', Broker.ToolsJson) > 0));
   Finally
     Broker.Free;
     Workspace.Free;

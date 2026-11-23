@@ -18,7 +18,7 @@ Uses
 
 Const
   BufferText = 'unit Main; unsaved IDE contents';
-  ReadBody = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_buffer","arguments":{"path":"Main.pas"}}}';
+  ReadBody = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"Main.pas"}}}';
   WaitMs = 10000;
 
 Type
@@ -528,35 +528,35 @@ Begin
   Bridge.BeginRun(awsNone);
   Check('a Chat run lists no broker tools', Bridge.ToolsJSON = '[]');
   Bridge.BeginRun(awsReadOnly);
-  Check('a read run lists read_buffer', Pos('"lazarus_read_buffer"', Bridge.ToolsJSON) > 0);
-  Check('a read run lists no replace_buffer', Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) = 0);
-  Check('a read run lists no replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) = 0);
-  Check('a read run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
+  Check('a read run lists read_file', Pos('"read_file"', Bridge.ToolsJSON) > 0);
+  Check('a read run lists no write_file', Pos('"write_file"', Bridge.ToolsJSON) = 0);
+  Check('a read run lists no replace_in_file', Pos('"replace_in_file"', Bridge.ToolsJSON) = 0);
+  Check('a read run hides the form tool', Pos('ensure_form_component', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(awsMarkdown);
-  Check('a Markdown run lists replace_buffer for documents, not every file',
-    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) > 0));
-  Check('a Markdown run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
+  Check('a Markdown run lists write_file for documents, not every file',
+    (Pos('"write_file"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) > 0));
+  Check('a Markdown run lists replace_in_file', Pos('"replace_in_file"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(awsProject);
-  Check('a project run lists replace_buffer for any file',
-    (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) = 0));
-  Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
-  Check('a project run lists the form tool', Pos('"lazarus_ensure_form_component"', Bridge.ToolsJSON) > 0);
+  Check('a project run lists write_file for any file',
+    (Pos('"write_file"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) = 0));
+  Check('a project run lists replace_in_file', Pos('"replace_in_file"', Bridge.ToolsJSON) > 0);
+  Check('a project run lists the form tool', Pos('"ensure_form_component"', Bridge.ToolsJSON) > 0);
   Check('a project run lists delete, rename and add-unit',
-    (Pos('"lazarus_delete_path"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_rename_path"', Bridge.ToolsJSON) > 0) And
-    (Pos('"lazarus_add_unit_to_project"', Bridge.ToolsJSON) > 0));
+    (Pos('"delete_path"', Bridge.ToolsJSON) > 0) And (Pos('"rename_path"', Bridge.ToolsJSON) > 0) And
+    (Pos('"add_unit_to_project"', Bridge.ToolsJSON) > 0));
   Check('a project run lists plans and section read',
-    (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
-    (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0));
-  Check('a project run hides set_active_plan', Pos('lazarus_set_active_plan', Bridge.ToolsJSON) = 0);
+    (Pos('"list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"get_active_plan"', Bridge.ToolsJSON) > 0) And
+    (Pos('"read_markdown_section"', Bridge.ToolsJSON) > 0));
+  Check('a project run hides set_active_plan', Pos('set_active_plan', Bridge.ToolsJSON) = 0);
   Bridge.BeginRun(awsMarkdown);
-  Check('a Markdown run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
+  Check('a Markdown run hides the form tool', Pos('ensure_form_component', Bridge.ToolsJSON) = 0);
   Check('a Markdown run hides delete, rename and add-unit',
-    (Pos('lazarus_delete_path', Bridge.ToolsJSON) = 0) And (Pos('lazarus_rename_path', Bridge.ToolsJSON) = 0) And
-    (Pos('lazarus_add_unit_to_project', Bridge.ToolsJSON) = 0));
+    (Pos('delete_path', Bridge.ToolsJSON) = 0) And (Pos('rename_path', Bridge.ToolsJSON) = 0) And
+    (Pos('add_unit_to_project', Bridge.ToolsJSON) = 0));
   Check('a Markdown run lists plans, section read and set_active_plan',
-    (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
-    (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0) And
-    (Pos('"lazarus_set_active_plan"', Bridge.ToolsJSON) > 0));
+    (Pos('"list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"get_active_plan"', Bridge.ToolsJSON) > 0) And
+    (Pos('"read_markdown_section"', Bridge.ToolsJSON) > 0) And
+    (Pos('"set_active_plan"', Bridge.ToolsJSON) > 0));
   Bridge.BeginRun(awsProject);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
@@ -690,7 +690,7 @@ Var
   ResultText, ErrorText: String;
 Begin
   Check('read ' + Path,
-    Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"' + Path + '"}', ResultText, ErrorText));
+    Broker.Execute(Bridge.RunId, 'read_file', '{"path":"' + Path + '"}', ResultText, ErrorText));
   Result := JsonField(ResultText, 'revision');
   Check('read ' + Path + ' returned a revision', Result <> '');
 End;
@@ -712,7 +712,7 @@ Begin
   Revision := ReadRevision('Main.pas');
   Workspace.ApprovedOld := '';
   Workspace.ApprovedNew := '';
-  Check('a unique match is replaced', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('a unique match is replaced', Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, Secret, Edited, False, False), ResultText, ErrorText));
   NextRevision := JsonField(ResultText, 'revision');
   Check('the new revision is returned', (NextRevision <> '') And (NextRevision <> Revision));
@@ -722,17 +722,17 @@ Begin
   Check('the buffer holds the replacement', Workspace.StoredText = After);
   Check('the unique match was one editor edit', Workspace.ReplaceCount = 1);
   Summary := MCPApprovalSummary(Workspace.ApprovedPath, Workspace.ApprovedOld, Workspace.ApprovedNew);
-  Check('approval receives the old and new buffer text', (Workspace.ApprovedTool = 'lazarus_replace_in_buffer') And
+  Check('approval receives the old and new buffer text', (Workspace.ApprovedTool = 'replace_in_file') And
     (Workspace.ApprovedOld = Before) And (Workspace.ApprovedNew = After));
   Check('the approval summary names the changed lines', Pos('lines 2-2 of 3 replaced by 1', Summary) > 0);
-  Check('the returned revision accepts the next edit', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('the returned revision accepts the next edit', Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', NextRevision, Edited, 'EditedAgain', False, False), ResultText, ErrorText) And
     (Workspace.StoredText = 'keep' + LineEnding + 'EditedAgain' + LineEnding + 'tail'));
 
   Before := Workspace.StoredText;
   Calls := Workspace.ReplaceCount;
   Revision := ReadRevision('Main.pas');
-  Check('a missing match fails', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('a missing match fails', Not Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, 'missing-token', Edited, False, False), ResultText, ErrorText));
   Check('a missing match leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
 
@@ -741,10 +741,10 @@ Begin
   Revision := ReadRevision('Main.pas');
   Calls := Workspace.ReplaceCount;
   Before := Workspace.StoredText;
-  Check('two matches without replace_all fail', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('two matches without replace_all fail', Not Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, 'one', 'ONE', False, False), ResultText, ErrorText));
   Check('two matches leave the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
-  Check('replace_all replaces both', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('replace_all replaces both', Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, 'one', 'ONE', True, True), ResultText, ErrorText));
   Check('both matches were replaced', Workspace.StoredText = 'ONE' + LineEnding + 'two' + LineEnding + 'ONE');
   Check('replace_all was one editor edit', Workspace.ReplaceCount = Calls + 1);
@@ -756,7 +756,7 @@ Begin
   Workspace.StoredText := 'keep' + LineEnding + 'moved-once' + LineEnding + 'tail';
   Calls := Workspace.ReplaceCount;
   Before := Workspace.StoredText;
-  Check('a stale revision fails', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('a stale revision fails', Not Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, 'moved-once', 'changed', False, False), ResultText, ErrorText));
   Check('a stale revision leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
 
@@ -765,12 +765,12 @@ Begin
   Revision := ReadRevision('Main.pas');
   Calls := Workspace.ReplaceCount;
   Before := Workspace.StoredText;
-  Check('the Markdown scope refuses a pas path', Not Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('the Markdown scope refuses a pas path', Not Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, 'edit me', 'edited', False, False), ResultText, ErrorText) And
     (Pos('Markdown', ErrorText) > 0));
   Check('a refused pas path leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
   Revision := ReadRevision('Notes.md');
-  Check('the Markdown scope accepts a markdown path', Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('the Markdown scope accepts a markdown path', Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Notes.md', Revision, 'edit me', 'edited', False, False), ResultText, ErrorText));
   Check('the markdown buffer was edited', Workspace.StoredText = 'keep' + LineEnding + 'edited' + LineEnding);
   Check('the markdown reply contains no buffer text', (Pos('edited', ResultText) = 0) And (Pos('edit me', ResultText) = 0));
@@ -798,18 +798,18 @@ Begin
   Workspace.AllowChanges := True;
   Workspace.SaveCount := 0;
   Bridge.BeginRun(awsProject);
-  Check('read_buffer still returns text by default',
-    Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText) And
+  Check('read_file still returns text by default',
+    Broker.Execute(Bridge.RunId, 'read_file', '{"path":"Main.pas"}', ResultText, ErrorText) And
     (Pos(Secret, ResultText) > 0));
   Revision := JsonField(ResultText, 'revision');
   Saves := Workspace.SaveCount;
-  Check('replace_buffer applies', Broker.Execute(Bridge.RunId, 'lazarus_replace_buffer',
+  Check('write_file applies', Broker.Execute(Bridge.RunId, 'write_file',
     ObjectArguments('Main.pas', Revision, 'text', After, False, False, ''), ResultText, ErrorText));
-  Check('replace_buffer reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
+  Check('write_file reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
     (Pos(Before, ResultText) = 0) And (Pos(After, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
-  Check('replace_buffer names the changed lines', JsonField(ResultText, 'lines') = '2-2');
+  Check('write_file names the changed lines', JsonField(ResultText, 'lines') = '2-2');
   Revision := JsonField(ResultText, 'revision');
-  Check('save accepts the replace_buffer revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'lazarus_save_buffer',
+  Check('save accepts the write_file revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'save_file',
     ObjectArguments('Main.pas', Revision, '', '', False, False, ''), ResultText, ErrorText) And (Workspace.SaveCount = Saves + 1));
 
   Workspace.StoredText := Before;
@@ -826,7 +826,7 @@ Begin
   Change.Add('text', After);
   PrepareArgs := Root.AsJSON;
   Root.Free;
-  Check('prepare the change set', Broker.Execute(Bridge.RunId, 'lazarus_prepare_changes', PrepareArgs, ResultText, ErrorText));
+  Check('prepare the change set', Broker.Execute(Bridge.RunId, 'prepare_changes', PrepareArgs, ResultText, ErrorText));
   Apply := TJSONObject.Create;
   Try
     Apply.Add('change_set_id', JsonPath(ResultText, 'change_set_id'));
@@ -835,17 +835,17 @@ Begin
     Apply.Free;
   End;
   Saves := Workspace.SaveCount;
-  Check('apply_changes applies', Broker.Execute(Bridge.RunId, 'lazarus_apply_changes', ApplyArgs, ResultText, ErrorText));
+  Check('apply_changes applies', Broker.Execute(Bridge.RunId, 'apply_changes', ApplyArgs, ResultText, ErrorText));
   Check('apply_changes reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos(Edited, ResultText) = 0) And
     (Pos(Before, ResultText) = 0) And (Pos(After, ResultText) = 0));
   Check('apply_changes names the changed lines', JsonPath(ResultText, 'files[0].lines') = '2-2');
   Revision := JsonPath(ResultText, 'files[0].revision');
-  Check('save accepts the apply_changes revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'lazarus_save_buffer',
+  Check('save accepts the apply_changes revision', (Revision <> '') And Broker.Execute(Bridge.RunId, 'save_file',
     ObjectArguments('Main.pas', Revision, '', '', False, False, ''), ResultText, ErrorText) And (Workspace.SaveCount = Saves + 1));
 
   Workspace.StoredText := Before;
   Bridge.BeginRun(awsProject);
-  Check('open_buffer can omit the text', Broker.Execute(Bridge.RunId, 'lazarus_open_buffer',
+  Check('open_buffer can omit the text', Broker.Execute(Bridge.RunId, 'open_buffer',
     ObjectArguments('Main.pas', '', '', '', True, False, 'include_text'), ResultText, ErrorText));
   Check('open_buffer reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
   Revision := JsonField(ResultText, 'revision');
@@ -857,8 +857,8 @@ Begin
   Finally
     Data.Free;
   End;
-  Check('replace_in_buffer accepts the open_buffer revision', (Revision <> '') And
-    Broker.Execute(Bridge.RunId, 'lazarus_replace_in_buffer',
+  Check('replace_in_file accepts the open_buffer revision', (Revision <> '') And
+    Broker.Execute(Bridge.RunId, 'replace_in_file',
     ReplaceArguments('Main.pas', Revision, Secret, Edited, False, False), ResultText, ErrorText) And
     (Workspace.StoredText = After));
 
@@ -880,13 +880,13 @@ Begin
   Workspace.DiskText := 'alpha' + LineEnding + Disk + LineEnding + 'omega';
   Workspace.StoredText := Unsaved + '-one' + LineEnding + Unsaved + '-two' + LineEnding + Unsaved + '-three';
   Bridge.BeginRun(awsReadOnly);
-  Check('a read run lists search_in_project', Pos('"lazarus_search_in_project"', Bridge.ToolsJSON) > 0);
+  Check('a read run lists search_in_project', Pos('"search_in_project"', Bridge.ToolsJSON) > 0);
   Obj := TJSONObject.Create;
   Try
     Obj.Add('query', Unsaved);
     Obj.Add('path', 'Main.pas');
     Obj.Add('max_results', 1);
-    Check('an unsaved buffer match is found', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project', Obj.AsJSON,
+    Check('an unsaved buffer match is found', Broker.Execute(Bridge.RunId, 'search_in_project', Obj.AsJSON,
       ResultText, ErrorText) And (Pos(Unsaved + '-one', ResultText) > 0) And (Pos(Disk, ResultText) = 0));
     Check('max_results caps the output', (Pos(Unsaved + '-two', ResultText) = 0) And (Pos('capped at 1', ResultText) > 0));
     Obj.Free;
@@ -896,7 +896,7 @@ Begin
     Obj.Add('path', 'Main.pas');
     Obj.Add('max_results', 5);
     Obj.Add('files_only', True);
-    Check('files_only returns the path without the line', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project',
+    Check('files_only returns the path without the line', Broker.Execute(Bridge.RunId, 'search_in_project',
       Obj.AsJSON, ResultText, ErrorText) And (Pos('Main.pas', ResultText) > 0) And (Pos(Unsaved, ResultText) = 0));
     Obj.Free;
     Obj := Nil;
@@ -904,14 +904,14 @@ Begin
     Obj.Add('query', Disk);
     Obj.Add('path', 'Other.pas');
     Obj.Add('max_results', 5);
-    Check('a different path searches the disk stand-in', Broker.Execute(Bridge.RunId, 'lazarus_search_in_project',
+    Check('a different path searches the disk stand-in', Broker.Execute(Bridge.RunId, 'search_in_project',
       Obj.AsJSON, ResultText, ErrorText) And (Pos(Disk, ResultText) > 0) And (Pos(Unsaved, ResultText) = 0));
     Obj.Free;
     Obj := Nil;
     Obj := TJSONObject.Create;
     Obj.Add('query', Unsaved);
     Obj.Add('path', 'Main.pas');
-    Check('max_results is required', Not Broker.Execute(Bridge.RunId, 'lazarus_search_in_project', Obj.AsJSON,
+    Check('max_results is required', Not Broker.Execute(Bridge.RunId, 'search_in_project', Obj.AsJSON,
       ResultText, ErrorText) And (Pos('max_results', ErrorText) > 0));
   Finally
     Obj.Free;
@@ -928,7 +928,7 @@ Var
   Images: TMCPToolImages;
 Begin
   Check('a call on the main thread runs at once',
-    Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
+    Bridge.Execute('read_file', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
     (Pos(BufferText, ResultText) > 0) And (Length(Images) = 0));
 End;
 
@@ -957,7 +957,7 @@ Begin
     Check('the released call leaves the pending list', Bridge.PendingCount = 0);
     CheckSynchronize(0);
     Check('the queued call is skipped when the main thread reaches it', Workspace.Reads = Reads);
-    Check('Cancel ends the broker run', Not Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText));
+    Check('Cancel ends the broker run', Not Broker.Execute(Bridge.RunId, 'read_file', '{"path":"Main.pas"}', ResultText, ErrorText));
   Finally
     Client.Free;
   End;
@@ -972,7 +972,7 @@ Begin
     Client.Free;
   End;
   Check('a main-thread call after Cancel is refused',
-    Not Bridge.Execute('lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
+    Not Bridge.Execute('read_file', '{"path":"Main.pas"}', ResultText, ErrorText, Images) And
     (ErrorText = MCPRunCancelledText));
 End;
 
@@ -1144,24 +1144,24 @@ Begin
   Workspace.AddUnitCalls := 0;
   Bridge.BeginRun(awsProject);
   Deletes := Workspace.DeleteCalls;
-  Check('delete outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_delete_path',
+  Check('delete outside the target is refused', Not Broker.Execute(Bridge.RunId, 'delete_path',
     '{"path":"' + Outside + '"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
     (Workspace.DeleteCalls = Deletes) And FileExists(Outside));
-  Check('delete inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_delete_path',
+  Check('delete inside the target works', Broker.Execute(Bridge.RunId, 'delete_path',
     '{"path":"inside.txt"}', ResultText, ErrorText) And (Workspace.DeleteCalls = Deletes + 1) And
     (Not FileExists(Root + 'inside.txt')));
   Renames := Workspace.RenameCalls;
-  Check('rename outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_rename_path',
+  Check('rename outside the target is refused', Not Broker.Execute(Bridge.RunId, 'rename_path',
     '{"path":"' + Outside + '","new_path":"stolen.txt"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
     (Workspace.RenameCalls = Renames) And FileExists(Outside));
-  Check('rename inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_rename_path',
+  Check('rename inside the target works', Broker.Execute(Bridge.RunId, 'rename_path',
     '{"path":"move-me.txt","new_path":"moved.txt"}', ResultText, ErrorText) And (Workspace.RenameCalls = Renames + 1) And
     (Not FileExists(Root + 'move-me.txt')) And FileExists(Root + 'moved.txt'));
   Adds := Workspace.AddUnitCalls;
-  Check('add-unit outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_add_unit_to_project',
+  Check('add-unit outside the target is refused', Not Broker.Execute(Bridge.RunId, 'add_unit_to_project',
     '{"path":"' + Outside + '"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
     (Workspace.AddUnitCalls = Adds));
-  Check('add-unit inside the target works', Broker.Execute(Bridge.RunId, 'lazarus_add_unit_to_project',
+  Check('add-unit inside the target works', Broker.Execute(Bridge.RunId, 'add_unit_to_project',
     '{"path":"UnitOne.pas","add_to_uses":true}', ResultText, ErrorText) And (Workspace.AddUnitCalls = Adds + 1) And
     (Pos('UnitOne.pas', Workspace.AddedUnit) > 0) And Workspace.AddedUses);
   DeleteFile(Outside);
@@ -1219,15 +1219,15 @@ Var
 Begin
   Workspace.AllowInspect := True;
   Bridge.BeginRun(awsNone);
-  Check('a Chat run does not list read_image', Pos('lazarus_read_image', Bridge.ToolsJSON) = 0);
-  Check('a Chat run refuses read_image', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
+  Check('a Chat run does not list read_image', Pos('read_image', Bridge.ToolsJSON) = 0);
+  Check('a Chat run refuses read_image', Not Broker.Execute(Bridge.RunId, 'read_image', '{"path":"dot.png"}',
     ResultText, ErrorText, Images) And (Length(Images) = 0));
   Bridge.BeginRun(awsReadOnly);
-  Check('a read run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+  Check('a read run lists read_image', Pos('"read_image"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(awsMarkdown);
-  Check('a Markdown run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+  Check('a Markdown run lists read_image', Pos('"read_image"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(awsProject);
-  Check('a project run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
+  Check('a project run lists read_image', Pos('"read_image"', Bridge.ToolsJSON) > 0);
 
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-image-' + IntToStr(GetProcessID);
   ForceDirectories(Root);
@@ -1239,7 +1239,7 @@ Begin
   WritePng(Root + 'wide.png', 3000, 4);
   Bridge.BeginRun(awsReadOnly);
 
-  Check('read_image returns one picture', Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
+  Check('read_image returns one picture', Broker.Execute(Bridge.RunId, 'read_image', '{"path":"dot.png"}',
     ResultText, ErrorText, Images) And (Length(Images) = 1));
   Check('the picture is a PNG upload copy', (Images[0].MimeType = 'image/png') And (Images[0].Data <> ''));
   MeasureReturned(Images[0], Width, Height);
@@ -1249,18 +1249,18 @@ Begin
   Check('the run keeps the picture for the trace', (Json <> '') And (Pos('dot.png', Json) > 0));
   Check('a result naming no stored picture shows none', Broker.ReadImagesJson('Unit Main;') = '');
 
-  Check('a path outside the project is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+  Check('a path outside the project is refused', Not Broker.Execute(Bridge.RunId, 'read_image',
     '{"path":"' + StringToJSONString(Outside) + '"}', ResultText, ErrorText, Images) And (ErrorText <> '') And
     (Length(Images) = 0));
-  Check('a parent path is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+  Check('a parent path is refused', Not Broker.Execute(Bridge.RunId, 'read_image',
     '{"path":"../' + ExtractFileName(Outside) + '"}', ResultText, ErrorText, Images) And (Length(Images) = 0));
-  Check('an empty path is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":""}',
+  Check('an empty path is refused', Not Broker.Execute(Bridge.RunId, 'read_image', '{"path":""}',
     ResultText, ErrorText, Images) And (Length(Images) = 0));
-  Check('a missing file is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"none.png"}',
+  Check('a missing file is refused', Not Broker.Execute(Bridge.RunId, 'read_image', '{"path":"none.png"}',
     ResultText, ErrorText, Images) And (Length(Images) = 0));
   {$IFDEF UNIX}
   Check('make a link that leaves the project', FpSymlink(PChar(Outside), PChar(Root + 'link.png')) = 0);
-  Check('a symbolic link that leaves the project is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+  Check('a symbolic link that leaves the project is refused', Not Broker.Execute(Bridge.RunId, 'read_image',
     '{"path":"link.png"}', ResultText, ErrorText, Images) And (Length(Images) = 0) And
     ((Pos('symbolic link', LowerCase(ErrorText)) > 0) Or (Pos('outside the active project', LowerCase(ErrorText)) > 0)));
   {$ENDIF}
@@ -1271,17 +1271,17 @@ Begin
   Finally
     Stream.Free;
   End;
-  Check('a file over 8 MiB is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"huge.png"}',
+  Check('a file over 8 MiB is refused', Not Broker.Execute(Bridge.RunId, 'read_image', '{"path":"huge.png"}',
     ResultText, ErrorText, Images) And (ErrorText <> '') And (Length(Images) = 0));
 
-  Check('a picture wider than the upload ceiling is read', Broker.Execute(Bridge.RunId, 'lazarus_read_image',
+  Check('a picture wider than the upload ceiling is read', Broker.Execute(Bridge.RunId, 'read_image',
     '{"path":"wide.png"}', ResultText, ErrorText, Images) And (Length(Images) = 1));
   MeasureReturned(Images[0], Width, Height);
   Check('the returned copy is at most 2048 pixels a side', (Width > 0) And (Width <= AssistantImageUploadMaxSide) And
     (Height <= AssistantImageUploadMaxSide));
   Check('the returned copy is at most 4 MiB', Length(DecodeStringBase64(Images[0].Data)) <= AssistantImageUploadMaxBytes);
 
-  Check('the bridge hands the picture back', Bridge.Execute('lazarus_read_image', '{"path":"dot.png"}', ResultText,
+  Check('the bridge hands the picture back', Bridge.Execute('read_image', '{"path":"dot.png"}', ResultText,
     ErrorText, Images) And (Length(Images) = 1) And (Images[0].MimeType = 'image/png'));
   Bridge.BeginRun(awsReadOnly);
   Check('a new run forgets the last run''s pictures', Broker.ReadImagesJson(ResultText) = '');
@@ -1322,7 +1322,7 @@ Begin
   Try
     Args.Add('path', 'Documents/Plan.md');
     Args.Add('heading', '### 1.1');
-    Check('a ### heading returns one item', Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section', Args.AsJSON,
+    Check('a ### heading returns one item', Broker.Execute(Bridge.RunId, 'read_markdown_section', Args.AsJSON,
       ResultText, ErrorText));
     Section := ResultText;
   Finally
@@ -1335,7 +1335,7 @@ Begin
   Try
     Args.Add('path', 'Documents/Plan.md');
     Args.Add('heading', '### 9.9');
-    Check('a missing heading is an error', Not Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section', Args.AsJSON,
+    Check('a missing heading is an error', Not Broker.Execute(Bridge.RunId, 'read_markdown_section', Args.AsJSON,
       ResultText, ErrorText) And (Pos('not found', ErrorText) > 0));
   Finally
     Args.Free;
@@ -1344,7 +1344,7 @@ Begin
   Try
     Args.Add('path', 'Documents/Plan.md');
     Args.Add('heading', '## 1. First package');
-    Check('a ## heading returns the whole package', Broker.Execute(Bridge.RunId, 'lazarus_read_markdown_section',
+    Check('a ## heading returns the whole package', Broker.Execute(Bridge.RunId, 'read_markdown_section',
       Args.AsJSON, ResultText, ErrorText));
     Section := ResultText;
   Finally
@@ -1354,7 +1354,7 @@ Begin
     (Pos('alpha only', Section) > 0) And (Pos('beta only', Section) > 0) And (Pos('package intro', Section) > 0));
   Check('the package stops before the next ## heading', (Pos('## 2. Second package', Section) = 0) And
     (Pos('second only', Section) = 0));
-  Check('Build refuses set_active_plan', Not Broker.Execute(Bridge.RunId, 'lazarus_set_active_plan',
+  Check('Build refuses set_active_plan', Not Broker.Execute(Bridge.RunId, 'set_active_plan',
     '{"path":"Documents/Plan.md"}', ResultText, ErrorText) And (Pos('Plan mode', ErrorText) > 0));
   DeleteFile(PlanPath);
   RemoveDir(Root + 'Documents');
@@ -1414,7 +1414,7 @@ Begin
   Workspace.LastCommand := '';
   Workspace.LastOptions := '';
   Bridge.BeginRun(awsProject);
-  Check('valid names are passed as only pairs', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('valid names are passed as only pairs', Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['GoodTest', 'OtherTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
   Command := Workspace.LastCommand;
   Check('only pairs follow the configured arguments', (ArgumentCount(Command) = 9) And
@@ -1426,37 +1426,37 @@ Begin
     DirectoryExists(ArgumentAt(Command, 8)));
   Check('the project Temporary folder ignores its own contents',
     FileExists(IncludeTrailingPathDelimiter(Root) + 'Temporary' + PathDelim + '.gitignore'));
-  Check('a name with a space is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a name with a space is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['Good Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
-  Check('a name with a slash is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a name with a slash is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['Good/Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
-  Check('a name with a quote is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a name with a quote is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['Good"Test']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
-  Check('a name with no lpr file is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a name with no lpr file is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['MissingTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
-  Check('without only the command is unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('without only the command is unchanged', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
   Launches := Workspace.LaunchCount;
-  Check('defines are passed as --define', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('defines are passed as --define', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","defines":["DEBUG"]}', ResultText, ErrorText) And (Workspace.LaunchCount = Launches + 1));
   Command := Workspace.LastCommand;
   Check('define arguments follow the configured arguments', (ArgumentCount(Command) = 7) And
     (ArgumentAt(Command, 3) = '--define') And (ArgumentAt(Command, 4) = 'DEBUG') And (ArgumentAt(Command, 5) = '--output-dir') And
     (Pos(IncludeTrailingPathDelimiter(Root) + 'Temporary' + PathDelim, ArgumentAt(Command, 6)) = 1));
   DefineDir := ArgumentAt(Command, 6);
-  Check('heaptrc is passed with only', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('heaptrc is passed with only', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And
     (Workspace.LaunchCount = Launches + 2));
   Command := Workspace.LastCommand;
   Check('heaptrc follows the only pair', (ArgumentCount(Command) = 8) And (ArgumentAt(Command, 3) = '--only') And
     (ArgumentAt(Command, 4) = 'GoodTest') And (ArgumentAt(Command, 5) = '--heaptrc') And (ArgumentAt(Command, 6) = '--output-dir'));
   HeapDir := ArgumentAt(Command, 7);
-  Check('valgrind with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('valgrind with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"valgrind"}', ResultText, ErrorText));
   ValDir := OutputDirectory(Workspace.LastCommand);
   Check('memory-check modes do not share an output directory', (HeapDir <> ValDir) And (Pos('-heaptrc-', HeapDir) > 0) And
     (Pos('-valgrind-', ValDir) > 0) And DirectoryExists(HeapDir) And DirectoryExists(ValDir));
-  Check('gui with only is passed as --gui', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('gui with only is passed as --gui', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"gui":true}', ResultText, ErrorText) And
     (Workspace.LaunchCount = Launches + 4));
   Command := Workspace.LastCommand;
@@ -1464,70 +1464,70 @@ Begin
     (ArgumentAt(Command, 4) = 'GoodTest') And (ArgumentAt(Command, 5) = '--gui') And (ArgumentAt(Command, 6) = '--output-dir'));
   GuiOnlyDir := ArgumentAt(Command, 7);
   Check('a gui run uses its own output directory', (Pos('-gui-', GuiOnlyDir) > 0) And DirectoryExists(GuiOnlyDir));
-  Check('gui alone is passed', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('gui alone is passed', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","gui":true}', ResultText, ErrorText) And (ArgumentCount(Workspace.LastCommand) = 6) And
     (ArgumentAt(Workspace.LastCommand, 3) = '--gui'));
   GuiDir := OutputDirectory(Workspace.LastCommand);
-  Check('gui false leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('gui false leaves the command unchanged', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","gui":false}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
   Launches := Workspace.LaunchCount;
-  Check('gui with a memory check is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('gui with a memory check is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc","gui":true}', ResultText, ErrorText) And
     (Pos('gui cannot be used with memory_check heaptrc', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
-  Check('a non-boolean gui is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a non-boolean gui is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","gui":"yes"}', ResultText, ErrorText) And
     (Pos('gui must be true or false', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
-  Check('a define with only is passed', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a define with only is passed', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"defines":["DEBUG"]}', ResultText, ErrorText));
   DebugDir := OutputDirectory(Workspace.LastCommand);
-  Check('another define with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('another define with the same only uses another output directory', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"defines":["TRACE"]}', ResultText, ErrorText));
   TraceDir := OutputDirectory(Workspace.LastCommand);
   Check('define sets do not share an output directory', (DebugDir <> TraceDir) And (Pos('-dDEBUG-', DebugDir) > 0) And
     (Pos('-dTRACE-', TraceDir) > 0));
-  Check('the same options stay current', Broker.Execute(Bridge.RunId, 'lazarus_test_status', '{"job_id":"test-job"}',
+  Check('the same options stay current', Broker.Execute(Bridge.RunId, 'test_status', '{"job_id":"test-job"}',
     ResultText, ErrorText) And JsonBoolean(ResultText, 'stale', Stale) And Not Stale);
   Saved := Workspace.BaseCommand;
   Workspace.BaseCommand := WithExtraArgument(Saved, '--marker');
-  Check('reapplying options after a command change is stale', Broker.Execute(Bridge.RunId, 'lazarus_test_status',
+  Check('reapplying options after a command change is stale', Broker.Execute(Bridge.RunId, 'test_status',
     '{"job_id":"test-job"}', ResultText, ErrorText) And JsonBoolean(ResultText, 'stale', Stale) And Stale);
   Workspace.BaseCommand := Saved;
   Launches := Workspace.LaunchCount;
-  Check('valgrind without only is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('valgrind without only is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","memory_check":"valgrind"}', ResultText, ErrorText) And
     (Pos('needs at least one only name', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
-  Check('a bad define name is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('a bad define name is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","defines":["bad-name"]}', ResultText, ErrorText) And
     (Pos('Define name must match', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
-  Check('more than 8 defines are refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('more than 8 defines are refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","defines":["A","B","C","D","E","F","G","H","I"]}', ResultText, ErrorText) And
     (Pos('at most 8', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
-  Check('an unknown memory check is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('an unknown memory check is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","memory_check":"asan"}', ResultText, ErrorText) And
     (Pos('memory_check must be', ErrorText) > 0) And (Workspace.LaunchCount = Launches));
   Workspace.BaseCommand := CommandWithScript(Root, 'echo');
-  Check('only on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('only on another command is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     OnlyRequest(['GoodTest']), ResultText, ErrorText) And
     (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
     (Workspace.LaunchCount = Launches));
-  Check('defines on another command are refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('defines on another command are refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","defines":["DEBUG"]}', ResultText, ErrorText) And
     (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
     (Workspace.LaunchCount = Launches));
-  Check('heaptrc on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('heaptrc on another command is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":["GoodTest"],"memory_check":"heaptrc"}', ResultText, ErrorText) And
     (Pos('applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
     (Workspace.LaunchCount = Launches));
-  Check('gui on another command is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('gui on another command is refused', Not Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","gui":true}', ResultText, ErrorText) And
     (Pos('gui applies only when the configured command is Tests/RunAssistantTests.pas', ErrorText) > 0) And
     (Workspace.LaunchCount = Launches));
   Workspace.BaseCommand := Saved;
-  Check('memory_check none leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('memory_check none leaves the command unchanged', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","memory_check":"none"}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
-  Check('empty defines leave the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('empty defines leave the command unchanged', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","defines":[]}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
-  Check('an empty only list leaves the command unchanged', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
+  Check('an empty only list leaves the command unchanged', Broker.Execute(Bridge.RunId, 'start_tests',
     '{"build_job_id":"job-1","only":[]}', ResultText, ErrorText) And (Workspace.LastCommand = Workspace.BaseCommand));
   RemoveDir(DefineDir);
   RemoveDir(HeapDir);
@@ -1574,7 +1574,7 @@ Begin
     Args.Add('event_method', 'ColorTimerTimer');
     Args.Add('uses_unit', 'ExtCtrls');
     Bridge.BeginRun(awsProject);
-    Check('the broker adds the component to both buffers', Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
+    Check('the broker adds the component to both buffers', Broker.Execute(Bridge.RunId, 'ensure_form_component',
       Args.AsJSON, ResultText, ErrorText) And (Workspace.FormCalls = 1));
   Finally
     Props.Free;
@@ -1587,7 +1587,7 @@ Begin
   BeforeLfm := Workspace.LfmText;
   Calls := Workspace.FormCalls;
   Bridge.BeginRun(awsMarkdown);
-  Check('a Markdown scope refuses the form tool', Not Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
+  Check('a Markdown scope refuses the form tool', Not Broker.Execute(Bridge.RunId, 'ensure_form_component',
     '{"path":"Main.pas","name":"OtherTimer","class_name":"TTimer"}', ResultText, ErrorText) And
     (Pos('Build mode', ErrorText) > 0) And (Workspace.FormCalls = Calls));
   Check('a refused form edit leaves both buffers unchanged', (Workspace.PasText = BeforePas) And (Workspace.LfmText = BeforeLfm));
@@ -1613,32 +1613,32 @@ Var
   Images: TMCPToolImages;
 Begin
   Bridge.BeginRun(awsReadOnly);
-  Check('a read run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
+  Check('a read run hides todo_write', Pos('todo_write', Bridge.ToolsJSON) = 0);
   Check('a read run refuses todo_write',
-    Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    Not Bridge.Execute('todo_write', Two, ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires Plan or Build mode.'));
   Bridge.BeginRun(awsMarkdown, amDocument);
-  Check('a Document run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
+  Check('a Document run hides todo_write', Pos('todo_write', Bridge.ToolsJSON) = 0);
   Check('a Document run refuses todo_write',
-    Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    Not Bridge.Execute('todo_write', Two, ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires Plan or Build mode.'));
   Bridge.BeginRun(awsMarkdown, amPlan);
-  Check('a Plan run lists todo_write', Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0);
+  Check('a Plan run lists todo_write', Pos('"todo_write"', Bridge.ToolsJSON) > 0);
   Bridge.BeginRun(awsProject);
   Check('a project run lists todo_write with its statuses',
-    (Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0) And
+    (Pos('"todo_write"', Bridge.ToolsJSON) > 0) And
     (Pos('"enum":["pending","in_progress","completed","cancelled"]', Bridge.ToolsJSON) > 0));
   Check('todo_write returns the whole list',
-    Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
+    Bridge.Execute('todo_write', Two, ResultText, ErrorText, Images) And
     (Pos('- [>] read: Read the unit (in_progress)', ResultText) > 0) And
     (Pos('- [ ] fix: Fix the call (pending)', ResultText) > 0));
   Check('a merge updates one item by id and keeps the other',
-    Bridge.Execute('lazarus_todo_write', '{"merge":true,"todos":[{"id":"read","status":"completed"}]}',
+    Bridge.Execute('todo_write', '{"merge":true,"todos":[{"id":"read","status":"completed"}]}',
     ResultText, ErrorText, Images) And
     (Pos('- [x] read: Read the unit (completed)', ResultText) > 0) And
     (Pos('- [ ] fix: Fix the call (pending)', ResultText) > 0));
   Check('todo_write without todos is refused',
-    Not Bridge.Execute('lazarus_todo_write', '{}', ResultText, ErrorText, Images) And
+    Not Bridge.Execute('todo_write', '{}', ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires a todos array.'));
   Check('the list is the one Grok''s todo_write keeps', WorkflowAssistantHarness.TodoCount = 2);
   Bridge.BeginRun(awsProject);
@@ -1658,37 +1658,37 @@ Begin
   Workspace.AllowCommands := True;
   Try
     Bridge.BeginRun(awsReadOnly);
-    Check('a read run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
+    Check('a read run hides run_command', Pos('run_command', Bridge.ToolsJSON) = 0);
     Check('a read run refuses run_command',
-      Not Bridge.Execute('lazarus_run_command', Echo, ResultText, ErrorText, Images) And
+      Not Bridge.Execute('run_command', Echo, ResultText, ErrorText, Images) And
       (ErrorText = 'Running a command requires Build mode.'));
     Bridge.BeginRun(awsMarkdown);
-    Check('a Markdown run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
+    Check('a Markdown run hides run_command', Pos('run_command', Bridge.ToolsJSON) = 0);
     Bridge.BeginRun(awsProject);
     Check('a project run lists run_command and command_status',
-      (Pos('"lazarus_run_command"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_command_status"', Bridge.ToolsJSON) > 0));
+      (Pos('"run_command"', Bridge.ToolsJSON) > 0) And (Pos('"command_status"', Bridge.ToolsJSON) > 0));
     Check('run_command states the broker''s timeout ceiling',
       Pos('"maximum":' + IntToStr(BrokerCommandMaxSeconds), Bridge.ToolsJSON) > 0);
     Check('run_project and the open tools stay hidden when the workspace has none',
-      (Pos('lazarus_run_project', Bridge.ToolsJSON) = 0) And (Pos('lazarus_open_file', Bridge.ToolsJSON) = 0));
+      (Pos('run_project', Bridge.ToolsJSON) = 0) And (Pos('open_file', Bridge.ToolsJSON) = 0));
 
     Broker.OnApproval := @Workspace.ApproveReplace;
     Workspace.DoneAfterPolls := 3;
     Check('a main-thread run_command returns the started job',
-      Bridge.Execute('lazarus_run_command', Echo, ResultText, ErrorText, Images) And
+      Bridge.Execute('run_command', Echo, ResultText, ErrorText, Images) And
       (Pos('"job_id":"job-1"', ResultText) > 0));
     Check('the approval names the checked command and its ceiling',
-      (Workspace.ApprovedTool = 'lazarus_run_command') And (Workspace.ApprovedPath = '') And
+      (Workspace.ApprovedTool = 'run_command') And (Workspace.ApprovedPath = '') And
       (Pos('"checked":', Workspace.ApprovedNew) > 0) And
       (Pos('"max":' + IntToStr(BrokerCommandMaxSeconds), Workspace.ApprovedNew) > 0));
     Check('a refused check starts nothing',
-      Not Bridge.Execute('lazarus_run_command', '{"program":"refuse"}', ResultText, ErrorText, Images) And
+      Not Bridge.Execute('run_command', '{"program":"refuse"}', ResultText, ErrorText, Images) And
       (ErrorText = 'Refused by the check.') And (Workspace.CommandStarts = 1));
     Check('command_status needs a job_id',
-      Not Bridge.Execute('lazarus_command_status', '{}', ResultText, ErrorText, Images) And
+      Not Bridge.Execute('command_status', '{}', ResultText, ErrorText, Images) And
       (ErrorText = 'job_id must be a nonempty string.'));
 
-    Call := TBridgeCallThread.Create('lazarus_run_command', Echo);
+    Call := TBridgeCallThread.Create('run_command', Echo);
     Try
       Check('a listener-thread run_command returns when the program ends', WaitForCall(Call) And Call.Succeeded);
       Check('it returns the final status with the output',
@@ -1702,7 +1702,7 @@ Begin
     End;
 
     Workspace.DoneAfterPolls := 0;
-    Call := TBridgeCallThread.Create('lazarus_run_command', Echo);
+    Call := TBridgeCallThread.Create('run_command', Echo);
     Try
       Started := GetTickCount64;
       While (Workspace.StatusPolls < 2) And (GetTickCount64 - Started < WaitMs) Do

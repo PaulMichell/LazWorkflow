@@ -157,7 +157,8 @@ Type
 Implementation
 
 Uses
-  jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools, AssistantHarness;
+  jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools, AssistantHarness, AssistantToolSpecs,
+  AssistantToolWire;
 
 Const
   MaxBufferBytes = 1048576;
@@ -680,7 +681,7 @@ Begin
   FChangeRun := FRunId;
   FChangeIdentity := FIdentity;
   Try
-    If Tool = 'lazarus_prepare_changes' Then
+    If Tool = 'prepare_changes' Then
       Begin
         FreeAndNil(FPrepared);
         Changes := Args.Find('changes');
@@ -776,7 +777,7 @@ Begin
         Exit(True);
       End;
     ID := Args.Get('change_set_id', '');
-    If (Tool = 'lazarus_change_status') And (ID = '') Then
+    If (Tool = 'change_status') And (ID = '') Then
       Begin
         List := TJSONArray.Create;
         Try
@@ -797,7 +798,7 @@ Begin
         ErrorText := 'Unknown or expired change set for this project.';
         Exit;
       End;
-    If Tool = 'lazarus_change_status' Then
+    If Tool = 'change_status' Then
       Begin
         ResultText := SetItem.Receipt;
         Exit(True);
@@ -807,7 +808,7 @@ Begin
         ErrorText := 'Applying or reverting a change set requires Build mode.';
         Exit;
       End;
-    If Tool = 'lazarus_apply_changes' Then
+    If Tool = 'apply_changes' Then
       Begin
         If SetItem <> FPrepared Then
           Begin
@@ -833,7 +834,7 @@ Begin
             Exit;
           End;
     SetItem.ReviewText(BeforeText, AfterText);
-    If Tool = 'lazarus_revert_changes' Then
+    If Tool = 'revert_changes' Then
       Begin
         Text := BeforeText;
         BeforeText := AfterText;
@@ -841,15 +842,15 @@ Begin
       End;
     If Not Approve(FChangeRun, Tool, '', BeforeText, AfterText, ErrorText) Then
       Begin
-        If Tool = 'lazarus_apply_changes' Then SetItem.State := 'rejected';
+        If Tool = 'apply_changes' Then SetItem.State := 'rejected';
         SetItem.Error := ErrorText;
         ResultText := SetItem.Receipt;
         ErrorText := ResultText;
         Exit;
       End;
-    If Tool = 'lazarus_apply_changes' Then Result := SetItem.Apply(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent)
+    If Tool = 'apply_changes' Then Result := SetItem.Apply(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent)
     Else Result := SetItem.Revert(@FAdapter.ReadChangeBuffer, @FAdapter.ReplaceBuffer, @ChangeCurrent);
-    If Result And (Tool = 'lazarus_apply_changes') Then
+    If Result And (Tool = 'apply_changes') Then
       ResultText := AppliedChangeReply(SetItem)
     Else
       Begin
@@ -897,7 +898,7 @@ Begin
       ErrorText := 'Local rename is unavailable.';
       Exit;
     End;
-  If Tool = 'lazarus_apply_local_rename' Then
+  If Tool = 'apply_local_rename' Then
     Begin
       If FWriteScope <> awsProject Then
         Begin
@@ -1186,7 +1187,7 @@ Begin
   { Match before approval or mutation. A failed match leaves the editor alone. }
   If Not ApplyExactReplace(Text, OldText, NewText, ReplaceAll, Updated, ErrorText) Then
     Exit;
-  If Not Approve(RunId, 'lazarus_replace_in_buffer', Path, Text, Updated, ErrorText) Then
+  If Not Approve(RunId, 'replace_in_file', Path, Text, Updated, ErrorText) Then
     Exit;
   Span := ChangedLineSpan(Text, Updated);
   If Not CommitBuffer(Path, Text, Updated, ResultText, ErrorText) Then
@@ -1334,7 +1335,7 @@ Begin
   ResultText := '';
   ErrorText := '';
   Images := Nil;
-  Semantic := (Tool = 'lazarus_find_declaration') Or (Tool = 'lazarus_find_references') Or (Tool = 'lazarus_symbol_context');
+  Semantic := (Tool = 'find_declaration') Or (Tool = 'find_references') Or (Tool = 'symbol_context');
   If GetCurrentThreadID <> FOwner Then
     Begin
       ErrorText := 'IDE tool dispatched on the wrong thread.';
@@ -1370,18 +1371,18 @@ Begin
           Exit;
         End;
       Args := TJSONObject(Data);
-      If (Tool = 'lazarus_prepare_changes') Or (Tool = 'lazarus_apply_changes') Or
-        (Tool = 'lazarus_change_status') Or (Tool = 'lazarus_revert_changes') Then
+      If (Tool = 'prepare_changes') Or (Tool = 'apply_changes') Or
+        (Tool = 'change_status') Or (Tool = 'revert_changes') Then
           Begin
             Result := ExecuteChanges(Tool, Args, ResultText, ErrorText);
             Exit;
           End;
-      If (Tool = 'lazarus_preview_local_rename') Or (Tool = 'lazarus_apply_local_rename') Then
+      If (Tool = 'preview_local_rename') Or (Tool = 'apply_local_rename') Then
         Begin
           Result := ExecuteRename(RunId, Tool, Args, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_create_file' Then
+      If (Tool = 'write_file') And (Args.Get('revision', '') = '') Then
         Begin
           If (FWriteScope = awsReadOnly) Or Not FAdapter.CanCreateFiles Then
             Begin
@@ -1405,7 +1406,9 @@ Begin
               ErrorText := 'Plan and Document mode can only create Markdown and document files.';
               Exit;
             End;
-          Node := Args.Find('text');
+          Node := Args.Find('content');
+          If Not Assigned(Node) Then
+            Node := Args.Find('text');
           If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
             Begin
               ErrorText := 'File text is required.';
@@ -1427,7 +1430,7 @@ Begin
           Result := FAdapter.CreateFile(Path, NewText, ResultText, ErrorText);
           Exit;
         End;
-      If (Tool = 'lazarus_write_markdown') Or (Tool = 'lazarus_update_markdown') Then
+      If (Tool = 'write_markdown') Or (Tool = 'update_markdown') Then
         Begin
           If (FWriteScope = awsReadOnly) Or Not FAdapter.CanWriteMarkdown Then
             Begin
@@ -1445,7 +1448,7 @@ Begin
                 Exit;
               End;
           { The adapter resolves an omitted path to the active plan or current document and refuses anything but .md. }
-          If Tool = 'lazarus_write_markdown' Then
+          If Tool = 'write_markdown' Then
             Begin
               Text := '';
               NewText := Args.Get('content', '');
@@ -1456,23 +1459,23 @@ Begin
               NewText := Args.Get('new_text', '');
             End;
           If Not Approve(RunId, Tool, Path, Text, NewText, ErrorText) Then Exit;
-          Result := FAdapter.WriteMarkdown(FMode, Copy(Tool, Length('lazarus_') + 1, MaxInt), Arguments, ResultText, ErrorText);
+          Result := FAdapter.WriteMarkdown(FMode, Tool, Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If (Tool = 'lazarus_start_build') Or (Tool = 'lazarus_build_status') Or (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
+      If (Tool = 'run_compile') Or (Tool = 'run_tests') Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanBuild Then
             Begin
               ErrorText := 'Build tools are unavailable in this mode.';
               Exit;
             End;
-          If (Tool = 'lazarus_start_tests') Or (Tool = 'lazarus_test_status') Then
+          If Tool = 'run_tests' Then
             If Not FAdapter.CanTest Then
               Begin
                 ErrorText := 'Configured tests are unavailable.';
                 Exit;
               End;
-          If Tool = 'lazarus_start_tests' Then
+          If (Tool = 'run_tests') And (Assigned(Args.Find('build_job_id')) Or Not Assigned(Args.Find('job_id'))) Then
             Begin
               Node := Args.Find('build_job_id');
               If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
@@ -1532,7 +1535,7 @@ Begin
               Result := FAdapter.StartTests(ActualPath, Text, NewText, ResultText, ErrorText);
               Exit;
             End;
-          If Tool = 'lazarus_start_build' Then
+          If (Tool = 'run_compile') And Not Assigned(Args.Find('job_id')) And Not Assigned(Args.Find('detail')) Then
             Begin
               ActualPath := '';
               Node := Args.Find('package');
@@ -1556,7 +1559,7 @@ Begin
                       ErrorText := 'job_id must be a nonempty string.';
                       Exit;
                     End;
-                  If Tool = 'lazarus_test_status' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
+                  If Tool = 'run_tests' Then Result := FAdapter.TestStatus(ResultText, ErrorText)
                   Else
                     Begin
                       Detail := '';
@@ -1590,15 +1593,15 @@ Begin
                 End;
           Exit;
         End;
-      If (Tool = 'lazarus_list_plans') Or (Tool = 'lazarus_get_active_plan') Or
-        (Tool = 'lazarus_set_active_plan') Or (Tool = 'lazarus_read_markdown_section') Then
+      If (Tool = 'list_plans') Or (Tool = 'get_active_plan') Or
+        (Tool = 'set_active_plan') Or (Tool = 'read_markdown_section') Then
         Begin
           If (FWriteScope <> awsMarkdown) And (FWriteScope <> awsProject) Then
             Begin
               ErrorText := 'Plan registry tools require Plan or Build mode.';
               Exit;
             End;
-          If Tool = 'lazarus_set_active_plan' Then
+          If Tool = 'set_active_plan' Then
             Begin
               If FWriteScope <> awsMarkdown Then
                 Begin
@@ -1614,7 +1617,7 @@ Begin
               If Not Approve(RunId, Tool, Node.AsString, '', Node.AsString, ErrorText) Then Exit;
               Result := ToolSetActivePlan(Arguments, ResultText, ErrorText);
             End
-          Else If Tool = 'lazarus_read_markdown_section' Then
+          Else If Tool = 'read_markdown_section' Then
             Begin
               Node := Args.Find('heading');
               If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
@@ -1630,13 +1633,13 @@ Begin
                 End;
               Result := ToolReadMarkdownSection(Arguments, ResultText, ErrorText);
             End
-          Else If Tool = 'lazarus_list_plans' Then
+          Else If Tool = 'list_plans' Then
             Result := ToolListPlans(ResultText, ErrorText)
           Else
             Result := ToolGetActivePlan(ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_todo_write' Then
+      If Tool = 'todo_write' Then
         Begin
           If Not TodoWriteOffered(FWriteScope) Then
             Begin
@@ -1646,7 +1649,7 @@ Begin
           Result := ToolTodoWrite(Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If (Tool = 'lazarus_delete_path') Or (Tool = 'lazarus_rename_path') Or (Tool = 'lazarus_add_unit_to_project') Then
+      If (Tool = 'delete_path') Or (Tool = 'rename_path') Or (Tool = 'add_unit_to_project') Then
         Begin
           If FWriteScope <> awsProject Then
             Begin
@@ -1660,7 +1663,7 @@ Begin
               Exit;
             End;
           Path := Node.AsString;
-          If Tool = 'lazarus_add_unit_to_project' Then
+          If Tool = 'add_unit_to_project' Then
             Begin
               AddUses := False;
               Node := Args.Find('add_to_uses');
@@ -1677,7 +1680,7 @@ Begin
               If Not AssistantCheckedAddUnitPath(Path, ActualPath, ErrorText) Then Exit;
               Result := FAdapter.AddUnitToProject(Arguments, ActualPath, AddUses, ResultText, ErrorText);
             End
-          Else If Tool = 'lazarus_rename_path' Then
+          Else If Tool = 'rename_path' Then
             Begin
               Node := Args.Find('new_path');
               If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
@@ -1702,7 +1705,7 @@ Begin
             End;
           Exit;
         End;
-      If Tool = 'lazarus_ensure_form_component' Then
+      If Tool = 'ensure_form_component' Then
         Begin
           If FWriteScope <> awsProject Then
             Begin
@@ -1752,7 +1755,7 @@ Begin
           Result := FAdapter.EnsureFormComponent(Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_stage_patch' Then
+      If Tool = 'stage_patch' Then
         Begin
           If FWriteScope <> awsProject Then
             Begin
@@ -1780,7 +1783,7 @@ Begin
           Result := FAdapter.StagePatch(Text, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_run_git' Then
+      If Tool = 'run_git' Then
         Begin
           If Not FAdapter.CanGit Or (FWriteScope = awsNone) Or (FWriteScope = awsMarkdown) Then
             Begin
@@ -1796,14 +1799,14 @@ Begin
           Result := FAdapter.RunGit(FMode, Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If (Tool = 'lazarus_run_command') Or (Tool = 'lazarus_command_status') Then
+      If (Tool = 'run_command') Or (Tool = 'command_status') Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanRunCommands Then
             Begin
               ErrorText := 'Running a command requires Build mode.';
               Exit;
             End;
-          If Tool = 'lazarus_command_status' Then
+          If Tool = 'command_status' Then
             Begin
               Node := Args.Find('job_id');
               If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Node.AsString = '') Then
@@ -1820,7 +1823,7 @@ Begin
           Result := FAdapter.StartRunCommand(Arguments, Text, BrokerCommandMaxSeconds, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_run_project' Then
+      If Tool = 'run_project' Then
         Begin
           If (FWriteScope <> awsProject) Or Not FAdapter.CanRunProject Then
             Begin
@@ -1831,7 +1834,7 @@ Begin
           Result := FAdapter.RunProject(ResultText, ErrorText);
           Exit;
         End;
-      If (Tool = 'lazarus_open_file') Or (Tool = 'lazarus_open_markdown') Then
+      If (Tool = 'open_file') Or (Tool = 'open_markdown') Then
         Begin
           If Not FAdapter.CanOpenEditors Then
             Begin
@@ -1844,18 +1847,18 @@ Begin
               ErrorText := 'A project-relative path is required.';
               Exit;
             End;
-          If Tool = 'lazarus_open_file' Then
+          If Tool = 'open_file' Then
             Result := FAdapter.OpenFile(Arguments, ResultText, ErrorText)
           Else
             Result := FAdapter.OpenMarkdown(Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_project_info' Then
+      If Tool = 'get_project_info' Then
         Begin
           ResultText := FAdapter.Describe;
           Exit(True);
         End;
-      If Tool = 'lazarus_search_in_project' Then
+      If Tool = 'search_in_project' Then
         Begin
           If Not FAdapter.CanInspectFiles Then
             Begin
@@ -1887,7 +1890,7 @@ Begin
           Result := FAdapter.SearchInProject(Arguments, ResultText, ErrorText);
           Exit;
         End;
-      If Tool = 'lazarus_read_image' Then
+      If Tool = 'read_image' Then
         Begin
           If Not FAdapter.CanInspectFiles Then
             Begin
@@ -1897,8 +1900,9 @@ Begin
           Result := ReadImage(Arguments, ResultText, ErrorText, Images);
           Exit;
         End;
-      If (Tool = 'lazarus_read_file') Or (Tool = 'lazarus_list_directory') Or
-        (Tool = 'lazarus_open_buffer') Then
+      If ((Tool = 'read_file') And (Assigned(Args.Find('start_line')) Or Assigned(Args.Find('end_line')) Or
+        Assigned(Args.Find('limit')) Or Assigned(Args.Find('offset')) Or Assigned(Args.Find('max_chars')))) Or
+        (Tool = 'list_directory') Or (Tool = 'open_buffer') Then
           Begin
             If Not FAdapter.CanInspectFiles Then
               Begin
@@ -1906,27 +1910,34 @@ Begin
                 Exit;
               End;
             Node := Args.Find('path');
-            If Not Assigned(Node) Or (Node.JSONType <> jtString) Or
-              ((Tool <> 'lazarus_list_directory') And (Trim(Node.AsString) = '')) Then
-                Begin
-                  ErrorText := 'A project path is required.';
-                  Exit;
-                End;
-            If Tool = 'lazarus_read_file' Then
+            If Tool = 'list_directory' Then
+              Begin
+                If Assigned(Node) And (Node.JSONType <> jtString) Then
+                  Begin
+                    ErrorText := 'path must be a string.';
+                    Exit;
+                  End;
+              End
+            Else If Not Assigned(Node) Or (Node.JSONType <> jtString) Or (Trim(Node.AsString) = '') Then
+              Begin
+                ErrorText := 'A project path is required.';
+                Exit;
+              End;
+            If Tool = 'read_file' Then
               Begin
                 Result := FAdapter.ReadFile(Arguments, ResultText, ErrorText);
                 Exit;
               End;
-            If Tool = 'lazarus_list_directory' Then
+            If Tool = 'list_directory' Then
               Begin
                 Result := FAdapter.ListDirectory(Arguments, ResultText, ErrorText);
                 Exit;
               End;
             If Not FAdapter.OpenBuffer(Node.AsString, ErrorText) Then Exit;
           End;
-      If (Tool <> 'lazarus_read_buffer') And (Tool <> 'lazarus_replace_buffer') And
-        (Tool <> 'lazarus_replace_in_buffer') And (Tool <> 'lazarus_save_buffer') And
-        (Tool <> 'lazarus_open_buffer') And (Not Semantic) Then
+      If (Tool <> 'read_file') And (Tool <> 'write_file') And
+        (Tool <> 'replace_in_file') And (Tool <> 'save_file') And
+        (Tool <> 'open_buffer') And (Not Semantic) Then
           Begin
             ErrorText := 'Tool is not registered with the IDE broker.';
             Exit;
@@ -1943,7 +1954,7 @@ Begin
           ErrorText := 'Buffer exceeds the supported size.';
           Exit;
         End;
-      If (Tool = 'lazarus_read_buffer') Or (Tool = 'lazarus_open_buffer') Then
+      If (Tool = 'read_file') Or (Tool = 'open_buffer') Then
         Begin
           Node := Args.Find('include_text');
           If Assigned(Node) And (Node.JSONType <> jtBoolean) Then
@@ -1979,15 +1990,15 @@ Begin
           ErrorText := 'Stale buffer revision; read the buffer again before using this request.';
           Exit;
         End;
-      If Tool = 'lazarus_replace_in_buffer' Then
+      If Tool = 'replace_in_file' Then
         Begin
           Result := ReplaceInBuffer(RunId, Path, Text, Args, ResultText, ErrorText);
           Exit;
         End;
       If Semantic Then
         Begin
-          If ((Tool = 'lazarus_find_declaration') And Not FAdapter.CanFindDeclaration) Or
-            ((Tool <> 'lazarus_find_declaration') And Not FAdapter.CanInspectSymbols) Then
+          If ((Tool = 'find_declaration') And Not FAdapter.CanFindDeclaration) Or
+            ((Tool <> 'find_declaration') And Not FAdapter.CanInspectSymbols) Then
               Begin
                 ErrorText := 'CodeTools symbol lookup is unavailable.';
                 Exit;
@@ -2007,11 +2018,11 @@ Begin
                 Exit;
               End;
           ResultField := 'declaration';
-          If Tool = 'lazarus_find_declaration' Then
+          If Tool = 'find_declaration' Then
             Begin
               If Not FAdapter.FindDeclaration(Path, Line, Column, ResultText, ErrorText) Then Exit;
             End
-              Else If Tool = 'lazarus_symbol_context' Then
+              Else If Tool = 'symbol_context' Then
                 Begin
                   ResultField := 'symbol';
                   If Not FAdapter.SymbolContext(Path, Line, Column, ResultText, ErrorText) Then Exit;
@@ -2068,20 +2079,22 @@ Begin
           Exit(True);
         End;
       If FAdapter.IsMarkdownPath(Path) And
-        ((Tool = 'lazarus_save_buffer') Or (Tool = 'lazarus_replace_buffer')) Then
+        ((Tool = 'save_file') Or (Tool = 'write_file')) Then
         Begin
           ErrorText :=
             'A plan or document is written with write_markdown or update_markdown, not by editing it in the source editor.';
           Exit;
         End;
-      If Tool = 'lazarus_save_buffer' Then
+      If Tool = 'save_file' Then
         Begin
           If Not Approve(RunId, Tool, Path, Text, '', ErrorText) Then Exit;
           Result := FAdapter.SaveBuffer(Path, Text, ErrorText);
           If Result Then ResultText := '{"saved":true,"revision":' + Quoted(Revision) + '}';
           Exit;
         End;
-      Node := Args.Find('text');
+      Node := Args.Find('content');
+      If Not Assigned(Node) Then
+        Node := Args.Find('text');
       If Not Assigned(Node) Or (Node.JSONType <> jtString) Then
         Begin
           ErrorText := 'Replacement text is required.';
@@ -2109,197 +2122,55 @@ Begin
 End;
 
 Function TAssistantToolBroker.ToolsJsonForScope(Scope: TAssistantWriteScope): String;
-Const
-  ReadSchema = '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}';
-  BufferSchema = '{"type":"object","properties":{"path":{"type":"string"},"include_text":{"type":"boolean"}},"required":["path"],"additionalProperties":false}';
-  SearchSchema = '{"type":"object","properties":{"query":{"type":"string"},"pattern":{"type":"string"},"path":{"type":"string"},' +
-    '"glob":{"type":"string"},"regex":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":200},' +
-    '"files_only":{"type":"boolean"}},"required":["query","max_results"],"additionalProperties":false}';
-  FileSchema = '{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},"max_chars":{"type":"integer","minimum":1,"maximum":48000}},"required":["path"],"additionalProperties":false}';
-  ChangeSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}';
-  ReplaceSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"old_text":{"type":"string"},' +
-    '"new_text":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["path","revision","old_text","new_text"],"additionalProperties":false}';
-  SaveSchema = '{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"}},"required":["path","revision"],"additionalProperties":false}';
 Var
-  WriteNote, SaveNote, SaveTool, ReadSource: String;
+  Offer: TAssistantBrokerOffer;
+  Notes: TAssistantToolRenderNotes;
+  Names: TStringList;
 Begin
   If Scope = awsNone Then
     Begin
       Result := '[]';
       Exit;
     End;
-  WriteNote := '';
+  Offer.Scope := Scope;
+  Offer.Mode := FMode;
+  Offer.InspectFiles := FAdapter.CanInspectFiles;
+  Offer.Declaration := FAdapter.CanFindDeclaration;
+  Offer.Symbols := FAdapter.CanInspectSymbols;
+  Offer.ChangeSets := FAdapter.CanChangeSets;
+  Offer.Rename := FAdapter.CanPreviewRename;
+  Offer.Markdown := FAdapter.CanWriteMarkdown;
+  Offer.Build := FAdapter.CanBuild;
+  Offer.Test := FAdapter.CanTest;
+  Offer.Git := FAdapter.CanGit;
+  Offer.Commands := FAdapter.CanRunCommands;
+  Offer.RunProject := FAdapter.CanRunProject;
+  Offer.OpenEditors := FAdapter.CanOpenEditors;
+  Notes := EmptyToolRenderNotes;
+  Notes.CommandMaxSeconds := BrokerCommandMaxSeconds;
   If Scope = awsMarkdown Then
-    WriteNote := ' Only Markdown and other document files are writable. Source stays in Build.';
+    Notes.WriteNote := ' Only Markdown and other document files are writable. Source stays in Build.';
   If FAdapter.SavesEdits Then
     Begin
-      SaveNote := 'Saves to disk as it edits: an open editor keeps Undo and is not brought forward, and a file that is ' +
+      Notes.SaveNote := 'Saves to disk as it edits: an open editor keeps Undo and is not brought forward, and a file that is ' +
         'not open is written without opening it.';
-      SaveTool := 'Edits are already saved. Confirms that the exact revision is on disk, saving an open editor if needed.';
-      ReadSource := 'Read a project file''s current text and get a revision token: the open editor''s text, ' +
+      Notes.SaveTool := 'Edits are already saved. Confirms that the exact revision is on disk, saving an open editor if needed.';
+      Notes.ReadSource := 'Read a project file''s current text and get a revision token: the open editor''s text, ' +
         'including unsaved changes, or the file on disk when it is not open. Never opens an editor tab. ';
     End
   Else
     Begin
-      SaveNote := 'Does not save.';
-      SaveTool := 'Explicitly save the exact previously read or edited revision.';
-      ReadSource := 'Read current IDE text, including unsaved changes, and get a revision token. ';
+      Notes.SaveNote := 'Does not save.';
+      Notes.SaveTool := 'Explicitly save the exact previously read or edited revision.';
+      Notes.ReadSource := 'Read current IDE text, including unsaved changes, and get a revision token. ';
     End;
-  Result := '[{"type":"function","name":"lazarus_project_info","description":"Describe the selected Lazarus project or package and relevant open buffer.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_read_buffer","description":"' + ReadSource +
-    'Returns the text unless include_text is false, which returns only the path, revision and line_count.","inputSchema":' + BufferSchema + '}';
-  If FAdapter.CanInspectFiles Then Result := Result +
-    ',{"type":"function","name":"lazarus_list_directory","description":"List a project directory, capped at 400 entries. Use path dot for the project root.","inputSchema":' + ReadSchema + '},' +
-    '{"type":"function","name":"lazarus_read_file","description":"Read project text, preferring unsaved IDE buffers over disk. Returns the requested text. ' +
-    'Supports line ranges and capped output. Does not open or save files; does not issue edit revisions.","inputSchema":' + FileSchema + '},' +
-    '{"type":"function","name":"lazarus_read_image","description":"Look at a project still image (PNG, JPEG, GIF, BMP and ' +
-    'similar) and show it to the user in the conversation. Returns the picture and one line: name, width x height, id. ' +
-    'Refuses a path outside the project, a symbolic link that leaves it, and a file over 8 MiB or the pixel limits. ' +
-    'The returned copy is at most 2048 pixels a side and 4 MiB. Use it rather than Read when the user should see ' +
-    'which picture was looked at.","inputSchema":' + ReadSchema + '},' +
-    '{"type":"function","name":"lazarus_search_in_project","description":"Search project text with the same rules as search_in_project. ' +
-    'Unsaved editor buffers are preferred over disk. Returns path:line:text unless files_only is true, which returns paths only. ' +
-    'Does not return file text beyond the matching line. max_results is required, from 1 to 200.","inputSchema":' + SearchSchema + '},' +
-    '{"type":"function","name":"lazarus_open_buffer","description":"Get an edit revision for an existing project text file: ' +
-    'the open editor''s text when it is open, otherwise the file on disk. Does not open an editor tab. ' +
-    'Returns the text and an edit revision unless include_text is false, which returns only the path, revision and line_count. Does not create or save files.","inputSchema":' +
-    BufferSchema + '}';
-  If FAdapter.CanFindDeclaration Then Result := Result +
-    ',{"type":"function","name":"lazarus_find_declaration","description":"Resolve a Pascal identifier using Lazarus CodeTools and the selected target configuration. First read/open the source buffer and supply its revision. Coordinates are 1-based lines and UTF-8 byte columns, including tabs as one byte. Returns a declaration location without moving the editor, changing files or issuing an edit revision for the target.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}}';
-  If FAdapter.CanInspectSymbols Then Result := Result +
-    ',{"type":"function","name":"lazarus_symbol_context","description":"Get a CodeTools hint and bounded source/declaration context for a Pascal symbol, using the current buffer revision. Read-only; positions are 1-based UTF-8 byte columns. External declarations expose location only.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1}},"required":["path","revision","line","column"],"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_find_references","description":"Find semantic Pascal references to the symbol at this revision and location. Supply an explicit search_paths list of 1-32 project source files. Prefers unsaved IDE buffers. Returns searched files, failures and truncation; never assume whole-project coverage. Comments, strings, inactive branches and unrelated same-name symbols are excluded. Read-only; columns are 1-based UTF-8 bytes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"search_paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":32},"max_results":{"type":"integer","minimum":1,"maximum":200,"default":100}},"required":["path","revision","line","column","search_paths"],"additionalProperties":false}}';
-  If FAdapter.CanChangeSets Then
-    Begin
-      Result := Result + ',{"type":"function","name":"lazarus_prepare_changes","description":"Prepare one reviewed change set for 1-16 project text files, open in the editor or not. Read each buffer first and supply its revision and complete proposed text. Does not edit or save; returns a one-use change_set_id. Replaces the previous pending set. No project/designer metadata edits or inferred rename coverage.","inputSchema":{"type":"object","properties":{"changes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"text":{"type":"string"}},"required":["path","revision","text"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}},' +
-        '{"type":"function","name":"lazarus_change_status","description":"Get an in-memory change-set receipt with per-file apply/recovery outcomes. Without an ID, lists receipts for this project. Receipts survive new chats/runs until the assistant panel closes; they are not durable.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"additionalProperties":false}}';
-      If Scope = awsProject Then Result := Result +
-        ',{"type":"function","name":"lazarus_apply_changes","description":"Review and apply an exact prepared multi-editor change set in Build. ' +
-        'Validates every source and editor stamp before each write. On failure restores only confirmed unchanged assistant edits and returns per-file outcomes. ' +
-        'On success returns each file''s new revision and changed line range, not the buffer text. ' + SaveNote + ' Does not build.",' +
-        '"inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}},' +
-        '{"type":"function","name":"lazarus_revert_changes","description":"Review and restore confirmed edits from a retained change-set receipt in Build. Skips changed, closed or unverified editors; returns partial outcomes instead of overwriting user edits. ' + SaveNote + ' Native Undo remains per editor.","inputSchema":{"type":"object","properties":{"change_set_id":{"type":"string"}},"required":["change_set_id"],"additionalProperties":false}}';
-    End;
-  If FAdapter.CanPreviewRename Then
-    Begin
-      Result := Result + ',{"type":"function","name":"lazarus_preview_local_rename","description":"Preview a routine-local variable or constant rename using CodeTools. Requires a current buffer revision; coordinates are 1-based UTF-8 bytes. Returns exact changes and a one-use preview_id without editing. Supports one editor only; rejects parameters, globals, fields, includes/macros/assembly, conditionals inside the routine and names in active code. Ignores comments, strings and unrelated inactive branches. Preview is valid only in this run; no partial renames.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"string"},"line":{"type":"integer","minimum":1},"column":{"type":"integer","minimum":1},"new_name":{"type":"string"}},"required":["path","revision","line","column","new_name"],"additionalProperties":false}}';
-      If Scope = awsProject Then Result := Result + ',{"type":"function","name":"lazarus_apply_local_rename","description":"Apply the exact previously reviewed local rename preview in Build mode. Revalidates source and CodeTools results after approval. ' +
-        'Consumes preview_id, preserves editor Undo and returns the new revision and changed line range, not the buffer text. ' +
-        SaveNote + ' Does not compile; never supply replacement text.","inputSchema":{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"],"additionalProperties":false}}';
-    End;
-  If Scope <> awsReadOnly Then Result := Result +
-    ',{"type":"function","name":"lazarus_replace_buffer","description":"Replace a previously read buffer at its exact revision, preserving Undo. ' +
-    SaveNote + ' Returns the new revision and changed line range, not the buffer text.' + WriteNote + '","inputSchema":' + ChangeSchema + '},' +
-    '{"type":"function","name":"lazarus_replace_in_buffer","description":"Replace exact old_text in a previously read buffer ' +
-    'at its revision, preserving Undo. ' + SaveNote + ' Changes nothing when old_text is missing, or when it matches more ' +
-    'than once unless replace_all is true. Returns the new revision and changed line range, not the buffer text.' +
-    WriteNote + '","inputSchema":' + ReplaceSchema + '},' +
-    '{"type":"function","name":"lazarus_save_buffer","description":"' + SaveTool + WriteNote + '","inputSchema":' + SaveSchema + '}';
-  If (Scope <> awsReadOnly) And FAdapter.CanCreateFiles Then Result := Result +
-    ',{"type":"function","name":"lazarus_create_file","description":"Create a new project text file (for example Documents/BugReport.md) and missing parent directories. Never overwrites an existing file or editor buffer. Writes to disk without opening a tab, adding a project member or compiling. To edit existing files, use buffer revision tools.' + WriteNote + '","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"],"additionalProperties":false}}';
-  If (Scope <> awsReadOnly) And FAdapter.CanWriteMarkdown Then Result := Result +
-    ',{"type":"function","name":"lazarus_write_markdown","description":"Create or overwrite a project Markdown plan or document ' +
-    '(prefer Documents/) and open its live window. This is the only way to write an existing .md file. Omit path for the ' +
-    'active plan in Plan and Build mode, or the current document in Document mode. In a plan a Status: line belongs under a ' +
-    '### item, never a ## heading. In a Git repository, Status: complete is refused until run_git commit has succeeded in ' +
-    'this turn; commit the plan file after that change. Without a repository, complete needs no commit.","inputSchema":' +
-    '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"open":{"type":"boolean"}},' +
-    '"required":["content"],"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_update_markdown","description":"Exact text replacement in a project Markdown plan ' +
-    'or document. Prefer it over a rewrite for a Status: line or one section. Omit path for the active plan in Plan and ' +
-    'Build mode, or the current document in Document mode. The same Status and commit rules as write_markdown apply.",' +
-    '"inputSchema":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},' +
-    '"new_text":{"type":"string"},"replace_all":{"type":"boolean"},"open":{"type":"boolean"}},' +
-    '"required":["old_text","new_text"],"additionalProperties":false}}';
-  If (Scope = awsProject) And FAdapter.CanBuild Then Result := Result +
-    ',{"type":"function","name":"lazarus_start_build","description":"Start an asynchronous build of the selected project, package, or folder target using its saved inputs. ' +
-    'A folder builds each .lpk under it, in the same order as run_compile. Optional package is one project-relative .lpk inside that folder. ' +
-    'Refuses relevant dirty buffers. Does not save anything.","inputSchema":{"type":"object","properties":{"package":{"type":"string"}},"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_build_status","description":"Poll the job_id returned by start_build. The default result is a summary: job id, done, exit code, outcome, stale and staleReason, capped diagnostic items, and manifest and dependency counts. Pass detail manifest for the observed-input list. Check done, outcome, stale and truncation. Compile success is not test or full-dependency validation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"},"detail":{"type":"string"}},"additionalProperties":false}}';
-  If (Scope = awsProject) And FAdapter.CanTest Then Result := Result +
-    ',{"type":"function","name":"lazarus_start_tests","description":"Run the exact user-configured target test command after a successful current build. ' +
-    'Optional only is a list of test program names, and applies only when the command is Tests/RunAssistantTests.pas. ' +
-    'Each name must match an existing Tests/<name>.lpr and is passed as --only. ' +
-    'Optional memory_check (none, heaptrc or valgrind) and defines (a list of conditional names passed as --define) also apply only to ' +
-    'Tests/RunAssistantTests.pas. A memory check other than none needs only; valgrind runs far slower than heaptrc. ' +
-    'Optional gui true passes --gui so the GUI test programs build and run too; a GUI-only test named in only needs it. ' +
-    'gui cannot be combined with a memory check, and it uses the IDE''s display. ' +
-    'Output goes to a directory chosen here under Temporary/ at the project root. ' +
-    'Applies tool approval, checks saved inputs and fingerprints the executable. Returns a test job_id; poll test_status. Does not save or rebuild.",' +
-    '"inputSchema":{"type":"object","properties":{"build_job_id":{"type":"string"},"only":{"type":"array","items":{"type":"string"}},' +
-    '"memory_check":{"type":"string","enum":["none","heaptrc","valgrind"]},"defines":{"type":"array","items":{"type":"string"}},' +
-    '"gui":{"type":"boolean"}},' +
-    '"required":["build_job_id"],"additionalProperties":false}},' +
-    '{"type":"function","name":"lazarus_test_status","description":"Poll the configured test job for output, exit status, stale evidence and its parent build ID. test_command_passed means the configured process exited zero with observed inputs unchanged; it does not prove all tests were discovered. Inspect output and truncation.","inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],"additionalProperties":false}}';
-  If ((Scope = awsProject) Or (Scope = awsReadOnly)) And FAdapter.CanGit Then Result := Result +
-    ',{"type":"function","name":"lazarus_run_git","description":' + Quoted(AssistantGitDescription) +
-    ',"inputSchema":' + AssistantGitSchema + '}';
-  If (Scope = awsProject) And FAdapter.CanGit Then Result := Result +
-    ',{"type":"function","name":"lazarus_stage_patch","description":' + Quoted(AssistantStagePatchDescription) +
-    ',"inputSchema":' + AssistantStagePatchSchema + '}';
-  If (Scope = awsMarkdown) Or (Scope = awsProject) Then Result := Result +
-    ',{"type":"function","name":"lazarus_list_plans","description":' +
-    Quoted('List plans registered in the project .assistant settings. Missing files are dropped. The project folders are not scanned.') +
-    ',"inputSchema":' + ListPlansSchema + '}' +
-    ',{"type":"function","name":"lazarus_get_active_plan","description":' +
-    Quoted('Return the canonical active plan path for this project.') +
-    ',"inputSchema":' + ListPlansSchema + '}' +
-    ',{"type":"function","name":"lazarus_read_markdown_section","description":' + Quoted(ReadSectionDescription) +
-    ',"inputSchema":' + ReadSectionSchema + '}';
-  If Scope = awsMarkdown Then Result := Result +
-    ',{"type":"function","name":"lazarus_set_active_plan","description":' +
-    Quoted('Set the canonical active plan Markdown path for this project. Plan mode only.') +
-    ',"inputSchema":' + SetActivePlanSchema + '}';
-  If TodoWriteOffered(Scope) Then Result := Result +
-    ',{"type":"function","name":"lazarus_todo_write","description":' + Quoted(
-    'Replace or update this turn''s short checklist. The whole list is returned and shown on the tool''s row in the ' +
-    'conversation. It ends with the turn and is not a plan Status: line. status is pending, in_progress, completed or ' +
-    'cancelled. merge true updates items by id and adds new ones; false or absent replaces the list.') +
-    ',"inputSchema":{"type":"object","properties":{"merge":{"type":"boolean"},"todos":{"type":"array","items":' +
-    '{"type":"object","properties":{"id":{"type":"string"},"content":{"type":"string"},"status":{"type":"string",' +
-    '"enum":["pending","in_progress","completed","cancelled"]}},"additionalProperties":false}}},"required":["todos"],' +
-    '"additionalProperties":false}}';
-  If Scope = awsProject Then Result := Result +
-    ',{"type":"function","name":"lazarus_ensure_form_component","description":' + Quoted(FormComponentDescription) +
-    ',"inputSchema":' + FormComponentSchema + '}' +
-    ',{"type":"function","name":"lazarus_delete_path","description":' + Quoted(DeletePathDescription) +
-    ',"inputSchema":' + DeletePathSchema + '}' +
-    ',{"type":"function","name":"lazarus_rename_path","description":' + Quoted(RenamePathDescription) +
-    ',"inputSchema":' + RenamePathSchema + '}' +
-    ',{"type":"function","name":"lazarus_add_unit_to_project","description":' + Quoted(AddUnitDescription) +
-    ',"inputSchema":' + AddUnitSchema + '}';
-  If (Scope = awsProject) And FAdapter.CanRunCommands Then Result := Result +
-    ',{"type":"function","name":"lazarus_run_command","description":' + Quoted(
-    'Run one program with its arguments, for a one-off check such as building and running a test program. No shell is ' +
-    'used, and Python and shells are refused. The program may be a name on PATH (fpc, instantfpc, lazbuild) or a path; ' +
-    'the working directory defaults to the project root and must stay inside it. Build mode only, and the approval ' +
-    'setting applies. Over MCP the call returns when the program ends: the outcome (exited, failed or cancelled), ' +
-    'exit_code, and the last 48000 characters of its combined output. Called directly it returns a job_id to poll ' +
-    'with command_status. timeout_seconds is 1 to ' + IntToStr(BrokerCommandMaxSeconds) + ', default 600. ' +
-    'Stop ends the program. A saved, repeatable test belongs in Tests/ and runs through start_tests.') +
-    ',"inputSchema":{"type":"object","properties":{"program":{"type":"string"},"arguments":{"type":"array","items":' +
-    '{"type":"string"},"maxItems":128},"working_directory":{"type":"string"},"timeout_seconds":{"type":"integer",' +
-    '"minimum":1,"maximum":' + IntToStr(BrokerCommandMaxSeconds) + '}},"required":["program"],"additionalProperties":false}}' +
-    ',{"type":"function","name":"lazarus_command_status","description":' + Quoted(
-    'Poll a run_command job by its job_id: done, outcome (running, exited, failed or cancelled), exit_code, any ' +
-    'error, and the last 48000 characters of output.') +
-    ',"inputSchema":{"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"],' +
-    '"additionalProperties":false}}';
-  If (Scope = awsProject) And FAdapter.CanRunProject Then Result := Result +
-    ',{"type":"function","name":"lazarus_run_project","description":' + Quoted(
-    'Start the active project''s built executable directly, with no shell and no debugger, and return at once with its ' +
-    'process id. The executable must already be built and must be inside the project. Build mode only, and the ' +
-    'approval setting applies. It does not capture output; use run_command for that.') +
-    ',"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}';
-  If FAdapter.CanOpenEditors Then Result := Result +
-    ',{"type":"function","name":"lazarus_open_file","description":' + Quoted(
-    'Open a project file in the Lazarus source editor and bring it forward, so the user can see it. Reuses an open ' +
-    'tab. Markdown files use open_markdown instead. Does not change the file.') +
-    ',"inputSchema":' + ReadSchema + '}' +
-    ',{"type":"function","name":"lazarus_open_markdown","description":' + Quoted(
-    'Open a project Markdown file in its live viewer window, so the user can see it. During a plan run the viewer ' +
-    'is not opened and the plan summary updates instead. Does not change the file.') +
-    ',"inputSchema":' + ReadSchema + '}';
-  Result := Result + ']';
+  Names := TStringList.Create;
+  Try
+    CollectBrokerToolNames(Offer, Names);
+    Result := RenderAssistantToolNames(Names, twkCodex, True, Notes);
+  Finally
+    Names.Free;
+  End;
 End;
+
 End.

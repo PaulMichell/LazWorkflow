@@ -112,14 +112,14 @@ Begin
   Manager.Editors[0].Syn.ReadOnly := False; Manager.Editors[1].Syn.ReadOnly := False;
   Manager.Editors[0].Syn.Text := OriginalA; Manager.Editors[1].Syn.Text := OriginalB;
   Run := Broker.BeginRun(WriteScope);
-  Check('read first editor', Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"a.pas"}', Reply, Err)); RevA := Field(Reply, 'revision');
-  Check('read second editor', Broker.Execute(Run, 'lazarus_read_buffer', '{"path":"b.pas"}', Reply, Err)); RevB := Field(Reply, 'revision');
+  Check('read first editor', Broker.Execute(Run, 'read_file', '{"path":"a.pas"}', Reply, Err)); RevA := Field(Reply, 'revision');
+  Check('read second editor', Broker.Execute(Run, 'read_file', '{"path":"b.pas"}', Reply, Err)); RevB := Field(Reply, 'revision');
   Args := '{"changes":[{"path":"a.pas","revision":"' + JsonEscapeText(RevA) + '","text":"' + JsonEscapeText(NewA) + '"},' +
     '{"path":"b.pas","revision":"' + JsonEscapeText(RevB) + '","text":"' + JsonEscapeText(NewB) + '"}]}';
 End;
 Procedure Prepare;
 Begin
-  If Not Broker.Execute(Run, 'lazarus_prepare_changes', Args, Reply, Err) Then Begin WriteLn(Err); Check('prepare set', False); End;
+  If Not Broker.Execute(Run, 'prepare_changes', Args, Reply, Err) Then Begin WriteLn(Err); Check('prepare set', False); End;
   IDArgs := '{"change_set_id":"' + JsonEscapeText(Field(Reply, 'change_set_id')) + '"}';
 End;
 Begin
@@ -145,40 +145,40 @@ Begin
     Reset; Prepare;
     Check('preparation changes no editor', (Workspace.Calls = 0) And (Manager.Editors[0].Syn.Text = OriginalA));
     Workspace.Saves := 0;
-    Check('apply both buffers', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err)
+    Check('apply both buffers', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err)
       And (Field(Reply, 'state') = 'applied') And (Manager.Editors[0].Syn.Text = NewA) And (Manager.Editors[1].Syn.Text = NewB));
     Check('apply saves each changed editor', Workspace.Saves = 2);
-    Check('apply receipt cannot replay', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
-    Check('apply invalidates old save revision', Not Broker.Execute(Run, 'lazarus_save_buffer',
+    Check('apply receipt cannot replay', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
+    Check('apply invalidates old save revision', Not Broker.Execute(Run, 'save_file',
       '{"path":"a.pas","revision":"' + JsonEscapeText(RevA) + '"}', Reply, Err));
-    Check('revert both confirmed edits', Broker.Execute(Run, 'lazarus_revert_changes', IDArgs, Reply, Err)
+    Check('revert both confirmed edits', Broker.Execute(Run, 'revert_changes', IDArgs, Reply, Err)
       And (Manager.Editors[0].Syn.Text = OriginalA) And (Manager.Editors[1].Syn.Text = OriginalB));
-    Check('empty save revision rejected after restoration', Not Broker.Execute(Run, 'lazarus_save_buffer',
+    Check('empty save revision rejected after restoration', Not Broker.Execute(Run, 'save_file',
       '{"path":"a.pas","revision":""}', Reply, Err) And (Pos('Stale buffer revision', Err) > 0));
     Manager.Editors[0].Syn.Undo;
     Check('recovery itself preserves native Undo', Manager.Editors[0].Syn.Text = NewA);
     Reset; Prepare;
-    Check('apply for native Undo test', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Check('apply for native Undo test', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Manager.Editors[0].Syn.Undo; Manager.Editors[1].Syn.Undo;
     Check('native Undo restores each complete editor change', (Manager.Editors[0].Syn.Text = OriginalA) And (Manager.Editors[1].Syn.Text = OriginalB));
     For Mode := 0 To 1 Do
       Begin
         If Mode = 0 Then Reset(awsReadOnly) Else Reset(awsMarkdown);
         Prepare;
-        Check('preview cannot enable writes outside Build', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
+        Check('preview cannot enable writes outside Build', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
       End;
     Reset; Prepare; Manager.Editors[1].Syn.ReadOnly := True;
-    Check('all editor preconditions checked before first mutation', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
+    Check('all editor preconditions checked before first mutation', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
     For Mode := 1 To 4 Do
       Begin
         Reset; Prepare; Workspace.ApprovalAction := Mode;
         Check('approval denial/change/cancel/project switch prevents all writes ' + IntToStr(Mode),
-          Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
+          Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
       End;
     For Mode := 1 To 5 Do
       Begin
         Reset; Prepare; Workspace.Failure := Mode;
-        Check('injected partial failure reported ' + IntToStr(Mode), Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+        Check('injected partial failure reported ' + IntToStr(Mode), Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
         If Mode = 1 Then Check('pre-write failure restores earlier confirmed edit',
           (Field(Reply, 'state') = 'rolled_back') And (Manager.Editors[0].Syn.Text = OriginalA) And (Manager.Editors[1].Syn.Text = OriginalB));
         If Mode = 2 Then Check('uncertain mutation is not automatically overwritten',
@@ -190,42 +190,42 @@ Begin
           Begin
             Check('interrupted run does not continue rollback', (Workspace.Calls = 2) And (Manager.Editors[0].Syn.Text = NewA));
             Project.Path := Root + '/project.lpi'; Run := Broker.BeginRun(awsProject); Workspace.Failure := 0;
-            Check('receipt survives a new run', Broker.Execute(Run, 'lazarus_change_status', IDArgs, Reply, Err));
-            Broker.Execute(Run, 'lazarus_revert_changes', IDArgs, Reply, Err);
+            Check('receipt survives a new run', Broker.Execute(Run, 'change_status', IDArgs, Reply, Err));
+            Broker.Execute(Run, 'revert_changes', IDArgs, Reply, Err);
             Check('new run can restore earlier confirmed edit', Manager.Editors[0].Syn.Text = OriginalA);
           End;
       End;
-    Reset; Prepare; Check('apply for stamp test', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Reset; Prepare; Check('apply for stamp test', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Manager.Editors[0].Syn.Text := OriginalA; Manager.Editors[0].Syn.Text := NewA;
-    Check('same bytes with changed stamp are not owned for recovery', Not Broker.Execute(Run, 'lazarus_revert_changes', IDArgs, Reply, Err)
+    Check('same bytes with changed stamp are not owned for recovery', Not Broker.Execute(Run, 'revert_changes', IDArgs, Reply, Err)
       And (Field(Reply, 'files[0].state') = 'conflict') And (Manager.Editors[0].Syn.Text = NewA) And (Manager.Editors[1].Syn.Text = OriginalB));
     Reset; Prepare; Manager.Editors[0].Syn.Text := NewA; Manager.Editors[0].Syn.Text := OriginalA;
-    Check('same bytes with changed stamp invalidate preparation', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
+    Check('same bytes with changed stamp invalidate preparation', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err) And (Workspace.Calls = 0));
     Reset; Prepare; Workspace.Failure := 6;
-    Check('later buffer change stops next write and restores first', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err)
+    Check('later buffer change stops next write and restores first', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err)
       And (Workspace.Calls = 2) And (Manager.Editors[0].Syn.Text = OriginalA) And (Manager.Editors[1].Syn.Text = 'edit during apply' + LineEnding));
     Reset; Prepare; Workspace.Failure := 7;
-    Check('recovery exception retains uncertain outcome', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err)
+    Check('recovery exception retains uncertain outcome', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err)
       And (Field(Reply, 'state') = 'partial') And (Field(Reply, 'files[0].state') = 'unknown') And (Manager.Editors[0].Syn.Text = NewA));
-    Reset; Prepare; Check('apply for project isolation test', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Reset; Prepare; Check('apply for project isolation test', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Project.Path := Project.Path + '.changed'; Run := Broker.BeginRun(awsProject);
-    Check('receipt hidden from another project', Not Broker.Execute(Run, 'lazarus_change_status', IDArgs, Reply, Err));
-    Reset; Prepare; Check('apply for missing revision test', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Check('receipt hidden from another project', Not Broker.Execute(Run, 'change_status', IDArgs, Reply, Err));
+    Reset; Prepare; Check('apply for missing revision test', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Args := '{"changes":[{"path":"a.pas","revision":"","text":"x"}]}';
-    Check('invalidated empty revision cannot prepare edits', Not Broker.Execute(Run, 'lazarus_prepare_changes', Args, Reply, Err));
+    Check('invalidated empty revision cannot prepare edits', Not Broker.Execute(Run, 'prepare_changes', Args, Reply, Err));
     Reset; Args := StringReplace(Args, JsonEscapeText(NewA), JsonEscapeText(OriginalA), []); Prepare;
-    Check('no-op buffer is not claimed for recovery', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err)
+    Check('no-op buffer is not claimed for recovery', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err)
       And (Workspace.Calls = 1) And (Field(Reply, 'files[0].state') = 'unchanged') And (Field(Reply, 'files[0].hasRecoverySnapshot') = 'false'));
-    Reset; Prepare; Check('apply for editor lifetime test', Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Reset; Prepare; Check('apply for editor lifetime test', Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Manager.Editors[0].Syn.Free; Manager.Editors[0].Syn := TSynEdit.Create(Nil); Manager.Editors[0].Syn.Text := NewA;
-    Check('reopened editor is not owned by earlier receipt', Not Broker.Execute(Run, 'lazarus_revert_changes', IDArgs, Reply, Err)
+    Check('reopened editor is not owned by earlier receipt', Not Broker.Execute(Run, 'revert_changes', IDArgs, Reply, Err)
       And (Field(Reply, 'files[0].state') = 'conflict') And (Manager.Editors[0].Syn.Text = NewA));
     Reset; Prepare; Run := Broker.BeginRun(awsProject);
-    Check('unapplied preview expires across runs', Not Broker.Execute(Run, 'lazarus_apply_changes', IDArgs, Reply, Err));
+    Check('unapplied preview expires across runs', Not Broker.Execute(Run, 'apply_changes', IDArgs, Reply, Err));
     Reset; Args := StringReplace(Args, 'b.pas', './a.pas', []);
-    Check('duplicate canonical editor rejected', Not Broker.Execute(Run, 'lazarus_prepare_changes', Args, Reply, Err));
+    Check('duplicate canonical editor rejected', Not Broker.Execute(Run, 'prepare_changes', Args, Reply, Err));
     Reset; Manager.Editors[1].Syn.Text := 'changed';
-    Check('stale preparation revision rejected', Not Broker.Execute(Run, 'lazarus_prepare_changes', Args, Reply, Err));
+    Check('stale preparation revision rejected', Not Broker.Execute(Run, 'prepare_changes', Args, Reply, Err));
     For I := 0 To 1 Do
       Begin FileText.LoadFromFile(Manager.Editors[I].Path); Check('disk source untouched', Trim(FileText.Text) = 'disk unchanged'); End;
   Finally

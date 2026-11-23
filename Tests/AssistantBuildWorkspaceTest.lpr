@@ -59,7 +59,7 @@ Function TWorkspace.Approve(Const Tool, Path, OldText, NewText: String): Boolean
 Var Settings: TAssistantTestSettings;
 Begin
   Result := ApprovalAction <> 1;
-  If (Tool = 'lazarus_start_tests') And (ApprovalAction = 2) Then
+  If (Tool = 'run_tests') And (ApprovalAction = 2) Then
     Begin
       Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, LazarusIDE.ActiveProject.ProjectInfoFile);
       Try Settings.Load; Inc(Settings.TimeoutSeconds); Settings.Save; Finally Settings.Free; End;
@@ -109,11 +109,11 @@ Var Workspace: TWorkspace; IDE: TIDE; Project: TProject; Manager: TManager; Edit
   Root, Run, Reply, Err, JobArgs, FirstID, BuildID, TestArgs: String; Settings: TAssistantTestSettings; ID: TGuid; Deadline: QWord;
 Procedure StartAndWait;
 Begin
-  If Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err) Then Begin WriteLn(Err); Check('build starts', False); End;
+  If Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err) Then Begin WriteLn(Err); Check('build starts', False); End;
   JobArgs := '{"job_id":"' + Field(Reply, 'job_id') + '"}';
   Deadline := GetTickCount64 + 4000;
   Repeat
-    Check('poll owned job', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err));
+    Check('poll owned job', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err));
     If Field(Reply, 'done') = 'true' Then Break;
     Sleep(50);
   Until GetTickCount64 > Deadline;
@@ -135,70 +135,70 @@ Begin
     Check('closed project file and paired resource are observed', (Pos('closed.pas', Reply) > 0) And (Pos('closed.lfm', Reply) > 0)
       And (Field(Reply, 'outcome') = 'compile_passed') And (Field(Reply, 'verified') = 'false'));
     WriteFile(Project.Member.Path, 'later saved edit');
-    Check('saved closed-file edit invalidates completed evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('saved closed-file edit invalidates completed evidence', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'outcome') = 'stale'));
     StartAndWait;
     Check('fresh build observes repaired source', Field(Reply, 'outcome') = 'compile_passed');
-    Check('earlier job cannot be confused with replacement build', Not Broker.Execute(Run, 'lazarus_build_status',
+    Check('earlier job cannot be confused with replacement build', Not Broker.Execute(Run, 'run_compile',
       '{"job_id":"' + FirstID + '"}', Reply, Err) And (Reply = ''));
     WriteFile(Root + '/closed.lfm', 'later resource edit');
-    Check('resource edit invalidates completed evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('resource edit invalidates completed evidence', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'outcome') = 'stale'));
     StartAndWait; Manager.Editor := Editor; Editor.Dirty := True;
-    Check('new dirty editor invalidates completed evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('new dirty editor invalidates completed evidence', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));
-    Check('dirty editor prevents another build', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('dirty editor prevents another build', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Editor.Dirty := False; Editor.DirtyDesign := True;
-    Check('unsaved designer changes invalidate build evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('unsaved designer changes invalidate build evidence', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));
-    Check('unsaved designer changes prevent build', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('unsaved designer changes prevent build', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Editor.DirtyDesign := False; Editor.Text := 'different bytes';
-    Check('unsaved text is refused even if modified flag is false', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('unsaved text is refused even if modified flag is false', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Editor.Text := 'unit Open;'; StartAndWait;
     BuildID := Field(Reply, 'job_id');
     TestArgs := '{"build_job_id":"' + BuildID + '"}';
-    Check('disabled test runner cannot execute', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+    Check('disabled test runner cannot execute', Not Broker.Execute(Run, 'run_tests', TestArgs, Reply, Err));
     Settings := TAssistantTestSettings.Create(AssistantTarget.StoreDirectory, Project.Path);
     Check('configured tests use the target document',
       Settings.StorageFilename = IncludeTrailingPathDelimiter(Root) + '.assistant' + PathDelim + 'config.json');
     Try
       Settings.Enabled := True; Settings.Executable := ParamStr(0); Settings.Arguments.Add('configured-tests'); Settings.Save;
       Workspace.ApprovalAction := 1; Broker.OnApproval := @Workspace.Approve;
-      Check('test approval denial prevents launch', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      Check('test approval denial prevents launch', Not Broker.Execute(Run, 'run_tests', TestArgs, Reply, Err));
       Workspace.ApprovalAction := 2;
-      Check('changed configuration during approval prevents launch', Not Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err)
+      Check('changed configuration during approval prevents launch', Not Broker.Execute(Run, 'run_tests', TestArgs, Reply, Err)
         And (Pos('changed during approval', Err) > 0));
       Workspace.ApprovalAction := 0;
-      Check('configured test command starts for current build', Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      Check('configured test command starts for current build', Broker.Execute(Run, 'run_tests', TestArgs, Reply, Err));
       JobArgs := '{"job_id":"' + Field(Reply, 'job_id') + '"}'; Deadline := GetTickCount64 + 4000;
       Repeat
-        Check('poll configured tests', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err));
+        Check('poll configured tests', Broker.Execute(Run, 'run_tests', JobArgs, Reply, Err));
         If Field(Reply, 'done') = 'true' Then Break;
         Sleep(50);
       Until GetTickCount64 > Deadline;
       Check('successful configured tests remain linked to build', (Field(Reply, 'outcome') = 'test_command_passed')
         And (Field(Reply, 'build_job_id') = BuildID) And (Field(Reply, 'testsRun') = 'true'));
       Settings.Arguments[0] := 'test-failure'; Settings.Save;
-      Check('changing configuration invalidates old test evidence', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err)
+      Check('changing configuration invalidates old test evidence', Broker.Execute(Run, 'run_tests', JobArgs, Reply, Err)
         And (Field(Reply, 'stale') = 'true'));
-      Check('failing test runner starts', Broker.Execute(Run, 'lazarus_start_tests', TestArgs, Reply, Err));
+      Check('failing test runner starts', Broker.Execute(Run, 'run_tests', TestArgs, Reply, Err));
       JobArgs := '{"job_id":"' + Field(Reply, 'job_id') + '"}'; Deadline := GetTickCount64 + 4000;
       Repeat
-        Check('poll failing tests', Broker.Execute(Run, 'lazarus_test_status', JobArgs, Reply, Err));
+        Check('poll failing tests', Broker.Execute(Run, 'run_tests', JobArgs, Reply, Err));
         If Field(Reply, 'done') = 'true' Then Break;
         Sleep(50);
       Until GetTickCount64 > Deadline;
       Check('test failure cannot become compile success', Field(Reply, 'outcome') = 'test_command_failed');
       FirstID := JobArgs; StartAndWait;
-      Check('replacement build invalidates earlier test evidence', Broker.Execute(Run, 'lazarus_test_status', FirstID, Reply, Err)
+      Check('replacement build invalidates earlier test evidence', Broker.Execute(Run, 'run_tests', FirstID, Reply, Err)
         And (Field(Reply, 'stale') = 'true'));
     Finally DeleteFile(Settings.StorageFilename); Settings.Free; RemoveDir(IncludeTrailingPathDelimiter(Root) + '.assistant'); End;
     Broker.OnApproval := Nil;
     Project.Mode := 'Release';
-    Check('build-mode switch invalidates evidence', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('build-mode switch invalidates evidence', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));
     Project.Mode := 'Debug'; Project.Dirty := True;
-    Check('project settings must be explicitly saved', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('project settings must be explicitly saved', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Project.Dirty := False; Manager.Editor := Nil;
     WriteFile(Project.Member.Path, 'unit Closed; interface uses Indirect; implementation end.');
     CodeToolBoss.LoadFile(Project.Member.Path, True, True);
@@ -207,20 +207,20 @@ Begin
     StartAndWait;
     Check('workspace reports complete CodeTools source closure', Field(Reply, 'dependencies.sourceClosureComplete') = 'true');
     WriteFile(Root + '/indirect.pas', 'unit Indirect; interface const Later = 1; implementation end.');
-    Check('closed transitive dependency invalidates completed build', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('closed transitive dependency invalidates completed build', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));
     CodeToolBoss.LoadFile(Root + '/indirect.pas', True, True); StartAndWait;
     WriteFile(Root + '/indirect.lfm', 'new resource');
-    Check('new dependency resource invalidates completed build', Broker.Execute(Run, 'lazarus_build_status', JobArgs, Reply, Err)
+    Check('new dependency resource invalidates completed build', Broker.Execute(Run, 'run_compile', JobArgs, Reply, Err)
       And (Field(Reply, 'stale') = 'true'));
     IDE.CancelWorkspace := Workspace;
-    Check('cancellation in CodeTools callback prevents compiler launch', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('cancellation in CodeTools callback prevents compiler launch', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Check('cancelled discovery leaves no job', Not Workspace.BuildStatus(Reply, Err));
     IDE.CancelWorkspace := Nil;
     DeleteFile(Project.Member.Path);
-    Check('missing project source prevents launch', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('missing project source prevents launch', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
     Run := Broker.BeginRun(awsMarkdown);
-    Check('Plan cannot launch compiler', Not Broker.Execute(Run, 'lazarus_start_build', '{}', Reply, Err));
+    Check('Plan cannot launch compiler', Not Broker.Execute(Run, 'run_compile', '{}', Reply, Err));
   Finally
     Broker.Free; Workspace.Free; LazarusIDE := Nil; SourceEditorManagerIntf := Nil;
     IDE.Free; Manager.Free; Editor.Free; Project.Member.Free; Project.Free;

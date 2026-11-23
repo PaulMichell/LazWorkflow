@@ -80,6 +80,14 @@
         <UnitName Value="AssistantMarkdownForm"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantToolSpecs.pas"/>
+        <UnitName Value="AssistantToolSpecs"/>
+      </Item>
+      <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantToolWire.pas"/>
+        <UnitName Value="AssistantToolWire"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantTools.pas"/>
         <UnitName Value="AssistantTools"/>
       </Item>

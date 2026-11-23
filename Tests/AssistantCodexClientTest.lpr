@@ -132,9 +132,9 @@ Begin
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"text"}}');
             Send('{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"**"}}');
-            Send('{"id":"tool-request","method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"lazarus_read_buffer","arguments":{"path":"test.pas"}}}');
+            Send('{"id":"tool-request","method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"read_file","arguments":{"path":"test.pas"}}}');
             If Prompt = 'duplicate' Then
-              Send('{"id":"tool-request-2","method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"lazarus_read_buffer","arguments":{}}}');
+              Send('{"id":"tool-request-2","method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"read_file","arguments":{}}}');
           End
         Else If Method = 'turn/interrupt' Then
           Begin

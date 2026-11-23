@@ -2,10 +2,9 @@ tools:
 Read
 Grep
 Glob
-mcp__lazarus__project_info
-mcp__lazarus__read_buffer
-mcp__lazarus__list_directory
+mcp__lazarus__get_project_info
 mcp__lazarus__read_file
+mcp__lazarus__list_directory
 mcp__lazarus__read_image
 mcp__lazarus__search_in_project
 mcp__lazarus__open_buffer

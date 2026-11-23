@@ -127,7 +127,7 @@ Begin
     0:
       Begin
         Step := 1;
-        SendCall('lazarus_project_info', Nil);
+        SendCall('get_project_info', Nil);
       End;
     1:
       Begin
@@ -139,7 +139,7 @@ Begin
         Step := 2;
         Args := TJSONObject.Create;
         Args.Add('path', 'Source/PackageUnit.pas');
-        SendCall('lazarus_open_buffer', Args);
+        SendCall('open_buffer', Args);
       End;
     2:
       Begin
@@ -160,14 +160,14 @@ Begin
         Args.Add('path', 'Source/PackageUnit.pas');
         Args.Add('revision', Revision);
         Args.Add('text', StringReplace(UnitText, 'Result := 42;', 'Result := 43;', [rfReplaceAll]));
-        SendCall('lazarus_replace_buffer', Args);
+        SendCall('write_file', Args);
       End;
     3:
       Begin
         Step := 4;
         Args := TJSONObject.Create;
         Args.Add('path', 'Source/PackageUnit.pas');
-        SendCall('lazarus_read_buffer', Args);
+        SendCall('read_file', Args);
       End;
     4:
       Begin
@@ -180,12 +180,12 @@ Begin
         Args := TJSONObject.Create;
         Args.Add('path', 'Source/PackageUnit.pas');
         Args.Add('revision', TJSONObject(Value).Get('revision', ''));
-        SendCall('lazarus_save_buffer', Args);
+        SendCall('save_file', Args);
       End;
     5:
       Begin
         Step := 6;
-        SendCall('lazarus_start_build', Nil);
+        SendCall('run_compile', Nil);
       End;
     6:
       Begin
@@ -200,7 +200,7 @@ Begin
         Sleep(250);
         Args := TJSONObject.Create;
         Args.Add('job_id', BuildJob);
-        SendCall('lazarus_build_status', Args);
+        SendCall('run_compile', Args);
       End;
     7:
       Begin
@@ -220,7 +220,7 @@ Begin
             Step := 8;
             Args := TJSONObject.Create;
             Args.Add('build_job_id', BuildJob);
-            SendCall('lazarus_start_tests', Args);
+            SendCall('run_tests', Args);
             Exit;
           End;
         If BuildPolls >= 240 Then
@@ -231,7 +231,7 @@ Begin
         Sleep(250);
         Args := TJSONObject.Create;
         Args.Add('job_id', BuildJob);
-        SendCall('lazarus_build_status', Args);
+        SendCall('run_compile', Args);
       End;
     8:
       Begin
@@ -246,7 +246,7 @@ Begin
         Sleep(250);
         Args := TJSONObject.Create;
         Args.Add('job_id', TestJob);
-        SendCall('lazarus_test_status', Args);
+        SendCall('run_tests', Args);
       End;
     9:
       Begin
@@ -277,7 +277,7 @@ Begin
         Sleep(250);
         Args := TJSONObject.Create;
         Args.Add('job_id', TestJob);
-        SendCall('lazarus_test_status', Args);
+        SendCall('run_tests', Args);
       End;
   Else
     FailAcceptance('Package acceptance ended in an unknown step.');
