@@ -2,7 +2,9 @@ Program AssistantCapabilityTest;
 
 { Checks the turn-backend capability registry against today's matrix (c) 2026 Michell Computing.
 
-  Lookup by grok, codex, and claude returns a set. openai-compatible is not a turn backend.
+  Lookup by grok, codex, and claude returns a set. openai-compatible is registered for the image adapter
+  and the usage query only. Context compaction for that id is Absent: the old flag was true, and there is
+  no history array to compact. Item 8.1 goldens do not mention that flag, so they are unchanged.
   No send path is called. }
 
 {$IFDEF FPC}
@@ -14,7 +16,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  SysUtils, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend, AssistantClaudeBackend;
+  SysUtils, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend, AssistantClaudeBackend,
+  AssistantCompatibleBackend;
 
 Var
   FailCount: Integer;
@@ -66,7 +69,17 @@ Begin
       Result[acRevisionEdits] := asNative;
       Result[acAsyncWork] := asNative;
       Result[acEffortControl] := asNative;
+    End
+  Else If BackendId = 'openai-compatible' Then
+    Begin
+      Result[acImageOutput] := asNative;
+      Result[acAccountUsage] := asNative;
     End;
+End;
+
+Function ExpectShowsEffort(Const BackendId: String): Boolean;
+Begin
+  Result := (BackendId = 'grok') Or (BackendId = 'codex');
 End;
 
 Procedure CheckBackend(Const BackendId, DisplayName: String);
@@ -86,6 +99,8 @@ Begin
         AssistantCapabilitySupport(BackendId, Capability, Support) And (Support = Expected[Capability]));
       Check(BackendId + ' set ' + AssistantCapabilityName(Capability), Info.Support[Capability] = Expected[Capability]);
     End;
+  Check(BackendId + ' effort footer', Info.ShowsEffort = ExpectShowsEffort(BackendId));
+  Check(BackendId + ' effort footer query', AssistantShowsEffort(BackendId) = ExpectShowsEffort(BackendId));
 End;
 
 Procedure CheckMissing(Const BackendId: String);
@@ -105,7 +120,12 @@ Begin
   CheckBackend('grok', 'Grok');
   CheckBackend('codex', 'ChatGPT');
   CheckBackend('claude', 'Claude');
-  CheckMissing('openai-compatible');
+  CheckBackend('openai-compatible', 'OpenAI-compatible');
+  Check('openai-compatible compaction is false', Not AssistantCapabilityDelivered('openai-compatible', acContextCompaction));
+  Check('openai-compatible still draws', AssistantCapabilityDelivered('openai-compatible', acImageOutput));
+  Check('openai-compatible cannot steer', Not AssistantCanSteer('openai-compatible'));
+  Check('claude effort is sent', AssistantCapabilityDelivered('claude', acEffortControl));
+  Check('claude effort is not shown', Not AssistantShowsEffort('claude'));
   CheckMissing('');
   CheckMissing('Grok');
   Check('unsupported sentence names the connection',

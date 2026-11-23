@@ -40,7 +40,7 @@ Type
     ImageModel: String;
     MaxOutputTokens: Integer;
     Constructor Create;
-    /// True for grok and openai-compatible. Derived from Backend, not a stored flag.
+    /// True when the registry delivers context compaction. OpenAI-compatible is false: it has no history to compact.
     Function CanCompactContext: Boolean;
   End;
   TAssistantConnections = Class
@@ -67,7 +67,7 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
-/// True for grok and openai-compatible. Claude and Codex have no image endpoint here.
+/// True when the registry delivers image output. Claude and ChatGPT are withheld. OpenAI-compatible keeps its adapter.
 Function AssistantBackendCanDraw(Const Backend: String): Boolean;
 /// Sets the Grok image model when drawing is turned on and none is stored.
 /// Does not copy the chat model. Other backends are left unchanged.
@@ -92,7 +92,8 @@ Function ReadActiveProfileCall(Out Profile: TAssistantProfileCall): Boolean;
 Implementation
 
 Uses
-  AssistantConfig, WorkflowSettings, fpjson;
+  AssistantConfig, WorkflowSettings, fpjson, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend,
+  AssistantClaudeBackend, AssistantCompatibleBackend;
 
 Constructor TAssistantConnection.Create;
 Begin
@@ -114,12 +115,12 @@ End;
 
 Function TAssistantConnection.CanCompactContext: Boolean;
 Begin
-  Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
+  Result := AssistantCapabilityDelivered(Backend, acContextCompaction);
 End;
 
 Function AssistantBackendCanDraw(Const Backend: String): Boolean;
 Begin
-  Result := (Backend = 'grok') Or (Backend = 'openai-compatible');
+  Result := AssistantCapabilityDelivered(Backend, acImageOutput);
 End;
 
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);

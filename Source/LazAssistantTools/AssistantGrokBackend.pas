@@ -42,6 +42,7 @@ Begin
   Info.Id := 'grok';
   Info.DisplayName := 'Grok';
   Info.Support := GrokCapabilitySet;
+  Info.ShowsEffort := True;
   RegisterAssistantBackend(Info);
 End;
 

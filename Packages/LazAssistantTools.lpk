@@ -160,6 +160,10 @@
         <UnitName Value="AssistantClaudeBackend"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantCompatibleBackend.pas"/>
+        <UnitName Value="AssistantCompatibleBackend"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantXaiProvider.pas"/>
         <UnitName Value="AssistantXaiProvider"/>
       </Item>

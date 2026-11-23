@@ -686,7 +686,7 @@ Uses AssistantWorkTarget, PackageIntf,
   AssistantPlanDocument, AssistantSaveBeforeTurn,
   AssistantTools, AssistantMarkdownForm, AssistantSubagents, GrokOAuth, AssistantAccountWorker, LazFileUtils,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
-  ProjectIntf, AssistantSkills, AssistantConnections, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
+  ProjectIntf, AssistantSkills, AssistantConnections, AssistantCapabilities, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness, AssistantClaudeStream,
   AssistantImages,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
@@ -5958,7 +5958,7 @@ Begin
     ModelText := Trim(FModelName);
   If ModelText = '' Then
     ModelText := 'Model';
-  If (FActiveBackend = 'grok') Or (FActiveBackend = 'codex') Then
+  If AssistantShowsEffort(FActiveBackend) Then
     Begin
       EffortText := EffortBarCaption(FActiveEffort);
       EffortHint := 'Click to choose an effort level';
@@ -8471,7 +8471,7 @@ Begin
       Else InputMemo.Text := UserText;
       Exit;
     End;
-  If FUseClaude Or Assigned(FClaudeRun) Or FTransportWait Then
+  If (Not AssistantCanSteer(FActiveBackend)) Or Assigned(FClaudeRun) Or FTransportWait Then
     Begin
       If Assigned(InputMemo) Then
         InputMemo.Text := UserText;
@@ -9315,7 +9315,7 @@ Begin
                   Exit;
                 End;
             End
-          Else If FUseClaude Or FTransportWait Then
+          Else If (Not AssistantCanSteer(FActiveBackend)) Or FTransportWait Then
             Begin
               PicturesStay;
               Exit;
@@ -10774,7 +10774,7 @@ Begin
     (FUseClaude And (FClaudeRuntime <> '') And (FClaudeModel <> '')) Or
     ((Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn);
   View.ApprovalCaption := ApprovalModeCaption(StrToApprovalMode(FActiveApproval));
-  If (FActiveBackend = 'grok') Or (FActiveBackend = 'codex') Then
+  If AssistantShowsEffort(FActiveBackend) Then
     View.Effort := EffortBarCaption(FActiveEffort)
   Else
     View.Effort := '—';
@@ -10810,7 +10810,7 @@ Begin
   If (View.PlanPath <> '') And TryReadAssistantPlanIdentity(View.PlanPath, Title, Err) Then
     View.PlanTitle := Title;
   View.CanSend := (Not FSending) And (Not FPlanAgentRunning);
-  View.CanSteer := FSending And (Not FUseClaude) And (Not FTransportWait);
+  View.CanSteer := FSending And AssistantCanSteer(FActiveBackend) And (Not FTransportWait);
   View.CanStop := FSending;
   View.CanChangeMode := Not (FSending Or FModeLocked);
   View.RemoteApproval := False;
@@ -11263,7 +11263,7 @@ Begin
       ErrorText := 'Nothing is running to steer.';
       Exit;
     End;
-  If FUseClaude Or FTransportWait Then
+  If (Not AssistantCanSteer(FActiveBackend)) Or FTransportWait Then
     Begin
       ErrorText := 'This connection cannot steer.';
       Exit;

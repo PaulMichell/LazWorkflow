@@ -35,6 +35,8 @@ Begin
   Info.Id := 'claude';
   Info.DisplayName := 'Claude';
   Info.Support := ClaudeCapabilitySet;
+  { Sent on the turn. The footer does not show it. }
+  Info.ShowsEffort := False;
   RegisterAssistantBackend(Info);
 End;
 

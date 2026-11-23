@@ -37,6 +37,7 @@ Begin
   Info.Id := 'codex';
   Info.DisplayName := 'ChatGPT';
   Info.Support := ChatGPTCapabilitySet;
+  Info.ShowsEffort := True;
   RegisterAssistantBackend(Info);
 End;
 

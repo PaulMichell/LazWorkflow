@@ -43,6 +43,8 @@ Type
     Id: String;
     DisplayName: String;
     Support: TAssistantCapabilitySet;
+    { Footer half of the effort row. Claude sends effort and does not show it. }
+    ShowsEffort: Boolean;
   End;
 
 /// Every capability Absent. A backend then sets the rows its path delivers.
@@ -58,6 +60,12 @@ Function FindAssistantBackend(Const BackendId: String; Out Info: TAssistantBacke
 /// False when the backend is not registered. Support is not set in that case.
 Function AssistantCapabilitySupport(Const BackendId: String; Capability: TAssistantCapability;
   Out Support: TAssistantSupport): Boolean;
+/// True when the backend is registered and the row is not Absent. An unknown id is false, not Absent.
+Function AssistantCapabilityDelivered(Const BackendId: String; Capability: TAssistantCapability): Boolean;
+/// The effort footer. False for Claude, which sends effort and does not show it.
+Function AssistantShowsEffort(Const BackendId: String): Boolean;
+/// Steer during a turn. False when the row is Absent or the id is not registered.
+Function AssistantCanSteer(Const BackendId: String): Boolean;
 
 Implementation
 
@@ -117,6 +125,7 @@ Begin
   Info.Id := '';
   Info.DisplayName := '';
   Info.Support := AbsentCapabilitySet;
+  Info.ShowsEffort := False;
 End;
 
 Procedure RegisterAssistantBackend(Const Info: TAssistantBackendInfo);
@@ -171,6 +180,25 @@ Begin
   Result := FindAssistantBackend(BackendId, Info);
   If Result Then
     Support := Info.Support[Capability];
+End;
+
+Function AssistantCapabilityDelivered(Const BackendId: String; Capability: TAssistantCapability): Boolean;
+Var
+  Support: TAssistantSupport;
+Begin
+  Result := AssistantCapabilitySupport(BackendId, Capability, Support) And (Support <> asAbsent);
+End;
+
+Function AssistantShowsEffort(Const BackendId: String): Boolean;
+Var
+  Info: TAssistantBackendInfo;
+Begin
+  Result := FindAssistantBackend(BackendId, Info) And Info.ShowsEffort;
+End;
+
+Function AssistantCanSteer(Const BackendId: String): Boolean;
+Begin
+  Result := AssistantCapabilityDelivered(BackendId, acSteer);
 End;
 
 Initialization
