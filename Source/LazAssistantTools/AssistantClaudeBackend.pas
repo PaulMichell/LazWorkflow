@@ -37,6 +37,7 @@ Begin
   Info.Support := ClaudeCapabilitySet;
   { Sent on the turn. The footer does not show it. }
   Info.ShowsEffort := False;
+  Info.ReadyKind := erRuntimeAndModel;
   RegisterAssistantBackend(Info);
 End;
 

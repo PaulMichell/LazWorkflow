@@ -39,12 +39,16 @@ Type
 
   TAssistantCapabilitySet = Array[TAssistantCapability] Of TAssistantSupport;
 
+  { How a registered engine becomes connected. erNone is not a turn engine. }
+  TAssistantEngineReady = (erNone, erSignedIn, erRuntimeAndModel);
+
   TAssistantBackendInfo = Record
     Id: String;
     DisplayName: String;
     Support: TAssistantCapabilitySet;
     { Footer half of the effort row. Claude sends effort and does not show it. }
     ShowsEffort: Boolean;
+    ReadyKind: TAssistantEngineReady;
   End;
 
 /// Every capability Absent. A backend then sets the rows its path delivers.
@@ -66,6 +70,10 @@ Function AssistantCapabilityDelivered(Const BackendId: String; Capability: TAssi
 Function AssistantShowsEffort(Const BackendId: String): Boolean;
 /// Steer during a turn. False when the row is Absent or the id is not registered.
 Function AssistantCanSteer(Const BackendId: String): Boolean;
+/// True when this id has a turn engine and that engine is signed in, or has a runtime and a model.
+Function AssistantTurnEngineReady(Const BackendId, RuntimePath, Model: String; SignedIn: Boolean): Boolean;
+/// The shared refusal. A known row is named. An empty id has no parentheses.
+Function AssistantTurnUnavailableSentence(Const BackendId: String): String;
 
 Implementation
 
@@ -126,6 +134,7 @@ Begin
   Info.DisplayName := '';
   Info.Support := AbsentCapabilitySet;
   Info.ShowsEffort := False;
+  Info.ReadyKind := erNone;
 End;
 
 Procedure RegisterAssistantBackend(Const Info: TAssistantBackendInfo);
@@ -199,6 +208,34 @@ End;
 Function AssistantCanSteer(Const BackendId: String): Boolean;
 Begin
   Result := AssistantCapabilityDelivered(BackendId, acSteer);
+End;
+
+Function AssistantTurnEngineReady(Const BackendId, RuntimePath, Model: String; SignedIn: Boolean): Boolean;
+Var
+  Info: TAssistantBackendInfo;
+Begin
+  Result := False;
+  If Not FindAssistantBackend(BackendId, Info) Then
+    Exit;
+  Case Info.ReadyKind Of
+    erSignedIn: Result := SignedIn;
+    erRuntimeAndModel: Result := (Trim(RuntimePath) <> '') And (Trim(Model) <> '');
+  Else
+    Result := False;
+  End;
+End;
+
+Function AssistantTurnUnavailableSentence(Const BackendId: String): String;
+Var
+  Info: TAssistantBackendInfo;
+  Name: String;
+Begin
+  Name := '';
+  If FindAssistantBackend(BackendId, Info) Then
+    Name := Info.DisplayName
+  Else
+    Name := '';
+  Result := AssistantUnsupportedSentence(acHarnessPrompt, Name);
 End;
 
 Initialization

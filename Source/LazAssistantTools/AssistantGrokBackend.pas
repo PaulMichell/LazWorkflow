@@ -43,6 +43,7 @@ Begin
   Info.DisplayName := 'Grok';
   Info.Support := GrokCapabilitySet;
   Info.ShowsEffort := True;
+  Info.ReadyKind := erSignedIn;
   RegisterAssistantBackend(Info);
 End;
 

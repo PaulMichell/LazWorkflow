@@ -38,6 +38,7 @@ Begin
   Info.DisplayName := 'ChatGPT';
   Info.Support := ChatGPTCapabilitySet;
   Info.ShowsEffort := True;
+  Info.ReadyKind := erRuntimeAndModel;
   RegisterAssistantBackend(Info);
 End;
 

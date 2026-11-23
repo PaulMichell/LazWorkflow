@@ -93,6 +93,8 @@ Type
     CanStop: Boolean;
     CanChangeMode: Boolean;
     ModeLocked: Boolean;
+    { Phone refusal when CanSend is false. Empty uses the unnamed standard sentence. }
+    UnavailableSentence: String;
   End;
 
   { Listen-thread idle. Must return without waiting on the IDE thread. }
@@ -1466,10 +1468,20 @@ Function TMonitorSession.CommandBlocked(Kind: Integer; Out MessageText: String):
 Begin
   Result := False;
   MessageText := 'The desktop control is not available.';
-  { CanSend starts false until the first status frame. An idle form still accepts Send.
-    FSendPending is the gap before the form reports Sending. It blocks like a running turn. }
+  { CanSend false refuses send, run_plan, and run_task. FSendPending is the gap before
+    the form reports Sending. It blocks like a running turn. }
   Case Kind Of
-    Ord(mmkSend), Ord(mmkNewConversation), Ord(mmkRunPlan), Ord(mmkRunTask), Ord(mmkClosePlan), Ord(mmkInsertTask):
+    Ord(mmkSend), Ord(mmkRunPlan), Ord(mmkRunTask):
+      Begin
+        Result := HostBusy Or FHostFlags.PlanAgentRunning Or (Not FHostFlags.CanSend);
+        If Result And (Not HostBusy) And (Not FHostFlags.PlanAgentRunning) Then
+          Begin
+            MessageText := Trim(FHostFlags.UnavailableSentence);
+            If MessageText = '' Then
+              MessageText := 'Not available with this connection.';
+          End;
+      End;
+    Ord(mmkNewConversation), Ord(mmkClosePlan), Ord(mmkInsertTask):
       Result := HostBusy Or FHostFlags.PlanAgentRunning;
     Ord(mmkSetMode): Result := HostBusy Or FHostFlags.ModeLocked Or (Not FHostFlags.CanChangeMode);
     Ord(mmkWorkOnPlan), Ord(mmkSelectPlan), Ord(mmkNewPlan): Result := HostBusy;

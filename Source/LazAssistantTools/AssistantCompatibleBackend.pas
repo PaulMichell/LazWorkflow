@@ -33,6 +33,7 @@ Begin
   Info.DisplayName := 'OpenAI-compatible';
   Info.Support := CompatibleCapabilitySet;
   Info.ShowsEffort := False;
+  Info.ReadyKind := erNone;
   RegisterAssistantBackend(Info);
 End;
 

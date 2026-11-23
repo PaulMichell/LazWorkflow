@@ -126,6 +126,8 @@ Type
     CanChangeMode: Boolean;
     RemoteApproval: Boolean;
     ErrorText: String;
+    { Phone and desktop refusal when this connection has no turn engine. Not a status field. }
+    UnavailableSentence: String;
     { Account allowance for the phone credit popup. Empty when this connection has no figure.
       Status JSON omits the fields when they are empty, so an older frame still decodes. }
     UsageCaption: String;

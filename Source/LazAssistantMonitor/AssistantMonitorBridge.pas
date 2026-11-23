@@ -498,6 +498,7 @@ Begin
   Flags.CanStop := View.CanStop;
   Flags.CanChangeMode := View.CanChangeMode;
   Flags.ModeLocked := View.ModeLocked;
+  Flags.UnavailableSentence := View.UnavailableSentence;
   Session.SetHostFlags(Flags);
 End;
 

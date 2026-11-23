@@ -101,6 +101,10 @@ Begin
     End;
   Check(BackendId + ' effort footer', Info.ShowsEffort = ExpectShowsEffort(BackendId));
   Check(BackendId + ' effort footer query', AssistantShowsEffort(BackendId) = ExpectShowsEffort(BackendId));
+  If (BackendId = 'grok') Or (BackendId = 'codex') Or (BackendId = 'claude') Then
+    Check(BackendId + ' has a turn engine', Info.ReadyKind <> erNone)
+  Else
+    Check(BackendId + ' has no turn engine', Info.ReadyKind = erNone);
 End;
 
 Procedure CheckMissing(Const BackendId: String);
@@ -122,6 +126,18 @@ Begin
   CheckBackend('claude', 'Claude');
   CheckBackend('openai-compatible', 'OpenAI-compatible');
   Check('openai-compatible compaction is false', Not AssistantCapabilityDelivered('openai-compatible', acContextCompaction));
+  Check('signed-in grok can send', AssistantTurnEngineReady('grok', '', 'grok-4', True));
+  Check('unsigned grok cannot send', Not AssistantTurnEngineReady('grok', '', 'grok-4', False));
+  Check('codex with a runtime can send', AssistantTurnEngineReady('codex', 'codex', 'gpt-5', False));
+  Check('codex without a runtime cannot send', Not AssistantTurnEngineReady('codex', '', 'gpt-5', True));
+  Check('claude with a runtime can send', AssistantTurnEngineReady('claude', 'claude', 'opus', False));
+  Check('claude without a model cannot send', Not AssistantTurnEngineReady('claude', 'claude', '', True));
+  Check('openai-compatible cannot send', Not AssistantTurnEngineReady('openai-compatible', '', 'gpt-4o', True));
+  Check('no selection cannot send', Not AssistantTurnEngineReady('', '', '', True));
+  Check('unknown backend cannot send', Not AssistantTurnEngineReady('mystery', 'runtime', 'model', True));
+  Check('openai-compatible sentence', AssistantTurnUnavailableSentence('openai-compatible') =
+    'Not available with this connection (OpenAI-compatible).');
+  Check('no selection sentence', AssistantTurnUnavailableSentence('') = 'Not available with this connection.');
   Check('openai-compatible still draws', AssistantCapabilityDelivered('openai-compatible', acImageOutput));
   Check('openai-compatible cannot steer', Not AssistantCanSteer('openai-compatible'));
   Check('claude effort is sent', AssistantCapabilityDelivered('claude', acEffortControl));

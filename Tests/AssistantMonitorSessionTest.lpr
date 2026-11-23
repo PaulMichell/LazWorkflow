@@ -585,6 +585,56 @@ Begin
   End;
 End;
 
+Procedure TestNoEngineRefusesTurnStart;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+  Json, ErrorJson: String;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := False;
+    Flags.UnavailableSentence := 'Not available with this connection (OpenAI-compatible).';
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandEmpty(mmkSend, 'send-no-engine'));
+    Check('send without an engine is not queued', Sink.Calls = 0);
+    Check('send without an engine is the standard sentence', DecodeLast(Message) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = 'Not available with this connection (OpenAI-compatible).'));
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandEmpty(mmkRunPlan, 'plan-no-engine'));
+    Check('run_plan without an engine is not queued', Sink.Calls = 0);
+    Check('run_plan without an engine is the standard sentence', DecodeLast(Message) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = Flags.UnavailableSentence));
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeCommandEmpty(mmkRunTask, 'task-no-engine'));
+    Check('run_task without an engine is not queued', Sink.Calls = 0);
+    Check('run_task without an engine is the standard sentence', DecodeLast(Message) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And
+      (ErrorBody.MessageText = Flags.UnavailableSentence));
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Carrier.ClearSent;
+    Sink.Calls := 0;
+    Check('connected send encodes', TryEncodeCommandSend('send-engine', 'hello', Json, ErrorJson, False));
+    Carrier.DeliverJson(Json);
+    Check('connected send is accepted', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSend)));
+    Flags.Sending := True;
+    Session.SetHostFlags(Flags);
+    Flags.Sending := False;
+    Session.SetHostFlags(Flags);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Function AckTurn: TAssistantMonitorTurn;
 Begin
   Result := Default(TAssistantMonitorTurn);
@@ -1641,6 +1691,7 @@ Begin
       TestIdlePollStillFills;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
+      TestNoEngineRefusesTurnStart;
       TestWorkOnPlanDoesNotBlockSend;
       TestCommandLifecycle;
       TestSelectTarget;

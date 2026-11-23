@@ -551,6 +551,7 @@ Type
     Function BuildSubmitApiText(Const ModelText: String; Out WithContext: Boolean): String;
     Procedure SteerQueuedText(Const UserText: String);
     Function ModeChipCaption(Mode: TAssistantMode): String;
+    Function TurnEngineReady: Boolean;
     Function RunPlanIsAvailable: Boolean;
     Procedure UpdateWorkActions;
     Procedure PopupAboveControl(Host: TControl; Popup: TPopupMenu);
@@ -2171,10 +2172,33 @@ Begin
   UpdateWorkActions;
 End;
 
+Function TProjectAssistantForm.TurnEngineReady: Boolean;
+Var
+  Runtime, Model: String;
+  SignedIn: Boolean;
+Begin
+  Runtime := '';
+  Model := '';
+  SignedIn := False;
+  If FUseCodex Then
+    Begin
+      Runtime := FCodexRuntime;
+      Model := FCodexModel;
+    End
+  Else If FUseClaude Then
+    Begin
+      Runtime := FClaudeRuntime;
+      Model := FClaudeModel;
+    End
+  Else
+    SignedIn := Assigned(AssistantChatConfig) And AssistantChatConfig.IsSignedIn;
+  Result := AssistantTurnEngineReady(FActiveBackend, Runtime, Model, SignedIn);
+End;
+
 Function TProjectAssistantForm.RunPlanIsAvailable: Boolean;
 Begin
   { Not limited to Plan or Build. Run Plan switches to Build itself. }
-  Result := (Not FSending) And (GetActivePlanRelativePath <> '');
+  Result := TurnEngineReady And (Not FSending) And (GetActivePlanRelativePath <> '');
 End;
 
 Procedure TProjectAssistantForm.UpdateWorkActions;
@@ -2192,6 +2216,8 @@ Begin
     NewPlanAction.Enabled := (Not FSending) And (Not Running);
   If Assigned(RunPlanAction) Then
     RunPlanAction.Enabled := RunPlanIsAvailable;
+  If Assigned(TasksAction) Then
+    TasksAction.Enabled := TurnEngineReady And (Not FSending) And (Not FPlanAgentRunning);
   If Assigned(ActivePlanCombo) Then
     ActivePlanCombo.Enabled := (Not FSending) And (Not Running);
   If Assigned(ActivePlanBrowseButton) Then
@@ -6088,11 +6114,17 @@ Begin
       FHoldingContinuation := False;
       FHeldAnswer := '';
     End;
-  SendAction.Enabled := True;
   If IsSending Then
     SendAction.Caption := 'Steer'
   Else
     SendAction.Caption := 'Send';
+  SendAction.Enabled := IsSending Or TurnEngineReady;
+  If SendAction.Enabled Then
+    SendAction.Hint := ''
+  Else
+    SendAction.Hint := AssistantTurnUnavailableSentence(FActiveBackend);
+  If Assigned(SendButton) Then
+    SendButton.ShowHint := Not SendAction.Enabled;
   StopAction.Enabled := IsSending;
   NewConversationAction.Enabled := Not IsSending;
   UpdateWorkActions;
@@ -8381,7 +8413,9 @@ Begin
   { Every backend and every way a turn starts: typed, Run Plan, Fix Error, tasks and the phone. }
   If AutoSend And (Not ConfirmSavedBeforeTurn(ActiveMode)) Then
     Exit;
-  If AutoSend And (Not FUseCodex) And (Not FUseClaude) Then
+  If AutoSend And (Not TurnEngineReady) Then
+    Exit;
+  If AutoSend And (FActiveBackend = 'grok') Then
     Begin
       If (Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn) Then
         Begin
@@ -9343,7 +9377,9 @@ Begin
         End;
       Exit;
     End;
-  If (Not FUseCodex) And (Not FUseClaude) And
+  If Not TurnEngineReady Then
+    Exit;
+  If (FActiveBackend = 'grok') And
     ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
     Begin
       RunAssistantModal('Sign in with SuperGrok / X Premium in Settings before sending.', mtInformation, [mbOK], 0);
@@ -10167,6 +10203,8 @@ Var
   Prompt: String;
   Col, TopLine: Integer;
 Begin
+  If Not TurnEngineReady Then
+    Exit;
   If FSending Then
     Begin
       RunAssistantModal('Wait for the current reply to finish (or Stop) before Fix Error.',
@@ -10809,7 +10847,8 @@ Begin
   View.PlanTitle := '';
   If (View.PlanPath <> '') And TryReadAssistantPlanIdentity(View.PlanPath, Title, Err) Then
     View.PlanTitle := Title;
-  View.CanSend := (Not FSending) And (Not FPlanAgentRunning);
+  View.CanSend := TurnEngineReady And (Not FSending) And (Not FPlanAgentRunning);
+  View.UnavailableSentence := AssistantTurnUnavailableSentence(FActiveBackend);
   View.CanSteer := FSending And AssistantCanSteer(FActiveBackend) And (Not FTransportWait);
   View.CanStop := FSending;
   View.CanChangeMode := Not (FSending Or FModeLocked);
@@ -11229,10 +11268,9 @@ Begin
     End;
   If ThisFormBusy(Self, ErrorText) Then
     Exit;
-  If (Not FUseCodex) And (Not FUseClaude) And
-    ((Not Assigned(AssistantChatConfig)) Or (Not AssistantChatConfig.IsSignedIn)) Then
+  If Not TurnEngineReady Then
     Begin
-      ErrorText := 'Sign in with SuperGrok / X Premium in Settings before sending.';
+      ErrorText := AssistantTurnUnavailableSentence(FActiveBackend);
       Exit;
     End;
   If Not SubmitUserTextEx(Trim(MessageText), Trim(MessageText), True) Then
@@ -11505,6 +11543,12 @@ Begin
       ErrorText := 'Wait for the current reply to finish before starting Run Plan.';
       Exit;
     End;
+  If Not TurnEngineReady Then
+    Begin
+      UpdateWorkActions;
+      ErrorText := AssistantTurnUnavailableSentence(FActiveBackend);
+      Exit;
+    End;
   If Not RunPlanIsAvailable Then
     Begin
       UpdateWorkActions;
@@ -11574,6 +11618,11 @@ Var
 Begin
   Result := False;
   ErrorText := '';
+  If Not TurnEngineReady Then
+    Begin
+      ErrorText := AssistantTurnUnavailableSentence(FActiveBackend);
+      Exit;
+    End;
   If Not FindMonitorTask(TaskId, Task, ErrorText) Then
     Exit;
   If RefuseDesktopTask(Task, ErrorText) Then
