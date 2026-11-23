@@ -11660,21 +11660,66 @@ End;
 
 Function TProjectAssistantForm.RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes;
   Out Mime: String; Out ImageWidth, ImageHeight: Integer; Out ErrorText: String): Boolean;
+Const
+  { Newest stored turns searched when the picture is not on the turn the phone named. }
+  StoredTurnsSearched = 16;
 Var
-  Turn: TAssistantMonitorTurn;
-  I, J: Integer;
+  Image: TAssistantMonitorImage;
+  Refs: TAssistantImageRefArray;
+  I, Searched: Integer;
   Found: Boolean;
-  DisplayPath, ReadError: String;
+  StoreDir, ReadError: String;
 
-  Procedure Take(Const Image: TAssistantMonitorImage);
+  Function Usable(Const Candidate: TAssistantMonitorImage): Boolean;
   Begin
-    Found := True;
-    DisplayPath := Image.DisplayPath;
-    Mime := Image.Mime;
-    ImageWidth := Image.Width;
-    ImageHeight := Image.Height;
-    If Image.Missing Or (DisplayPath = '') Then
-      ErrorText := 'missing';
+    Result := (Candidate.Id = ImageId) And (Not Candidate.Missing) And (Candidate.DisplayPath <> '');
+  End;
+
+  Function FindInTurn(Index: Integer): Boolean;
+  Var
+    Turn: TAssistantMonitorTurn;
+    TurnError: String;
+    K, J: Integer;
+  Begin
+    Result := False;
+    If Not FillMonitorTurn(Index, Turn, TurnError) Then
+      Exit;
+    For K := 0 To High(Turn.Images) Do
+      If Usable(Turn.Images[K]) Then
+        Begin
+          Image := Turn.Images[K];
+          Exit(True);
+        End;
+    For K := 0 To High(Turn.Blocks) Do
+      For J := 0 To High(Turn.Blocks[K].Images) Do
+        If Usable(Turn.Blocks[K].Images[J]) Then
+          Begin
+            Image := Turn.Blocks[K].Images[J];
+            Exit(True);
+          End;
+  End;
+
+  Function FindInPendingAttachments: Boolean;
+  Var
+    K: Integer;
+  Begin
+    Result := False;
+    SetLength(Refs, 0);
+    If Not ParseAssistantImageRefs(FPendingTurnAttachments, Refs) Then
+      Exit;
+    For K := 0 To High(Refs) Do
+      If (Refs[K].Id = ImageId) And (Refs[K].DisplayPath <> '') And
+        AssistantImageDisplayPresent(StoreDir, Refs[K].Id, Refs[K].DisplayPath) Then
+        Begin
+          Image := Default(TAssistantMonitorImage);
+          Image.Id := Refs[K].Id;
+          Image.Name := Refs[K].Name;
+          Image.Mime := Refs[K].Mime;
+          Image.Width := Refs[K].Width;
+          Image.Height := Refs[K].Height;
+          Image.DisplayPath := Refs[K].DisplayPath;
+          Exit(True);
+        End;
   End;
 
 Begin
@@ -11683,38 +11728,39 @@ Begin
   Mime := '';
   ImageWidth := 0;
   ImageHeight := 0;
-  ErrorText := '';
-  DisplayPath := '';
-  Found := False;
-  If Not FillMonitorTurn(TurnIndex, Turn, ErrorText) Then
+  ErrorText := 'missing';
+  If ImageId = '' Then
+    Exit;
+  StoreDir := '';
+  If Assigned(ProjectAssistantConversation) Then
+    StoreDir := ProjectAssistantConversation.AssistantDirectory;
+  Image := Default(TAssistantMonitorImage);
+  Found := FindInTurn(TurnIndex);
+  { The live turn's rows can change between the image notice and this request. Its own pictures are still in the
+    pending attachments, and a turn that has just been recorded holds them under its stored index. }
+  If (Not Found) And (TurnIndex < 0) Then
+    Found := FindInPendingAttachments;
+  If (Not Found) And Assigned(ProjectAssistantConversation) Then
     Begin
-      ErrorText := 'missing';
-      Exit;
-    End;
-  For I := 0 To High(Turn.Images) Do
-    If Turn.Images[I].Id = ImageId Then
-      Begin
-        Take(Turn.Images[I]);
-        Break;
-      End;
-  If Not Found Then
-    For I := 0 To High(Turn.Blocks) Do
-      Begin
-        For J := 0 To High(Turn.Blocks[I].Images) Do
-          If Turn.Blocks[I].Images[J].Id = ImageId Then
+      Searched := 0;
+      I := ProjectAssistantConversation.TurnCount - 1;
+      While (Not Found) And (I >= 0) And (Searched < StoredTurnsSearched) Do
+        Begin
+          If I <> TurnIndex Then
             Begin
-              Take(Turn.Blocks[I].Images[J]);
-              Break;
+              Found := FindInTurn(I);
+              Inc(Searched);
             End;
-        If Found Then
-          Break;
-      End;
-  If Not Found Or (ErrorText = 'missing') Then
-    Begin
-      ErrorText := 'missing';
-      Exit;
+          Dec(I);
+        End;
     End;
-  If Not ReadStoredAssistantImage(ProjectRootPath, DisplayPath, Data, ReadError) Then
+  If Not Found Then
+    Exit;
+  ErrorText := '';
+  Mime := Image.Mime;
+  ImageWidth := Image.Width;
+  ImageHeight := Image.Height;
+  If Not ReadStoredAssistantImage(ProjectRootPath, Image.DisplayPath, Data, ReadError) Then
     Begin
       SetLength(Data, 0);
       If Pos('larger than', ReadError) > 0 Then

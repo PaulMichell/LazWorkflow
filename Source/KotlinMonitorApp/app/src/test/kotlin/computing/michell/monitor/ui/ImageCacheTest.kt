@@ -66,6 +66,39 @@ class ImageCacheTest {
   }
 
   @Test
+  fun aRefusalOnTheLiveTurnIsAskedAgainOnceTheTurnIsStored() {
+    val tracker = ImageFetchTracker(limit = 4, lifetimeMs = 1_000L)
+    val running = BoardContent("host", "c1", emptyList(), turnWith(-2, "u" to listOf(picture("shot"))))
+    assertEquals(listOf(-2), tracker.next(0, running, 0L).map { key -> key.turnIndex })
+    tracker.refuse("shot")
+    // While the turn runs, the refused picture is not asked for again on the live turn.
+    assertTrue(tracker.next(0, running, 10L).isEmpty())
+    val stored = BoardContent("host", "c1", listOf(turnWith(5, "u" to listOf(picture("shot")))))
+    val again = tracker.next(0, stored, 20L)
+    assertEquals(listOf("shot"), again.map { key -> key.imageId })
+    assertEquals(listOf(5), again.map { key -> key.turnIndex })
+    // A refusal for a stored turn settles the id.
+    tracker.refuse("shot")
+    assertTrue(tracker.next(0, stored, 30L).isEmpty())
+    assertTrue(tracker.next(0, running, 40L).isEmpty())
+  }
+
+  @Test
+  fun anAnswerAfterALiveRefusalSettlesThePicture() {
+    val tracker = ImageFetchTracker(limit = 4, lifetimeMs = 1_000L)
+    val running = BoardContent("host", "c1", emptyList(), turnWith(-2, "u" to listOf(picture("shot"))))
+    tracker.next(0, running, 0L)
+    tracker.refuse("shot")
+    val stored = BoardContent("host", "c1", listOf(turnWith(5, "u" to listOf(picture("shot")))))
+    tracker.next(0, stored, 10L)
+    tracker.settle("shot")
+    assertTrue(tracker.next(0, stored, 20L).isEmpty())
+    // A reset forgets the refusal, so a new link may ask on the live turn again.
+    tracker.reset()
+    assertEquals(listOf("shot"), tracker.next(0, running, 30L).map { key -> key.imageId })
+  }
+
+  @Test
   fun visibleSetRequestsLiveNeighboursAndNotDistantHistory() {
     val order = listOf(0, 1, 2, 3, 4)
     val images = mapOf(

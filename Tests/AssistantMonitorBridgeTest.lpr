@@ -15,7 +15,8 @@ Uses
   {$ENDIF}
   Interfaces, Forms, Classes, SysUtils, FileUtil, fpjson, jsonparser, AssistantTestIDEHost,
   WorkflowSettings, ProjectAssistantForm, AssistantSessionObserve, AssistantMonitorSession,
-  AssistantMonitorBridge, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCommands;
+  AssistantMonitorBridge, AssistantMonitorCarrier, AssistantMonitorCodec, AssistantMonitorFrames, AssistantMonitorCommands,
+  AssistantMonitorImages;
 
 Const
   MenuKeys: Array[0..6] Of String = ('plan_choices', 'plan', 'targets', 'conversations', 'models', 'reasoning', 'permissions');
@@ -91,6 +92,38 @@ Begin
   End;
 End;
 
+{ One image_unavailable reply for the request, with the reason the form reported. No error reply closes the request. }
+Procedure CheckImageRefusal(Carrier: TMonitorMemoryCarrier; Const RequestId, ImageId, Reason: String);
+Var
+  Root, Payload: TJSONObject;
+  Data: TJSONData;
+  Index, Replies, Errors: Integer;
+  Kind: String;
+Begin
+  Replies := 0;
+  Errors := 0;
+  For Index := 0 To Carrier.SentCount - 1 Do
+    Begin
+      Data := GetJSON(Carrier.SentJson(Index));
+      Try
+        Root := TJSONObject(Data);
+        Kind := Root.Get('type', '');
+        If Kind = 'error' Then
+          Inc(Errors);
+        If (Kind <> 'image_unavailable') Or (Root.Get('id', '') <> RequestId) Then
+          Continue;
+        Payload := TJSONObject(Root.Find('payload'));
+        Inc(Replies);
+        Check('image_unavailable names ' + ImageId, Payload.Get('image_id', '') = ImageId);
+        Check('image_unavailable reason is ' + Reason, Payload.Get('reason', '') = Reason);
+      Finally
+        Data.Free;
+      End;
+    End;
+  Check('one image_unavailable reply for ' + RequestId, Replies = 1);
+  Check('an image refusal is not an error reply', Errors = 0);
+End;
+
 Procedure TestBridge;
 Var
   Form: TProjectAssistantForm;
@@ -155,6 +188,11 @@ Begin
     CheckSynchronize;
     Session.DrainOutbound;
     CheckKeys(Carrier, ['status', 'session', 'mode', 'target', 'tasks', 'plan_choices', 'plan']);
+    Carrier.ClearSent;
+    Carrier.DeliverJson(EncodeImageGet('image-live', -2, 'img-absent'));
+    CheckSynchronize;
+    Session.DrainOutbound;
+    CheckImageRefusal(Carrier, 'image-live', 'img-absent', 'missing');
     {$IFDEF MONITOR_BRIDGE_TEST}
     Form.BindToActiveProject;
     CheckSynchronize;

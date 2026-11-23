@@ -74,16 +74,17 @@ fun imageRequestKeys(
 
 /**
  * Pictures on the board with no stored file, as image_get requests. The live turn comes first, then stored turns
- * newest first, so the end of the conversation arrives before older history. Ids in [skip] are left out, and no
- * more than [room] requests are returned. The note of pictures from before schema 5 names no turn, so the desktop
- * could not find them; those are not asked for.
+ * newest first, so the end of the conversation arrives before older history. Ids in [skip] are left out, ids in
+ * [skipLive] are left out of turns with an index below 0, and no more than [room] requests are returned. The note of
+ * pictures from before schema 5 names no turn, so the desktop could not find them; those are not asked for.
  */
 fun boardImageFetches(
   hostGeneration: Int,
   turns: List<WireTurn>,
   live: WireTurn?,
   skip: Set<String>,
-  room: Int
+  room: Int,
+  skipLive: Set<String> = emptySet()
 ): List<ImageRequestKey> {
   if (room <= 0) return emptyList()
   val keys = ArrayList<ImageRequestKey>()
@@ -93,7 +94,8 @@ fun boardImageFetches(
       if (block.blockId == StoredImagesBlockId) continue
       for (image in block.images) {
         if (image.id.isEmpty() || image.missing || image.displayPath.isNotEmpty()) continue
-        if (image.id in skip || !seen.add(image.id)) continue
+        if (image.id in skip || (turn.turnIndex < 0 && image.id in skipLive)) continue
+        if (!seen.add(image.id)) continue
         keys += ImageRequestKey(hostGeneration, turn.turnIndex, image.id)
         if (keys.size >= room) return keys
       }
@@ -102,30 +104,44 @@ fun boardImageFetches(
   return keys
 }
 
+private data class AskedImage(val atMs: Long, val turnIndex: Int)
+
 /**
- * The image_get requests on the current link. An answer or an unavailable reply settles an id, so it is not asked
- * again. A request with no answer inside the assembly lifetime may be asked again. A dropped link forgets what was
- * in flight, because the replies went with the socket. No more than [limit] requests are in flight.
+ * The image_get requests on the current link. An answer settles an id, so it is not asked again. An unavailable
+ * reply settles it too, unless it was asked for on the live turn: the live turn's rows change while it runs, so that
+ * id is asked again once it shows on a stored turn. A request with no answer inside the assembly lifetime may be
+ * asked again. A dropped link forgets what was in flight, because the replies went with the socket. No more than
+ * [limit] requests are in flight.
  */
 class ImageFetchTracker(
   private val limit: Int = MonitorLimits.MaxOpenImageAssemblies,
   private val lifetimeMs: Long = MonitorLimits.ImageAssemblyTtlMs
 ) {
-  private val asked = HashMap<String, Long>()
+  private val asked = HashMap<String, AskedImage>()
   private val settled = HashSet<String>()
+  private val refusedLive = HashSet<String>()
 
   val inFlight: Set<String> get() = asked.keys.toSet()
 
   fun next(hostGeneration: Int, board: BoardContent, nowMs: Long): List<ImageRequestKey> {
-    asked.entries.removeAll { entry -> nowMs - entry.value >= lifetimeMs }
-    val keys = boardImageFetches(hostGeneration, board.turns, board.live, asked.keys + settled, limit - asked.size)
-    for (key in keys) asked[key.imageId] = nowMs
+    asked.entries.removeAll { entry -> nowMs - entry.value.atMs >= lifetimeMs }
+    val keys = boardImageFetches(
+      hostGeneration, board.turns, board.live, asked.keys + settled, limit - asked.size, refusedLive
+    )
+    for (key in keys) asked[key.imageId] = AskedImage(nowMs, key.turnIndex)
     return keys
   }
 
   fun settle(imageId: String) {
     asked.remove(imageId)
+    refusedLive.remove(imageId)
     settled += imageId
+  }
+
+  /** The desktop sent image_unavailable. A refusal for the live turn waits for the stored turn. */
+  fun refuse(imageId: String) {
+    val request = asked.remove(imageId)
+    if (request != null && request.turnIndex < 0) refusedLive += imageId else settle(imageId)
   }
 
   /** The assembly gave up on this id. It may be asked for again. */
@@ -140,6 +156,7 @@ class ImageFetchTracker(
   fun reset() {
     asked.clear()
     settled.clear()
+    refusedLive.clear()
   }
 }
 

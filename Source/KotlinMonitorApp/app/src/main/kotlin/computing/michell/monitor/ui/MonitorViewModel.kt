@@ -1921,11 +1921,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val decoded = mutableListOf<DecodedImage>()
     val fetched = mutableListOf<Pair<String, ByteArray>>()
     val settled = mutableListOf<String>()
+    val refused = mutableListOf<String>()
     for (effect in effects) {
       if (effect !is MonitorEffect.DecodeImage) continue
       val generation = uiState.value.hostGeneration
       val missing = (effect.message.inbound as? InboundPayload.ImageMissing)?.value
-      if (missing != null) settled += missing.imageId
+      if (missing != null) refused += missing.imageId
       val part = effect.message.inbound as? InboundPayload.ImagePart
       val joined = if (part == null) null else images.accept(part.image, part.bytes)
       val expired = images.takeExpired()
@@ -1950,8 +1951,11 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val copyState = incomingCopiesScreen(effects)
     withContext(Dispatchers.Main) {
       for (image in decoded) storeDecoded(image)
-      if (settled.isNotEmpty()) {
-        synchronized(imageFetch) { for (id in settled) imageFetch.settle(id) }
+      if (settled.isNotEmpty() || refused.isNotEmpty()) {
+        synchronized(imageFetch) {
+          for (id in refused) imageFetch.refuse(id)
+          for (id in settled) imageFetch.settle(id)
+        }
         // An unavailable reason is chrome on the tile. A settled request makes room for the next picture.
         if (!copyState) uiState.value = coordinator.state
         requestBoardImages()

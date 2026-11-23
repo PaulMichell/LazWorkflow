@@ -55,7 +55,7 @@ Uses
   AssistantMonitorImages, AssistantMonitorState, AssistantMonitorCommands,
   Classes, SyncObjs, Forms, ExtCtrls, fpjson, WorkflowLog, AssistantSessionObserve, AssistantMonitorCodec,
   AssistantMonitorMirror, AssistantMonitorSync, AssistantMonitorApproval, AssistantTools, AssistantConversation,
-  AssistantSaveBeforeTurn, ProjectAssistantForm;
+  AssistantSaveBeforeTurn, AssistantMonitorFrames, ProjectAssistantForm;
 
 Const
   ResumeConversationWaitMs = 60000;
@@ -1617,9 +1617,12 @@ Begin
         Result := Form.RemoteImage(Image.TurnIndex, Image.ImageId, Data, Mime, ImageWidth, ImageHeight, ErrorText);
         If Not Result Then
           Begin
-            If ErrorText = '' Then
+            { The phone shows the reason. Only the three catalogue reasons go on the wire. }
+            If (ErrorText <> 'too_large') And (ErrorText <> 'refused') Then
               ErrorText := 'missing';
-            SendJson(EncodeImageUnavailable(Id, Image.ImageId, 'missing'));
+            MonitorLog(2, 'image refused reason=' + ErrorText + ' turn=' + IntToStr(Image.TurnIndex) + ' image=' +
+              Image.ImageId);
+            SendJson(EncodeImageUnavailable(Id, Image.ImageId, ErrorText));
             Result := True;
             ErrorText := '';
           End
@@ -1639,6 +1642,8 @@ Begin
           Begin
             If Unavailable = '' Then
               Unavailable := 'missing';
+            MonitorLog(2, 'image refused reason=' + Unavailable + ' turn=' + IntToStr(Image.TurnIndex) + ' image=' +
+              Image.ImageId);
             SendJson(EncodeImageUnavailable(Id, Image.ImageId, Unavailable));
           End;
       End;
