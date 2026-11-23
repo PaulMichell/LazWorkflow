@@ -5024,6 +5024,31 @@ Begin
           Raise Exception.Create('The Lazarus tools could not start: ' + ToolsError);
         TurnSettings.MCPConfigFile := ConfigFile;
       End;
+    If FClaudeResume Then
+      Begin
+        TurnSettings.SystemPrompt := '';
+        If (FClaudeSessionId <> '') And (Not ClaudeHarnessWasDelivered(FClaudeSessionId)) Then
+          Begin
+            SetCurrentSystemNote('This Claude session was started before the work policy was sent. ' +
+              'Claude Code keeps that recorded prompt, so this turn does not pick up the new one. Start a new chat to send it.');
+            NoteClaudeHarnessDelivered(FClaudeSessionId);
+          End;
+      End
+    Else
+      Begin
+        TurnSettings.SystemPrompt := ClaudeHarnessPrompt(ActiveMode);
+        If TurnSettings.MCPConfigFile <> '' Then
+          TurnSettings.SystemPrompt := TurnSettings.SystemPrompt + LineEnding + LineEnding + ClaudeReadImageNote;
+        NoteClaudeHarnessDelivered(FClaudeSessionId);
+        WorkflowLogger.Info('ProjectAssistant',
+          'Claude Code stores the system prompt on the session''s first request. A later prompt change will not reach a resumed session.');
+        If Length(TurnSettings.SystemPrompt) > ClaudeFixtureAcceptedTextChars Then
+          WorkflowLogger.Info('ProjectAssistant',
+            'Claude append-system-prompt is ' + IntToStr(Length(TurnSettings.SystemPrompt)) +
+            ' characters. Fixtures in Tests/Fixtures/Claude show the program accepting up to ' +
+            IntToStr(ClaudeFixtureAcceptedTextChars) + ' characters. Project rules stay within ' +
+            IntToStr(AssistantAgentsMaxChars) + ' characters. The work policy is kept.');
+      End;
     FClaudeRun := TAssistantClaudeRun.Create(TurnSettings, LaunchText);
     SetStreamPhase(AssistantPhaseWaiting);
     Result := True;

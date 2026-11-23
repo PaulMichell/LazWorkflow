@@ -63,6 +63,9 @@ Function AssistantImageOutputPromptSection: String;
 Function AssistantCannotWriteImagesLine: String;
 /// The developerInstructions a ChatGPT turn attaches: the harness prompt, without the image sentence Grok appends.
 Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
+/// The harness prompt a new Claude session receives. Same builder as Grok: policy, mode overlay, skills and
+/// AGENTS.md. Claude cannot run a child or write an image, so those two offers stay out.
+Function ClaudeHarnessPrompt(Mode: TAssistantMode): String;
 
 Implementation
 
@@ -87,6 +90,27 @@ Begin
     If Assigned(WorkflowAssistantHarness) Then
       { ChatGPT cannot run a child. Do not name spawn_subagent in the instructions. }
       Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel, True, False);
+  Finally
+    Names.Free;
+  End;
+End;
+
+Function ClaudeHarnessPrompt(Mode: TAssistantMode): String;
+Var
+  Names: TStringList;
+  Root, PlanRel: String;
+Begin
+  Result := '';
+  Names := TStringList.Create;
+  Try
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(Mode), Names);
+    Root := ProjectRootPath;
+    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+      Root := ProjectAssistantConversation.ProjectRoot;
+    PlanRel := GetActivePlanRelativePath;
+    If Assigned(WorkflowAssistantHarness) Then
+      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel, False, False);
   Finally
     Names.Free;
   End;

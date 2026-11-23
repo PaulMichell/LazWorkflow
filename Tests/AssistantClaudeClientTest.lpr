@@ -453,13 +453,13 @@ Begin
     Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
 
     Args.Clear;
-    AppendClaudeModeArguments(awsNone, '/tmp/lazarus-mcp-x.json', Args);
+    AppendClaudeModeArguments(awsNone, '/tmp/lazarus-mcp-x.json', '', Args);
     Check('chat turns get no tools and no server, even with a config file', (Args.Count = 2) And (Args[0] = '--tools=') And
       (Args[1] = '--strict-mcp-config'));
     For Scope In [awsReadOnly, awsMarkdown, awsProject] Do
       Begin
         Args.Clear;
-        AppendClaudeModeArguments(Scope, '/tmp/lazarus-mcp-x.json', Args);
+        AppendClaudeModeArguments(Scope, '/tmp/lazarus-mcp-x.json', ClaudeReadImageNote, Args);
         Check('turns outside chat read with Claude Code and act through the Lazarus server', (Args.Count = 5) And
           (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--mcp-config=/tmp/lazarus-mcp-x.json') And
           (Args[2] = '--allowedTools=mcp__lazarus__*') And (Args[4] = '--strict-mcp-config'));
@@ -469,7 +469,7 @@ Begin
           (Pos('Edit', Args.Text) = 0) And (Pos('Write', Args.Text) = 0) And (Pos('Bash', Args.Text) = 0));
       End;
     Args.Clear;
-    AppendClaudeModeArguments(awsProject, '', Args);
+    AppendClaudeModeArguments(awsProject, '', '', Args);
     Check('without a config file a turn only reads and loads no server', (Args.Count = 2) And
       (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--strict-mcp-config'));
     Check('a Lazarus tool is shown without the server prefix', ClaudeToolDisplayName('mcp__lazarus__read_buffer') = 'read_buffer');

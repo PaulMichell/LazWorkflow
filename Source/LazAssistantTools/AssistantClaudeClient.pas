@@ -7,8 +7,10 @@ Unit AssistantClaudeClient;
   the program's own auth status is checked once per executable per IDE session. Each turn is claude -p with
   stream-json output, folded into TClaudeStreamState so the IDE sees text, tool calls, usage and the
   subscription's rate-limit windows while the turn runs. Outside Chat a turn reaches the IDE's Lazarus tools
-  through the MCP server named in its config file; it does not receive this assistant's own tool list, skill
-  bodies, or transcript compactor. }
+  through the MCP server named in its config file. The first request of a session also receives the harness
+  prompt (policy, mode overlay, skills and AGENTS.md) via --append-system-prompt. Claude Code stores that
+  prompt and reuses it on resume. This client does not receive the assistant's own tool list or transcript
+  compactor, and it never reads Claude sign-in files or sets a billing flag. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -45,6 +47,8 @@ Type
     { Claude Code's own session: started with --session-id, continued with --resume. }
     SessionId: String;
     Resume: Boolean;
+    { Harness prompt for a new session. Empty on resume: Claude Code already stored the first one. }
+    SystemPrompt: String;
     { The prompt is one stream-json user message (AssistantClaudeInput), not plain text. }
     StreamInput: Boolean;
   End;
@@ -112,6 +116,9 @@ Const
     is not repeated in the conversation. }
   ClaudeReadImageNote = 'When the user should see which picture you looked at, open it with the Lazarus read_image ' +
     'tool rather than Read: read_image shows the picture in the conversation.';
+  { Longest line in Tests/Fixtures/Claude (mcp-image.jsonl). No fixture records a longer --append-system-prompt
+    than ClaudeReadImageNote. A longer harness prompt is reported and still sent. }
+  ClaudeFixtureAcceptedTextChars = 5560;
 
 /// The claude program on PATH, or empty.
 Function DetectClaudeExecutable: String;
@@ -122,10 +129,14 @@ Function ClaudeToolScopeForMode(Mode: TAssistantMode): TAssistantWriteScope;
 /// True when the turn starts the Lazarus MCP server and appends the read-image note. Chat does not.
 Function ClaudeTurnUsesMCP(Mode: TAssistantMode): Boolean;
 /// Tool arguments that hold a turn to Scope. None has no tools. Every other scope reads with Claude Code's own
-/// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile, whose broker run
-/// enforces the scope's writes, and appends ClaudeReadImageNote to the system prompt. An empty MCPConfigFile
-/// loads no server and adds no note, which leaves reading only.
-Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile: String; Args: TStrings);
+/// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile. SystemPrompt is the
+/// --append-system-prompt body. Empty sends none. The caller adds ClaudeReadImageNote when the Lazarus tools
+/// are loaded. An empty MCPConfigFile loads no server.
+Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile, SystemPrompt: String;
+  Args: TStrings);
+/// True after this session id was given the harness prompt. A resume that returns false started before that.
+Procedure NoteClaudeHarnessDelivered(Const SessionId: String);
+Function ClaudeHarnessWasDelivered(Const SessionId: String): Boolean;
 /// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
 Function ClaudeToolDisplayName(Const ToolName: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
@@ -190,6 +201,7 @@ Const
 Var
   { Executables whose account was confirmed as a subscription in this IDE session. }
   ConfirmedExecutables: TStringList;
+  HarnessSessions: TStringList;
   AccountLock: TRTLCriticalSection;
 
 Function DetectClaudeExecutable: String;
@@ -220,9 +232,24 @@ Begin
   Result := ClaudeToolScopeForMode(Mode) <> awsNone;
 End;
 
-Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile: String; Args: TStrings);
+Procedure NoteClaudeHarnessDelivered(Const SessionId: String);
+Begin
+  If (SessionId = '') Or (HarnessSessions.IndexOf(SessionId) >= 0) Then
+    Exit;
+  HarnessSessions.Add(SessionId);
+End;
+
+Function ClaudeHarnessWasDelivered(Const SessionId: String): Boolean;
+Begin
+  Result := (SessionId <> '') And (HarnessSessions.IndexOf(SessionId) >= 0);
+End;
+
+Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile, SystemPrompt: String;
+  Args: TStrings);
 Const
   ReadTools = 'Read,Grep,Glob';
+Var
+  Prompt: String;
 Begin
   If Not Assigned(Args) Then
     Exit;
@@ -238,10 +265,11 @@ Begin
           Args.Add('--mcp-config=' + MCPConfigFile);
           { The only --allowedTools list. Whether a second one adds to it or replaces it is not known. }
           Args.Add('--allowedTools=mcp__' + MCPServerName + '__*');
-          { In the system prompt, not the user's message: read_image exists only with the server. }
-          Args.Add('--append-system-prompt=' + ClaudeReadImageNote);
         End;
     End;
+  Prompt := Trim(SystemPrompt);
+  If Prompt <> '' Then
+    Args.Add('--append-system-prompt=' + Prompt);
   { Only the server named above, never one from the user's or the project's Claude Code settings. }
   Args.Add('--strict-mcp-config');
 End;
@@ -994,7 +1022,7 @@ Begin
       Else If CheckTurnSettings(Settings, ErrorText) And EnsureClaudeSubscription(Settings.Executable, ErrorText) Then
         Begin
           AppendClaudeTurnArguments(Settings.Model, Settings.Effort, Settings.SessionId, Settings.Resume, Args);
-          AppendClaudeModeArguments(Settings.ToolScope, Settings.MCPConfigFile, Args);
+          AppendClaudeModeArguments(Settings.ToolScope, Settings.MCPConfigFile, Settings.SystemPrompt, Args);
           If Settings.StreamInput Then
             Begin
               Args.Add('--input-format');
@@ -1051,9 +1079,11 @@ Initialization
 
 InitCriticalSection(AccountLock);
 ConfirmedExecutables := TStringList.Create;
+HarnessSessions := TStringList.Create;
 
 Finalization
 
+FreeAndNil(HarnessSessions);
 FreeAndNil(ConfirmedExecutables);
 DoneCriticalSection(AccountLock);
 

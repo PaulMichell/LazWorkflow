@@ -447,7 +447,11 @@ Begin
       ConfigFile := 'mcp-config.json'
     Else
       ConfigFile := '';
-    AppendClaudeModeArguments(AssistantWriteScopeForMode(Mode), ConfigFile, Args);
+    If ConfigFile <> '' Then
+      Attached := ClaudeHarnessPrompt(Mode) + LineEnding + LineEnding + ClaudeReadImageNote
+    Else
+      Attached := ClaudeHarnessPrompt(Mode);
+    AppendClaudeModeArguments(AssistantWriteScopeForMode(Mode), ConfigFile, Attached, Args);
     AddCommaNames(ArgumentValue(Args, '--tools='), Names);
     Attached := ArgumentValue(Args, '--append-system-prompt=');
     If Not ClaudeTurnUsesMCP(Mode) Then
