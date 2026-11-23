@@ -21,10 +21,6 @@ Uses
   Classes, AssistantClaudeStream, AssistantConversation;
 
 Type
-  { What Claude Code's own tools may do in a turn. The form maps each conversation mode onto one, so this unit
-    needs no IDE units. Read comes first: a settings record left at its default stays read-only. }
-  TClaudeToolScope = (ctsRead, ctsNone, ctsMarkdown, ctsProject);
-
   { The billing fields of claude auth status. Email and organisation are never read. }
   TClaudeAccount = Record
     SignedIn: Boolean;
@@ -37,8 +33,9 @@ Type
   TClaudeTurnSettings = Record
     Executable: String;
     Model: String;
-    { What the turn may do, from the conversation mode. The approval setting is not here: the broker applies it. }
-    ToolScope: TClaudeToolScope;
+    { What the turn may write. AssistantWriteScopeForMode maps the conversation mode. The broker unit is not
+      used here: its implementation pulls IDE units, and this client must not. }
+    ToolScope: TAssistantWriteScope;
     { The --mcp-config file for the IDE's Lazarus tools. Empty loads no MCP server. }
     MCPConfigFile: String;
     WorkingDirectory: String;
@@ -120,16 +117,15 @@ Const
 Function DetectClaudeExecutable: String;
 /// The expanded path when it names an executable file, otherwise empty.
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
-/// What a Claude turn may do in each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
-/// Build works on the project. The Lazarus tools' broker run enforces it.
-Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
+/// AssistantWriteScopeForMode. Kept so a Claude call site names the same map as Codex.
+Function ClaudeToolScopeForMode(Mode: TAssistantMode): TAssistantWriteScope;
 /// True when the turn starts the Lazarus MCP server and appends the read-image note. Chat does not.
 Function ClaudeTurnUsesMCP(Mode: TAssistantMode): Boolean;
 /// Tool arguments that hold a turn to Scope. None has no tools. Every other scope reads with Claude Code's own
 /// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile, whose broker run
 /// enforces the scope's writes, and appends ClaudeReadImageNote to the system prompt. An empty MCPConfigFile
 /// loads no server and adds no note, which leaves reading only.
-Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
+Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile: String; Args: TStrings);
 /// A tool name for the trace: mcp__lazarus__read_buffer is shown as read_buffer. Other names are unchanged.
 Function ClaudeToolDisplayName(Const ToolName: String): String;
 /// Print-mode arguments for one stream-json turn. The default model, an empty effort and an empty SessionId
@@ -214,30 +210,24 @@ Begin
     Result := Path;
 End;
 
-Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
+Function ClaudeToolScopeForMode(Mode: TAssistantMode): TAssistantWriteScope;
 Begin
-  Case Mode Of
-    amChat: Result := ctsNone;
-    amDocument, amPlan: Result := ctsMarkdown;
-    amBuild: Result := ctsProject;
-  Else
-    Result := ctsRead;
-  End;
+  Result := AssistantWriteScopeForMode(Mode);
 End;
 
 Function ClaudeTurnUsesMCP(Mode: TAssistantMode): Boolean;
 Begin
-  Result := ClaudeToolScopeForMode(Mode) <> ctsNone;
+  Result := ClaudeToolScopeForMode(Mode) <> awsNone;
 End;
 
-Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);
+Procedure AppendClaudeModeArguments(Scope: TAssistantWriteScope; Const MCPConfigFile: String; Args: TStrings);
 Const
   ReadTools = 'Read,Grep,Glob';
 Begin
   If Not Assigned(Args) Then
     Exit;
   { One argument each, so an empty list cannot be lost or swallow the next option. }
-  If Scope = ctsNone Then
+  If Scope = awsNone Then
     Args.Add('--tools=')
   Else
     Begin

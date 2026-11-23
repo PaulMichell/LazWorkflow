@@ -258,7 +258,7 @@ Type
     Procedure ReleaseCodexProcess;
     Procedure ReleaseCodexRun;
     Procedure ReleaseClaudeProcess;
-    Function StartClaudeTools(Scope: TClaudeToolScope; Out ConfigFile, ErrorText: String): Boolean;
+    Function StartClaudeTools(Scope: TAssistantWriteScope; Out ConfigFile, ErrorText: String): Boolean;
     Procedure ReleaseClaudeTools;
     Function ApproveClaudeTool(Const Tool, Path, OldText, NewText: String): Boolean;
     Function TryDeferDroppedTransport(Const Answer, ErrorText, Body: String): Boolean;
@@ -4828,7 +4828,7 @@ End;
 
 { The Lazarus tools for one Claude turn: a broker run in the turn's scope, served on a loopback port with a new
   token. ConfigFile is the owner-only --mcp-config file, deleted again by ReleaseClaudeTools. }
-Function TProjectAssistantForm.StartClaudeTools(Scope: TClaudeToolScope; Out ConfigFile, ErrorText: String): Boolean;
+Function TProjectAssistantForm.StartClaudeTools(Scope: TAssistantWriteScope; Out ConfigFile, ErrorText: String): Boolean;
 Begin
   Result := False;
   ConfigFile := '';
@@ -4964,14 +4964,7 @@ Begin
     Exit;
   If FCodexWorkspace.Identity <> FCodexIdentity Then
     Exit;
-  Case ActiveMode Of
-    amChat: FCodexBroker.BeginRun(awsNone, amChat);
-    amBuild: FCodexBroker.BeginRun(awsProject, amBuild);
-    amDocument: FCodexBroker.BeginRun(awsMarkdown, amDocument);
-    amPlan: FCodexBroker.BeginRun(awsMarkdown, amPlan);
-  Else
-    FCodexBroker.BeginRun(awsReadOnly, amInspect);
-  End;
+  FCodexBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
   Try
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
       FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile,
@@ -5122,12 +5115,7 @@ Begin
   FCodexBroker.OnApproval := Nil;
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
-  Case ActiveMode Of
-    amChat: FCodexBroker.BeginRun(awsNone, amChat);
-    amBuild: FCodexBroker.BeginRun(awsProject, amBuild);
-    amDocument: FCodexBroker.BeginRun(awsMarkdown, amDocument);
-    amPlan: FCodexBroker.BeginRun(awsMarkdown, amPlan);
-  Else FCodexBroker.BeginRun(awsReadOnly, amInspect); End;
+  FCodexBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
   ShowChatSurfaceKeepMode;
   { Same user text as SubmitUserTextEx. The harness prompt owns the mode essay, including chat's no-tools sentence.
     Pictures are the same stored refs. The Codex wire maps them to localImage; it does not invent a note. }

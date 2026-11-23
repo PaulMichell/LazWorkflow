@@ -520,22 +520,23 @@ End;
 
 Procedure CheckScopes;
 Begin
-  Check('ctsNone maps to awsNone', ClaudeBrokerWriteScope(ctsNone) = awsNone);
-  Check('ctsRead maps to awsReadOnly', ClaudeBrokerWriteScope(ctsRead) = awsReadOnly);
-  Check('ctsMarkdown maps to awsMarkdown', ClaudeBrokerWriteScope(ctsMarkdown) = awsMarkdown);
-  Check('ctsProject maps to awsProject', ClaudeBrokerWriteScope(ctsProject) = awsProject);
-  Bridge.BeginRun(ctsNone);
+  Check('chat has no write scope', AssistantWriteScopeForMode(amChat) = awsNone);
+  Check('inspect is read-only', AssistantWriteScopeForMode(amInspect) = awsReadOnly);
+  Check('document edits markdown', AssistantWriteScopeForMode(amDocument) = awsMarkdown);
+  Check('plan edits markdown', AssistantWriteScopeForMode(amPlan) = awsMarkdown);
+  Check('build edits the project', AssistantWriteScopeForMode(amBuild) = awsProject);
+  Bridge.BeginRun(awsNone);
   Check('a Chat run lists no broker tools', Bridge.ToolsJSON = '[]');
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('a read run lists read_buffer', Pos('"lazarus_read_buffer"', Bridge.ToolsJSON) > 0);
   Check('a read run lists no replace_buffer', Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) = 0);
   Check('a read run lists no replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) = 0);
   Check('a read run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
-  Bridge.BeginRun(ctsMarkdown);
+  Bridge.BeginRun(awsMarkdown);
   Check('a Markdown run lists replace_buffer for documents, not every file',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) > 0));
   Check('a Markdown run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('a project run lists replace_buffer for any file',
     (Pos('"lazarus_replace_buffer"', Bridge.ToolsJSON) > 0) And (Pos('other document files', Bridge.ToolsJSON) = 0));
   Check('a project run lists replace_in_buffer', Pos('"lazarus_replace_in_buffer"', Bridge.ToolsJSON) > 0);
@@ -547,7 +548,7 @@ Begin
     (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
     (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0));
   Check('a project run hides set_active_plan', Pos('lazarus_set_active_plan', Bridge.ToolsJSON) = 0);
-  Bridge.BeginRun(ctsMarkdown);
+  Bridge.BeginRun(awsMarkdown);
   Check('a Markdown run hides the form tool', Pos('lazarus_ensure_form_component', Bridge.ToolsJSON) = 0);
   Check('a Markdown run hides delete, rename and add-unit',
     (Pos('lazarus_delete_path', Bridge.ToolsJSON) = 0) And (Pos('lazarus_rename_path', Bridge.ToolsJSON) = 0) And
@@ -556,7 +557,7 @@ Begin
     (Pos('"lazarus_list_plans"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_get_active_plan"', Bridge.ToolsJSON) > 0) And
     (Pos('"lazarus_read_markdown_section"', Bridge.ToolsJSON) > 0) And
     (Pos('"lazarus_set_active_plan"', Bridge.ToolsJSON) > 0));
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('the bridge run is the broker run', (Bridge.RunId <> '') And (Bridge.RunId = Broker.RunId));
 End;
 
@@ -596,7 +597,7 @@ Var
   Client: TClientThread;
   Reads: Integer;
 Begin
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('the listener starts with the run''s catalogue', StartListener);
   Reads := Workspace.Reads;
   Client := TClientThread.Create(Listener.URL, Listener.Token);
@@ -707,7 +708,7 @@ Begin
   After := 'keep' + LineEnding + Edited + LineEnding + 'tail';
   Workspace.StoredText := Before;
   Workspace.ReplaceCount := 0;
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Revision := ReadRevision('Main.pas');
   Workspace.ApprovedOld := '';
   Workspace.ApprovedNew := '';
@@ -736,7 +737,7 @@ Begin
   Check('a missing match leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
 
   Workspace.StoredText := 'one' + LineEnding + 'two' + LineEnding + 'one';
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Revision := ReadRevision('Main.pas');
   Calls := Workspace.ReplaceCount;
   Before := Workspace.StoredText;
@@ -750,7 +751,7 @@ Begin
   Check('the replace_all reply contains no buffer text', (Pos('ONE', ResultText) = 0) And (Pos('one', ResultText) = 0));
 
   Workspace.StoredText := 'keep' + LineEnding + 'only-once' + LineEnding + 'tail';
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Revision := ReadRevision('Main.pas');
   Workspace.StoredText := 'keep' + LineEnding + 'moved-once' + LineEnding + 'tail';
   Calls := Workspace.ReplaceCount;
@@ -760,7 +761,7 @@ Begin
   Check('a stale revision leaves the buffer unchanged', (Workspace.StoredText = Before) And (Workspace.ReplaceCount = Calls));
 
   Workspace.StoredText := 'keep' + LineEnding + 'edit me' + LineEnding;
-  Bridge.BeginRun(ctsMarkdown);
+  Bridge.BeginRun(awsMarkdown);
   Revision := ReadRevision('Main.pas');
   Calls := Workspace.ReplaceCount;
   Before := Workspace.StoredText;
@@ -796,7 +797,7 @@ Begin
   Workspace.AllowInspect := True;
   Workspace.AllowChanges := True;
   Workspace.SaveCount := 0;
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('read_buffer still returns text by default',
     Broker.Execute(Bridge.RunId, 'lazarus_read_buffer', '{"path":"Main.pas"}', ResultText, ErrorText) And
     (Pos(Secret, ResultText) > 0));
@@ -813,7 +814,7 @@ Begin
 
   Workspace.StoredText := Before;
   Workspace.EditorStamp := 1;
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Revision := ReadRevision('Main.pas');
   Root := TJSONObject.Create;
   Changes := TJSONArray.Create;
@@ -843,7 +844,7 @@ Begin
     ObjectArguments('Main.pas', Revision, '', '', False, False, ''), ResultText, ErrorText) And (Workspace.SaveCount = Saves + 1));
 
   Workspace.StoredText := Before;
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('open_buffer can omit the text', Broker.Execute(Bridge.RunId, 'lazarus_open_buffer',
     ObjectArguments('Main.pas', '', '', '', True, False, 'include_text'), ResultText, ErrorText));
   Check('open_buffer reply contains no buffer text', (Pos(Secret, ResultText) = 0) And (Pos('"text"', ResultText) = 0));
@@ -878,7 +879,7 @@ Begin
   Workspace.OpenPath := 'Main.pas';
   Workspace.DiskText := 'alpha' + LineEnding + Disk + LineEnding + 'omega';
   Workspace.StoredText := Unsaved + '-one' + LineEnding + Unsaved + '-two' + LineEnding + Unsaved + '-three';
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('a read run lists search_in_project', Pos('"lazarus_search_in_project"', Bridge.ToolsJSON) > 0);
   Obj := TJSONObject.Create;
   Try
@@ -981,7 +982,7 @@ Var
   OldRun: String;
 Begin
   OldRun := Bridge.RunId;
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('the next run has a new run id', (Bridge.RunId <> '') And (Bridge.RunId <> OldRun));
   Client := TClientThread.Create(Listener.URL, Listener.Token);
   Try
@@ -1141,7 +1142,7 @@ Begin
   Workspace.DeleteCalls := 0;
   Workspace.RenameCalls := 0;
   Workspace.AddUnitCalls := 0;
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Deletes := Workspace.DeleteCalls;
   Check('delete outside the target is refused', Not Broker.Execute(Bridge.RunId, 'lazarus_delete_path',
     '{"path":"' + Outside + '"}', ResultText, ErrorText) And (Pos('outside', ErrorText) > 0) And
@@ -1217,15 +1218,15 @@ Var
   Width, Height: Integer;
 Begin
   Workspace.AllowInspect := True;
-  Bridge.BeginRun(ctsNone);
+  Bridge.BeginRun(awsNone);
   Check('a Chat run does not list read_image', Pos('lazarus_read_image', Bridge.ToolsJSON) = 0);
   Check('a Chat run refuses read_image', Not Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
     ResultText, ErrorText, Images) And (Length(Images) = 0));
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('a read run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
-  Bridge.BeginRun(ctsMarkdown);
+  Bridge.BeginRun(awsMarkdown);
   Check('a Markdown run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('a project run lists read_image', Pos('"lazarus_read_image"', Bridge.ToolsJSON) > 0);
 
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-broker-image-' + IntToStr(GetProcessID);
@@ -1236,7 +1237,7 @@ Begin
   WritePng(Root + 'dot.png', 4, 3);
   WritePng(Outside, 4, 3);
   WritePng(Root + 'wide.png', 3000, 4);
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
 
   Check('read_image returns one picture', Broker.Execute(Bridge.RunId, 'lazarus_read_image', '{"path":"dot.png"}',
     ResultText, ErrorText, Images) And (Length(Images) = 1));
@@ -1282,7 +1283,7 @@ Begin
 
   Check('the bridge hands the picture back', Bridge.Execute('lazarus_read_image', '{"path":"dot.png"}', ResultText,
     ErrorText, Images) And (Length(Images) = 1) And (Images[0].MimeType = 'image/png'));
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('a new run forgets the last run''s pictures', Broker.ReadImagesJson(ResultText) = '');
 
   DeleteFile(Outside);
@@ -1316,7 +1317,7 @@ Begin
     '## 2. Second package' + LineEnding +
     'second only' + LineEnding);
   Check('select the section-read target', AssistantTarget.SelectFolder(Root, ErrorText));
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Args := TJSONObject.Create;
   Try
     Args.Add('path', 'Documents/Plan.md');
@@ -1412,7 +1413,7 @@ Begin
   Workspace.LaunchCount := 0;
   Workspace.LastCommand := '';
   Workspace.LastOptions := '';
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('valid names are passed as only pairs', Broker.Execute(Bridge.RunId, 'lazarus_start_tests',
     OnlyRequest(['GoodTest', 'OtherTest']), ResultText, ErrorText) And (Workspace.LaunchCount = 1));
   Command := Workspace.LastCommand;
@@ -1572,7 +1573,7 @@ Begin
     Args.Add('properties', Props.AsJSON);
     Args.Add('event_method', 'ColorTimerTimer');
     Args.Add('uses_unit', 'ExtCtrls');
-    Bridge.BeginRun(ctsProject);
+    Bridge.BeginRun(awsProject);
     Check('the broker adds the component to both buffers', Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
       Args.AsJSON, ResultText, ErrorText) And (Workspace.FormCalls = 1));
   Finally
@@ -1585,7 +1586,7 @@ Begin
   BeforePas := Workspace.PasText;
   BeforeLfm := Workspace.LfmText;
   Calls := Workspace.FormCalls;
-  Bridge.BeginRun(ctsMarkdown);
+  Bridge.BeginRun(awsMarkdown);
   Check('a Markdown scope refuses the form tool', Not Broker.Execute(Bridge.RunId, 'lazarus_ensure_form_component',
     '{"path":"Main.pas","name":"OtherTimer","class_name":"TTimer"}', ResultText, ErrorText) And
     (Pos('Build mode', ErrorText) > 0) And (Workspace.FormCalls = Calls));
@@ -1611,19 +1612,19 @@ Var
   ResultText, ErrorText: String;
   Images: TMCPToolImages;
 Begin
-  Bridge.BeginRun(ctsRead);
+  Bridge.BeginRun(awsReadOnly);
   Check('a read run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
   Check('a read run refuses todo_write',
     Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires Plan or Build mode.'));
-  Bridge.BeginRun(ctsMarkdown, amDocument);
+  Bridge.BeginRun(awsMarkdown, amDocument);
   Check('a Document run hides todo_write', Pos('lazarus_todo_write', Bridge.ToolsJSON) = 0);
   Check('a Document run refuses todo_write',
     Not Bridge.Execute('lazarus_todo_write', Two, ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires Plan or Build mode.'));
-  Bridge.BeginRun(ctsMarkdown, amPlan);
+  Bridge.BeginRun(awsMarkdown, amPlan);
   Check('a Plan run lists todo_write', Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0);
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('a project run lists todo_write with its statuses',
     (Pos('"lazarus_todo_write"', Bridge.ToolsJSON) > 0) And
     (Pos('"enum":["pending","in_progress","completed","cancelled"]', Bridge.ToolsJSON) > 0));
@@ -1640,7 +1641,7 @@ Begin
     Not Bridge.Execute('lazarus_todo_write', '{}', ResultText, ErrorText, Images) And
     (ErrorText = 'todo_write requires a todos array.'));
   Check('the list is the one Grok''s todo_write keeps', WorkflowAssistantHarness.TodoCount = 2);
-  Bridge.BeginRun(ctsProject);
+  Bridge.BeginRun(awsProject);
   Check('a new run starts with no checklist', WorkflowAssistantHarness.TodoCount = 0);
 End;
 
@@ -1656,14 +1657,14 @@ Var
 Begin
   Workspace.AllowCommands := True;
   Try
-    Bridge.BeginRun(ctsRead);
+    Bridge.BeginRun(awsReadOnly);
     Check('a read run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
     Check('a read run refuses run_command',
       Not Bridge.Execute('lazarus_run_command', Echo, ResultText, ErrorText, Images) And
       (ErrorText = 'Running a command requires Build mode.'));
-    Bridge.BeginRun(ctsMarkdown);
+    Bridge.BeginRun(awsMarkdown);
     Check('a Markdown run hides run_command', Pos('lazarus_run_command', Bridge.ToolsJSON) = 0);
-    Bridge.BeginRun(ctsProject);
+    Bridge.BeginRun(awsProject);
     Check('a project run lists run_command and command_status',
       (Pos('"lazarus_run_command"', Bridge.ToolsJSON) > 0) And (Pos('"lazarus_command_status"', Bridge.ToolsJSON) > 0));
     Check('run_command states the broker''s timeout ceiling',

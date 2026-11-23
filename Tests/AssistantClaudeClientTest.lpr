@@ -12,7 +12,8 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantClaudeClient, AssistantClaudeStream, AssistantClaudeInput,
+  Classes, SysUtils, fpjson, jsonparser, AssistantConversation, AssistantClaudeClient, AssistantClaudeStream,
+  AssistantClaudeInput,
   AssistantImages, ClaudeCaptureSupport;
 
 Const
@@ -278,7 +279,7 @@ Var
   Stream: TClaudeStreamState;
   TurnSettings: TClaudeTurnSettings;
   Args, ParentVariables, Filtered: TStringList;
-  Scope: TClaudeToolScope;
+  Scope: TAssistantWriteScope;
   {$IFDEF UNIX}
   Handle: THandle;
   FakeDirectory, FakeClaude, LargePrompt, PictureLine: String;
@@ -452,10 +453,10 @@ Begin
     Check('effort is passed', (Args.IndexOf('--effort') >= 0) And (Args[Args.IndexOf('--effort') + 1] = 'high'));
 
     Args.Clear;
-    AppendClaudeModeArguments(ctsNone, '/tmp/lazarus-mcp-x.json', Args);
+    AppendClaudeModeArguments(awsNone, '/tmp/lazarus-mcp-x.json', Args);
     Check('chat turns get no tools and no server, even with a config file', (Args.Count = 2) And (Args[0] = '--tools=') And
       (Args[1] = '--strict-mcp-config'));
-    For Scope In [ctsRead, ctsMarkdown, ctsProject] Do
+    For Scope In [awsReadOnly, awsMarkdown, awsProject] Do
       Begin
         Args.Clear;
         AppendClaudeModeArguments(Scope, '/tmp/lazarus-mcp-x.json', Args);
@@ -468,14 +469,14 @@ Begin
           (Pos('Edit', Args.Text) = 0) And (Pos('Write', Args.Text) = 0) And (Pos('Bash', Args.Text) = 0));
       End;
     Args.Clear;
-    AppendClaudeModeArguments(ctsProject, '', Args);
+    AppendClaudeModeArguments(awsProject, '', Args);
     Check('without a config file a turn only reads and loads no server', (Args.Count = 2) And
       (Args[0] = '--tools=Read,Grep,Glob') And (Args[1] = '--strict-mcp-config'));
     Check('a Lazarus tool is shown without the server prefix', ClaudeToolDisplayName('mcp__lazarus__read_buffer') = 'read_buffer');
     Check('a Claude Code tool keeps its name', ClaudeToolDisplayName('Read') = 'Read');
     Check('a malformed MCP name is left alone', (ClaudeToolDisplayName('mcp__lazarus__') = 'mcp__lazarus__') And
       (ClaudeToolDisplayName('mcp____x') = 'mcp____x'));
-    Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = ctsRead);
+    Check('a settings record left at its default reads only', Default(TClaudeTurnSettings).ToolScope = awsReadOnly);
   Finally
     Args.Free;
   End;

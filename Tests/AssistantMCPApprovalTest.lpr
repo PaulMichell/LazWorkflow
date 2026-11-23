@@ -12,7 +12,8 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantToolBroker, AssistantClaudeClient,
+  Interfaces, Classes, SysUtils, fpjson, jsonparser, fphttpclient, AssistantConversation, AssistantToolBroker,
+  AssistantClaudeClient,
   AssistantMCPListener, AssistantMCPBridge, AssistantConfig, AssistantTools;
 
 Const
@@ -356,7 +357,7 @@ Begin
   Bridge := TMCPBrokerBridge.Create(Broker);
   Listener := Nil;
   Try
-    Bridge.BeginRun(ctsProject);
+    Bridge.BeginRun(awsProject);
     Listener := TMCPListener.Create(Bridge.ToolsJSON, @Bridge.Execute);
     Check('the listener starts', Listener.Start(Error));
     CheckLongApproval;

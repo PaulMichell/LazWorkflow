@@ -25,7 +25,6 @@ Const
   BrokerCommandMaxSeconds = 1500;
 
 Type
-  TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
   TAssistantWorkspaceAdapter = Class
   Public
     Function Identity: String; Virtual; Abstract;

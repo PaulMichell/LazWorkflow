@@ -396,7 +396,7 @@ Begin
   Broker := TAssistantToolBroker.Create(Workspace);
   Try
     Workspace.CreateFiles := CreateFiles;
-    Broker.BeginRun(ClaudeBrokerWriteScope(ClaudeToolScopeForMode(Mode)), Mode);
+    Broker.BeginRun(AssistantWriteScopeForMode(Mode), Mode);
     Listed := MCPToolsListResult(Broker.ToolsJson);
     Data := Nil;
     Try
@@ -447,7 +447,7 @@ Begin
       ConfigFile := 'mcp-config.json'
     Else
       ConfigFile := '';
-    AppendClaudeModeArguments(ClaudeToolScopeForMode(Mode), ConfigFile, Args);
+    AppendClaudeModeArguments(AssistantWriteScopeForMode(Mode), ConfigFile, Args);
     AddCommaNames(ArgumentValue(Args, '--tools='), Names);
     Attached := ArgumentValue(Args, '--append-system-prompt=');
     If Not ClaudeTurnUsesMCP(Mode) Then

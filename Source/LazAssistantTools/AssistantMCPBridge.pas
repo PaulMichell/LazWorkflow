@@ -7,7 +7,7 @@ Unit AssistantMCPBridge;
   for Stop or the end of the run, releases every waiting call with an error at once, without waiting for the IDE
   thread; a queued call it released is then skipped when it comes up, so it never reaches the broker.
 
-  The broker's write scope comes from the turn's Claude tool scope, so a mode maps onto permissions in one place. }
+  The broker's write scope is the turn's TAssistantWriteScope. A mode maps onto that in AssistantWriteScopeForMode. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -17,7 +17,7 @@ Unit AssistantMCPBridge;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantToolBroker, AssistantClaudeClient, AssistantConversation, AssistantMCPProtocol;
+  Classes, SysUtils, AssistantToolBroker, AssistantConversation, AssistantMCPProtocol;
 
 Const
   MCPRunCancelledText = 'The Claude run was stopped before this tool ran.';
@@ -41,10 +41,10 @@ Type
     { The broker is borrowed and must outlive the bridge. Create, BeginRun, Cancel and ToolsJSON run on the IDE thread. }
     Constructor Create(ToolBroker: TAssistantToolBroker);
     Destructor Destroy; Override;
-    /// Starts a broker run with the write scope for this Claude tool scope, cancelling any run still open.
-    Function BeginRun(Scope: TClaudeToolScope): String; Overload;
+    /// Starts a broker run with this write scope, cancelling any run still open.
+    Function BeginRun(Scope: TAssistantWriteScope): String; Overload;
     /// Same run, with the turn's mode so Plan and Document are not collapsed.
-    Function BeginRun(Scope: TClaudeToolScope; Mode: TAssistantMode): String; Overload;
+    Function BeginRun(Scope: TAssistantWriteScope; Mode: TAssistantMode): String; Overload;
     /// Ends the run: every waiting call returns MCPRunCancelledText and later calls are refused until BeginRun.
     Procedure Cancel;
     /// The broker's catalogue for this run's scope, to hand to TMCPListener.
@@ -58,8 +58,6 @@ Type
     Property PendingCount: Integer Read GetPendingCount;
   End;
 
-/// The broker write scope for a Claude tool scope: the same permissions the Codex launch gives each mode.
-Function ClaudeBrokerWriteScope(Scope: TClaudeToolScope): TAssistantWriteScope;
 /// What an approval names for a broker write: the path, the changed line range and the start of the new lines,
 /// short enough for the confirmation's 240 characters. Without a path, the start of NewText (git arguments).
 Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
@@ -94,17 +92,6 @@ Type
     Function HasRun: Boolean;
     Procedure Run;
   End;
-
-Function ClaudeBrokerWriteScope(Scope: TClaudeToolScope): TAssistantWriteScope;
-Begin
-  Case Scope Of
-    ctsNone: Result := awsNone;
-    ctsMarkdown: Result := awsMarkdown;
-    ctsProject: Result := awsProject;
-  Else
-    Result := awsReadOnly;
-  End;
-End;
 
 Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
 Const
@@ -322,13 +309,13 @@ Begin
   End;
 End;
 
-Function TMCPBrokerBridge.BeginRun(Scope: TClaudeToolScope): String;
+Function TMCPBrokerBridge.BeginRun(Scope: TAssistantWriteScope): String;
 Var
   NewRunId: String;
 Begin
   Cancel;
   { One-argument broker start. Markdown becomes Plan; a live turn passes ActiveMode instead. }
-  NewRunId := FBroker.BeginRun(ClaudeBrokerWriteScope(Scope));
+  NewRunId := FBroker.BeginRun(Scope);
   EnterCriticalSection(Lock);
   Try
     FRunId := NewRunId;
@@ -339,12 +326,12 @@ Begin
   Result := NewRunId;
 End;
 
-Function TMCPBrokerBridge.BeginRun(Scope: TClaudeToolScope; Mode: TAssistantMode): String;
+Function TMCPBrokerBridge.BeginRun(Scope: TAssistantWriteScope; Mode: TAssistantMode): String;
 Var
   NewRunId: String;
 Begin
   Cancel;
-  NewRunId := FBroker.BeginRun(ClaudeBrokerWriteScope(Scope), Mode);
+  NewRunId := FBroker.BeginRun(Scope, Mode);
   EnterCriticalSection(Lock);
   Try
     FRunId := NewRunId;

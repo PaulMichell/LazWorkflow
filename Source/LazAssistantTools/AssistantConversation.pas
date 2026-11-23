@@ -23,6 +23,11 @@ Uses
 Type
   TAssistantMode = (amInspect, amDocument, amPlan, amBuild, amChat);
 
+  { What a turn may write. Read-only is first so a zeroed record stays read-only. Chat is none.
+    Document and Plan share Markdown. Build is the project. This is not in the broker: that unit's
+    implementation uses the IDE, and the Claude client must not. }
+  TAssistantWriteScope = (awsReadOnly, awsMarkdown, awsProject, awsNone);
+
   { Lightweight row for the conversation turn list (also lives in FIndex). }
   TConversationIndexEntry = Class
   Public
@@ -157,6 +162,8 @@ Type
 
 Function AssistantModeToStr(Mode: TAssistantMode): String;
 Function StrToAssistantMode(Const ModeText: String): TAssistantMode;
+/// The write scope for a conversation mode. A new mode is a change here, not a second case.
+Function AssistantWriteScopeForMode(Mode: TAssistantMode): TAssistantWriteScope;
 Function NewConversationTurnId: String;
 Function NewMonitorConversationId: String;
 Function MonitorConversationIdIsValid(Const ConversationId: String): Boolean;
@@ -198,6 +205,17 @@ Begin
     amBuild: Result := 'build';
   Else
     Result := 'chat';
+  End;
+End;
+
+Function AssistantWriteScopeForMode(Mode: TAssistantMode): TAssistantWriteScope;
+Begin
+  Case Mode Of
+    amChat: Result := awsNone;
+    amDocument, amPlan: Result := awsMarkdown;
+    amBuild: Result := awsProject;
+  Else
+    Result := awsReadOnly;
   End;
 End;
 
