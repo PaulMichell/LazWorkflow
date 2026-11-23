@@ -73,7 +73,7 @@ Type
     Function StartBuild(Const PackagePath: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Function BuildStatus(Out ResultText, ErrorText: String; Const Detail: String = ''): Boolean; Virtual;
     Procedure CancelBuild; Virtual;
-    { run_command, with Grok's checks, as a job off the IDE thread. Command is the checked command as JSON; the start
+    { run_command, with the shared argument checks, as a job off the IDE thread. Command is the checked command as JSON; the start
       checks the arguments again and refuses a command that no longer matches it. One command runs at a time. }
     Function CanRunCommands: Boolean; Virtual;
     Function CheckRunCommand(Const Arguments: String; MaxTimeoutSeconds: Integer; Out Command, ErrorText: String): Boolean; Virtual;
@@ -81,7 +81,7 @@ Type
       Out ResultText, ErrorText: String): Boolean; Virtual;
     Function RunCommandStatus(Const JobId: String; Out ResultText, ErrorText: String): Boolean; Virtual;
     Procedure CancelRunCommand; Virtual;
-    { Grok's run_project, open_file and open_markdown. }
+    { Shared run_project, open_file and open_markdown. }
     Function CanRunProject: Boolean; Virtual;
     Function RunProject(Out ResultText, ErrorText: String): Boolean; Virtual;
     Function CanOpenEditors: Boolean; Virtual;
@@ -126,7 +126,7 @@ Type
     Function SnapshotRevision(Const Path: String): String;
     Function Approve(Const RunId, Tool, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
     Function CanWritePath(Const Path: String): Boolean;
-    { Grok offers todo_write in Plan and Build only. }
+    { todo_write is offered in Plan and Build only. }
     Function TodoWriteOffered(Scope: TAssistantWriteScope): Boolean;
     Function Remember(Const Path, Text: String): String;
   Public
@@ -582,7 +582,7 @@ Begin
   SetLength(FImages, 0);
   FRenamePreview := Default(TLocalRenamePreview);
   FreeAndNil(FPrepared);
-  { The checklist belongs to one turn, as it does for Grok. }
+  { The checklist belongs to one turn. }
   If Assigned(WorkflowAssistantHarness) Then
     WorkflowAssistantHarness.ClearTurnTodos;
   Result := FRunId;
@@ -1283,7 +1283,7 @@ Begin
   Result := Execute(RunId, Tool, Arguments, ResultText, ErrorText, Images);
 End;
 
-{ The Grok tool's path checks and image store. The picture goes back as the upload copy, and its ref is kept for
+{ Shared path checks and image store. The picture goes back as the upload copy, and its ref is kept for
   the trace. }
 Function TAssistantToolBroker.ReadImage(Const Arguments: String; Out ResultText, ErrorText: String;
   Out Images: TMCPToolImages): Boolean;

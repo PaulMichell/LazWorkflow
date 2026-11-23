@@ -239,9 +239,10 @@ Type
     FReconnectIntervalMs, FCreditIntervalMs: QWord;
     FCodexLaunchPrompt, FCodexLaunchTools, FCodexLaunchInstructions, FCodexLaunchWire: String;
     FCodexLaunchReady: Boolean;
-    FCodexWorkspace: TAssistantIDEWorkspace;
-    FCodexBroker: TAssistantToolBroker;
-    { The running Claude turn's Lazarus tools: its broker run on FCodexBroker and its loopback MCP server. }
+    { Shared by ChatGPT and Claude. }
+    FIDEWorkspace: TAssistantIDEWorkspace;
+    FToolBroker: TAssistantToolBroker;
+    { The running Claude turn's Lazarus tools: its broker run on FToolBroker and its loopback MCP server. }
     ClaudeBridge: TMCPBrokerBridge;
     ClaudeListener: TMCPListener;
     Procedure LoadConnectionSettings;
@@ -997,8 +998,8 @@ Begin
   If Assigned(AssistantClient) Then AssistantClient.DetachStreamCallbacks;
   ReleaseCodexRun;
   ReleaseClaudeProcess;
-  FreeAndNil(FCodexBroker);
-  FreeAndNil(FCodexWorkspace);
+  FreeAndNil(FToolBroker);
+  FreeAndNil(FIDEWorkspace);
   If Assigned(AssistantClient) Then
     AssistantClient.CancelStream;
   FSending := False;
@@ -1183,8 +1184,8 @@ Begin
   Note := '';
   KeptPlan := GetActivePlanRelativePath;
   PersistSession;
-  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
-  If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
+  If Assigned(FToolBroker) Then FToolBroker.Cancel;
+  If Assigned(FIDEWorkspace) Then FIDEWorkspace.CancelBuild;
   If Not AssistantTarget.SelectFolder(Directory, Note) Then
     Exit;
   If AssistantTarget.Kind = atkFolder Then
@@ -2891,8 +2892,8 @@ Var Note: String;
 Begin
   ClearBuildWorkTracking;
   FBuildWorkSectionIndex := SectionIndex; FBuildWorkSectionTitle := SectionTitle;
-  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
-  FBuildWorkIdentity := FCodexWorkspace.Identity;
+  If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
+  FBuildWorkIdentity := FIDEWorkspace.Identity;
   If Not ResolvePlanPath(GetActivePlanRelativePath, FBuildWorkPlanPath, Note) Or
     Not ReadBuildInput(FBuildWorkPlanPath, FBuildWorkPlanText, Note) Or
     Not GetPlanSectionBody(FBuildWorkPlanPath, SectionIndex, FBuildWorkBody, Note) Then
@@ -3038,8 +3039,8 @@ Begin
       LeaveInProgress(Note);
       Exit;
     End;
-  If (FBuildWorkPlanPath = '') Or Not Assigned(FCodexWorkspace) Or
-    (FCodexWorkspace.Identity <> FBuildWorkIdentity) Or
+  If (FBuildWorkPlanPath = '') Or Not Assigned(FIDEWorkspace) Or
+    (FIDEWorkspace.Identity <> FBuildWorkIdentity) Or
     Not ResolvePlanPath(GetActivePlanRelativePath, PlanRel, Err) Or (PlanRel <> FBuildWorkPlanPath) Or
     Not ReadBuildInput(PlanRel, CurrentPlan, Err) Or (CurrentPlan <> FBuildWorkPlanText) Then
     Begin
@@ -3162,10 +3163,10 @@ End;
 Function TProjectAssistantForm.ClaudeBuildToolsJson: String;
 Begin
   Result := '';
-  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
-  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
+  If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FToolBroker) Then FToolBroker := TAssistantToolBroker.Create(FIDEWorkspace);
   { A prompt must not start a run. BeginRun would cancel a build and replace the open run id. }
-  Result := FCodexBroker.ToolsJsonForScope(awsProject);
+  Result := FToolBroker.ToolsJsonForScope(awsProject);
 End;
 
 Function TProjectAssistantForm.BuildWorkPrompt(Const PlanRel, SectionTitle, StatusText,
@@ -3432,8 +3433,8 @@ Begin
       RunAssistantModal('Set an active plan first.', mtInformation, [mbOK], 0);
       Exit;
     End;
-  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
-  Note := PlanRunBuildRefusal(FCodexWorkspace.CanBuild, AssistantTarget.Manifest);
+  If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
+  Note := PlanRunBuildRefusal(FIDEWorkspace.CanBuild, AssistantTarget.Manifest);
   If Note <> '' Then Begin SetBuildStatusFeedback(Note); Exit; End;
   { Available from Chat, Inspect, Document, Plan, or Build. Switch before any package work. }
   SelectMode(amBuild);
@@ -4810,7 +4811,7 @@ End;
 
 Procedure TProjectAssistantForm.ReleaseCodexRun;
 Begin
-  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
+  If Assigned(FToolBroker) Then FToolBroker.Cancel;
   ReleaseCodexProcess;
 End;
 
@@ -4834,11 +4835,11 @@ Begin
   ConfigFile := '';
   ErrorText := '';
   ReleaseClaudeTools;
-  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
-  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
+  If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FToolBroker) Then FToolBroker := TAssistantToolBroker.Create(FIDEWorkspace);
   { A Codex launch sets this back to Nil; only one backend runs a turn at a time. }
-  FCodexBroker.OnApproval := @ApproveClaudeTool;
-  ClaudeBridge := TMCPBrokerBridge.Create(FCodexBroker);
+  FToolBroker.OnApproval := @ApproveClaudeTool;
+  ClaudeBridge := TMCPBrokerBridge.Create(FToolBroker);
   { The run carries ActiveMode. Plan and Document share a Markdown scope, so the scope alone is not enough. }
   ClaudeBridge.BeginRun(Scope, ActiveMode);
   ClaudeListener := TMCPListener.Create(ClaudeBridge.ToolsJSON, @ClaudeBridge.Execute);
@@ -4868,8 +4869,8 @@ Var
   ErrorText, CallId: String;
 Begin
   CallId := '';
-  If Assigned(FCodexBroker) Then
-    CallId := FCodexBroker.ApprovalCallId;
+  If Assigned(FToolBroker) Then
+    CallId := FToolBroker.ApprovalCallId;
   Result := ApproveBrokerToolCall(Tool, CallId, Path, OldText, NewText, ErrorText);
 End;
 
@@ -4960,14 +4961,14 @@ End;
 Function TProjectAssistantForm.LaunchStoredCodexRun: Boolean;
 Begin
   Result := False;
-  If (Not FCodexLaunchReady) Or (Not Assigned(FCodexBroker)) Or (Not Assigned(FCodexWorkspace)) Then
+  If (Not FCodexLaunchReady) Or (Not Assigned(FToolBroker)) Or (Not Assigned(FIDEWorkspace)) Then
     Exit;
-  If FCodexWorkspace.Identity <> FCodexIdentity Then
+  If FIDEWorkspace.Identity <> FCodexIdentity Then
     Exit;
-  FCodexBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
+  FToolBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
   Try
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
-      FCodexLaunchTools, FCodexBroker.RunId, 600000, FCodexProfile,
+      FCodexLaunchTools, FToolBroker.RunId, 600000, FCodexProfile,
       PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), FCodexLaunchInstructions,
       ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
     FCodexRun.Start;
@@ -5069,7 +5070,7 @@ Begin
       StopStream;
       Exit;
     End;
-  If (FTransportBackend = 'codex') And Assigned(FCodexWorkspace) And (FCodexWorkspace.Identity <> FCodexIdentity) Then
+  If (FTransportBackend = 'codex') And Assigned(FIDEWorkspace) And (FIDEWorkspace.Identity <> FCodexIdentity) Then
     Begin
       StopStream;
       Exit;
@@ -5108,14 +5109,14 @@ Begin
       If Not FUseCodex Then Exit;
       If (FCodexRuntime = '') Or (FCodexModel = '') Then Exit;
     End;
-  If Not Assigned(FCodexWorkspace) Then FCodexWorkspace := TAssistantIDEWorkspace.Create;
-  If Not Assigned(FCodexBroker) Then FCodexBroker := TAssistantToolBroker.Create(FCodexWorkspace);
-  FCodexIdentity := FCodexWorkspace.Identity;
+  If Not Assigned(FIDEWorkspace) Then FIDEWorkspace := TAssistantIDEWorkspace.Create;
+  If Not Assigned(FToolBroker) Then FToolBroker := TAssistantToolBroker.Create(FIDEWorkspace);
+  FCodexIdentity := FIDEWorkspace.Identity;
   { Turns use ApproveToolIfNeeded. Do not hook the lazarus_* review dialog. }
-  FCodexBroker.OnApproval := Nil;
+  FToolBroker.OnApproval := Nil;
   RefreshFromConfig;
   If Not FModeLocked Then LockModeForSend;
-  FCodexBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
+  FToolBroker.BeginRun(AssistantWriteScopeForMode(ActiveMode), ActiveMode);
   ShowChatSurfaceKeepMode;
   { Same user text as SubmitUserTextEx. The harness prompt owns the mode essay, including chat's no-tools sentence.
     Pictures are the same stored refs. The Codex wire maps them to localImage; it does not invent a note. }
@@ -5185,7 +5186,7 @@ Begin
     FCodexLaunchWire := WireJson;
     FCodexLaunchReady := True;
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
-      Prompt, ToolsJson, FCodexBroker.RunId, 600000, FCodexProfile,
+      Prompt, ToolsJson, FToolBroker.RunId, 600000, FCodexProfile,
       PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), Instructions, ActiveMode,
       ProjectAssistantRoot, WireJson);
     BeginWriteImageTurn;
@@ -5229,7 +5230,7 @@ Begin
   FPollingCodex := True;
   Try
     Run := FCodexRun;
-    If FCodexWorkspace.Identity <> FCodexIdentity Then
+    If FIDEWorkspace.Identity <> FCodexIdentity Then
       Begin
         StopStream;
         Exit;
@@ -5282,9 +5283,9 @@ Begin
         FCompletionBuildJSON := ''; FCompletionTestJSON := '';
         If (FBuildWorkSectionIndex >= 0) And (ActiveMode = amBuild) And (Snapshot.ErrorText = '') Then
           Begin
-            FCodexWorkspace.BuildStatus(FCompletionBuildJSON, EvidenceError);
+            FIDEWorkspace.BuildStatus(FCompletionBuildJSON, EvidenceError);
             If FCodexRun <> Run Then Exit;
-            FCodexWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
+            FIDEWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
             If FCodexRun <> Run Then Exit;
           End;
         { A transport or credit drop with no answer waits and retries. Finish releases the process. }
@@ -5503,9 +5504,9 @@ Begin
       Block.Ok := Not Step.IsError;
       Block.Body := Step.Output;
       { The broker kept the picture it sent; its id is in the result line, as for a Grok read_image. }
-      If (Not Step.IsError) And (Step.Name = 'mcp__lazarus__read_image') And Assigned(FCodexBroker) Then
+      If (Not Step.IsError) And (Step.Name = 'mcp__lazarus__read_image') And Assigned(FToolBroker) Then
         Begin
-          ImagesJson := FCodexBroker.ReadImagesJson(Step.Output);
+          ImagesJson := FToolBroker.ReadImagesJson(Step.Output);
           If ImagesJson <> '' Then
             FTrace.AttachBlockImages(Block, ImagesJson);
         End;
@@ -9822,8 +9823,8 @@ Begin
   If Not AssistantTarget.Available Then Root := '';
   Title := 'Assistant — ' + AssistantTarget.DisplayName;
   RefreshTargetChoices(Nil);
-  If Assigned(FCodexBroker) Then FCodexBroker.Cancel;
-  If Assigned(FCodexWorkspace) Then FCodexWorkspace.CancelBuild;
+  If Assigned(FToolBroker) Then FToolBroker.Cancel;
+  If Assigned(FIDEWorkspace) Then FIDEWorkspace.CancelBuild;
   SetActivePlanRelativePath('');
 
   Caption := Title;
