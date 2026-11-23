@@ -187,7 +187,7 @@ Begin
       ErrorText := 'Not a Markdown tool: ' + Tool;
       Exit(False);
     End;
-  Result := ExecuteAssistantToolForMode(Tool, Arguments, '', Mode, ResultText, ErrorText, ImageRefs, True);
+  Result := DispatchAssistantTool(Tool, Arguments, Mode, ResultText, ErrorText, ImageRefs);
 End;
 
 Destructor TAssistantIDEWorkspace.Destroy;

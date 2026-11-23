@@ -39,6 +39,8 @@ mcp__lazarus__command_status
 mcp__lazarus__run_project
 mcp__lazarus__open_file
 mcp__lazarus__open_markdown
+mcp__lazarus__read_skill
+mcp__lazarus__grep
 
 attached: append-system-prompt
 You are the Lazarus Project Assistant (Build mode).

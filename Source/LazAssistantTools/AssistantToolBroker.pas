@@ -1330,6 +1330,7 @@ Var
   SearchPaths: TStringList;
   ResultField: String;
   Semantic, AddUses: Boolean;
+  Refs: TAssistantImageRefArray;
 Begin
   Result := False;
   ResultText := '';
@@ -1939,7 +1940,11 @@ Begin
         (Tool <> 'replace_in_file') And (Tool <> 'save_file') And
         (Tool <> 'open_buffer') And (Not Semantic) Then
           Begin
+            Result := DispatchAssistantTool(Tool, Arguments, FMode, ResultText, ErrorText, Refs);
+            If Copy(ErrorText, 1, 13) <> 'Unknown tool:' Then
+              Exit;
             ErrorText := 'Tool is not registered with the IDE broker.';
+            ResultText := '';
             Exit;
           End;
       Node := Args.Find('path');
@@ -2132,6 +2137,7 @@ Begin
       Result := '[]';
       Exit;
     End;
+  Offer := Default(TAssistantBrokerOffer);
   Offer.Scope := Scope;
   Offer.Mode := FMode;
   Offer.InspectFiles := FAdapter.CanInspectFiles;

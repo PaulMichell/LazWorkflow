@@ -272,15 +272,15 @@ Begin
     LeaveCriticalSection(FLock);
   End;
   Try
-    { Shared catalogue only. An unknown name is an error; do not fall through to the broker.
-      Ask uses the broker summary and the Codex call id, then the tool runs without a second prompt. }
+    { One executor. Ask uses the broker summary and the Codex call id, then DispatchAssistantTool runs the body.
+      An unknown name is an error. There is no second dispatcher and no approval skip. }
     If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, CodexToolApprovalSummary(Tool.Arguments), ErrorText) Then
       Begin
         OK := False;
         Text := ErrorText;
       End
     Else
-      OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, Tool.CallId, FMode, Text, ErrorText, ImageRefs, True);
+      OK := DispatchAssistantTool(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText, ImageRefs);
     If Not OK Then Text := ErrorText;
     Attachments := '';
     If OK Then Attachments := AssistantImageRefsToJson(ImageRefs);

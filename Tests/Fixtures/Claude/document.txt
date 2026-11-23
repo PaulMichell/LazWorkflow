@@ -25,6 +25,8 @@ mcp__lazarus__read_markdown_section
 mcp__lazarus__set_active_plan
 mcp__lazarus__open_file
 mcp__lazarus__open_markdown
+mcp__lazarus__read_skill
+mcp__lazarus__grep
 
 attached: append-system-prompt
 You are the Lazarus Project Assistant (Document mode).

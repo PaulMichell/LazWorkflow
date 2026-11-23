@@ -2,9 +2,11 @@ Unit AssistantTools;
 
 { Built-in IDE tools for LazAssistantTools: read, Plan Markdown, Build source edit (c) 2026 Michell Computing.
 
-  Size note: exceeds the 1000 line preference. Tool schemas, sandbox checks, and
-  dispatch are one IDE tool surface. Reviewed 2026-11-06: stage_patch stays in
-  this catalog and calls StageAssistantGitPatch. The Git process is not copied here. }
+  Size note: exceeds the 1000 line preference. The bodies are the single
+  implementation behind DispatchAssistantTool. Splitting them by family would
+  copy the path and editor helpers into each unit, which is the third copy this
+  executor refuses. Reviewed 2026-11-23: the dispatch table is the split; the
+  helpers stay here. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -34,6 +36,9 @@ Function AssistantParentToolsJson(Mode: TAssistantMode): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
+/// The one name-to-body table. Approval stays with the caller. There is no alias branch.
+Function DispatchAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
@@ -4375,8 +4380,8 @@ Begin
   End;
 End;
 
-Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode; Out ResultText: String;
-  Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+Function DispatchAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 Var
   Name: String;
 Begin
@@ -4450,6 +4455,12 @@ Begin
     ErrorText := 'spawn_subagent must run on the parent session actor.'
   Else
     ErrorText := 'Unknown tool: ' + ToolName;
+End;
+
+Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode; Out ResultText: String;
+  Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+Begin
+  Result := DispatchAssistantTool(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
 End;
 
 Initialization

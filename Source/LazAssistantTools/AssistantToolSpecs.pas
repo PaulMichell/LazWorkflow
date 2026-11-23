@@ -16,7 +16,7 @@ Unit AssistantToolSpecs;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantConversation;
+  Classes, SysUtils, AssistantConversation, AssistantCapabilities;
 
 Type
   { Which broker scopes and adapter flags offer the tool. brNone is native-only. }
@@ -34,6 +34,9 @@ Type
     Modes: Set Of TAssistantMode;
     Role: TAssistantBrokerRole;
     IdeThread: Boolean;
+    { When true, the tool is withheld unless the offer delivers Capability. }
+    Gated: Boolean;
+    Capability: TAssistantCapability;
   End;
   TAssistantToolRenderNotes = Record
     SaveNote, WriteNote, ReadSource, SaveTool: String;
@@ -43,7 +46,7 @@ Type
     Scope: TAssistantWriteScope;
     Mode: TAssistantMode;
     InspectFiles, Declaration, Symbols, ChangeSets, Rename, Markdown, Build, Test, Git, Commands, RunProject,
-      OpenEditors: Boolean;
+      OpenEditors, Subagents, ImageOutput: Boolean;
   End;
 
 Function FindAssistantToolSpec(Const Name: String; Out Spec: TAssistantToolSpec): Boolean;
@@ -515,6 +518,8 @@ Begin
           '"files":{"type":"string","description":"Optional changed-file list the child should focus on"}},"required":["prompt"]}';
         Result.Modes := [amInspect, amDocument, amPlan, amBuild];
         Result.Role := brNone;
+        Result.Gated := True;
+        Result.Capability := acSubagents;
       End;
     32:
       Begin
@@ -530,6 +535,8 @@ Begin
           '"required":["path","prompt"]}';
         Result.Modes := [amDocument, amPlan, amBuild];
         Result.Role := brNone;
+        Result.Gated := True;
+        Result.Capability := acImageOutput;
       End;
     33:
       Begin
@@ -653,6 +660,18 @@ Begin
   Result := FindAssistantToolSpec(Name, Spec) And (Mode In Spec.Modes);
 End;
 
+Function CapabilityOffered(Const Spec: TAssistantToolSpec; Const Offer: TAssistantBrokerOffer): Boolean;
+Begin
+  If Not Spec.Gated Then
+    Result := True
+  Else If Spec.Capability = acSubagents Then
+    Result := Offer.Subagents
+  Else If Spec.Capability = acImageOutput Then
+    Result := Offer.ImageOutput
+  Else
+    Result := False;
+End;
+
 Function BrokerRoleOffered(Role: TAssistantBrokerRole; Const Offer: TAssistantBrokerOffer): Boolean;
 Begin
   Result := False;
@@ -704,8 +723,18 @@ Begin
   If Offer.Scope = awsNone Then
     Exit;
   For I := 0 To High(Order) Do
-    If FindAssistantToolSpec(Order[I], Spec) And BrokerRoleOffered(Spec.Role, Offer) Then
+    If FindAssistantToolSpec(Order[I], Spec) And BrokerRoleOffered(Spec.Role, Offer) And
+      CapabilityOffered(Spec, Offer) Then
       Names.Add(Spec.Name);
+  { Same table as Grok. A mode tool with no broker role is still offered, unless its capability is absent. }
+  For I := 0 To TableCount - 1 Do
+    Begin
+      Spec := ToolAt(I);
+      If (Spec.Role <> brNone) Or Not (Offer.Mode In Spec.Modes) Or Not CapabilityOffered(Spec, Offer) Then
+        Continue;
+      If Names.IndexOf(Spec.Name) < 0 Then
+        Names.Add(Spec.Name);
+    End;
 End;
 
 Function SpecCount: Integer;
