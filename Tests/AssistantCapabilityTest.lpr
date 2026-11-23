@@ -140,6 +140,11 @@ Begin
   Check('no selection sentence', AssistantTurnUnavailableSentence('') = 'Not available with this connection.');
   Check('openai-compatible still draws', AssistantCapabilityDelivered('openai-compatible', acImageOutput));
   Check('openai-compatible cannot steer', Not AssistantCanSteer('openai-compatible'));
+  Check('claude cannot steer', Not AssistantCanSteer('claude'));
+  Check('grok can steer', AssistantCanSteer('grok'));
+  Check('codex can steer', AssistantCanSteer('codex'));
+  Check('claude steer sentence', AssistantCapabilitySentence('claude', acSteer) =
+    'Not available with this connection (Claude).');
   Check('claude effort is sent', AssistantCapabilityDelivered('claude', acEffortControl));
   Check('claude effort is not shown', Not AssistantShowsEffort('claude'));
   CheckMissing('');

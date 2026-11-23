@@ -6024,7 +6024,9 @@ Begin
   StatusFooter.SetPermissionsHint('Click to choose permissions');
   FContextStatusHint := Format('About %d of %d tokens. Click for a breakdown.', [FContextUsed, FContextLimit]);
   StatusFooter.SetRightHint('Click for session info');
-  If Assigned(SendAction) Then SendAction.Hint := '';
+  { A disabled Send hint is the refusal. Do not wipe it on a footer refresh. }
+  If Assigned(SendAction) And SendAction.Enabled Then
+    SendAction.Hint := '';
   RefreshAttachAction;
   If FUseCodex Then
     FContextStatusHint := CodexContextDetails(FCodexContextUsage, FContextUsed) + LineEnding + 'Click for details.'
@@ -6117,13 +6119,19 @@ Begin
       FHoldingContinuation := False;
       FHeldAnswer := '';
     End;
-  If IsSending Then
+  { Absent steer stays Send and disabled until the turn ends. Steer is the capability, not the running state. }
+  If IsSending And AssistantCanSteer(FActiveBackend) Then
     SendAction.Caption := 'Steer'
   Else
     SendAction.Caption := 'Send';
-  SendAction.Enabled := IsSending Or TurnEngineReady;
+  If IsSending Then
+    SendAction.Enabled := AssistantCanSteer(FActiveBackend)
+  Else
+    SendAction.Enabled := TurnEngineReady;
   If SendAction.Enabled Then
     SendAction.Hint := ''
+  Else If IsSending Then
+    SendAction.Hint := AssistantCapabilitySentence(FActiveBackend, acSteer)
   Else
     SendAction.Hint := AssistantTurnUnavailableSentence(FActiveBackend);
   If Assigned(SendButton) Then
@@ -9315,6 +9323,9 @@ Var
   End;
 Begin
   If Not Assigned(InputMemo) Then Exit;
+  { Enter and Ctrl+Enter call this directly. A disabled Send must not submit or steer. }
+  If Not SendAction.Enabled Then
+    Exit;
   UserText := Trim(InputMemo.Text);
   HasImages := ComposerHasImages;
   If (UserText = '') And (Not HasImages) Then
@@ -11304,7 +11315,12 @@ Begin
       ErrorText := 'Nothing is running to steer.';
       Exit;
     End;
-  If (Not AssistantCanSteer(FActiveBackend)) Or FTransportWait Then
+  If Not AssistantCanSteer(FActiveBackend) Then
+    Begin
+      ErrorText := AssistantCapabilitySentence(FActiveBackend, acSteer);
+      Exit;
+    End;
+  If FTransportWait Then
     Begin
       ErrorText := 'This connection cannot steer.';
       Exit;

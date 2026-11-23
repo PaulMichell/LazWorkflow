@@ -585,6 +585,51 @@ Begin
   End;
 End;
 
+Procedure TestAbsentSteerRefuses;
+Var
+  Sink: TCommandSink;
+  Flags: TMonitorHostFlags;
+  Message: TMonitorMessage;
+  ErrorBody: TMonitorErrorBody;
+  Json, ErrorJson: String;
+Begin
+  Sink := TCommandSink.Create;
+  Try
+    Session.OnCommand := @Sink.Hear;
+    Flags := Default(TMonitorHostFlags);
+    Flags.Sending := True;
+    Flags.CanSteer := False;
+    Flags.CanStop := True;
+    Flags.UnavailableSentence := 'Not available with this connection (Claude).';
+    Session.SetHostFlags(Flags);
+    Check('absent steer is busy', Session.State = mssBusy);
+    Carrier.ClearSent;
+    Check('absent steer encodes', TryEncodeCommandSteer('steer-absent', 'look at the other file', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('absent steer is not queued', Sink.Calls = 0);
+    Check('absent steer is the standard sentence', DecodeLast(Message) And (Message.Kind = mmkError) And
+      DecodeMonitorError(Message.PayloadJson, ErrorBody) And (ErrorBody.MessageText = Flags.UnavailableSentence));
+    Flags := Default(TMonitorHostFlags);
+    Flags.Sending := True;
+    Flags.CanSend := False;
+    Flags.CanSteer := True;
+    Flags.CanStop := True;
+    Session.SetHostFlags(Flags);
+    Sink.Calls := 0;
+    Carrier.ClearSent;
+    Check('present steer encodes', TryEncodeCommandSteer('steer-present', 'keep going', Json, ErrorJson));
+    Carrier.DeliverJson(Json);
+    Check('present steer is queued', (Sink.Calls = 1) And (Sink.Kind = Ord(mmkSteer)));
+    Flags := Default(TMonitorHostFlags);
+    Flags.CanSend := True;
+    Session.SetHostFlags(Flags);
+    Check('absent steer test returns to live', Session.State = mssLive);
+  Finally
+    Session.OnCommand := Nil;
+    Sink.Free;
+  End;
+End;
+
 Procedure TestNoEngineRefusesTurnStart;
 Var
   Sink: TCommandSink;
@@ -1691,6 +1736,7 @@ Begin
       TestIdlePollStillFills;
       TestReconnectKeepsRunningTurn;
       TestIdleSteerSubmits;
+      TestAbsentSteerRefuses;
       TestNoEngineRefusesTurnStart;
       TestWorkOnPlanDoesNotBlockSend;
       TestCommandLifecycle;

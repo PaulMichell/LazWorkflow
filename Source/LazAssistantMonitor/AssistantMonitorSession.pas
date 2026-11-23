@@ -1520,7 +1520,14 @@ Begin
         Begin
           Result := (FState <> mssBusy) Or (Not FHostFlags.CanSteer);
           If FState <> mssBusy Then
-            MessageText := 'Nothing is running to steer.';
+            MessageText := 'Nothing is running to steer.'
+          Else If Not FHostFlags.CanSteer Then
+            Begin
+              { Same sentence as the disabled Send hint. The text is not queued. }
+              MessageText := Trim(FHostFlags.UnavailableSentence);
+              If MessageText = '' Then
+                MessageText := 'Not available with this connection.';
+            End;
         End;
     End;
     Ord(mmkStop): Result := (FState = mssBusy) And (Not FHostFlags.CanStop);

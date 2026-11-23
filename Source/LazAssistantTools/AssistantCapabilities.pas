@@ -72,7 +72,9 @@ Function AssistantShowsEffort(Const BackendId: String): Boolean;
 Function AssistantCanSteer(Const BackendId: String): Boolean;
 /// True when this id has a turn engine and that engine is signed in, or has a runtime and a model.
 Function AssistantTurnEngineReady(Const BackendId, RuntimePath, Model: String; SignedIn: Boolean): Boolean;
-/// The shared refusal. A known row is named. An empty id has no parentheses.
+/// The shared refusal for one capability. A known row is named. An empty id has no parentheses.
+Function AssistantCapabilitySentence(Const BackendId: String; Capability: TAssistantCapability): String;
+/// The shared refusal when no turn can start. A known row is named. An empty id has no parentheses.
 Function AssistantTurnUnavailableSentence(Const BackendId: String): String;
 
 Implementation
@@ -225,17 +227,20 @@ Begin
   End;
 End;
 
-Function AssistantTurnUnavailableSentence(Const BackendId: String): String;
+Function AssistantCapabilitySentence(Const BackendId: String; Capability: TAssistantCapability): String;
 Var
   Info: TAssistantBackendInfo;
   Name: String;
 Begin
   Name := '';
   If FindAssistantBackend(BackendId, Info) Then
-    Name := Info.DisplayName
-  Else
-    Name := '';
-  Result := AssistantUnsupportedSentence(acHarnessPrompt, Name);
+    Name := Info.DisplayName;
+  Result := AssistantUnsupportedSentence(Capability, Name);
+End;
+
+Function AssistantTurnUnavailableSentence(Const BackendId: String): String;
+Begin
+  Result := AssistantCapabilitySentence(BackendId, acHarnessPrompt);
 End;
 
 Initialization
