@@ -4865,9 +4865,12 @@ End;
   tools: Ask shows the confirmation, Auto and Always allow. }
 Function TProjectAssistantForm.ApproveClaudeTool(Const Tool, Path, OldText, NewText: String): Boolean;
 Var
-  ErrorText: String;
+  ErrorText, CallId: String;
 Begin
-  Result := ApproveToolIfNeeded(Tool, '', MCPApprovalSummary(Path, OldText, NewText), ErrorText);
+  CallId := '';
+  If Assigned(FCodexBroker) Then
+    CallId := FCodexBroker.ApprovalCallId;
+  Result := ApproveBrokerToolCall(Tool, CallId, Path, OldText, NewText, ErrorText);
 End;
 
 Function ClaudeWorkDirectory: String;

@@ -108,6 +108,7 @@ Type
     FRevision: Integer;
     FSnapshots: Array Of TBrokerSnapshot;
     FOnApproval: TAssistantToolApproval;
+    FApprovalCallId: String;
     FRenamePreview: TLocalRenamePreview;
     FPrepared: TAssistantChangeSet;
     FReceipts: TObjectList;
@@ -149,6 +150,8 @@ Type
     /// Catalogue for Scope. Does not start a run or change the open run, its build, or a prepared change set.
     Function ToolsJsonForScope(Scope: TAssistantWriteScope): String;
     Property OnApproval: TAssistantToolApproval Read FOnApproval Write FOnApproval;
+    { MCP request id for the call currently being approved. Empty outside that call. }
+    Property ApprovalCallId: String Read FApprovalCallId Write FApprovalCallId;
     Property RunId: String Read FRunId;
   End;
 

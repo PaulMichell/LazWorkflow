@@ -62,7 +62,8 @@ Type
 Implementation
 
 Uses
-  AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages, AssistantRecovery, AssistantConfig;
+  fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages, AssistantRecovery,
+  AssistantConfig, AssistantMCPBridge;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
@@ -195,6 +196,36 @@ Begin
   End;
 End;
 
+Function CodexToolApprovalSummary(Const ArgumentsJson: String): String;
+Var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  Path, OldText, NewText: String;
+Begin
+  Path := '';
+  OldText := '';
+  NewText := '';
+  Data := Nil;
+  Try
+    Data := GetJSON(ArgumentsJson);
+  Except
+    Data := Nil;
+  End;
+  If Data Is TJSONObject Then
+    Begin
+      Obj := TJSONObject(Data);
+      Path := Obj.Get('path', '');
+      OldText := Obj.Get('old_text', '');
+      NewText := Obj.Get('new_text', '');
+      If NewText = '' Then
+        NewText := Obj.Get('text', '');
+    End;
+  Data.Free;
+  If (Path = '') And (OldText = '') And (NewText = '') Then
+    NewText := ArgumentsJson;
+  Result := MCPApprovalSummary(Path, OldText, NewText);
+End;
+
 Procedure TAssistantCodexRun.QueueToolForTest(Const ToolName, ArgumentsJson: String);
 Begin
   EnterCriticalSection(FLock);
@@ -241,9 +272,15 @@ Begin
     LeaveCriticalSection(FLock);
   End;
   Try
-    { Shared catalogue only. An unknown name is an error; do not fall through to the broker. }
-    { Codex does not call the remote waiter and does not raise approval_requested. }
-    OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, '', FMode, Text, ErrorText, ImageRefs);
+    { Shared catalogue only. An unknown name is an error; do not fall through to the broker.
+      Ask uses the broker summary and the Codex call id, then the tool runs without a second prompt. }
+    If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, CodexToolApprovalSummary(Tool.Arguments), ErrorText) Then
+      Begin
+        OK := False;
+        Text := ErrorText;
+      End
+    Else
+      OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, Tool.CallId, FMode, Text, ErrorText, ImageRefs, True);
     If Not OK Then Text := ErrorText;
     Attachments := '';
     If OK Then Attachments := AssistantImageRefsToJson(ImageRefs);

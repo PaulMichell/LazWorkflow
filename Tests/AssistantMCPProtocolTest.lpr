@@ -30,7 +30,7 @@ Type
     Calls: Integer;
     LastTool: String;
     LastArguments: String;
-    Function Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+    Function Run(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
   End;
 
 Const
@@ -41,7 +41,8 @@ Var
   Requests: TStringList;
   Probe: TToolProbe;
 
-Function TToolProbe.Run(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+Function TToolProbe.Run(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
+  Out Images: TMCPToolImages): Boolean;
 Begin
   Inc(Calls);
   LastTool := Tool;

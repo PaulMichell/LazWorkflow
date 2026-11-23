@@ -32,10 +32,11 @@ Type
     Cancelled: Boolean;
     Function GetPendingCount: Integer;
     { Queues one broker call to the IDE thread and waits for it, or for Cancel. Not on the IDE thread. }
-    Function QueueCall(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+    Function QueueCall(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
+      Out Images: TMCPToolImages): Boolean;
     { run_command over MCP: starts the job on the IDE thread, then waits here, off the IDE thread, polling
       command_status until the program ends, so the call returns its output as Grok's run_command does. }
-    Function RunCommandToEnd(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+    Function RunCommandToEnd(Const Arguments, CallId: String; Out ResultText, ErrorText: String): Boolean;
   Public
     { The broker is borrowed and must outlive the bridge. Create, BeginRun, Cancel and ToolsJSON run on the IDE thread. }
     Constructor Create(ToolBroker: TAssistantToolBroker);
@@ -49,7 +50,8 @@ Type
     /// The broker's catalogue for this run's scope, to hand to TMCPListener.
     Function ToolsJSON: String;
     /// A TMCPToolExecutor. Safe from any thread; blocks until the IDE thread has run the call or the run is cancelled.
-    Function Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
+    Function Execute(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
+      Out Images: TMCPToolImages): Boolean;
     Property Broker: TAssistantToolBroker Read FBroker;
     Property RunId: String Read FRunId;
     /// Calls waiting for the IDE thread.
@@ -61,11 +63,13 @@ Function ClaudeBrokerWriteScope(Scope: TClaudeToolScope): TAssistantWriteScope;
 /// What an approval names for a broker write: the path, the changed line range and the start of the new lines,
 /// short enough for the confirmation's 240 characters. Without a path, the start of NewText (git arguments).
 Function MCPApprovalSummary(Const Path, OldText, NewText: String): String;
+/// Ask-mode gate for one broker tool. The summary is MCPApprovalSummary, and ToolId is the MCP request id.
+Function ApproveBrokerToolCall(Const Tool, ToolId, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
 
 Implementation
 
 Uses
-  fpjson, jsonparser;
+  fpjson, jsonparser, AssistantTools;
 
 Type
   { One queued call, shared by the waiting listener thread and the queued Run. The last Release frees it. }
@@ -77,12 +81,12 @@ Type
     Done: Boolean;
   Public
     Broker: TAssistantToolBroker;
-    RunId, Tool, Arguments: String;
+    RunId, Tool, Arguments, CallId: String;
     Succeeded: Boolean;
     ResultText, ErrorText: String;
     Images: TMCPToolImages;
     Finished: PRTLEvent;
-    Constructor Create(CallBroker: TAssistantToolBroker; Const CallRunId, CallTool, CallArguments: String);
+    Constructor Create(CallBroker: TAssistantToolBroker; Const CallRunId, CallTool, CallArguments, CallCallId: String);
     Destructor Destroy; Override;
     Procedure Release;
     { False when the call had already run, so its result stands. }
@@ -161,9 +165,15 @@ Begin
   End;
 End;
 
+Function ApproveBrokerToolCall(Const Tool, ToolId, Path, OldText, NewText: String; Out ErrorText: String): Boolean;
+Begin
+  Result := ApproveToolIfNeeded(Tool, ToolId, MCPApprovalSummary(Path, OldText, NewText), ErrorText);
+End;
+
 { TMCPPendingCall }
 
-Constructor TMCPPendingCall.Create(CallBroker: TAssistantToolBroker; Const CallRunId, CallTool, CallArguments: String);
+Constructor TMCPPendingCall.Create(CallBroker: TAssistantToolBroker; Const CallRunId, CallTool, CallArguments,
+  CallCallId: String);
 Begin
   Inherited Create;
   InitCriticalSection(CallLock);
@@ -175,6 +185,7 @@ Begin
   RunId := CallRunId;
   Tool := CallTool;
   Arguments := CallArguments;
+  CallId := CallCallId;
   Succeeded := False;
   ResultText := '';
   ErrorText := '';
@@ -247,7 +258,12 @@ Begin
     CallError := '';
     CallImages := Nil;
     Try
-      CallSucceeded := Broker.Execute(RunId, Tool, Arguments, CallResult, CallError, CallImages);
+      Broker.ApprovalCallId := CallId;
+      Try
+        CallSucceeded := Broker.Execute(RunId, Tool, Arguments, CallResult, CallError, CallImages);
+      Finally
+        Broker.ApprovalCallId := '';
+      End;
     Except
       On E: Exception Do
         Begin
@@ -364,7 +380,7 @@ Begin
   Result := FBroker.ToolsJson;
 End;
 
-Function TMCPBrokerBridge.Execute(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+Function TMCPBrokerBridge.Execute(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
   Out Images: TMCPToolImages): Boolean;
 Var
   CallRunId: String;
@@ -386,16 +402,21 @@ Begin
       If CallRunId = '' Then
         ErrorText := MCPRunCancelledText
       Else
-        Result := FBroker.Execute(CallRunId, Tool, Arguments, ResultText, ErrorText, Images);
+        FBroker.ApprovalCallId := CallId;
+        Try
+          Result := FBroker.Execute(CallRunId, Tool, Arguments, ResultText, ErrorText, Images);
+        Finally
+          FBroker.ApprovalCallId := '';
+        End;
       Exit;
     End;
   If Tool = 'lazarus_run_command' Then
-    Result := RunCommandToEnd(Arguments, ResultText, ErrorText)
+    Result := RunCommandToEnd(Arguments, CallId, ResultText, ErrorText)
   Else
-    Result := QueueCall(Tool, Arguments, ResultText, ErrorText, Images);
+    Result := QueueCall(Tool, Arguments, CallId, ResultText, ErrorText, Images);
 End;
 
-Function TMCPBrokerBridge.RunCommandToEnd(Const Arguments: String; Out ResultText, ErrorText: String): Boolean;
+Function TMCPBrokerBridge.RunCommandToEnd(Const Arguments, CallId: String; Out ResultText, ErrorText: String): Boolean;
 Const
   PollMs = 250;
 Var
@@ -404,7 +425,7 @@ Var
   Data: TJSONData;
   Done: Boolean;
 Begin
-  Result := QueueCall('lazarus_run_command', Arguments, Started, ErrorText, Images);
+  Result := QueueCall('lazarus_run_command', Arguments, CallId, Started, ErrorText, Images);
   ResultText := Started;
   If Not Result Then
     Exit;
@@ -427,7 +448,7 @@ Begin
   Repeat
     Sleep(PollMs);
     { Cancel ends the run: this call then fails with MCPRunCancelledText, and the broker has stopped the program. }
-    If Not QueueCall('lazarus_command_status', StatusArguments, Status, ErrorText, Images) Then
+    If Not QueueCall('lazarus_command_status', StatusArguments, CallId, Status, ErrorText, Images) Then
       Begin
         ResultText := '';
         Result := False;
@@ -449,7 +470,7 @@ Begin
   Result := True;
 End;
 
-Function TMCPBrokerBridge.QueueCall(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+Function TMCPBrokerBridge.QueueCall(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
   Out Images: TMCPToolImages): Boolean;
 Var
   Call: TMCPPendingCall;
@@ -465,7 +486,7 @@ Begin
         ErrorText := MCPRunCancelledText;
         Exit;
       End;
-    Call := TMCPPendingCall.Create(FBroker, FRunId, Tool, Arguments);
+    Call := TMCPPendingCall.Create(FBroker, FRunId, Tool, Arguments, CallId);
     Pending.Add(Call);
     { Queued under the lock, so Cancel either sees this call in the list or ran before it was made. }
     TThread.Queue(Nil, @Call.Run);

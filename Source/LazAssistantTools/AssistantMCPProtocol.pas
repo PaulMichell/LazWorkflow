@@ -27,7 +27,7 @@ Type
 
   { Runs one broker tool with its arguments as a JSON object. False is a tool failure, explained in ErrorText.
     Images are sent only with a successful result. }
-  TMCPToolExecutor = Function(Const Tool, Arguments: String; Out ResultText, ErrorText: String;
+  TMCPToolExecutor = Function(Const Tool, Arguments, CallId: String; Out ResultText, ErrorText: String;
     Out Images: TMCPToolImages): Boolean Of Object;
 
 Const
@@ -188,6 +188,16 @@ Begin
     'serverInfo', TJSONObject.Create(['name', MCPServerName, 'version', MCPServerVersion])]);
 End;
 
+Function MCPCallIdText(Id: TJSONData): String;
+Begin
+  If Not Assigned(Id) Or (Id.JSONType = jtNull) Then
+    Result := ''
+  Else If Id.JSONType = jtString Then
+    Result := Id.AsString
+  Else
+    Result := Id.AsJSON;
+End;
+
 Function CallTool(Id: TJSONData; Params: TJSONObject; Const ToolsJSON: String; Executor: TMCPToolExecutor): String;
 Var
   Arguments: TJSONData;
@@ -227,7 +237,7 @@ Begin
   ErrorText := '';
   Images := Nil;
   Try
-    Succeeded := Executor(Tool, ArgumentText, ResultText, ErrorText, Images);
+    Succeeded := Executor(Tool, ArgumentText, MCPCallIdText(Id), ResultText, ErrorText, Images);
   Except
     On E: Exception Do
       Begin
