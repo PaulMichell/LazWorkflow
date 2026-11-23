@@ -977,7 +977,8 @@ End;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Begin
-  Result := AssistantParentToolsJson(Mode);
+  { The shared catalogue does not offer spawn_subagent. Only a parent whose own engine can run the child adds it. }
+  Result := BuildAssistantToolsJsonForSession(Mode, False, True);
 End;
 
 Function ProjectRootPath: String;

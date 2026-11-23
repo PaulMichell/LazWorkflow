@@ -29,11 +29,11 @@ Type
     FTodos: TAssistantTodoArray;
     Function ModeCaption(Mode: TAssistantMode): String;
     Function BuildWorkPolicy: String;
-    Function BuildToolCalling: String;
+    Function BuildToolCalling(OfferSubagents: Boolean): String;
     Function BuildIdeFusion: String;
     Function BuildCommunication: String;
     Function BuildFormatting: String;
-    Function BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String): String;
+    Function BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String; OfferSubagents: Boolean): String;
     Function AttachTaggedSkills(SkillNames: TStrings; Const ProjectRoot: String): String;
     Function BuildSkillsSection(Const ProjectRoot: String; SkillNames: TStrings): String;
     Function BuildProjectRules(Const ProjectRoot: String): String;
@@ -45,7 +45,7 @@ Type
     Constructor Create;
     Destructor Destroy; Override;
     Function BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot, ActivePlanRel: String;
-      IncludeImageOutput: Boolean = True): String;
+      IncludeImageOutput: Boolean = True; OfferSubagents: Boolean = True): String;
     Procedure ClearTurnTodos;
     Function TodoCount: Integer;
     Function TodoItem(Index: Integer): TAssistantTodoItem;
@@ -85,7 +85,8 @@ Begin
       Root := ProjectAssistantConversation.ProjectRoot;
     PlanRel := GetActivePlanRelativePath;
     If Assigned(WorkflowAssistantHarness) Then
-      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel);
+      { ChatGPT cannot run a child. Do not name spawn_subagent in the instructions. }
+      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel, True, False);
   Finally
     Names.Free;
   End;
@@ -126,7 +127,7 @@ Begin
     '</work_policy>';
 End;
 
-Function TAssistantHarness.BuildToolCalling: String;
+Function TAssistantHarness.BuildToolCalling(OfferSubagents: Boolean): String;
 Begin
   Result :=
     '<tool_calling>' + LineEnding +
@@ -153,10 +154,12 @@ Begin
     'Use `grep` / `search_in_project` before a stack of `read_file` calls. Page large files with start_line/end_line.' + LineEnding +
     '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
     '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
-    'Use `read_skill` to load a catalogued SKILL.md. Use `todo_write` for the current Build turn''s short checklist.' + LineEnding +
-    'Use `spawn_subagent` for parallel explore or Pascal review lenses (depth 1, at most 3 live at once; extras wait). ' +
-    'Do not spawn for syntax (use `run_compile`) or every edit. Children cannot spawn children.' + LineEnding +
-    '</tool_calling>';
+    'Use `read_skill` to load a catalogued SKILL.md. Use `todo_write` for the current Build turn''s short checklist.' + LineEnding;
+  If OfferSubagents Then
+    Result := Result +
+      'Use `spawn_subagent` for parallel explore or Pascal review lenses (depth 1, at most 3 live at once; extras wait). ' +
+      'Do not spawn for syntax (use `run_compile`) or every edit. Children cannot spawn children.' + LineEnding;
+  Result := Result + '</tool_calling>';
 End;
 
 Function TAssistantHarness.BuildIdeFusion: String;
@@ -188,7 +191,8 @@ Begin
     '</formatting>';
 End;
 
-Function TAssistantHarness.BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String): String;
+Function TAssistantHarness.BuildModeOverlay(Mode: TAssistantMode; Const ActivePlanRel: String;
+  OfferSubagents: Boolean): String;
 Var
   PlanPath: String;
 Begin
@@ -220,6 +224,7 @@ Begin
         AssistantPlanAuthoringRules + LineEnding +
         'Prefer `update_markdown` for Status: lines or a single section. Never edit source (.pas/.lfm) in Plan mode.';
     amBuild:
+      Begin
       Result := Result +
         'You are the Project Assistant in **Build mode** for Free Pascal / Lazarus.' + LineEnding +
         'Implement by calling tools. Workflow: grep/search → read → edit (.pas and .lfm) → run_compile → fix.' + LineEnding +
@@ -240,8 +245,11 @@ Begin
         'Read the active plan, including its overall instructions, before implementing a work package. Preserve automatic-commit instructions when writing or updating plans.' + LineEnding +
         'Stay on the active work package. Actionable plan items are `###` headings with a `Status:` line; ' +
         '`##` headings are context and must not receive a Status line.' + LineEnding +
-        'Prefer Michell Free Pascal conventions.' + LineEnding +
-        'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
+        'Prefer Michell Free Pascal conventions.';
+      If OfferSubagents Then
+        Result := Result + LineEnding +
+          'On Review, fan out pascal-naming, pascal-structure, and pascal-review via spawn_subagent over changed files.';
+      End;
   Else
     Result := Result +
       'You are the Project Assistant in **Inspect mode** for Free Pascal / Lazarus.' + LineEnding +
@@ -409,7 +417,7 @@ Begin
 End;
 
 Function TAssistantHarness.BuildSystemPrompt(Mode: TAssistantMode; SkillNames: TStrings; Const ProjectRoot,
-  ActivePlanRel: String; IncludeImageOutput: Boolean): String;
+  ActivePlanRel: String; IncludeImageOutput, OfferSubagents: Boolean): String;
 Var
   Parts, Names: TStringList;
   Tagged: String;
@@ -445,11 +453,11 @@ Begin
     Try
       Parts.Add('You are the Lazarus Project Assistant (' + ModeCaption(Mode) + ' mode).');
       Parts.Add(BuildWorkPolicy);
-      Parts.Add(BuildToolCalling);
+      Parts.Add(BuildToolCalling(OfferSubagents));
       Parts.Add(BuildIdeFusion);
       Parts.Add(BuildCommunication);
       Parts.Add(BuildFormatting);
-      Parts.Add(BuildModeOverlay(Mode, ActivePlanRel));
+      Parts.Add(BuildModeOverlay(Mode, ActivePlanRel, OfferSubagents));
       { A subagent passes IncludeImageOutput false. It does not receive write_image. }
       If IncludeImageOutput And AssistantTurnOffersImageOutput(Mode) Then
         Parts.Add(AssistantImageOutputPromptSection)
