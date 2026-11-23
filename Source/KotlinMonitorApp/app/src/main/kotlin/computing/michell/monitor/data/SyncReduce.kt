@@ -253,9 +253,10 @@ private fun applyOne(
     }
     is MonitorEvent.ImageAdded -> {
       val existing = images[event.imageId]
+      // A notice without a block keeps the block an earlier notice named.
       images[event.imageId] = ImageRecord(
         event.imageId, host, conversationId, existing?.filePath ?: "", event.bytes, event.mime,
-        existing?.size ?: event.bytes
+        existing?.size ?: event.bytes, event.turnId, event.blockId.ifEmpty { existing?.block ?: "" }
       )
       touchedImages += event.imageId
     }

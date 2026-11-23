@@ -810,6 +810,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var cacheSaveJob: Job? = null
   private var suppressCache = false
   private val images = ImageAssembly()
+  /** Guarded by itself: the board, the link, and image replies reach it from different threads. */
+  private val imageFetch = ImageFetchTracker()
+  /** image_get command id to image id, until the write is final. */
+  private val imageCommands = java.util.concurrent.ConcurrentHashMap<String, String>()
   private val display = object : DisplayPreferences {
     override val showThinking: Boolean get() = displayPrefs.getBoolean(DisplayThinkingKey, true)
     override val showTools: Boolean get() = displayPrefs.getBoolean(DisplayToolsKey, true)
@@ -938,6 +942,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
     viewModelScope.launch(Dispatchers.Default) {
       session.commandResults.collect { result ->
+        // A picture request is not a prompt. Its failed write must not put a prompt back or say Could not send.
+        val imageId = imageCommands[result.commandId]
+        if (imageId != null) {
+          if (result.outcome != computing.michell.monitor.connection.CatalogueWrite.Queued) imageCommands.remove(result.commandId)
+          if (result.outcome == computing.michell.monitor.connection.CatalogueWrite.Failed ||
+            result.outcome == computing.michell.monitor.connection.CatalogueWrite.Stale) {
+            synchronized(imageFetch) { imageFetch.release(imageId) }
+          }
+          return@collect
+        }
         val effects = coordinator.onEvent(MonitorEvent.CommandResult(uiState.value, result)) ?: return@collect
         withContext(Dispatchers.Main) { applyUiEffects(effects) }
       }
@@ -1467,6 +1481,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
           if (nextHasRows || !currentHasRows || current.conversationId == conversationId) storedBoardState.value = displayed
           if (followingHead) shownForHead = displayed
           sendFetchGrants(screenFetch.replaceBoard(conversationId, board.turns, board.live))
+          requestBoardImages()
           if (row != null) {
             coordinator.noteResumeCursor(row.id, row.streamId, row.seq)
             coordinator.noteSyncTime(row.updatedAt)
@@ -1870,9 +1885,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private fun onLink(status: computing.michell.monitor.connection.LinkStatus) {
     sendFetchGrants(screenFetch.setConnected(status.phase == computing.michell.monitor.connection.LinkPhase.Live))
+    // A picture asked for on the old socket will not be answered on the new one.
+    if (status.phase != computing.michell.monitor.connection.LinkPhase.Live) synchronized(imageFetch) { imageFetch.linkDropped() }
     val effects = coordinator.onEvent(MonitorEvent.LinkChanged(uiState.value, status))
     if (effects != null) applyUiEffects(effects)
-    if (status.phase == computing.michell.monitor.connection.LinkPhase.Live) followHostConversation(uiState.value.conversationId)
+    if (status.phase == computing.michell.monitor.connection.LinkPhase.Live) {
+      followHostConversation(uiState.value.conversationId)
+      requestBoardImages()
+    }
     if (status.phase == computing.michell.monitor.connection.LinkPhase.Disconnected) {
       askedStatusModel = false
       val host = store.load().hostId
@@ -1899,26 +1919,78 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   private suspend fun execute(effects: List<MonitorEffect>) {
     val decoded = mutableListOf<DecodedImage>()
+    val fetched = mutableListOf<Pair<String, ByteArray>>()
+    val settled = mutableListOf<String>()
     for (effect in effects) {
-      if (effect is MonitorEffect.DecodeImage) {
-        val generation = uiState.value.hostGeneration
-        val bitmap = decodeBitmap(effect.message)
-        val expired = images.takeExpired()
-        if (expired.isNotEmpty()) coordinator.noteImagesExpired(expired)
-        if (bitmap != null && uiState.value.hostGeneration == generation) {
-          val cacheKey = ImageCacheKey(generation, bitmap.imageId, bitmap.revision)
-          coordinator.noteBitmap(imageCacheText(cacheKey))
-          coordinator.noteImageFetched(bitmap.imageId)
-          decoded += bitmap
-        }
+      if (effect !is MonitorEffect.DecodeImage) continue
+      val generation = uiState.value.hostGeneration
+      val missing = (effect.message.inbound as? InboundPayload.ImageMissing)?.value
+      if (missing != null) settled += missing.imageId
+      val part = effect.message.inbound as? InboundPayload.ImagePart
+      val joined = if (part == null) null else images.accept(part.image, part.bytes)
+      val expired = images.takeExpired()
+      if (expired.isNotEmpty()) {
+        coordinator.noteImagesExpired(expired)
+        synchronized(imageFetch) { for (id in expired) imageFetch.release(id) }
+      }
+      if (part == null || joined == null) continue
+      fetched += part.image.imageId to joined
+      settled += part.image.imageId
+      val bitmap = decodeBounded(joined)
+      if (bitmap != null && uiState.value.hostGeneration == generation) {
+        val turnIndex = uiState.value.live?.turnIndex ?: -1
+        coordinator.noteBitmap(imageCacheText(ImageCacheKey(generation, part.image.imageId, part.image.revision)))
+        coordinator.noteImageFetched(part.image.imageId)
+        decoded += DecodedImage(generation, part.image.imageId, part.image.revision, turnIndex, bitmap)
       }
     }
+    if (fetched.isNotEmpty()) storeFetchedImages(fetched)
     // An empty effect list is a plan or status frame. Leaving it unpublished is why
     // the Plan page stayed stale until Conversation was opened and closed.
     val copyState = incomingCopiesScreen(effects)
     withContext(Dispatchers.Main) {
       for (image in decoded) storeDecoded(image)
+      if (settled.isNotEmpty()) {
+        synchronized(imageFetch) { for (id in settled) imageFetch.settle(id) }
+        // An unavailable reason is chrome on the tile. A settled request makes room for the next picture.
+        if (!copyState) uiState.value = coordinator.state
+        requestBoardImages()
+      }
       if (copyState) applyUiEffects(effects)
+    }
+  }
+
+  /** Saves each fetched picture under the open conversation. The screen watch decodes the file once its row points at it. */
+  private suspend fun storeFetchedImages(fetched: List<Pair<String, ByteArray>>) {
+    val host = watchedHost
+    val conversationId = watchedConversation
+    if (host.isEmpty() || conversationId.isEmpty()) return
+    withContext(Dispatchers.IO) {
+      for ((imageId, bytes) in fetched) {
+        try {
+          conversations.storeFetchedImage(host, conversationId, imageId, bytes)
+        } catch (error: Exception) {
+          // A failed local copy must not drop the live session. The tile keeps the decoded bitmap.
+        }
+      }
+    }
+  }
+
+  /**
+   * Asks the desktop for pictures on the board that have no file yet. Only on a live link, and only for the
+   * conversation the desktop has open: image_get names a turn index in that conversation.
+   */
+  private fun requestBoardImages() {
+    val shown = uiState.value
+    if (shown.disconnected || shown.reviewingOffline) return
+    if (session.status.value.phase != computing.michell.monitor.connection.LinkPhase.Live) return
+    val board = storedBoardState.value
+    if (board.conversationId.isEmpty() || board.conversationId != shown.conversationId) return
+    val keys = synchronized(imageFetch) { imageFetch.next(shown.hostGeneration, board, System.currentTimeMillis()) }
+    for (key in keys) {
+      val commandId = session.nextCommandId()
+      imageCommands[commandId] = key.imageId
+      session.sendCatalogue(computing.michell.monitor.protocol.encodeImageGet(commandId, key.turnIndex, key.imageId))
     }
   }
 
@@ -1948,6 +2020,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         is MonitorEffect.Send -> session.sendCatalogue(effect.json)
         MonitorEffect.ClearCaches -> {
           images.reset()
+          synchronized(imageFetch) { imageFetch.reset() }
+          imageCommands.clear()
           imageCache.reset()
           bitmapsState.value = emptyMap()
         }
@@ -2102,14 +2176,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private fun rememberMicrophoneAsked() {
     if (microphoneAsked()) return
     displayPrefs.edit().putBoolean(DictationPermissionAskedKey, true).commit()
-  }
-
-  private fun decodeBitmap(message: MonitorMessage): DecodedImage? {
-    val part = message.inbound as? InboundPayload.ImagePart ?: return null
-    val joined = images.accept(part.image, part.bytes) ?: return null
-    val bitmap = decodeBounded(joined) ?: return null
-    val turnIndex = uiState.value.live?.turnIndex ?: -1
-    return DecodedImage(uiState.value.hostGeneration, part.image.imageId, part.image.revision, turnIndex, bitmap)
   }
 
   private fun decodeBounded(bytes: ByteArray): Bitmap? {

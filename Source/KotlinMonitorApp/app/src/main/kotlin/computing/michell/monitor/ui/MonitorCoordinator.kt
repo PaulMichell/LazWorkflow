@@ -29,6 +29,7 @@ import computing.michell.monitor.protocol.UnsavedEditsReason
 import computing.michell.monitor.protocol.encodeRunPlan
 import computing.michell.monitor.protocol.decodeError
 import computing.michell.monitor.protocol.decodeHelloOk
+import computing.michell.monitor.protocol.decodeImageUnavailable
 import computing.michell.monitor.protocol.decodeModels
 import computing.michell.monitor.protocol.decodePlan
 import computing.michell.monitor.protocol.decodeStatusPayload
@@ -559,7 +560,15 @@ class MonitorCoordinator(
         if (local.draft.isEmpty()) local = local.copy(draft = text)
       }
       MessageKind.Error -> applyError(message)?.let { effects += it }
-      MessageKind.ImageData, MessageKind.ImageUnavailable -> effects += MonitorEffect.DecodeImage(message)
+      MessageKind.ImageData -> effects += MonitorEffect.DecodeImage(message)
+      MessageKind.ImageUnavailable -> {
+        // The tile says why the picture will not come, instead of loading for ever.
+        val missing = (message.inbound as? InboundPayload.ImageMissing)?.value ?: decodeImageUnavailable(message.payloadJson)
+        if (missing != null && missing.imageId.isNotEmpty()) {
+          local = local.copy(imageReasons = local.imageReasons + (missing.imageId to missing.reason.ifEmpty { "missing" }))
+        }
+        effects += MonitorEffect.DecodeImage(message)
+      }
       else -> {}
     }
     noteRunClock()

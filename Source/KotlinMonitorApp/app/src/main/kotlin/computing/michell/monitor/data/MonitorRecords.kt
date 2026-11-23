@@ -3,7 +3,10 @@ package computing.michell.monitor.data
 /* Room rows for the phone's local copy (c) 2026 Michell Computing.
 
    The database is the source of truth for live view and offline review.
-   Images are files. The row keeps the path and the sizes, not the pixels. */
+   Images are files. The row keeps the path and the sizes, not the pixels.
+   An image row names its turn and the block that shows it, so the screen can
+   draw it there and ask the desktop for it by turn. An empty path is a picture
+   the desktop announced and the phone has not fetched yet. */
 
 import androidx.room3.Entity
 import androidx.room3.ForeignKey
@@ -112,7 +115,9 @@ data class ImageRecord(
   val filePath: String,
   val bytes: Long,
   val mime: String,
-  val size: Long
+  val size: Long,
+  val turn: String = "",
+  val block: String = ""
 )
 
 /** A block whose body is not the cursor's text until a fetch finishes. */

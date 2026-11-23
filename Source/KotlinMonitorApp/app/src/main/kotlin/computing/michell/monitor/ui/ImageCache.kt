@@ -1,7 +1,13 @@
 package computing.michell.monitor.ui
 
-/* Useful image requests and the decoded-pixel cache (c) 2026 Michell Computing. */
+/* Useful image requests and the decoded-pixel cache (c) 2026 Michell Computing.
 
+   A picture the desktop announced has no file until the phone asks for it with
+   image_get. The board says which pictures still have no file. The tracker
+   keeps the requests on this link inside the phone's assembly limit. */
+
+import computing.michell.monitor.data.StoredImagesBlockId
+import computing.michell.monitor.protocol.MonitorLimits
 import computing.michell.monitor.protocol.WireImage
 import computing.michell.monitor.protocol.WireTurn
 
@@ -64,6 +70,77 @@ fun imageRequestKeys(
     }
   }
   return keys
+}
+
+/**
+ * Pictures on the board with no stored file, as image_get requests. The live turn comes first, then stored turns
+ * newest first, so the end of the conversation arrives before older history. Ids in [skip] are left out, and no
+ * more than [room] requests are returned. The note of pictures from before schema 5 names no turn, so the desktop
+ * could not find them; those are not asked for.
+ */
+fun boardImageFetches(
+  hostGeneration: Int,
+  turns: List<WireTurn>,
+  live: WireTurn?,
+  skip: Set<String>,
+  room: Int
+): List<ImageRequestKey> {
+  if (room <= 0) return emptyList()
+  val keys = ArrayList<ImageRequestKey>()
+  val seen = HashSet<String>()
+  for (turn in listOfNotNull(live) + turns.sortedByDescending { turn -> turn.turnIndex }) {
+    for (block in turn.blocks) {
+      if (block.blockId == StoredImagesBlockId) continue
+      for (image in block.images) {
+        if (image.id.isEmpty() || image.missing || image.displayPath.isNotEmpty()) continue
+        if (image.id in skip || !seen.add(image.id)) continue
+        keys += ImageRequestKey(hostGeneration, turn.turnIndex, image.id)
+        if (keys.size >= room) return keys
+      }
+    }
+  }
+  return keys
+}
+
+/**
+ * The image_get requests on the current link. An answer or an unavailable reply settles an id, so it is not asked
+ * again. A request with no answer inside the assembly lifetime may be asked again. A dropped link forgets what was
+ * in flight, because the replies went with the socket. No more than [limit] requests are in flight.
+ */
+class ImageFetchTracker(
+  private val limit: Int = MonitorLimits.MaxOpenImageAssemblies,
+  private val lifetimeMs: Long = MonitorLimits.ImageAssemblyTtlMs
+) {
+  private val asked = HashMap<String, Long>()
+  private val settled = HashSet<String>()
+
+  val inFlight: Set<String> get() = asked.keys.toSet()
+
+  fun next(hostGeneration: Int, board: BoardContent, nowMs: Long): List<ImageRequestKey> {
+    asked.entries.removeAll { entry -> nowMs - entry.value >= lifetimeMs }
+    val keys = boardImageFetches(hostGeneration, board.turns, board.live, asked.keys + settled, limit - asked.size)
+    for (key in keys) asked[key.imageId] = nowMs
+    return keys
+  }
+
+  fun settle(imageId: String) {
+    asked.remove(imageId)
+    settled += imageId
+  }
+
+  /** The assembly gave up on this id. It may be asked for again. */
+  fun release(imageId: String) {
+    asked.remove(imageId)
+  }
+
+  fun linkDropped() {
+    asked.clear()
+  }
+
+  fun reset() {
+    asked.clear()
+    settled.clear()
+  }
 }
 
 private data class ImageCacheEntry(val key: ImageCacheKey, val turnIndex: Int, val bytes: Long)

@@ -12,6 +12,9 @@ import computing.michell.monitor.protocol.WireImage
 import computing.michell.monitor.protocol.WireTurn
 import java.io.File
 
+/** The note at the end that holds pictures whose turn is not known. */
+const val StoredImagesBlockId = "stored-images"
+
 data class StoredScreen(
   val conversation: ConversationRecord,
   val turns: List<TurnRecord>,
@@ -66,11 +69,31 @@ fun documentFromRows(
   images: List<ImageRecord> = emptyList()
 ): OfflineCacheDocument {
   val stale = repairs.filter { repair -> repair.missingBody || repair.stale }.map { repair -> repair.blockId }.toSet()
-  val pictures = images.map { image -> wireImage(image) }
   val byTurn = blocks.groupBy { block -> block.turn }
+  // A picture is drawn on the block that showed it on the desktop. A notice with no block puts it on its turn's
+  // prompt. A row from before schema 5 names neither, and goes in one note at the end as before.
+  val blockIds = blocks.map { block -> block.blockId }.toSet()
+  val turnIds = turns.map { turn -> turn.turnId }.toSet()
+  val onBlock = HashMap<String, MutableList<WireImage>>()
+  val onTurn = HashMap<String, MutableList<WireImage>>()
+  val pictures = ArrayList<WireImage>()
+  for (image in images) {
+    val picture = wireImage(image)
+    when {
+      image.block.isNotEmpty() && image.block in blockIds -> onBlock.getOrPut(image.block) { ArrayList() } += picture
+      image.turn.isNotEmpty() && image.turn in turnIds -> onTurn.getOrPut(image.turn) { ArrayList() } += picture
+      else -> pictures += picture
+    }
+  }
   val wire = turns.sortedBy { turn -> turn.ordinal }.map { turn ->
-    val bodies = (byTurn[turn.turnId] ?: emptyList()).sortedBy { block -> block.ordinal }.map { block ->
+    val sorted = (byTurn[turn.turnId] ?: emptyList()).sortedBy { block -> block.ordinal }
+    val promptBlock = (sorted.firstOrNull { block -> block.kind == "user" } ?: sorted.firstOrNull())?.blockId
+    val turnPictures = onTurn[turn.turnId] ?: emptyList<WireImage>()
+    if (promptBlock == null) pictures += turnPictures
+    val bodies = sorted.map { block ->
       val running = block.state == "running" || (turn.outcome == "running" && block.state.isEmpty())
+      val shown = (onBlock[block.blockId] ?: emptyList<WireImage>()) +
+        (if (block.blockId == promptBlock) turnPictures else emptyList())
       WireBlock(
         block.kind,
         block.blockId,
@@ -81,7 +104,7 @@ fun documentFromRows(
         running,
         block.state == "ok",
         0,
-        emptyList(),
+        shown,
         deferred = block.blockId in stale
       )
     }
@@ -103,14 +126,15 @@ fun documentFromRows(
   }
   val withPictures = if (pictures.isEmpty() || wire.isEmpty()) wire
     else wire.dropLast(1) + wire.last().copy(blocks = wire.last().blocks + WireBlock(
-      "note", "stored-images", "", "", "", "", false, true, 0, pictures
+      "note", StoredImagesBlockId, "", "", "", "", false, true, 0, pictures
     ))
   return OfflineCacheDocument(withPictures, withPictures, withPictures.lastOrNull { turn -> turn.live }, "", "", emptyList(), -1, "")
 }
 
+/** A picture not fetched yet has no path. It is not missing: the tile says it is loading until the file arrives. */
 fun wireImage(image: ImageRecord): WireImage {
   val present = image.filePath.isNotEmpty() && File(image.filePath).isFile
-  return WireImage(image.id, image.id, image.mime, 0, 0, image.filePath, !present)
+  return WireImage(image.id, image.id, image.mime, 0, 0, if (present) image.filePath else "", false)
 }
 
 private fun mergedTurns(document: OfflineCacheDocument): List<WireTurn> {

@@ -2,12 +2,69 @@ package computing.michell.monitor.ui
 
 /* Image request and cache decisions without a device (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.data.StoredImagesBlockId
+import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.protocol.WireImage
+import computing.michell.monitor.protocol.WireTurn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+private fun picture(id: String, path: String = "", missing: Boolean = false): WireImage {
+  return WireImage(id, id, "image/png", 0, 0, path, missing)
+}
+
+private fun turnWith(index: Int, vararg blocks: Pair<String, List<WireImage>>): WireTurn {
+  return WireTurn(index, "turn-$index", "build", "", "", "", blocks = blocks.map { (blockId, images) ->
+    WireBlock("tool", blockId, "", "", "", "", false, true, 0, images)
+  })
+}
+
 class ImageCacheTest {
+  @Test
+  fun theBoardAsksForUnfetchedPicturesLiveFirstThenNewest() {
+    val old = turnWith(0, "b0" to listOf(picture("old")))
+    val newer = turnWith(1, "b1" to listOf(picture("fetched", path = "/files/fetched"), picture("newer")))
+    val live = turnWith(-2, "b-live" to listOf(picture("live")))
+    val keys = boardImageFetches(3, listOf(old, newer), live, emptySet(), 8)
+    assertEquals(listOf("live", "newer", "old"), keys.map { key -> key.imageId })
+    assertEquals(listOf(-2, 1, 0), keys.map { key -> key.turnIndex })
+    assertTrue(keys.all { key -> key.hostGeneration == 3 })
+    assertEquals(listOf("live"), boardImageFetches(3, listOf(old, newer), live, emptySet(), 1).map { key -> key.imageId })
+    assertEquals(listOf("old"), boardImageFetches(3, listOf(old, newer), live, setOf("live", "newer"), 8).map { key -> key.imageId })
+    assertTrue(boardImageFetches(3, listOf(old), null, emptySet(), 0).isEmpty())
+  }
+
+  @Test
+  fun missingPicturesAndTheUnplacedNoteAreNotAskedFor() {
+    val turn = turnWith(
+      4,
+      "b4" to listOf(picture("gone", missing = true)),
+      StoredImagesBlockId to listOf(picture("no-turn"))
+    )
+    assertTrue(boardImageFetches(0, listOf(turn), null, emptySet(), 8).isEmpty())
+  }
+
+  @Test
+  fun theTrackerKeepsRequestsInsideTheLimitAndSettlesAnswers() {
+    val board = BoardContent("host", "c1", listOf(turnWith(0, "b0" to listOf(picture("a"), picture("b"), picture("c")))))
+    val tracker = ImageFetchTracker(limit = 2, lifetimeMs = 1_000L)
+    assertEquals(listOf("a", "b"), tracker.next(0, board, 0L).map { key -> key.imageId })
+    assertTrue(tracker.next(0, board, 10L).isEmpty())
+    tracker.settle("a")
+    assertEquals(listOf("c"), tracker.next(0, board, 20L).map { key -> key.imageId })
+    // An answered picture is not asked for again. An unanswered one is, after the assembly lifetime.
+    assertEquals(listOf("b", "c"), tracker.next(0, board, 1_020L).map { key -> key.imageId })
+    tracker.linkDropped()
+    assertEquals(setOf<String>(), tracker.inFlight)
+    assertEquals(listOf("b", "c"), tracker.next(0, board, 1_030L).map { key -> key.imageId })
+    tracker.release("b")
+    assertEquals(listOf("b"), tracker.next(0, board, 1_040L).map { key -> key.imageId })
+    tracker.reset()
+    assertEquals(listOf("a", "b"), tracker.next(0, board, 1_050L).map { key -> key.imageId })
+  }
+
   @Test
   fun visibleSetRequestsLiveNeighboursAndNotDistantHistory() {
     val order = listOf(0, 1, 2, 3, 4)

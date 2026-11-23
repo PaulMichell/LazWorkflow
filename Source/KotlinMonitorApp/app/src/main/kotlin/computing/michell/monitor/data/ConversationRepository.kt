@@ -64,6 +64,24 @@ class ConversationRepository(
     database.images().upsert(row)
   }
 
+  /**
+   * Writes the bytes the desktop sent for an announced picture and points its row at the file. The row changes,
+   * so the screen watch decodes the file. False when there is no such row, no image folder, or the write failed.
+   */
+  suspend fun storeFetchedImage(host: String, conversationId: String, imageId: String, bytes: ByteArray): Boolean {
+    val root = imageRoot ?: return false
+    val row = database.sync().loadImagesById(host, conversationId, listOf(imageId)).firstOrNull() ?: return false
+    val target = monitorImageFile(root, host, conversationId, imageId) ?: return false
+    try {
+      copyBytes(bytes, target)
+    } catch (error: Exception) {
+      return false
+    }
+    if (!target.isFile) return false
+    database.images().upsert(row.copy(filePath = target.path, size = bytes.size.toLong()))
+    return true
+  }
+
   suspend fun deleteImage(host: String, conversationId: String, imageId: String) {
     database.images().delete(host, conversationId, imageId)
   }
@@ -108,6 +126,8 @@ class ConversationRepository(
     }
     val present = ArrayList<AgedImage>()
     for (image in database.images().listAll()) {
+      // An announced picture has no file until it is fetched. Deleting its row would lose it before it arrives.
+      if (image.filePath.isEmpty()) continue
       val file = File(image.filePath)
       if (!file.isFile) {
         database.images().delete(image.host, image.conversation, image.id)

@@ -2,9 +2,10 @@ package computing.michell.monitor.data
 
 /* Local Room database for the monitor phone (c) 2026 Michell Computing.
 
-   One file, monitor.db. The caller keeps the instance. Schema version 4.
+   One file, monitor.db. The caller keeps the instance. Schema version 5.
    Version 2 adds the host plan row. Version 3 adds repair, held append, and
-   state rows. Version 4 keeps the plan file counts on that row.
+   state rows. Version 4 keeps the plan file counts on that row. Version 5
+   names the turn and block of each image row.
    Android framework SQLite is the driver. */
 
 import android.content.Context
@@ -72,6 +73,15 @@ private val PlanFileCountsMigration = Migration(3, 4) { connection: SQLiteConnec
   connection.prepare("ALTER TABLE `plan_new` RENAME TO `plan`").use { statement -> statement.step() }
 }
 
+/** Rows from before version 5 keep an empty turn and block. They are drawn at the end and are not fetched. */
+private val ImagePlaceMigration = Migration(4, 5) { connection: SQLiteConnection ->
+  connection.prepare("ALTER TABLE `image` ADD COLUMN `turn` TEXT NOT NULL DEFAULT ''").use { statement -> statement.step() }
+  connection.prepare("ALTER TABLE `image` ADD COLUMN `block` TEXT NOT NULL DEFAULT ''").use { statement -> statement.step() }
+}
+
+/** Every step from version 1. Tests open an older file with the same list. */
+internal val MonitorMigrations = arrayOf(PlanTableMigration, SyncObligationMigration, PlanFileCountsMigration, ImagePlaceMigration)
+
 @Database(
   entities = [
     HostRecord::class,
@@ -85,7 +95,7 @@ private val PlanFileCountsMigration = Migration(3, 4) { connection: SQLiteConnec
     HeldAppendRecord::class,
     HostStateRecord::class
   ],
-  version = 4
+  version = 5
 )
 abstract class MonitorDatabase : RoomDatabase() {
   abstract fun hosts(): HostDao
@@ -101,7 +111,7 @@ fun openMonitorDatabase(context: Context): MonitorDatabase {
   val path = context.applicationContext.getDatabasePath("monitor.db").absolutePath
   return Room.databaseBuilder<MonitorDatabase>(context.applicationContext, path)
     .setDriver(AndroidSQLiteDriver())
-    .addMigrations(PlanTableMigration, SyncObligationMigration, PlanFileCountsMigration)
+    .addMigrations(*MonitorMigrations)
     .setQueryCoroutineContext(Dispatchers.IO)
     .build()
 }
