@@ -54,8 +54,7 @@ A change to a package needs the IDE rebuilt (Tools → Build Lazarus) before it 
 ## Git
 
 Commit subjects take an area prefix and an imperative summary (`Claude: resume the Claude Code session …`); the
-body explains the cause, the effect, and why the fix is right. Commit only the files you changed. Untracked files
-under `Source/KotlinMonitorApp/` belong to other work: leave them alone.
+body explains the cause, the effect, and why the fix is right. Commit only the files you changed.
 
 ## Current work: the Claude connector
 
