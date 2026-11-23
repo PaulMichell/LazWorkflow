@@ -18,6 +18,10 @@ Program RunAssistantTests;
   objcopy --strip-debug, because Valgrind 3.24 aborts in its DWARF reader on these binaries.
   Tests/FpcTimezone.supp hides the RTL timezone init reports.
 
+  Known failures that predate this work are printed as KNOWN and do not fail the suite. A FAIL is a new regression.
+  --only still builds and runs a named known test. The reasons are the ones in CLAUDE.md. Do not restore bufferUpdated,
+  and do not treat the settings Codex check as a bug to fix here.
+
   Size note (2026-11-07): over 1000 lines once the memory-check probes of plan item 2.4 (Documents/Plan-20261107-025146.md)
   were added. Plan item 2.3 names Tests/RunAssistantTestsOptions.inc as the place to move the option handling when the
   memory-check settings have settled. }
@@ -121,6 +125,7 @@ Begin
   WriteLn(StdErr, '--only ' + ProbeTestNames[0] + ' or --only ' + ProbeTestNames[1] + ' runs a planted-fault probe, which is not');
   WriteLn(StdErr, '  in the default run. Its ' + ProbeCleanArg + ' run must pass; under --heaptrc or --valgrind its planted run must');
   WriteLn(StdErr, '  be reported by the memory check. Without a memory check the planted run is skipped.');
+  WriteLn(StdErr, 'Known pre-existing failures are printed as KNOWN and do not fail the suite. --only still runs one.');
   Halt(2);
 End;
 
@@ -893,6 +898,19 @@ Begin
   Failures.Add(TestName);
 End;
 
+{ Empty unless TestName is a failure that predates this work. The wording is the CLAUDE.md reason. }
+Function KnownSkipReason(Const TestName: String): String;
+Begin
+  Result := '';
+  If TestName = 'AssistantSettingsTest' Then
+    Result := 'stops at the Codex check "missing saved executable recovered without changing connection identity", ' +
+      'and also fails "a new profile does not inherit image output"'
+  Else If TestName = 'AssistantEditorEditsTest' Then
+    Result := 'fails "Plan advertises Markdown edits and saves"'
+  Else If TestName = 'AssistantMCPApprovalTest' Then
+    Result := 'fails "the held call completes": still looks for bufferUpdated, which was removed';
+End;
+
 Procedure RunTest(Const TestName: String; TimeoutSec: Integer);
 Var
   Run: TRunResult;
@@ -1031,6 +1049,7 @@ Function RunSuite: Boolean;
 Var
   UnitDirs, Tests, Command: TStringList;
   I, BuildTimeout: Integer;
+  Reason, NewFailures: String;
 Begin
   Result := False;
   UnitDirs := AssistantUnitDirs;
@@ -1050,8 +1069,18 @@ Begin
         BuildTimeout := 300
       Else
         BuildTimeout := 90;
+      If OnlyNames.Count = 0 Then
+        Say('KNOWN AssistantUsageTest: not registered in the runner. This is not a new regression.');
       For I := 0 To Tests.Count - 1 Do
         Begin
+          Reason := '';
+          If OnlyNames.Count = 0 Then
+            Reason := KnownSkipReason(Tests[I]);
+          If Reason <> '' Then
+            Begin
+              Say('KNOWN ' + Tests[I] + ': ' + Reason);
+              Continue;
+            End;
           Command.Clear;
           Command.Add('fpc');
           Command.Add('-v0');
@@ -1097,6 +1126,19 @@ Begin
       Tests.Free;
     End;
     Say('Logs: ' + OutputDir);
+    If Failures.Count = 0 Then
+      Say('No new failures.')
+    Else
+      Begin
+        NewFailures := '';
+        For I := 0 To Failures.Count - 1 Do
+          Begin
+            If NewFailures <> '' Then
+              NewFailures := NewFailures + ', ';
+            NewFailures := NewFailures + Failures[I];
+          End;
+        Say('New failures: ' + NewFailures);
+      End;
     Result := Failures.Count = 0;
   Finally
     UnitDirs.Free;

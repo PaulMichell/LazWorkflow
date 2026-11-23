@@ -41,13 +41,13 @@ neither may be used with `--independent`, `--package-check` or `--gui`. Valgrind
 capped at 3600 seconds, and runs far slower than heaptrc. A valgrind build omits `-gl` and is then
 stripped of debug sections, because Valgrind 3.24 aborts in its DWARF reader on these binaries.
 
-Known failures that predate the Claude connector work: `AssistantSettingsTest` stops at the Codex check "missing
-saved executable recovered without changing connection identity", and also fails "a new profile does not inherit
-image output" once that first check is passed. `AssistantUsageTest` is not registered in the runner. Among the
-GUI tests, `AssistantWorkspaceTest` and `AssistantWorkTargetTest` do not build (they call
-`ExecuteAssistantToolForMode` without its `ToolId` argument), and `AssistantEditorEditsTest` fails "Plan advertises
-Markdown edits and saves". `AssistantMCPApprovalTest` fails "the held call completes": it still looks for
-`bufferUpdated`, which commit `d8c7e5c` removed from the broker's edit replies.
+Known failures that predate the Claude connector work are printed by the runner as `KNOWN` and do not fail the suite.
+A `FAIL` line is a new regression. `AssistantSettingsTest` stops at the Codex check "missing saved executable recovered
+without changing connection identity", and also fails "a new profile does not inherit image output" once that first
+check is passed. `AssistantUsageTest` is not registered. `AssistantEditorEditsTest` fails "Plan advertises Markdown
+edits and saves". `AssistantMCPApprovalTest` fails "the held call completes": it still looks for `bufferUpdated`,
+which commit `d8c7e5c` removed from the broker's edit replies. Do not put `bufferUpdated` back. The `ToolId` calls in
+`AssistantWorkspaceTest` and `AssistantWorkTargetTest` are fixed; those programs are no longer known build breaks.
 
 A change to a package needs the IDE rebuilt (Tools → Build Lazarus) before it can be seen in the running IDE.
 

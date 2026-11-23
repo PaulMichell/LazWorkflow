@@ -146,7 +146,7 @@ Begin
   End;
   Check('folder target for read_image', AssistantTarget.SelectFolder(Root, Note));
   SetLength(Refs, 0);
-  Check('read_image stores the picture', ExecuteAssistantToolForMode('read_image', '{"path":"photo.png"}', amInspect,
+  Check('read_image stores the picture', ExecuteAssistantToolForMode('read_image', '{"path":"photo.png"}', '', amInspect,
     Reply, Note, Refs) And (Length(Refs)=1));
   Check('result is the name', Pos('photo.png', Reply)>0);
   Check('result is the dimensions', Pos('8 x 4', Reply)>0);
@@ -189,26 +189,26 @@ Begin
   AssistantChatConfig.SetApprovalModeEnum(aamAlways);
   Try
     Check('png is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
-      '{"path":"photo.png","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+      '{"path":"photo.png","content":"not an image file payload"}', '', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('webp is still not a text edit', (Not ExecuteAssistantToolForMode('write_file',
-      '{"path":"photo.webp","content":"not an image file payload"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0) And
+      '{"path":"photo.webp","content":"not an image file payload"}', '', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0) And
       (Not FileExists(Root+'/photo.webp')));
     Check('inspect write_file still rejects a png', (Not ExecuteAssistantToolForMode('write_file',
-      '{"path":"photo.png","content":"not an image file payload"}', amInspect, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+      '{"path":"photo.png","content":"not an image file payload"}', '', amInspect, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('replace_in_file still refuses a png', (Not ExecuteAssistantToolForMode('replace_in_file',
-      '{"path":"photo.png","old_text":"a","new_text":"b"}', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
+      '{"path":"photo.png","old_text":"a","new_text":"b"}', '', amBuild, Reply, Note)) And (Pos('blocked/binary', Note)>0));
     Check('markdown write is refused before an editor edit', (Not ExecuteAssistantToolForMode('write_file',
       '{"path":"Documents/Plan.md","content":"This plan text is long enough and must still be refused."}',
-      amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
+      '', amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
     Check('markdown replace is refused before an editor edit', (Not ExecuteAssistantToolForMode('replace_in_file',
-      '{"path":"Notes.md","old_text":"old","new_text":"new"}', amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
+      '{"path":"Notes.md","old_text":"old","new_text":"new"}', '', amBuild, Reply, Note)) And (Pos('write_markdown', Note)>0));
   Finally
     AssistantChatConfig.SetApprovalModeEnum(SavedApproval);
   End;
   Check('escape link created', fpSymlink(PChar(Outside), PChar(Root+'/escape.png'))=0);
   SetLength(Refs, 0);
   Check('symbolic link that leaves the project is refused', Not ExecuteAssistantToolForMode('read_image',
-    '{"path":"escape.png"}', amPlan, Reply, Note, Refs));
+    '{"path":"escape.png"}', '', amPlan, Reply, Note, Refs));
   Check('escape is refused by the sandbox', (Pos('symbolic link', LowerCase(Note))>0) Or
     (Pos('outside the active project', LowerCase(Note))>0));
   AssistantTarget.SelectProject;
@@ -424,7 +424,7 @@ Var
   Function Draw(Const Args: String): Boolean;
   Begin
     BeginWriteImageTurn;
-    Result := ExecuteAssistantToolForMode('write_image', Args, amBuild, Reply, Note);
+    Result := ExecuteAssistantToolForMode('write_image', Args, '', amBuild, Reply, Note);
   End;
 Begin
   Root := GetTempDir + 'laz-write-image-' + IntToStr(GetProcessID);
@@ -464,7 +464,7 @@ Begin
     SetLength(Refs, 0);
     SetLength(Stored, 0);
     Check('read_image of the written path shows the same bytes',
-      ExecuteAssistantToolForMode('read_image', '{"path":"icons/dot.png"}', amBuild, Reply, Note, Refs) And
+      ExecuteAssistantToolForMode('read_image', '{"path":"icons/dot.png"}', '', amBuild, Reply, Note, Refs) And
       (Length(Refs) = 1) And ReadStoredAssistantImage(Root, Refs[0].DisplayPath, Stored, Note) And
       (StringOf(Stored) = Written) And (Pos('Wrote', Reply) = 0));
     Check('existing file is not replaced without overwrite',
@@ -565,10 +565,10 @@ Begin
     Check('symlink cannot extend write scope',Not AssistantTarget.AllowsWrite(Root+'/Source/One/escape/Two.pas'));
     Check('manifest editing requires package editor',Not AssistantTarget.AllowsWrite(Packages.First.Filename));
     Check('read resolver uses target root',ResolveProjectPath('Source/One/One.pas',Path,Note) And (Path=Packages.First.Member.Path));
-    Check('legacy tools describe selected package',ExecuteAssistantToolForMode('get_project_info','{}',amInspect,Reply,Note) And (Pos('One.lpk',Reply)>0));
-    Check('legacy package writes cannot alter unrelated source',Not ExecuteAssistantToolForMode('write_file','{"path":"App/App.pas","content":"bad"}',amBuild,Reply,Note));
+    Check('legacy tools describe selected package',ExecuteAssistantToolForMode('get_project_info','{}','',amInspect,Reply,Note) And (Pos('One.lpk',Reply)>0));
+    Check('legacy package writes cannot alter unrelated source',Not ExecuteAssistantToolForMode('write_file','{"path":"App/App.pas","content":"bad"}','',amBuild,Reply,Note));
     Check('Git cannot stage unrelated project source',Not ToolRunGit(amBuild,'{"arguments":["add","--","App/App.pas"]}',Reply,Note));
-    Check('legacy membership tool cannot modify active project',Not ExecuteAssistantToolForMode('add_unit_to_project','{"path":"Source/One/One.pas"}',amBuild,Reply,Note));
+    Check('legacy membership tool cannot modify active project',Not ExecuteAssistantToolForMode('add_unit_to_project','{"path":"Source/One/One.pas"}','',amBuild,Reply,Note));
     Store.SetProjectRoot(AssistantTarget.Root,AssistantTarget.StoreKey);
     Check('save package plan setting',Store.SaveShellConfig(True,amPlan,'Documents/One.md'));
     Key:=AssistantTarget.StoreKey;Path:=AssistantTarget.StoreDirectory;
