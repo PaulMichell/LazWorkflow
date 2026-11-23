@@ -42,6 +42,14 @@ Type
   { How a registered engine becomes connected. erNone is not a turn engine. }
   TAssistantEngineReady = (erNone, erSignedIn, erRuntimeAndModel);
 
+  { How a turn keeps earlier messages. A backend sets this when it registers.
+    Message history is the service array. It is not a session id. }
+  TAssistantContinuity = (
+    acoMessageHistory,
+    acoRuntimeSession,
+    acoRecapOnly
+  );
+
   TAssistantBackendInfo = Record
     Id: String;
     DisplayName: String;
@@ -49,6 +57,8 @@ Type
     { Footer half of the effort row. Claude sends effort and does not show it. }
     ShowsEffort: Boolean;
     ReadyKind: TAssistantEngineReady;
+    { Chosen by the backend. The form does not invent a fourth history path. }
+    Continuity: TAssistantContinuity;
   End;
 
 /// Every capability Absent. A backend then sets the rows its path delivers.
@@ -68,6 +78,10 @@ Function AssistantCapabilitySupport(Const BackendId: String; Capability: TAssist
 Function AssistantCapabilityDelivered(Const BackendId: String; Capability: TAssistantCapability): Boolean;
 /// The effort footer. False for Claude, which sends effort and does not show it.
 Function AssistantShowsEffort(Const BackendId: String): Boolean;
+/// The registered continuity strategy. An unknown id is message history, not a session id.
+Function AssistantBackendContinuity(Const BackendId: String): TAssistantContinuity;
+/// True only for a recap-only thread. That path re-sends stored pictures. A session does not.
+Function AssistantContinuityReattachesImages(Strategy: TAssistantContinuity): Boolean;
 /// Steer during a turn. False when the row is Absent or the id is not registered.
 Function AssistantCanSteer(Const BackendId: String): Boolean;
 /// True when this id has a turn engine and that engine is signed in, or has a runtime and a model.
@@ -137,6 +151,7 @@ Begin
   Info.Support := AbsentCapabilitySet;
   Info.ShowsEffort := False;
   Info.ReadyKind := erNone;
+  Info.Continuity := acoMessageHistory;
 End;
 
 Procedure RegisterAssistantBackend(Const Info: TAssistantBackendInfo);
@@ -205,6 +220,21 @@ Var
   Info: TAssistantBackendInfo;
 Begin
   Result := FindAssistantBackend(BackendId, Info) And Info.ShowsEffort;
+End;
+
+Function AssistantBackendContinuity(Const BackendId: String): TAssistantContinuity;
+Var
+  Info: TAssistantBackendInfo;
+Begin
+  If FindAssistantBackend(BackendId, Info) Then
+    Result := Info.Continuity
+  Else
+    Result := acoMessageHistory;
+End;
+
+Function AssistantContinuityReattachesImages(Strategy: TAssistantContinuity): Boolean;
+Begin
+  Result := Strategy = acoRecapOnly;
 End;
 
 Function AssistantCanSteer(Const BackendId: String): Boolean;

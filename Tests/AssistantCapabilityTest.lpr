@@ -82,6 +82,16 @@ Begin
   Result := (BackendId = 'grok') Or (BackendId = 'codex');
 End;
 
+Function ExpectContinuity(Const BackendId: String): TAssistantContinuity;
+Begin
+  If BackendId = 'codex' Then
+    Result := acoRecapOnly
+  Else If BackendId = 'claude' Then
+    Result := acoRuntimeSession
+  Else
+    Result := acoMessageHistory;
+End;
+
 Procedure CheckBackend(Const BackendId, DisplayName: String);
 Var
   Info: TAssistantBackendInfo;
@@ -100,6 +110,8 @@ Begin
       Check(BackendId + ' set ' + AssistantCapabilityName(Capability), Info.Support[Capability] = Expected[Capability]);
     End;
   Check(BackendId + ' effort footer', Info.ShowsEffort = ExpectShowsEffort(BackendId));
+  Check(BackendId + ' continuity', Info.Continuity = ExpectContinuity(BackendId));
+  Check(BackendId + ' continuity query', AssistantBackendContinuity(BackendId) = ExpectContinuity(BackendId));
   Check(BackendId + ' effort footer query', AssistantShowsEffort(BackendId) = ExpectShowsEffort(BackendId));
   If (BackendId = 'grok') Or (BackendId = 'codex') Or (BackendId = 'claude') Then
     Check(BackendId + ' has a turn engine', Info.ReadyKind <> erNone)

@@ -12,7 +12,8 @@ Uses
   cthreads,
   BaseUnix,
   {$ENDIF}
-  Interfaces, Classes, SysUtils, fpimage, fpwritepng, AssistantImages, AssistantConversation, AssistantProjectPaths;
+  Interfaces, Classes, SysUtils, fpimage, fpwritepng, AssistantImages, AssistantConversation, AssistantProjectPaths,
+  AssistantRecap;
 
 Type
   { Reports a size over 8 MiB. A read means the size gate did not run first. }
@@ -361,6 +362,70 @@ Begin
   End;
 End;
 
+Function Filled(Ch: Char; Count: Integer): String;
+Begin
+  SetLength(Result, Count);
+  If Count > 0 Then
+    FillChar(Result[1], Count, Ch);
+End;
+
+Procedure TestRecapBuilder(Const Root: String; Const Stored: TAssistantStoredImage);
+Var
+  Store: TAssistantConversationStore;
+  Turn: TConversationTurn;
+  Entry: TConversationIndexEntry;
+  Current, Refs: TAssistantImageRefArray;
+  Recap: String;
+  OneTurn: String;
+Begin
+  Store := TAssistantConversationStore.Create;
+  Try
+    Store.SetProjectRoot(Root);
+    Turn := Default(TConversationTurn);
+    Turn.Model := 'recap-model';
+    Turn.Prompt := 'OLD-MARKER' + Filled('O', AssistantRecapUserChars);
+    Turn.Response := Filled('X', AssistantRecapAnswerChars);
+    Turn.AttachmentsJson := '[{"id":"missing-old","name":"gone.png"}]';
+    Check('old recap turn stored', Store.AppendTurn(Turn, Entry));
+    Turn := Default(TConversationTurn);
+    Turn.Model := 'recap-model';
+    Turn.Prompt := Filled('A', AssistantRecapUserChars);
+    Turn.Response := Filled('B', AssistantRecapAnswerChars);
+    SetLength(Refs, 1);
+    Refs[0] := ImageRefFromStored(Stored);
+    Turn.AttachmentsJson := AssistantImageRefsToJson(Refs);
+    Check('included recap turn stored', Store.AppendTurn(Turn, Entry));
+    Turn := Default(TConversationTurn);
+    Turn.Model := 'recap-model';
+    Turn.Prompt := 'NEW-MARKER' + Filled('C', AssistantRecapUserChars);
+    Turn.Response := Filled('D', AssistantRecapAnswerChars);
+    Turn.AttachmentsJson := '[{"id":"missing-new","name":"gone.png"}]';
+    Check('newest recap turn stored', Store.AppendTurn(Turn, Entry));
+    Turn := Default(TConversationTurn);
+    Turn.Model := 'other-model';
+    Turn.Prompt := 'OTHER-MODEL';
+    Turn.Response := 'no';
+    Check('other model stored', Store.AppendTurn(Turn, Entry));
+    SetLength(Current, 0);
+    AssistantBuildRecap(Store, Root, 'recap-model', Current, True, AssistantImageMaxAttachments, Recap, Refs);
+    OneTurn := 'User: ' + Filled('A', AssistantRecapUserChars) + LineEnding +
+      'Assistant: ' + Filled('B', AssistantRecapAnswerChars) + LineEnding;
+    Check('recap keeps the two newest turns', (Pos('NEW-MARKER', Recap) > 0) And (Pos(OneTurn, Recap) > 0));
+    Check('recap drops the turn past the cap', Pos('OLD-MARKER', Recap) = 0);
+    Check('recap drops another model', Pos('OTHER-MODEL', Recap) = 0);
+    Check('recap re-attaches the included picture', (Length(Refs) = 1) And (Refs[0].Id = Stored.Id));
+    Check('recap skips a missing picture', Pos('missing-old', AssistantImageRefsToJson(Refs)) = 0);
+    SetLength(Current, 1);
+    Current[0] := ImageRefFromStored(Stored);
+    AssistantBuildRecap(Store, Root, 'recap-model', Current, False, 1, Recap, Refs);
+    Check('a session does not re-attach older pictures', (Length(Refs) = 1) And (Refs[0].Id = Stored.Id));
+    Check('empty recap leaves the submit text', AssistantRecapPrompt('', 'now') = 'now');
+    Check('recap heading is shared', Pos('Previous conversation (bounded recap):', AssistantRecapPrompt(Recap, 'now')) = 1);
+  Finally
+    Store.Free;
+  End;
+End;
+
 Procedure TestArchiveCopy(Const Root: String; Const Stored: TAssistantStoredImage);
 Const
   ArchiveId = '20261119T120000';
@@ -402,6 +467,7 @@ Begin
     TestDimensionBeforeDecode(Root);
     TestPngRoundTrip(Root, Stored);
     TestTurnJsonRoundTrip(Root, Stored);
+    TestRecapBuilder(Root, Stored);
     TestArchiveCopy(Root, Stored);
     TestStoredPaths(Root);
     TestSymlinkRefusal(Root, Stored);

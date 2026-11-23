@@ -156,6 +156,10 @@
         <UnitName Value="AssistantCapabilities"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantRecap.pas"/>
+        <UnitName Value="AssistantRecap"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantGrokBackend.pas"/>
         <UnitName Value="AssistantGrokBackend"/>
       </Item>

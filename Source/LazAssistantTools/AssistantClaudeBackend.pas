@@ -38,6 +38,8 @@ Begin
   { Sent on the turn. The footer does not show it. }
   Info.ShowsEffort := False;
   Info.ReadyKind := erRuntimeAndModel;
+  { Claude Code keeps the session. A recap is only for a session it no longer has. }
+  Info.Continuity := acoRuntimeSession;
   RegisterAssistantBackend(Info);
 End;
 

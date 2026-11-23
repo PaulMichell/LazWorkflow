@@ -689,7 +689,7 @@ Uses AssistantWorkTarget, PackageIntf,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCapabilities, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness, AssistantClaudeStream,
-  AssistantImages,
+  AssistantImages, AssistantRecap,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
   AssistantFileDrop, AssistantTaskNoteForm, LResources;
 
@@ -5130,12 +5130,9 @@ End;
 
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;
 Var
-  Prompt, Recap, SubmitText, ToolsJson, Instructions, ImageError, InputJson, WireJson, Path: String;
-  I, J, N, K: Integer;
-  Found: Boolean;
-  Turn: TConversationTurn;
+  Prompt, Recap, SubmitText, ToolsJson, Instructions, ImageError, InputJson, WireJson: String;
   WithContext: Boolean;
-  Refs, WireRefs, Prior: TAssistantImageRefArray;
+  Refs, WireRefs: TAssistantImageRefArray;
 Begin
   Result := False;
   If (FCodexRuntime = '') Or (FCodexModel = '') Then
@@ -5160,39 +5157,13 @@ Begin
   Refs := LimitAssistantImageRefs(Refs);
   SubmitText := BuildSubmitApiText(AssistantImageModelText(ApiText, Length(Refs)), WithContext);
   FPendingTurnAttachments := AssistantImageRefsToJson(Refs);
-  SetLength(WireRefs, Length(Refs) + AssistantImageMaxAttachments);
-  N := Length(Refs);
-  For I := 0 To High(Refs) Do WireRefs[I] := Refs[I];
-  Recap := '';
-  If Assigned(ProjectAssistantConversation) Then
-    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
-      Begin
-        If Length(Recap) >= 24000 Then Break;
-        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
-          Begin
-            Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
-              'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
-            { Ephemeral threads have no message array. Replay stored refs the same way Grok resends them. }
-            ParseAssistantImageRefs(Turn.AttachmentsJson, Prior);
-            For J := 0 To High(Prior) Do
-              Begin
-                If N >= AssistantImageMaxAttachments Then Break;
-                Found := False;
-                For K := 0 To N - 1 Do
-                  If WireRefs[K].Id = Prior[J].Id Then Found := True;
-                If Found Then Continue;
-                If Not AssistantImageUploadFile(ProjectAssistantRoot, Prior[J], Path, ImageError) Then Continue;
-                WireRefs[N] := Prior[J];
-                Inc(N);
-              End;
-          End;
-      End;
-  SetLength(WireRefs, N);
+  { Recap-only. The shared builder owns the limits and the image re-attachment rule. }
+  AssistantBuildRecap(ProjectAssistantConversation, ProjectAssistantRoot, FModelName, Refs,
+    AssistantContinuityReattachesImages(AssistantBackendContinuity('codex')), AssistantImageMaxAttachments,
+    Recap, WireRefs);
   WireJson := AssistantImageRefsToJson(WireRefs);
   { Recap is transport history, not an instruction essay. A missing old file is skipped, not described. }
-  Prompt := SubmitText;
-  If Recap <> '' Then
-    Prompt := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+  Prompt := AssistantRecapPrompt(Recap, SubmitText);
   If Not CodexUserInputJson(ProjectAssistantRoot, Prompt, WireJson, InputJson, ImageError) Then
     Begin
       FPendingTurnAttachments := '';
@@ -5254,25 +5225,10 @@ Begin
 End;
 
 Function TProjectAssistantForm.ClaudeRecapPrompt(Const SubmitText: String): String;
-Var
-  Recap: String;
-  I: Integer;
-  Turn: TConversationTurn;
 Begin
-  { Only for a new Claude Code session in a conversation that already has turns: after a restart, a project or
-    connection switch, or a session Claude Code no longer has. A resumed session keeps its own history. }
-  Recap := '';
-  If Assigned(ProjectAssistantConversation) Then
-    For I := ProjectAssistantConversation.TurnCount - 1 DownTo 0 Do
-      Begin
-        If Length(Recap) >= 24000 Then Break;
-        If ProjectAssistantConversation.GetTurn(I, Turn) And (Turn.Model = FModelName) Then
-          Recap := 'User: ' + Copy(Turn.Prompt, 1, 4000) + LineEnding +
-            'Assistant: ' + Copy(Turn.Response, 1, 8000) + LineEnding + Recap;
-      End;
-  Result := SubmitText;
-  If Recap <> '' Then
-    Result := 'Previous conversation (bounded recap):' + LineEnding + Recap + LineEnding + LineEnding + SubmitText;
+  { Only for a new Claude Code session. A resumed session keeps its own history and its pictures.
+    This path does not re-attach older images, and it does not give Grok a session id. }
+  Result := AssistantRecapPrompt(AssistantBoundedRecap(ProjectAssistantConversation, FModelName), SubmitText);
 End;
 
 Function TProjectAssistantForm.StartClaudeReply(Const DisplayText, ApiText: String): Boolean;

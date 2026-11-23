@@ -39,6 +39,8 @@ Begin
   Info.Support := ChatGPTCapabilitySet;
   Info.ShowsEffort := True;
   Info.ReadyKind := erRuntimeAndModel;
+  { Each turn is an ephemeral thread. Earlier turns arrive as a bounded recap. }
+  Info.Continuity := acoRecapOnly;
   RegisterAssistantBackend(Info);
 End;
 

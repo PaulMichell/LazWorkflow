@@ -34,6 +34,8 @@ Begin
   Info.Support := CompatibleCapabilitySet;
   Info.ShowsEffort := False;
   Info.ReadyKind := erNone;
+  { Not a turn engine. Message history is the unused default, not a session id. }
+  Info.Continuity := acoMessageHistory;
   RegisterAssistantBackend(Info);
 End;
 

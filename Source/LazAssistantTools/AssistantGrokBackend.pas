@@ -44,6 +44,8 @@ Begin
   Info.Support := GrokCapabilitySet;
   Info.ShowsEffort := True;
   Info.ReadyKind := erSignedIn;
+  { The service keeps the message array. This engine has no session id. }
+  Info.Continuity := acoMessageHistory;
   RegisterAssistantBackend(Info);
 End;
 
