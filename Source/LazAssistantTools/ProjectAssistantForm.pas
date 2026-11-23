@@ -8343,8 +8343,10 @@ Begin
     AssistantChatConfig.IncludeIDEContext;
   If WithContext Then
     Begin
-      { After several turns, full editor dumps explode the prompt; use light context. }
-      If Assigned(AssistantClient) And (AssistantClient.MessageCount >= 8) Then
+      { Stored turns, not AssistantClient.MessageCount. Claude never fills that array.
+        Codex fills it as side history the app-server does not receive. }
+      If Assigned(ProjectAssistantConversation) And
+        AssistantUseLightIDEContext(ProjectAssistantConversation.TurnCount) Then
         ContextBlock := BuildIDEContextBlockLight
       Else
         ContextBlock := BuildIDEContextBlock;

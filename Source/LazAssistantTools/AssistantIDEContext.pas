@@ -20,10 +20,15 @@ Const
     model token limit (full file can be re-read via tools). }
   AssistantContextMaxActiveCharsLight = 8000;
   AssistantContextMaxProjectFiles = 250;
+  { Completed stored turns before the next submit uses the light block. The number stays 8.
+    The counter is the conversation, not the HTTP client message array. }
+  AssistantLightContextAfterTurns = 8;
 
 Function BuildIDEContextBlock: String;
 { Smaller attach for long conversations (cursor + selection or short head of file). }
 Function BuildIDEContextBlockLight: String;
+/// True when this many stored turns means the next submit should use the light IDE block.
+Function AssistantUseLightIDEContext(TurnCount: Integer): Boolean;
 /// Point size of the IDE editor text. Zero when the editor font is not available.
 Function IDEEditorTextSize: Integer;
 
@@ -123,6 +128,11 @@ End;
 Function BuildProjectFilesSection: String;
 Begin
   Result := AssistantTarget.Describe;
+End;
+
+Function AssistantUseLightIDEContext(TurnCount: Integer): Boolean;
+Begin
+  Result := TurnCount >= AssistantLightContextAfterTurns;
 End;
 
 Function BuildIDEContextBlock: String;

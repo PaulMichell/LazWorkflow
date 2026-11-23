@@ -523,6 +523,9 @@ Begin
   If (ParamCount>0) And SameText(ExtractFileExt(ParamStr(ParamCount)),'.lpk') Then
     Begin If (ParamCount<>3) Or (Pos('--pcp=',ParamStr(1))<>1) Or (Pos('--widgetset=',ParamStr(2))<>1) Then Halt(2);WriteLn('package compile fixture');Halt(0);End;
   Application.Initialize;GetIDEConfigStorage:=@MemoryConfig;
+  Check('seven stored turns still use the full IDE block', Not AssistantUseLightIDEContext(7));
+  Check('eight stored turns use the light IDE block', AssistantUseLightIDEContext(AssistantLightContextAfterTurns));
+  Check('a longer stored conversation stays on the light block', AssistantUseLightIDEContext(20));
   TestWriteImage;
   TestReadImage;
   TestCodexPlanTools;
