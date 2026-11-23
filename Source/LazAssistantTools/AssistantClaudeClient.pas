@@ -20,7 +20,7 @@ Unit AssistantClaudeClient;
 Interface
 
 Uses
-  Classes, AssistantClaudeStream, AssistantConversation;
+  Classes, AssistantClaudeStream, AssistantConversation, AssistantEvents;
 
 Type
   { The billing fields of claude auth status. Email and organisation are never read. }
@@ -51,6 +51,8 @@ Type
     SystemPrompt: String;
     { The prompt is one stream-json user message (AssistantClaudeInput), not plain text. }
     StreamInput: Boolean;
+    { Events JSONL for this turn. Empty writes nothing. A retry of the same turn reuses the file. }
+    EventsFile: String;
   End;
 
   { The Claude session for the plan item being sent. Holding means the conversation session was set aside. }
@@ -91,10 +93,16 @@ Type
     Prompt: String;
     Stream: TClaudeStreamState;
     Latest: TClaudeRunSnapshot;
+    Events: TAssistantEventLog;
+    NotedStarts: Integer;
+    NotedDone: TStringList;
     CancelFlag: LongInt;
     Function IsCancelled: Boolean;
     Procedure ProcessStarted;
     Procedure ReceiveLine(Const Line: String);
+    Procedure NoteStreamTools;
+    Procedure NoteEvent(Kind: TAssistantEventKind; Const Text: String = ''; Const ToolName: String = '';
+      Const ToolId: String = ''; Ok: Boolean = True; Const AttachmentsJson: String = '');
   Protected
     Procedure Execute; Override;
   Public
@@ -103,6 +111,9 @@ Type
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Snapshot: TClaudeRunSnapshot;
+    Function TurnSnapshot: TAssistantTurnSnapshot;
+    Function TakeEvents: TAssistantEventArray;
+    Function KeySource: String;
   End;
 
 Const
@@ -924,6 +935,46 @@ Begin
   End;
 End;
 
+Procedure TAssistantClaudeRun.NoteEvent(Kind: TAssistantEventKind; Const Text: String; Const ToolName: String;
+  Const ToolId: String; Ok: Boolean; Const AttachmentsJson: String);
+Var
+  Event: TAssistantEvent;
+Begin
+  If Not Assigned(Events) Then
+    Exit;
+  Event := MakeAssistantEvent(Kind, apWaiting, Text, ToolName, ToolId, Ok, 0, AttachmentsJson);
+  If Kind In [aekToolStarted, aekToolCompleted] Then
+    Event.Phase := apTools;
+  Events.Append(Event);
+End;
+
+Procedure TAssistantClaudeRun.NoteStreamTools;
+Var
+  I: Integer;
+  Step: TClaudeToolStep;
+  Name: String;
+Begin
+  { Called under Lock. File append stays on the event log's own lock. }
+  For I := NotedStarts To High(Latest.Tools) Do
+    Begin
+      Step := Latest.Tools[I];
+      Name := ClaudeToolDisplayName(Step.Name);
+      NoteEvent(aekToolStarted, Step.Input, Name, Step.Id);
+    End;
+  NotedStarts := Length(Latest.Tools);
+  If Not Assigned(NotedDone) Then
+    Exit;
+  For I := 0 To High(Latest.Tools) Do
+    Begin
+      Step := Latest.Tools[I];
+      If (Not Step.Done) Or (Step.Id = '') Or (NotedDone.IndexOf(Step.Id) >= 0) Then
+        Continue;
+      NotedDone.Add(Step.Id);
+      Name := ClaudeToolDisplayName(Step.Name);
+      NoteEvent(aekToolCompleted, Step.Output, Name, Step.Id, Not Step.IsError);
+    End;
+End;
+
 Procedure TAssistantClaudeRun.ReceiveLine(Const Line: String);
 Begin
   If Not ApplyClaudeStreamLine(Line, Stream) Then
@@ -946,6 +997,7 @@ Begin
     Latest.OutputTokens := Stream.Turn.OutputTokens;
     Latest.CachedInputTokens := Stream.Turn.CachedInputTokens;
     Latest.HasCached := Stream.Turn.HasCached;
+    NoteStreamTools;
   Finally
     LeaveCriticalSection(Lock);
   End;
@@ -961,6 +1013,9 @@ Begin
   ClearClaudeStream(Stream);
   Latest := Default(TClaudeRunSnapshot);
   Latest.UsageState := ClaudeUsageUnavailable;
+  Events := TAssistantEventLog.Create(Settings.EventsFile);
+  NotedDone := TStringList.Create;
+  NotedStarts := 0;
   CancelFlag := 0;
   FreeOnTerminate := False;
   { Last: this starts the thread. }
@@ -971,6 +1026,8 @@ Destructor TAssistantClaudeRun.Destroy;
 Begin
   Cancel;
   WaitFor;
+  FreeAndNil(Events);
+  FreeAndNil(NotedDone);
   DoneCriticalSection(Lock);
   Inherited Destroy;
 End;
@@ -988,6 +1045,65 @@ Begin
   Finally
     LeaveCriticalSection(Lock);
   End;
+End;
+
+Function TAssistantClaudeRun.KeySource: String;
+Begin
+  EnterCriticalSection(Lock);
+  Try
+    Result := Latest.KeySource;
+  Finally
+    LeaveCriticalSection(Lock);
+  End;
+End;
+
+Function TAssistantClaudeRun.TakeEvents: TAssistantEventArray;
+Begin
+  If Assigned(Events) Then
+    Result := Events.TakePending
+  Else
+    Result := Nil;
+End;
+
+Function TAssistantClaudeRun.TurnSnapshot: TAssistantTurnSnapshot;
+Var
+  OpenTool: Boolean;
+Begin
+  Result := EmptyAssistantTurnSnapshot;
+  EnterCriticalSection(Lock);
+  Try
+    Result.Content := Latest.Content;
+    Result.Thinking := Latest.Thinking;
+    Result.ErrorText := Latest.ErrorText;
+    Result.Done := Latest.Done;
+    Result.ToolCount := Latest.ToolCalls;
+    Result.ReplaySafe := Latest.ToolCalls = 0;
+    OpenTool := (Length(Latest.Tools) > 0) And (Not Latest.Tools[High(Latest.Tools)].Done) And (Not Latest.Done);
+    Result.Usage.InputTokens := Latest.InputTokens;
+    Result.Usage.OutputTokens := Latest.OutputTokens;
+    Result.Usage.CachedInputTokens := Latest.CachedInputTokens;
+    Result.Usage.HasCached := Latest.HasCached;
+    Result.Usage.ContextTokens := Latest.ContextTokens;
+    Result.Usage.RateLimitJson := Latest.RateLimitJson;
+    Result.Usage.Reported := Latest.UsageState = ClaudeUsageReported;
+    Result.Usage.HasReasoning := Latest.Thinking <> '';
+  Finally
+    LeaveCriticalSection(Lock);
+  End;
+  If OpenTool Then
+    Result.Phase := AssistantPhaseRunning
+  Else If Result.Content <> '' Then
+    Result.Phase := AssistantPhaseStreaming
+  Else If Result.Thinking <> '' Then
+    Result.Phase := AssistantPhaseThinking
+  Else
+    Result.Phase := AssistantPhaseWaiting;
+  If Assigned(Events) Then
+    Begin
+      Result.EventsFile := Events.FileName;
+      If Events.ToolRan Then
+        Result.ReplaySafe := False;
+    End;
 End;
 
 Function CheckTurnSettings(Const Settings: TClaudeTurnSettings; Out ErrorText: String): Boolean;
@@ -1015,6 +1131,7 @@ Begin
   Answered := False;
   Args := TStringList.Create;
   Environment := TStringList.Create;
+  NoteEvent(aekTurnStarted, Settings.Model);
   Try
     Try
       If IsCancelled Then
@@ -1070,9 +1187,14 @@ Begin
     Latest.Tools := Copy(Stream.Tools);
     Latest.Thinking := Stream.Thinking;
     Latest.Done := True;
+    NoteStreamTools;
   Finally
     LeaveCriticalSection(Lock);
   End;
+  If ErrorText <> '' Then
+    NoteEvent(aekError, ErrorText, '', '', False)
+  Else
+    NoteEvent(aekTurnEnded, Latest.Content);
 End;
 
 Initialization

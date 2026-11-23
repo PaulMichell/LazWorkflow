@@ -10,7 +10,7 @@ Unit AssistantEvents;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantProtocol;
+  Classes, SysUtils, SyncObjs, AssistantProtocol;
 
 Type
   TAssistantEventKind = (
@@ -47,6 +47,42 @@ Type
   End;
 
   TAssistantEventArray = Array Of TAssistantEvent;
+
+  { Counts the turn published. ContextWindow is the model window when the runtime sent one. }
+  TAssistantTurnUsage = Record
+    InputTokens, OutputTokens, CachedInputTokens, ReasoningTokens, ContextTokens, ContextWindow: Int64;
+    HasCached, HasReasoning, Reported: Boolean;
+    RateLimitJson: String;
+  End;
+
+  { One shape for every backend. Tool steps are events, not a second array. }
+  TAssistantTurnSnapshot = Record
+    Content, Thinking, Phase, ErrorText: String;
+    Usage: TAssistantTurnUsage;
+    Done: Boolean;
+    { False once any tool has been requested. Recovery must not replay the turn. }
+    ReplaySafe: Boolean;
+    ToolCount: Integer;
+    EventsFile: String;
+  End;
+
+  { Appends the events JSONL and keeps the lines the poll has not applied yet. }
+  TAssistantEventLog = Class
+  Private
+    FLock: TRTLCriticalSection;
+    FFileName: String;
+    FPending: TAssistantEventArray;
+    FToolRan: Boolean;
+    FCount: Integer;
+  Public
+    Constructor Create(Const FileName: String);
+    Destructor Destroy; Override;
+    Procedure Append(Const Event: TAssistantEvent);
+    Function TakePending: TAssistantEventArray;
+    Function ToolRan: Boolean;
+    Property FileName: String Read FFileName;
+    Property Count: Integer Read FCount;
+  End;
 
   TAssistantTraceNotify = Procedure(Const Event: TAssistantEvent) Of Object;
 
@@ -103,11 +139,90 @@ Function LoadAssistantEventsFile(Const FileName: String; Out Events: TAssistantE
 Function CreateAssistantEventsFilePath(Const ProjectRoot: String): String;
 Function AssistantEventsRelativePath(Const AbsFile, ProjectRoot: String): String;
 Function AssistantEventsAbsolutePath(Const RelOrAbs, ProjectRoot: String): String;
+Function EmptyAssistantTurnSnapshot: TAssistantTurnSnapshot;
+Function MakeAssistantEvent(Kind: TAssistantEventKind; Phase: TAssistantPhase; Const Text, ToolName, ToolId: String;
+  Ok: Boolean = True; DurationMs: Integer = 0; Const AttachmentsJson: String = ''): TAssistantEvent;
 
 Implementation
 
 Uses
   fpjson, jsonparser, AssistantRecovery, AssistantToolWire;
+
+Constructor TAssistantEventLog.Create(Const FileName: String);
+Begin
+  Inherited Create;
+  InitCriticalSection(FLock);
+  FFileName := FileName;
+  FToolRan := False;
+  FCount := 0;
+End;
+
+Destructor TAssistantEventLog.Destroy;
+Begin
+  DoneCriticalSection(FLock);
+  Inherited Destroy;
+End;
+
+Procedure TAssistantEventLog.Append(Const Event: TAssistantEvent);
+Var
+  N: Integer;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    If Event.Kind In [aekToolStarted, aekSubagentStarted] Then
+      FToolRan := True;
+    N := Length(FPending);
+    SetLength(FPending, N + 1);
+    FPending[N] := Event;
+    Inc(FCount);
+    If FFileName <> '' Then
+      AppendAssistantEvent(FFileName, Event);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAssistantEventLog.TakePending: TAssistantEventArray;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := Copy(FPending, 0, Length(FPending));
+    SetLength(FPending, 0);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAssistantEventLog.ToolRan: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FToolRan;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function EmptyAssistantTurnSnapshot: TAssistantTurnSnapshot;
+Begin
+  Result := Default(TAssistantTurnSnapshot);
+  Result.ReplaySafe := True;
+  Result.Phase := AssistantPhaseWaiting;
+End;
+
+Function MakeAssistantEvent(Kind: TAssistantEventKind; Phase: TAssistantPhase; Const Text, ToolName, ToolId: String;
+  Ok: Boolean; DurationMs: Integer; Const AttachmentsJson: String): TAssistantEvent;
+Begin
+  Result := Default(TAssistantEvent);
+  Result.Kind := Kind;
+  Result.Phase := Phase;
+  Result.Text := Text;
+  Result.ToolName := ToolName;
+  Result.ToolId := ToolId;
+  Result.Ok := Ok;
+  Result.DurationMs := DurationMs;
+  Result.AttachmentsJson := AttachmentsJson;
+End;
 
 Function AssistantEventKindName(Kind: TAssistantEventKind): String;
 Begin

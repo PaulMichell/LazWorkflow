@@ -211,15 +211,14 @@ Type
     FCodexRuntime, FCodexModel, FCodexProfile, FCodexIdentity, FCodexEffort, FCodexApproval, FCodexModelsJson: String;
     FActiveEffort, FActiveApproval: String;
     FCodexRun: TAssistantCodexRun;
-    FPollingCodex: Boolean;
     FClaudeRun: TAssistantClaudeRun;
-    FPollingClaude: Boolean;
+    FPollingTurn: Boolean;
+    { Absolute events JSONL for the turn in flight. Codex and Claude reuse it on a transport retry. }
+    FTurnEventsFile: String;
     FClaudeRuntime, FClaudeModel, FClaudeDirectory, FClaudeLaunchPrompt, FClaudeConnectionId: String;
     FClaudeEffort: String;
     FClaudeLaunchReady: Boolean;
     FClaudeRetries: Integer;
-    { Tool calls of the running Claude turn already placed in the trace. }
-    FClaudeToolsShown: Integer;
     { Claude Code's session for this conversation. The key is connection, project and first turn. }
     FClaudeSessionId, FClaudeSessionKey, FClaudeSubmitText: String;
     FClaudeResume, FClaudeFreshRetried: Boolean;
@@ -249,10 +248,10 @@ Type
     Procedure RecordCompletedUsage;
     Function StartCodexReply(Const DisplayText, ApiText: String): Boolean;
     Function StartClaudeReply(Const DisplayText, ApiText: String): Boolean;
-    Procedure PollCodex;
-    Procedure PollClaude;
+    Function BeginTurnEventsFile: String;
+    Procedure PollTurn;
+    Procedure ApplyTurnEvents(Const Events: TAssistantEventArray);
     Procedure ApplyClaudeRateLimit(Const RateLimitJson: String);
-    Procedure ApplyClaudeToolSteps(Const Snapshot: TClaudeRunSnapshot);
     Function ClaudeSessionKey: String;
     Function ClaudeRecapPrompt(Const SubmitText: String): String;
     Procedure NoteClaudeKeySource(Const KeySource: String);
@@ -4577,7 +4576,9 @@ Begin
   Turn.PlanFile := GetActivePlanRelativePath;
   Turn.TodoId := '';
   Turn.EventsFile := '';
-  If (Not FUseCodex) And (Not FUseClaude) And Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
+  If FTurnEventsFile <> '' Then
+    Turn.EventsFile := AssistantEventsRelativePath(FTurnEventsFile, ProjectAssistantConversation.ProjectRoot)
+  Else If Assigned(AssistantClient) And (AssistantClient.LastEventsFile <> '') Then
     Turn.EventsFile := AssistantEventsRelativePath(AssistantClient.LastEventsFile,
       ProjectAssistantConversation.ProjectRoot);
   If ProjectAssistantConversation.AppendTurn(Turn, Entry) Then
@@ -4938,6 +4939,13 @@ Begin
   Decision := ClassifyDroppedTransport(ErrorText, Body, FUserCancelled);
   If Decision.Action <> araRetryLastAction Then
     Exit;
+  { Same rule for every backend: a tool already ran, so the stored prompt is not started again. }
+  If (Assigned(FCodexRun) And (Not AssistantMayReplayTurn(FCodexRun.TurnSnapshot.ReplaySafe))) Or
+    (Assigned(FClaudeRun) And (Not AssistantMayReplayTurn(FClaudeRun.TurnSnapshot.ReplaySafe))) Then
+    Begin
+      PostRecoverySentence(AssistantTurnNotReplayed);
+      Exit;
+    End;
   Note := '';
   RetryAt := 0;
   FTransportWaitMs := AssistantDroppedTransportWaitMs(Decision.HttpWait, ErrorText, Body, '',
@@ -4970,7 +4978,7 @@ Begin
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel, FCodexLaunchPrompt,
       FCodexLaunchTools, FToolBroker.RunId, 600000, FCodexProfile,
       PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), FCodexLaunchInstructions,
-      ActiveMode, ProjectAssistantRoot, FCodexLaunchWire);
+      ActiveMode, ProjectAssistantRoot, FCodexLaunchWire, FTurnEventsFile);
     FCodexRun.Start;
     SetStreamPhase(AssistantPhaseWaiting);
     Result := True;
@@ -5004,7 +5012,9 @@ Begin
   TurnSettings.TimeoutMs := ClaudeRunTimeoutMs;
   TurnSettings.SessionId := FClaudeSessionId;
   TurnSettings.Resume := FClaudeResume;
-  FClaudeToolsShown := 0;
+  If FTurnEventsFile = '' Then
+    BeginTurnEventsFile;
+  TurnSettings.EventsFile := FTurnEventsFile;
   LaunchText := FClaudeLaunchPrompt;
   Try
     { A picture that cannot be read fails the send before anything starts. It is not replaced by a text note. }
@@ -5210,10 +5220,11 @@ Begin
     FCodexLaunchInstructions := Instructions;
     FCodexLaunchWire := WireJson;
     FCodexLaunchReady := True;
+    BeginTurnEventsFile;
     FCodexRun := TAssistantCodexRun.Create(FCodexRuntime, FCodexProfile, FCodexModel,
       Prompt, ToolsJson, FToolBroker.RunId, 600000, FCodexProfile,
       PlanRunTurnEffort(FPlanAgentRunning, FCodexEffort, AssistantChatConfig.PlanRunEffort), Instructions, ActiveMode,
-      ProjectAssistantRoot, WireJson);
+      ProjectAssistantRoot, WireJson, FTurnEventsFile);
     BeginWriteImageTurn;
     FCodexRun.Start;
     FComposerImagesSent := Length(Refs) > 0;
@@ -5229,104 +5240,6 @@ Begin
         Result := FSending;
       End;
   End;
-End;
-
-Procedure TProjectAssistantForm.PollCodex;
-Var Snapshot: TCodexRunSnapshot; Tool: TCodexToolRequest;
-  ToolText, EvidenceError, Phase: String; OK, Serviced, ToolPending: Boolean; Block: TTraceBlock; Run: TAssistantCodexRun;
-
-  Function PhaseForSnapshot(Const RunSnapshot: TCodexRunSnapshot; PendingTool: Boolean): String;
-  Begin
-    { Same right-hand phases as the Grok stream, for every backend. }
-    If PendingTool Then
-      Result := AssistantPhaseRunning
-    Else If RunSnapshot.State In [crsConnecting, crsReady, crsStartingThread, crsStartingTurn] Then
-      Result := AssistantPhaseWaiting
-    Else If RunSnapshot.Content <> '' Then
-      Result := AssistantPhaseStreaming
-    Else If RunSnapshot.Thinking <> '' Then
-      Result := AssistantPhaseThinking
-    Else
-      Result := AssistantPhaseWaiting;
-  End;
-
-Begin
-  If FPollingCodex Then Exit;
-  FPollingCodex := True;
-  Try
-    Run := FCodexRun;
-    If FIDEWorkspace.Identity <> FCodexIdentity Then
-      Begin
-        StopStream;
-        Exit;
-      End;
-    Snapshot := FCodexRun.Snapshot;
-    If Snapshot.ContextUsage.Reported And
-      ((Not FCodexContextUsage.Reported) Or
-       (Snapshot.ContextUsage.Last.TotalTokens <> FCodexContextUsage.Last.TotalTokens) Or
-       (Snapshot.ContextUsage.Total.TotalTokens <> FCodexContextUsage.Total.TotalTokens) Or
-       (Snapshot.ContextUsage.ModelContextWindow <> FCodexContextUsage.ModelContextWindow)) Then
-      Begin
-        FCodexContextUsage := Snapshot.ContextUsage;
-        UpdateStatusFooter;
-      End;
-    ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
-    ToolPending := FCodexRun.HasPendingTool;
-    If ToolPending And FSending Then
-      Begin
-        SetStreamPhase(AssistantPhaseRunning);
-        If Assigned(StatusFooter) Then
-          StatusFooter.Update;
-      End;
-    Serviced := Run.ServiceOneTool(Tool, ToolText, OK);
-    If FCodexRun <> Run Then Exit; { cancelled/replaced during an IDE callback }
-    If Serviced Then
-      Begin
-        { Use the text captured at the tool request, even if the worker advanced
-          between the timer snapshot and the IDE handoff. }
-        ApplyAssistantSnapshots(Tool.ContentBefore, Tool.ThinkingBefore);
-        ApplyLiveThinkingAndAnswer;
-        Block := FTrace.AddTool(Tool.CallId, Tool.Tool, Tool.Arguments);
-        Block.Body := ToolText; Block.Ok := OK; Block.Running := False;
-        If OK And (SameText(Tool.Tool, 'write_markdown') Or SameText(Tool.Tool, 'update_markdown')) Then
-          FPlanWriteThisTurn := True;
-        FAnswerSliceStart := Length(FLiveContent) + 1;
-        FThinkingSliceStart := Length(FLiveThinking) + 1;
-        FTrace.StartThinking(0);
-        RefreshChatDisplay(False, True);
-      End;
-    If Snapshot.Done Then
-      Begin
-        If FCodexRun <> Run Then Exit;
-        { Do not finish the reply. The same stored turn starts again after the wait. }
-        If TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
-          Begin
-            ReleaseCodexProcess;
-            Exit;
-          End;
-        { Capture current evidence before releasing the broker cancels its jobs. }
-        FCompletionBuildJSON := ''; FCompletionTestJSON := '';
-        If (FBuildWorkSectionIndex >= 0) And (ActiveMode = amBuild) And (Snapshot.ErrorText = '') Then
-          Begin
-            FIDEWorkspace.BuildStatus(FCompletionBuildJSON, EvidenceError);
-            If FCodexRun <> Run Then Exit;
-            FIDEWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
-            If FCodexRun <> Run Then Exit;
-          End;
-        { A transport or credit drop with no answer waits and retries. Finish releases the process. }
-        FinishAssistantReply(Snapshot.ErrorText);
-      End
-    Else
-      Begin
-        If FSending Then
-          Begin
-            Phase := PhaseForSnapshot(Snapshot, ToolPending And Not Serviced);
-            SetStreamPhase(Phase);
-          End;
-        If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) Then
-          FTraceView.RefreshElapsed(FTrace);
-      End;
-  Finally FPollingCodex := False; End;
 End;
 
 Function TProjectAssistantForm.ClaudeSessionKey: String;
@@ -5425,6 +5338,7 @@ Begin
   FClaudeConnectionId := FActiveConnectionId;
   FClaudeLaunchPrompt := Prompt;
   FClaudeLaunchReady := True;
+  BeginTurnEventsFile;
   FClaudeRetries := 0;
   FClaudeUsageReported := False;
   SetSending(True);
@@ -5474,88 +5388,179 @@ Begin
 End;
 
 { True for a successful Claude Code file edit whose path ends with the active plan's relative path. }
-Function ClaudeStepWritesPlan(Const Step: TClaudeToolStep): Boolean;
+Function ClaudeStepWritesPlan(Const ToolName, InputText: String): Boolean;
 Var
   PlanRel, Input: String;
 Begin
   Result := False;
-  If (Not Step.Done) Or Step.IsError Then
-    Exit;
-  { A Lazarus Markdown write counts as a plan write in any mode, as the assistant's own write_markdown does. }
-  If (Step.Name = 'mcp__lazarus__write_markdown') Or (Step.Name = 'mcp__lazarus__update_markdown') Then
+  If SameText(ToolName, 'write_markdown') Or SameText(ToolName, 'update_markdown') Or
+    (ToolName = 'mcp__lazarus__write_markdown') Or (ToolName = 'mcp__lazarus__update_markdown') Then
     Exit(True);
-  If Not (SameText(Step.Name, 'Edit') Or SameText(Step.Name, 'Write') Or SameText(Step.Name, 'MultiEdit')) Then
+  If Not (SameText(ToolName, 'Edit') Or SameText(ToolName, 'Write') Or SameText(ToolName, 'MultiEdit')) Then
     Exit;
   PlanRel := StringReplace(GetActivePlanRelativePath, '\', '/', [rfReplaceAll]);
   If PlanRel = '' Then
     Exit;
-  { The input is JSON, so a slash in the path may be escaped. }
-  Input := StringReplace(StringReplace(Step.Input, '\/', '/', [rfReplaceAll]), '\\', '/', [rfReplaceAll]);
+  Input := StringReplace(StringReplace(InputText, '\/', '/', [rfReplaceAll]), '\\', '/', [rfReplaceAll]);
   Result := Pos(PlanRel + '"', Input) > 0;
 End;
 
-Procedure TProjectAssistantForm.ApplyClaudeToolSteps(Const Snapshot: TClaudeRunSnapshot);
+Function TProjectAssistantForm.BeginTurnEventsFile: String;
+Var
+  Root: String;
+Begin
+  Root := '';
+  If Assigned(ProjectAssistantConversation) Then
+    Root := ProjectAssistantConversation.ProjectRoot;
+  If Root = '' Then
+    Root := ProjectAssistantRoot;
+  Result := CreateAssistantEventsFilePath(Root);
+  FTurnEventsFile := Result;
+End;
+
+Procedure TProjectAssistantForm.ApplyTurnEvents(Const Events: TAssistantEventArray);
 Var
   I: Integer;
-  Step: TClaudeToolStep;
+  Event: TAssistantEvent;
   Block: TTraceBlock;
   ImagesJson: String;
 Begin
-  If (Not FSending) Or (Not Assigned(FTrace)) Then
+  If (Length(Events) = 0) Or (Not Assigned(FTrace)) Or (Not FSending) Then
     Exit;
-  { Same shape as a Codex tool: the text and thinking written before the call, then the call, then new slices. }
-  For I := FClaudeToolsShown To High(Snapshot.Tools) Do
+  For I := 0 To High(Events) Do
     Begin
-      Step := Snapshot.Tools[I];
-      ApplyAssistantSnapshots(Copy(Snapshot.Content, 1, Step.TextBefore), Copy(Snapshot.Thinking, 1, Step.ThinkingBefore));
-      ApplyLiveThinkingAndAnswer;
-      Block := FTrace.AddTool(Step.Id, ClaudeToolDisplayName(Step.Name), Step.Input);
-      Block.Running := True;
-      FAnswerSliceStart := Step.TextBefore + 1;
-      FThinkingSliceStart := Step.ThinkingBefore + 1;
-      FTrace.StartThinking(0);
-      SetStreamPhase(AssistantPhaseRunning);
-    End;
-  FClaudeToolsShown := Length(Snapshot.Tools);
-  For I := 0 To High(Snapshot.Tools) Do
-    Begin
-      Step := Snapshot.Tools[I];
-      If Not Step.Done Then
-        Continue;
-      Block := FTrace.FindTool(Step.Id);
-      If (Not Assigned(Block)) Or (Not Block.Running) Then
-        Continue;
-      Block.Running := False;
-      Block.Ok := Not Step.IsError;
-      Block.Body := Step.Output;
-      { The broker kept the picture it sent; its id is in the result line, as for a Grok read_image. }
-      If (Not Step.IsError) And (Step.Name = 'mcp__lazarus__read_image') And Assigned(FToolBroker) Then
-        Begin
-          ImagesJson := FToolBroker.ReadImagesJson(Step.Output);
-          If ImagesJson <> '' Then
-            FTrace.AttachBlockImages(Block, ImagesJson);
-        End;
-      If Step.IsError Then
-        Begin
-          Block.Collapsed := False;
-          If Pos('failed', LowerCase(Block.Title)) < 1 Then
-            Block.Title := Block.Title + '  failed';
-        End;
-      If ClaudeStepWritesPlan(Step) Then
+      Event := Events[I];
+      If (Event.Kind = aekToolCompleted) And Event.Ok And
+        (SameText(Event.ToolName, 'write_markdown') Or SameText(Event.ToolName, 'update_markdown')) Then
         FPlanWriteThisTurn := True;
+      If (Event.Kind = aekRecovery) And (Trim(Event.Text) <> '') Then
+        Begin
+          AdoptRecoverySentence(Event.Text);
+          Continue;
+        End;
+      Case Event.Kind Of
+        aekToolStarted:
+          Begin
+            ApplyLiveThinkingAndAnswer;
+            FTrace.AddTool(Event.ToolId, Event.ToolName, Event.Text);
+            FAnswerSliceStart := High(Integer);
+            FThinkingSliceStart := High(Integer);
+            SetStreamPhase(AssistantPhaseRunning);
+          End;
+        aekToolCompleted:
+          Begin
+            Block := FTrace.FindTool(Event.ToolId);
+            If Not Assigned(Block) Then
+              Block := FTrace.AddTool(Event.ToolId, Event.ToolName, '');
+            Block.Running := False;
+            Block.Ok := Event.Ok;
+            If Event.DurationMs > 0 Then
+              Block.DurationMs := Event.DurationMs;
+            If Event.Text <> '' Then
+              Block.Body := Event.Text;
+            If Event.AttachmentsJson <> '' Then
+              FTrace.AttachBlockImages(Block, Event.AttachmentsJson)
+            Else If Event.Ok And SameText(Event.ToolName, 'read_image') And Assigned(FToolBroker) Then
+              Begin
+                ImagesJson := FToolBroker.ReadImagesJson(Event.Text);
+                If ImagesJson <> '' Then
+                  FTrace.AttachBlockImages(Block, ImagesJson);
+              End;
+            If Not Event.Ok Then
+              Begin
+                Block.Collapsed := False;
+                If Pos('failed', LowerCase(Block.Title)) < 1 Then
+                  Block.Title := Block.Title + '  failed';
+              End;
+            If Event.Ok And ClaudeStepWritesPlan(Event.ToolName, Block.ToolArgs) Then
+              FPlanWriteThisTurn := True;
+            FAnswerSliceStart := Length(FLiveContent) + 1;
+            FThinkingSliceStart := Length(FLiveThinking) + 1;
+            FTrace.StartThinking(0);
+          End;
+      Else
+        { Content and phase come from the turn snapshot. }
+      End;
     End;
+  If FViewingLive And Assigned(FTraceView) Then
+    FTraceView.Sync(FTrace, True);
+  AssistantSessionObserve.TouchAssistantMirror;
 End;
 
-Procedure TProjectAssistantForm.PollClaude;
+Procedure TProjectAssistantForm.PollTurn;
 Var
-  Snapshot: TClaudeRunSnapshot;
-  Run: TAssistantClaudeRun;
+  CodexRun: TAssistantCodexRun;
+  ClaudeRun: TAssistantClaudeRun;
+  Turn: TAssistantTurnSnapshot;
+  Usage: TCodexContextUsage;
+  Tool: TCodexToolRequest;
+  ToolText, EvidenceError: String;
+  OK: Boolean;
 Begin
-  If FPollingClaude Then Exit;
-  FPollingClaude := True;
+  If FPollingTurn Then
+    Exit;
+  FPollingTurn := True;
   Try
-    Run := FClaudeRun;
-    If Not Assigned(Run) Then Exit;
+    CodexRun := FCodexRun;
+    ClaudeRun := FClaudeRun;
+    If Assigned(CodexRun) Then
+      Begin
+        If FIDEWorkspace.Identity <> FCodexIdentity Then
+          Begin
+            StopStream;
+            Exit;
+          End;
+        Turn := CodexRun.TurnSnapshot;
+        Usage := CodexRun.ContextUsage;
+        If Usage.Reported And
+          ((Not FCodexContextUsage.Reported) Or (Usage.Last.TotalTokens <> FCodexContextUsage.Last.TotalTokens) Or
+           (Usage.Total.TotalTokens <> FCodexContextUsage.Total.TotalTokens) Or
+           (Usage.ModelContextWindow <> FCodexContextUsage.ModelContextWindow)) Then
+          Begin
+            FCodexContextUsage := Usage;
+            UpdateStatusFooter;
+          End;
+        ApplyAssistantSnapshots(Turn.Content, Turn.Thinking);
+        ApplyTurnEvents(CodexRun.TakeEvents);
+        If FCodexRun <> CodexRun Then
+          Exit;
+        CodexRun.ServiceOneTool(Tool, ToolText, OK);
+        If FCodexRun <> CodexRun Then
+          Exit;
+        ApplyTurnEvents(CodexRun.TakeEvents);
+        Turn := CodexRun.TurnSnapshot;
+        If Turn.Done Then
+          Begin
+            If FCodexRun <> CodexRun Then
+              Exit;
+            If TryDeferDroppedTransport(FLiveContent, Turn.ErrorText, Turn.ErrorText) Then
+              Begin
+                ReleaseCodexProcess;
+                Exit;
+              End;
+            FCompletionBuildJSON := '';
+            FCompletionTestJSON := '';
+            If (FBuildWorkSectionIndex >= 0) And (ActiveMode = amBuild) And (Turn.ErrorText = '') Then
+              Begin
+                FIDEWorkspace.BuildStatus(FCompletionBuildJSON, EvidenceError);
+                If FCodexRun <> CodexRun Then
+                  Exit;
+                FIDEWorkspace.TestStatus(FCompletionTestJSON, EvidenceError);
+                If FCodexRun <> CodexRun Then
+                  Exit;
+              End;
+            FinishAssistantReply(Turn.ErrorText);
+          End
+        Else If FSending Then
+          Begin
+            SetStreamPhase(Turn.Phase);
+            If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) Then
+              FTraceView.RefreshElapsed(FTrace);
+          End;
+        Exit;
+      End;
+    If Not Assigned(ClaudeRun) Then
+      Exit;
     If (FClaudeConnectionId <> '') And (FActiveConnectionId <> FClaudeConnectionId) Then
       Begin
         StopStream;
@@ -5566,32 +5571,30 @@ Begin
         StopStream;
         Exit;
       End;
-    Snapshot := Run.Snapshot;
-    If FClaudeRun <> Run Then Exit;
-    ApplyClaudeToolSteps(Snapshot);
-    If (Snapshot.Content <> '') Or (Snapshot.Thinking <> '') Then
-      ApplyAssistantSnapshots(Snapshot.Content, Snapshot.Thinking);
-    { A call still waiting for its result keeps the footer on Running, as a pending Codex tool does. }
-    If FSending And (Length(Snapshot.Tools) > 0) And (Not Snapshot.Tools[High(Snapshot.Tools)].Done) Then
+    Turn := ClaudeRun.TurnSnapshot;
+    If FClaudeRun <> ClaudeRun Then
+      Exit;
+    If (Turn.Content <> '') Or (Turn.Thinking <> '') Then
+      ApplyAssistantSnapshots(Turn.Content, Turn.Thinking);
+    ApplyTurnEvents(ClaudeRun.TakeEvents);
+    If FSending And (Turn.Phase = AssistantPhaseRunning) Then
       SetStreamPhase(AssistantPhaseRunning);
-    If (Snapshot.ContextTokens > 0) And (Snapshot.ContextTokens < High(Integer)) Then
-      FContextUsed := Snapshot.ContextTokens;
-    ApplyClaudeRateLimit(Snapshot.RateLimitJson);
-    If Snapshot.Done Then
+    If (Turn.Usage.ContextTokens > 0) And (Turn.Usage.ContextTokens < High(Integer)) Then
+      FContextUsed := Turn.Usage.ContextTokens;
+    ApplyClaudeRateLimit(Turn.Usage.RateLimitJson);
+    If Turn.Done Then
       Begin
-        If FClaudeRun <> Run Then Exit;
-        NoteClaudeKeySource(Snapshot.KeySource);
-        FClaudeUsageReported := Snapshot.UsageState = ClaudeUsageReported;
-        FClaudeInputTokens := Snapshot.InputTokens;
-        FClaudeOutputTokens := Snapshot.OutputTokens;
-        FClaudeCachedInputTokens := Snapshot.CachedInputTokens;
-        FClaudeHasCached := Snapshot.HasCached;
-        { A turn that ran a tool may already have edited files or run commands, so only a turn that ran none
-          waits and starts the same stored prompt again, a bounded number of times. }
-        If (Snapshot.ToolCalls = 0) And ClaudeSessionMissing(Snapshot.ErrorText) And (Not FClaudeFreshRetried) Then
+        If FClaudeRun <> ClaudeRun Then
+          Exit;
+        NoteClaudeKeySource(ClaudeRun.KeySource);
+        FClaudeUsageReported := Turn.Usage.Reported;
+        FClaudeInputTokens := Turn.Usage.InputTokens;
+        FClaudeOutputTokens := Turn.Usage.OutputTokens;
+        FClaudeCachedInputTokens := Turn.Usage.CachedInputTokens;
+        FClaudeHasCached := Turn.Usage.HasCached;
+        If AssistantMayReplayTurn(Turn.ReplaySafe) And ClaudeSessionMissing(Turn.ErrorText) And
+          (Not FClaudeFreshRetried) Then
           Begin
-            { Claude Code no longer has this session. Start a new one once. A plan item is not replayed and
-              does not take the conversation recap. Only a turn that ran no tool reaches here. }
             FClaudeFreshRetried := True;
             FClaudeSessionId := NewClaudeSessionId;
             FClaudeResume := False;
@@ -5610,11 +5613,10 @@ Begin
               FinishAssistantReply('The run could not be restarted.');
             Exit;
           End;
-        If (Snapshot.ToolCalls = 0) And (FClaudeRetries < AssistantFaultRetryCap(-1)) And
-          TryDeferDroppedTransport(FLiveContent, Snapshot.ErrorText, Snapshot.ErrorText) Then
+        If (FClaudeRetries < AssistantFaultRetryCap(-1)) And
+          TryDeferDroppedTransport(FLiveContent, Turn.ErrorText, Turn.ErrorText) Then
           Begin
             Inc(FClaudeRetries);
-            { A first turn may have created its session; another --session-id with that id would be refused. }
             If Not FClaudeResume Then
               Begin
                 FClaudeSessionId := NewClaudeSessionId;
@@ -5624,12 +5626,10 @@ Begin
             ReleaseClaudeProcess;
             Exit;
           End;
-        FinishAssistantReply(Snapshot.ErrorText);
-        If Snapshot.ErrorText = '' Then
-          { The turn is recorded now, so the key includes this conversation's first turn. }
+        FinishAssistantReply(Turn.ErrorText);
+        If Turn.ErrorText = '' Then
           FClaudeSessionKey := ClaudeSessionKey
-        Else If (Not FClaudeResume) And (Not (FClaudePlanItem.Active And (Snapshot.ToolCalls > 0))) Then
-          { A new session that ran no tool may not exist. A plan item that ran tools is resumed, not replayed. }
+        Else If (Not FClaudeResume) And (Not (FClaudePlanItem.Active And (Not Turn.ReplaySafe))) Then
           FClaudeSessionId := '';
         ReleaseClaudePlanItemSession(FClaudePlanItem, FClaudeSessionId, FClaudeSessionKey);
       End
@@ -5638,7 +5638,7 @@ Begin
     If FViewingLive And Assigned(FTraceView) And Assigned(FTrace) And FSending Then
       FTraceView.RefreshElapsed(FTrace);
   Finally
-    FPollingClaude := False;
+    FPollingTurn := False;
   End;
 End;
 
@@ -5657,14 +5657,9 @@ Begin
       If FSending And (FStatusPhase <> '') Then
         StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
           StatusActivityReserve(AssistantProgressPhase(FStatusPhase)));
-      If Assigned(FCodexRun) Then
+      If Assigned(FCodexRun) Or Assigned(FClaudeRun) Then
         Begin
-          PollCodex;
-          Exit;
-        End;
-      If Assigned(FClaudeRun) Then
-        Begin
-          PollClaude;
+          PollTurn;
           Exit;
         End;
       If FSending And Assigned(FTraceView) And Assigned(FTrace) And FViewingLive Then
@@ -8505,6 +8500,7 @@ Begin
       RevealSubmittedPrompt;
       { Large skill + IDE context means a noticeable wait before the first token.
         That gap is model/server time-to-first-token, not local UI hang. }
+      FTurnEventsFile := '';
       If AssistantClient.StartStream(@StreamToken) Then
         Begin
           FComposerImagesSent := Length(Refs) > 0;
@@ -9622,6 +9618,7 @@ Begin
   SetSending(True);
   BeginAssistantReply;
   RevealSubmittedPrompt;
+  FTurnEventsFile := '';
   If Not AssistantClient.StartStream(@StreamToken) Then
     Begin
       AssistantClient.ToolsEnabled := ActiveMode <> amChat;

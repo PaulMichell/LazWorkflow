@@ -164,6 +164,9 @@ Begin
   Check('truncated Codex frame does not replay the turn', Decision.Action = araStop);
   Decision := ClassifyDroppedTransport('Could not start Claude Code.', '', False);
   Check('Claude start failure retries the turn', Decision.Action = araRetryLastAction);
+  Check('a tool blocks a whole-turn replay', Not AssistantMayReplayTurn(False));
+  Check('no tool still allows a replay', AssistantMayReplayTurn(True));
+  Check('the lost retry is explained', Pos('not started again', AssistantTurnNotReplayed) > 0);
   { A started Claude turn may have edited files or run commands. Replaying it would repeat them. }
   Decision := ClassifyDroppedTransport('Claude Code did not complete the turn.', '', False);
   Check('incomplete Claude turn is not replayed', Decision.Action = araStop);

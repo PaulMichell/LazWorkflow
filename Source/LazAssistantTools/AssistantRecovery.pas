@@ -34,6 +34,8 @@ Const
   AssistantRecoveryWaitCredits = 'Waiting for credits.';
   AssistantRecoveryWaitRateLimit = 'Waiting for the rate limit.';
   AssistantRecoveryResumeCall = 'Resuming the call.';
+  { A whole-turn retry after any tool. Read-only Grok tools used to allow one. They do not. }
+  AssistantTurnNotReplayed = 'A tool already ran, so this turn is not started again.';
 
 Type
   TAssistantRecoveryAction = (
@@ -136,6 +138,8 @@ Function AssistantDroppedTransportWaitMs(Kind: TAssistantHttpWait; Const ErrorTe
   NowTime: TDateTime; Out RetryAt: TDateTime): QWord;
 Function AssistantDroppedTransportWaitNote(Kind: TAssistantHttpWait; Const ErrorText: String;
   RetryAt: TDateTime): String;
+{ False once any tool has run. Recovery must not start that turn again. }
+Function AssistantMayReplayTurn(ReplaySafe: Boolean): Boolean;
 
 Implementation
 
@@ -1024,6 +1028,11 @@ Begin
   Else
     Result := AssistantReconnectWaitNote(ErrorText);
   End;
+End;
+
+Function AssistantMayReplayTurn(ReplaySafe: Boolean): Boolean;
+Begin
+  Result := ReplaySafe;
 End;
 
 End.

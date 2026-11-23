@@ -60,6 +60,7 @@ Type
     FRecoveryStopText: String;
     FTerminalNoted: Boolean;
     FMutatingToolRan: Boolean;
+    FToolRan: Boolean;
     FActiveToolName: String;
     FHttpExceptionClass: String;
     FToolCallsCommitted: Boolean;
@@ -134,6 +135,7 @@ Type
       ReasoningEffort, ToolsJson, EventsFile: String; OnToken: TAssistantStreamEvent);
     Destructor Destroy; Override;
     Procedure Cancel;
+    Function TurnSnapshot: TAssistantTurnSnapshot;
     Function EnqueueSteer(Const Text: String; Const ImageRefs: TAssistantImageRefArray): Boolean;
     Procedure Detach;
     Procedure DetachCallbacks;
@@ -233,6 +235,7 @@ Begin
   FRecoveryStopText := '';
   FTerminalNoted := False;
   FMutatingToolRan := False;
+  FToolRan := False;
   FActiveToolName := '';
   FHttpExceptionClass := '';
   FToolCallsCommitted := False;
@@ -625,9 +628,54 @@ Begin
   Event.Ok := Ok;
   Event.DurationMs := DurationMs;
   Event.AttachmentsJson := AttachmentsJson;
+  If Kind In [aekToolStarted, aekSubagentStarted] Then
+    Begin
+      EnterCriticalSection(FSnapLock);
+      Try
+        FToolRan := True;
+      Finally
+        LeaveCriticalSection(FSnapLock);
+      End;
+    End;
   AppendAssistantEvent(FEventsFile, Event);
   If TraceKindForUi(Kind) Then
     QueueTrace(Event);
+End;
+
+Function TAssistantActor.TurnSnapshot: TAssistantTurnSnapshot;
+Begin
+  Result := EmptyAssistantTurnSnapshot;
+  EnterCriticalSection(FSnapLock);
+  Try
+    Result.Content := FContent;
+    Result.Thinking := FThinking;
+    Result.EventsFile := FEventsFile;
+    Result.ReplaySafe := Not FToolRan;
+    If FToolRan Then
+      Result.ToolCount := 1;
+    If FFinishEmitted Or FPendingFinish Then
+      Begin
+        Result.Done := FFinishEmitted;
+        Result.ErrorText := FErrorText;
+        Result.Phase := AssistantPhaseWaiting;
+      End
+    Else
+      Begin
+        Result.Done := False;
+        Result.ErrorText := '';
+        Case FPhase Of
+          apThinking: Result.Phase := AssistantPhaseThinking;
+          apStreaming: Result.Phase := AssistantPhaseStreaming;
+          apTools: Result.Phase := AssistantPhaseRunning;
+        Else
+          Result.Phase := AssistantPhaseWaiting;
+        End;
+        If FStatusText <> '' Then
+          Result.Phase := FStatusText;
+      End;
+  Finally
+    LeaveCriticalSection(FSnapLock);
+  End;
 End;
 
 Procedure TAssistantActor.NotifyMain;
@@ -2013,8 +2061,12 @@ Begin
                 Exit;
               End;
           Else
-            If FTerminalNoted Or FMutatingToolRan Or (Attempt >= 2) Then
+            { A tool already ran, including a read-only one. Do not start the turn again.
+              A Grok read used to allow one whole-turn retry. That retry is gone. }
+            If FTerminalNoted Or FToolRan Or (Attempt >= 2) Then
               Begin
+                If FToolRan And (Not FTerminalNoted) And (Attempt < 2) Then
+                  LogEvent(aekRecovery, AssistantTurnNotReplayed);
                 PostTerminalStop(Area, E.ClassName, E.Message);
                 Exit;
               End;

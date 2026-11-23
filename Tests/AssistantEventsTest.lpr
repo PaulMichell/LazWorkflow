@@ -11,7 +11,7 @@ Uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Interfaces, Classes, SysUtils, AssistantProtocol, AssistantEvents;
+  Interfaces, Classes, SysUtils, AssistantProtocol, AssistantEvents, AssistantRecovery;
 
 Var
   FailCount: Integer;
@@ -85,6 +85,38 @@ Begin
   Check('json tool', Pos('"tool":"read_file"', Line) > 0);
   Check('json escaped path', Pos('Foo.pas', Line) > 0);
   Check('json loop', Pos('"loop":2', Line) > 0);
+End;
+
+Procedure TestTurnEventLog;
+Var
+  Log: TAssistantEventLog;
+  Path: String;
+  Event: TAssistantEvent;
+  Pending, Loaded: TAssistantEventArray;
+  Snapshot: TAssistantTurnSnapshot;
+Begin
+  Path := IncludeTrailingPathDelimiter(GetTempDir) + 'lazworkflow-turn-log.jsonl';
+  DeleteFile(Path);
+  Log := TAssistantEventLog.Create(Path);
+  Try
+    Snapshot := EmptyAssistantTurnSnapshot;
+    Check('fresh snapshot is replay-safe', Snapshot.ReplaySafe And (Not Log.ToolRan));
+    Event := MakeAssistantEvent(aekToolStarted, apTools, '{"path":"Foo.pas"}', 'read_file', 'call_9');
+    Log.Append(Event);
+    Check('a tool request is not replay-safe', Log.ToolRan);
+    Pending := Log.TakePending;
+    Check('pending tool event', (Length(Pending) = 1) And (Pending[0].ToolId = 'call_9') And
+      (Pending[0].ToolName = 'read_file'));
+    Pending := Log.TakePending;
+    Check('pending queue drains once', Length(Pending) = 0);
+    Check('log reloads the tool step', LoadAssistantEventsFile(Path, Loaded) And (Length(Loaded) = 1) And
+      (Loaded[0].Kind = aekToolStarted) And (Loaded[0].ToolName = 'read_file') And (Loaded[0].ToolId = 'call_9'));
+    Snapshot.ReplaySafe := AssistantMayReplayTurn(Not Log.ToolRan);
+    Check('recovery refuses a replay after a tool', Not Snapshot.ReplaySafe);
+  Finally
+    Log.Free;
+    DeleteFile(Path);
+  End;
 End;
 
 Procedure TestEventFile;
@@ -255,6 +287,7 @@ Begin
   TestSteerBuffer;
   TestSteerEnvelope;
   TestEventJson;
+  TestTurnEventLog;
   TestEventFile;
   TestParseToolCalls;
   TestParseEventRoundTrip;

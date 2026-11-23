@@ -12,7 +12,7 @@ Unit AssistantCodexRun;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext;
+  Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext, AssistantEvents;
 
 Type
   TCodexRunSnapshot = Record
@@ -28,6 +28,7 @@ Type
     FProjectRoot, FAttachments, FSteerInput, FToolAttachments, FLastSteerError: String;
     FMode: TAssistantMode;
     FSnapshot: TCodexRunSnapshot;
+    FEvents: TAssistantEventLog;
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
     FToolResult, FSteer: String;
@@ -36,13 +37,15 @@ Type
     FCancelled: LongInt;
     Function Cancelled: Boolean;
     Procedure Publish(Client: TAssistantCodexClient);
+    Procedure NoteEvent(Kind: TAssistantEventKind; Const Text: String = ''; Const ToolName: String = '';
+      Const ToolId: String = ''; Ok: Boolean = True; Const AttachmentsJson: String = '');
   Protected
     Procedure Execute; Override;
   Public
     Constructor Create(Const Executable, Cwd, Model, Prompt, ToolsJson, RunId: String;
       TimeoutMs: Cardinal = 600000; Const ProfileDir: String = ''; Const Effort: String = '';
       Const DeveloperInstructions: String = ''; Mode: TAssistantMode = amInspect;
-      Const ProjectRoot: String = ''; Const AttachmentsJson: String = '');
+      Const ProjectRoot: String = ''; Const AttachmentsJson: String = ''; Const EventsFile: String = '');
     Destructor Destroy; Override;
     Procedure Cancel;
     Function Steer(Const Text: String): Boolean; Overload;
@@ -50,6 +53,9 @@ Type
     Function Steer(Const Text, AttachmentsJson: String): Boolean; Overload;
     Property LastSteerError: String Read FLastSteerError;
     Function Snapshot: TCodexRunSnapshot;
+    Function TurnSnapshot: TAssistantTurnSnapshot;
+    Function ContextUsage: TCodexContextUsage;
+    Function TakeEvents: TAssistantEventArray;
     Function HasPendingTool: Boolean;
     { Caller must run on the IDE thread. Returns after at most one tool.
       It never waits for process or network output. }
@@ -68,11 +74,12 @@ Uses
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
     Const DeveloperInstructions: String; Mode: TAssistantMode; Const ProjectRoot: String;
-    Const AttachmentsJson: String);
+    Const AttachmentsJson: String; Const EventsFile: String);
 Begin
   Inherited Create(True);
   FreeOnTerminate := False;
   InitCriticalSection(FLock);
+  FEvents := TAssistantEventLog.Create(EventsFile);
   FExecutable := Executable;
   FCwd := Cwd;
   FModel := Model;
@@ -111,6 +118,7 @@ Begin
   { TThread.Destroy joins. Owner must poll Snapshot.Done before destruction
     to keep Lazarus responsive, including after cancelling during shutdown. }
   Inherited Destroy;
+  FreeAndNil(FEvents);
   DoneCriticalSection(FLock);
 End;
 
@@ -170,6 +178,78 @@ Begin
   Finally
     LeaveCriticalSection(FLock);
   End;
+End;
+
+Procedure TAssistantCodexRun.NoteEvent(Kind: TAssistantEventKind; Const Text: String; Const ToolName: String;
+  Const ToolId: String; Ok: Boolean; Const AttachmentsJson: String);
+Var
+  Event: TAssistantEvent;
+Begin
+  If Not Assigned(FEvents) Then
+    Exit;
+  Event := MakeAssistantEvent(Kind, apWaiting, Text, ToolName, ToolId, Ok, 0, AttachmentsJson);
+  If Kind In [aekToolStarted, aekToolCompleted] Then
+    Event.Phase := apTools;
+  FEvents.Append(Event);
+End;
+
+Function TAssistantCodexRun.ContextUsage: TCodexContextUsage;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    Result := FSnapshot.ContextUsage;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
+Function TAssistantCodexRun.TakeEvents: TAssistantEventArray;
+Begin
+  If Assigned(FEvents) Then
+    Result := FEvents.TakePending
+  Else
+    Result := Nil;
+End;
+
+Function TAssistantCodexRun.TurnSnapshot: TAssistantTurnSnapshot;
+Var
+  Pending: Boolean;
+Begin
+  Result := EmptyAssistantTurnSnapshot;
+  EnterCriticalSection(FLock);
+  Try
+    Result.Content := FSnapshot.Content;
+    Result.Thinking := FSnapshot.Thinking;
+    Result.ErrorText := FSnapshot.ErrorText;
+    Result.Done := FSnapshot.Done;
+    Pending := FToolPending And Not FToolReady;
+    Result.Usage.Reported := FSnapshot.ContextUsage.Reported;
+    Result.Usage.ContextWindow := FSnapshot.ContextUsage.ModelContextWindow;
+    Result.Usage.ContextTokens := FSnapshot.ContextUsage.Last.TotalTokens;
+    Result.Usage.InputTokens := FSnapshot.ContextUsage.Last.InputTokens;
+    Result.Usage.OutputTokens := FSnapshot.ContextUsage.Last.OutputTokens;
+    Result.Usage.CachedInputTokens := FSnapshot.ContextUsage.Last.CachedInputTokens;
+    Result.Usage.ReasoningTokens := FSnapshot.ContextUsage.Last.ReasoningOutputTokens;
+    Result.Usage.HasCached := FSnapshot.ContextUsage.Last.CachedInputTokens > 0;
+    Result.Usage.HasReasoning := FSnapshot.ContextUsage.Last.ReasoningOutputTokens > 0;
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+  If Pending Then
+    Result.Phase := AssistantPhaseRunning
+  Else If Result.Content <> '' Then
+    Result.Phase := AssistantPhaseStreaming
+  Else If Result.Thinking <> '' Then
+    Result.Phase := AssistantPhaseThinking
+  Else
+    Result.Phase := AssistantPhaseWaiting;
+  If Assigned(FEvents) Then
+    Begin
+      Result.EventsFile := FEvents.FileName;
+      Result.ReplaySafe := Not FEvents.ToolRan;
+      If FEvents.ToolRan Then
+        Result.ToolCount := 1;
+    End;
 End;
 
 Function TAssistantCodexRun.HasPendingTool: Boolean;
@@ -238,9 +318,11 @@ Begin
     FToolReady := False;
     FToolServicing := False;
     FSnapshot.Done := False;
+    ReplayUnsafe := True;
   Finally
     LeaveCriticalSection(FLock);
   End;
+  NoteEvent(aekToolStarted, ArgumentsJson, ToolName, 'test-call');
 End;
 
 Procedure TAssistantCodexRun.ServiceTool;
@@ -305,6 +387,8 @@ Begin
       LeaveCriticalSection(FLock);
     End;
   End;
+  If Result Then
+    NoteEvent(aekToolCompleted, Text, Tool.Tool, Tool.CallId, OK, Attachments);
 End;
 
 Procedure TAssistantCodexRun.Execute;
@@ -320,6 +404,7 @@ Var
 Begin
   Client := Nil;
   Env := Nil;
+  NoteEvent(aekTurnStarted, FModel);
   Try
     Try
       If Cancelled Then
@@ -461,9 +546,11 @@ Begin
             Try
               FTool := Tool;
               FToolPending := True;
+              ReplayUnsafe := True;
             Finally
               LeaveCriticalSection(FLock);
             End;
+            NoteEvent(aekToolStarted, Tool.Arguments, Tool.Tool, Tool.CallId);
           End;
         If (SteerInput <> '') And Client.SteerInput(SteerInput) Then
           Begin
@@ -506,6 +593,10 @@ Begin
     Finally
       LeaveCriticalSection(FLock);
     End;
+    If FSnapshot.ErrorText <> '' Then
+      NoteEvent(aekError, FSnapshot.ErrorText, '', '', False)
+    Else
+      NoteEvent(aekTurnEnded, FSnapshot.Content);
   End;
 End;
 End.
