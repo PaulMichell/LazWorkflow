@@ -348,6 +348,11 @@
         <UnitName Value="AssistantAccountUsage"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantAccountStatus.pas"/>
+        <UnitName Value="AssistantAccountStatus"/>
+      </Item>
+
+      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantCodexUsage.pas"/>
         <UnitName Value="AssistantCodexUsage"/>
       </Item>

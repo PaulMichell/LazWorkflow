@@ -178,14 +178,14 @@ Type
     Procedure StatusFooterUsageClick(Sender: TObject);
     Procedure StatusFooterRightClick(Sender: TObject);
     Procedure FooterMenuClick(Sender: TObject);
-  Private
+  Public
     FRefreshingTargets: Boolean;
     FRefreshingPlans: Boolean;
     FTargetPaths: TStringList;
     FTargetRestored: Boolean;
     Function TryApplyTarget(Const Directory: String; Out Note: String): Boolean;
     Procedure ApplyTarget(Const Directory: String);
-  Private
+  Public
 
     FCanCompactContext: Boolean;
     FActiveConnectionId: String;
@@ -268,7 +268,7 @@ Type
     Function LaunchStoredTransportRun: Boolean;
     Procedure ResumeDroppedTransport;
     Procedure PollTransportWait;
-  Private
+  Public
     ElapsedTimer: TTimer;
     FDisplayUser: String; { Current-turn user text shown in the Chat tab. }
     FComposerImagesJson: String; { Unsent attachment refs. Not cleared when a model rejects an image. }
@@ -528,7 +528,7 @@ Type
     Function BuildReviewDisplayLabel(Const KindLabel: String;
       ErrorCount, WarningCount, HintCount: Integer; BuildOk: Boolean): String;
     Function BuildFixErrorPromptForLine(Line: TMessageLine): String;
-  Private
+  Public
     { Set while a phone command starts a turn: unsaved work is then saved only when the phone asked for it, and
       the desktop never shows the question. RemoteRefusal says why the turn did not start. }
     RemoteTurnStarting, RemoteSaveFirst: Boolean;
@@ -687,7 +687,7 @@ Uses AssistantWorkTarget, PackageIntf,
   FileUtil, LCLIntf, LazIDEIntf, IDEMsgIntf, SrcEditorIntf, fpimage, fpwritepng,
   ProjectIntf, AssistantSkills, AssistantConnections, AssistantCapabilities, AssistantUsage, AssistantCodexSettings, AssistantCodexClient,
   AssistantCodexUsage, AssistantHarness, AssistantClaudeStream,
-  AssistantImages, AssistantRecap,
+  AssistantImages, AssistantRecap, AssistantAccountStatus,
   AssistantImageView, AssistantXaiProvider, AssistantTasks, AssistantTasksForm, AssistantTaskRun,
   AssistantFileDrop, AssistantTaskNoteForm, LResources;
 
@@ -5754,141 +5754,38 @@ End;
 
 
 Procedure TProjectAssistantForm.RefreshCentreStatus;
-Var
-  UsageHint: String;
 Begin
-  If Not Assigned(StatusFooter) Then
-    Exit;
-  StatusFooter.SetCentreText(FContextStatusText);
-  StatusFooter.SetCentreHint(FContextStatusHint);
-  If FPlanStatusCaption <> '' Then
-    StatusFooter.SetUsageText(FPlanStatusCaption)
-  Else
-    StatusFooter.SetUsageText('Credits');
-  UsageHint := 'Click for plan usage';
-  If FPlanStatusHint <> '' Then
-    UsageHint := UsageHint + LineEnding + FPlanStatusHint;
-  StatusFooter.SetUsageHint(UsageHint);
+  Seam_RefreshCentreStatus(Self);
 End;
 
 Procedure TProjectAssistantForm.ApplyAccountUsageLabel;
-Var
-  SlotItem, Item: TAccountUsageSnapshot;
-  PreviousCaption, PreviousHint: String;
 Begin
-  If Not Assigned(StatusFooter) Then
-    Exit;
-  ClearAccountUsageSnapshot(SlotItem);
-  If Assigned(FAccountUsageSlot) Then
-    SlotItem := FAccountUsageSlot.ReadSnapshot;
-  Item := AccountUsageForFooter(FActiveConnectionId, SlotItem);
-  If AccountUsageApplies(Item, FActiveConnectionId) Then
-    PublishAccountUsageSnapshot(Item);
-  PreviousCaption := FPlanStatusCaption;
-  PreviousHint := FPlanStatusHint;
-  FPlanStatusCaption := AccountUsageCaption(Item, FActiveConnectionId);
-  FPlanStatusHint := AccountUsageHint(Item, FActiveConnectionId);
-  RefreshCentreStatus;
-  { The phone credit popup reads these strings from the next status frame. }
-  If (FPlanStatusCaption <> PreviousCaption) Or (FPlanStatusHint <> PreviousHint) Then
-    AssistantSessionObserve.AssistantSessionObserve(asnStatus);
+  Seam_ApplyAccountUsageLabel(Self);
 End;
 
 Procedure TProjectAssistantForm.SyncCodexUsageIdle;
 Begin
-  SetCodexAccountUsageIdle((FActiveBackend = 'codex') And (Not FSending) And (Not FPlanAgentRunning) And (Not FReviewInProgress));
+  Seam_SyncCodexUsageIdle(Self);
 End;
 
 Procedure TProjectAssistantForm.NoteAccountConnectionChanged;
 Begin
-  CancelCodexAccountUsage;
-  SyncCodexUsageIdle;
-  If Assigned(FAccountUsageSlot) Then
-    FAccountUsageSlot.SetActive(FActiveConnectionId);
-  FAccountUsageAttemptId := '';
-  FAccountUsageAttemptAt := 0;
-  FAccountUsageWanted := AccountUsageRegistered(FActiveBackend);
-  ApplyAccountUsageLabel;
+  Seam_NoteAccountConnectionChanged(Self);
 End;
 
 Procedure TProjectAssistantForm.StartAccountUsageWorker;
-Var
-  Worker: TAccountUsageWorker;
 Begin
-  If (Not Assigned(FAccountUsageSlot)) Or FAccountUsageSlot.IsClosed Then
-    Exit;
-  If Assigned(FAccountUsageWorker) And (Not FAccountUsageWorker.Finished) Then
-    Exit;
-  If Assigned(FAccountUsageWorker) Then
-    Begin
-      FAccountUsageWorker.WaitFor;
-      FreeAndNil(FAccountUsageWorker);
-    End;
-  If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
-    Exit;
-  SyncCodexUsageIdle;
-  If (FActiveBackend = 'codex') And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
-    Exit;
-  Worker := TAccountUsageWorker.CreateForProject(FAccountUsageSlot, FActiveConnectionId, FActiveBackend, FActiveModel, FAccountApiBase,
-    FAccountKeySource, FAccountKeyEnv, FAccountKeyValue, FAccountPreset, FAccountWire, FCodexRuntime, FCodexProfile);
-  FAccountUsageWorker := Worker;
-  FAccountUsageWanted := False;
-  FAccountUsageAttemptId := FActiveConnectionId;
-  FAccountUsageAttemptAt := Now;
-  Worker.Start;
+  Seam_StartAccountUsageWorker(Self);
 End;
 
 Procedure TProjectAssistantForm.AccountUsageTimerTimer(Sender: TObject);
-Var
-  Due: Boolean;
 Begin
-  Try
-    If csDestroying In ComponentState Then
-      Exit;
-    ApplyAccountUsageLabel;
-    SyncCodexUsageIdle;
-    If Not Assigned(FAccountUsageSlot) Or FAccountUsageSlot.IsClosed Then
-      Exit;
-    If Assigned(FAccountUsageWorker) And (Not FAccountUsageWorker.Finished) Then
-      Exit;
-    If (FActiveConnectionId = '') Or (Not AccountUsageRegistered(FActiveBackend)) Then
-      Exit;
-    If (FActiveBackend = 'codex') And ((FSending) Or FPlanAgentRunning Or FReviewInProgress) Then
-      Exit;
-    Due := FAccountUsageWanted;
-    If Not Due Then
-      Due := Showing And ((FAccountUsageAttemptId <> FActiveConnectionId) Or
-        ((Now - FAccountUsageAttemptAt) >= EncodeTime(0, 3, 0, 0)));
-    If Not Due Then
-      Exit;
-    StartAccountUsageWorker;
-  Except
-    On E: Exception Do
-      WorkflowLogger.Warning('ProjectAssistant', 'Account usage refresh failed.');
-  End;
+  Seam_AccountUsageTimerTimer(Self, Sender);
 End;
 
 Procedure TProjectAssistantForm.ReleaseAccountUsageRefresh;
 Begin
-  If Assigned(FAccountUsageTimer) Then
-    Begin
-      FAccountUsageTimer.Enabled := False;
-      FAccountUsageTimer.OnTimer := Nil;
-      FreeAndNil(FAccountUsageTimer);
-    End;
-  CancelCodexAccountUsage;
-  If Assigned(FAccountUsageSlot) Then
-    FAccountUsageSlot.Close;
-  If Assigned(FAccountUsageWorker) Then
-    Begin
-      TAccountUsageWorker(FAccountUsageWorker).Detach;
-      FAccountUsageWorker := Nil;
-    End;
-  If Assigned(FAccountUsageSlot) Then
-    Begin
-      FAccountUsageSlot.Release;
-      FAccountUsageSlot := Nil;
-    End;
+  Seam_ReleaseAccountUsageRefresh(Self);
 End;
 
 Function EffortBarCaption(Const Value: String): String;
