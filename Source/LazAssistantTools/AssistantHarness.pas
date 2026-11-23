@@ -61,12 +61,35 @@ Var
 Function AssistantImageOutputPromptSection: String;
 /// One line for a profile that cannot generate images.
 Function AssistantCannotWriteImagesLine: String;
+/// The developerInstructions a ChatGPT turn attaches: the harness prompt, without the image sentence Grok appends.
+Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
 
 Implementation
 
 Uses
   LazFileUtils, fpjson, jsonparser, WorkflowLog, LazIDEIntf, SrcEditorIntf, LCLVersion, AssistantPlan,
-  AssistantConnections, AssistantConfig;
+  AssistantConnections, AssistantConfig, AssistantTools;
+
+Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
+Var
+  Names: TStringList;
+  Root, PlanRel: String;
+Begin
+  Result := '';
+  Names := TStringList.Create;
+  Try
+    If Assigned(AssistantChatConfig) Then
+      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(Mode), Names);
+    Root := ProjectRootPath;
+    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
+      Root := ProjectAssistantConversation.ProjectRoot;
+    PlanRel := GetActivePlanRelativePath;
+    If Assigned(WorkflowAssistantHarness) Then
+      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel);
+  Finally
+    Names.Free;
+  End;
+End;
 
 Constructor TAssistantHarness.Create;
 Begin

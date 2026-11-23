@@ -4844,19 +4844,6 @@ Begin
   Result := ApproveToolIfNeeded(Tool, '', MCPApprovalSummary(Path, OldText, NewText), ErrorText);
 End;
 
-{ What a Claude turn may do in each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
-  Build works on the project. The Lazarus tools' broker run enforces it. }
-Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
-Begin
-  Case Mode Of
-    amChat: Result := ctsNone;
-    amDocument, amPlan: Result := ctsMarkdown;
-    amBuild: Result := ctsProject;
-  Else
-    Result := ctsRead;
-  End;
-End;
-
 Function ClaudeWorkDirectory: String;
 Begin
   Result := ExcludeTrailingPathDelimiter(ProjectRootPath);
@@ -5008,7 +4995,7 @@ Begin
       End;
     { Chat has no tools. Every other mode acts only through the Lazarus tools, so a turn without them is refused
       rather than run with reading alone. }
-    If TurnSettings.ToolScope <> ctsNone Then
+    If ClaudeTurnUsesMCP(ActiveMode) Then
       Begin
         If Not StartClaudeTools(TurnSettings.ToolScope, ConfigFile, ToolsError) Then
           Raise Exception.Create('The Lazarus tools could not start: ' + ToolsError);
@@ -5081,27 +5068,6 @@ Begin
       Exit;
     End;
   ResumeDroppedTransport;
-End;
-
-Function CodexDeveloperInstructions(Mode: TAssistantMode): String;
-Var
-  Names: TStringList;
-  Root, PlanRel: String;
-Begin
-  Result := '';
-  Names := TStringList.Create;
-  Try
-    If Assigned(AssistantChatConfig) Then
-      AssistantChatConfig.CollectSkillsForMode(AssistantModeToStr(Mode), Names);
-    Root := ProjectRootPath;
-    If Assigned(ProjectAssistantConversation) And (ProjectAssistantConversation.ProjectRoot <> '') Then
-      Root := ProjectAssistantConversation.ProjectRoot;
-    PlanRel := GetActivePlanRelativePath;
-    If Assigned(WorkflowAssistantHarness) Then
-      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel);
-  Finally
-    Names.Free;
-  End;
 End;
 
 Function TProjectAssistantForm.StartCodexReply(Const DisplayText, ApiText: String): Boolean;

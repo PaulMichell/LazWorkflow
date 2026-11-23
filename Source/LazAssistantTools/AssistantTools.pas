@@ -29,6 +29,8 @@ Const
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
+/// Tools a parent Grok turn offers. A subagent calls BuildAssistantToolsJsonForSession with both flags false.
+Function AssistantParentToolsJson(Mode: TAssistantMode): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
@@ -968,9 +970,14 @@ Begin
   Result := '[' + Body + ']';
 End;
 
-Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
+Function AssistantParentToolsJson(Mode: TAssistantMode): String;
 Begin
   Result := BuildAssistantToolsJsonForSession(Mode, True, True);
+End;
+
+Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
+Begin
+  Result := AssistantParentToolsJson(Mode);
 End;
 
 Function ProjectRootPath: String;

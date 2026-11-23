@@ -18,7 +18,7 @@ Unit AssistantClaudeClient;
 Interface
 
 Uses
-  Classes, AssistantClaudeStream;
+  Classes, AssistantClaudeStream, AssistantConversation;
 
 Type
   { What Claude Code's own tools may do in a turn. The form maps each conversation mode onto one, so this unit
@@ -120,6 +120,11 @@ Const
 Function DetectClaudeExecutable: String;
 /// The expanded path when it names an executable file, otherwise empty.
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
+/// What a Claude turn may do in each conversation mode: Chat talks, Inspect reads, Document and Plan edit Markdown,
+/// Build works on the project. The Lazarus tools' broker run enforces it.
+Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
+/// True when the turn starts the Lazarus MCP server and appends the read-image note. Chat does not.
+Function ClaudeTurnUsesMCP(Mode: TAssistantMode): Boolean;
 /// Tool arguments that hold a turn to Scope. None has no tools. Every other scope reads with Claude Code's own
 /// Read, Grep and Glob and does everything else through the Lazarus tools in MCPConfigFile, whose broker run
 /// enforces the scope's writes, and appends ClaudeReadImageNote to the system prompt. An empty MCPConfigFile
@@ -207,6 +212,22 @@ Begin
   Path := ExpandFileName(Path);
   If FileIsExecutable(Path) Then
     Result := Path;
+End;
+
+Function ClaudeToolScopeForMode(Mode: TAssistantMode): TClaudeToolScope;
+Begin
+  Case Mode Of
+    amChat: Result := ctsNone;
+    amDocument, amPlan: Result := ctsMarkdown;
+    amBuild: Result := ctsProject;
+  Else
+    Result := ctsRead;
+  End;
+End;
+
+Function ClaudeTurnUsesMCP(Mode: TAssistantMode): Boolean;
+Begin
+  Result := ClaudeToolScopeForMode(Mode) <> ctsNone;
 End;
 
 Procedure AppendClaudeModeArguments(Scope: TClaudeToolScope; Const MCPConfigFile: String; Args: TStrings);

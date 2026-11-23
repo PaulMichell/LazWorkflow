@@ -1,0 +1,23 @@
+tools:
+Read
+Grep
+Glob
+mcp__lazarus__project_info
+mcp__lazarus__read_buffer
+mcp__lazarus__list_directory
+mcp__lazarus__read_file
+mcp__lazarus__read_image
+mcp__lazarus__search_in_project
+mcp__lazarus__open_buffer
+mcp__lazarus__find_declaration
+mcp__lazarus__symbol_context
+mcp__lazarus__find_references
+mcp__lazarus__prepare_changes
+mcp__lazarus__change_status
+mcp__lazarus__preview_local_rename
+mcp__lazarus__run_git
+mcp__lazarus__open_file
+mcp__lazarus__open_markdown
+
+attached: append-system-prompt
+When the user should see which picture you looked at, open it with the Lazarus read_image tool rather than Read: read_image shows the picture in the conversation.

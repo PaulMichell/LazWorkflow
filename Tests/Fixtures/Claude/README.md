@@ -90,3 +90,7 @@ bodies. To capture: serve a stub over HTTP that logs each request body and offer
 `claude -p --model haiku --tools=Read --mcp-config=<file> --strict-mcp-config --allowedTools=mcp__lazarus__*` with
 a prompt asking it to read `Main.pas` through that tool, then replace the lines with the logged bodies, keeping the
 `tools/call` arguments as `{"path":"Main.pas"}`.
+
+## Offer snapshots
+
+`inspect.txt`, `document.txt`, `plan.txt`, `build.txt` and `chat.txt` are the tool names a Claude turn is offered and the system text actually appended, for each conversation mode. `Tests/AssistantOfferSnapshotTest.lpr` compares them. A catalogue or prompt change fails until the file is updated on purpose. `<if-can-create-file>` stands for `mcp__lazarus__create_file`, which the IDE offers only when `CanCreateNewText` is true. Sibling snapshots are `Tests/Fixtures/Grok/` and `Tests/Fixtures/ChatGPT/`. OpenAI-compatible has none.

@@ -869,7 +869,11 @@ Function TAssistantService.ToolsJsonCached: String;
 Begin
   If (Not FToolsJsonValid) Or (FToolsJsonMode <> FActiveMode) Then
     Begin
-      FToolsJsonCache := BuildAssistantToolsJsonForSession(FActiveMode, Not FIsSubagent, Not FIsSubagent);
+      { A child does not get spawn_subagent or write_image. A parent uses the shared catalogue. }
+      If FIsSubagent Then
+        FToolsJsonCache := BuildAssistantToolsJsonForSession(FActiveMode, False, False)
+      Else
+        FToolsJsonCache := AssistantParentToolsJson(FActiveMode);
       FToolsJsonMode := FActiveMode;
       FToolsJsonValid := True;
     End;
