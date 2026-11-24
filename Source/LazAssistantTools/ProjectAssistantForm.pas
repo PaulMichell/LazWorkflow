@@ -1730,18 +1730,15 @@ Begin
     End;
   Backend := FActiveBackend;
   Current := LowerCase(Trim(FActiveApproval));
-  If (Current <> 'ask') And (Current <> 'auto') And (Current <> 'always') Then
-    Current := 'ask';
+  Current := ApprovalModeToStr(StrToApprovalMode(Current));
   If (FActiveBackend = 'codex') Then
     Begin
       AddMode('ask', 'Ask before file changes and builds');
-      AddMode('auto', 'Auto: allow project tools');
       AddMode('always', 'Always: allow registered tools');
     End
   Else
     Begin
       AddMode('ask', 'Ask — confirm each write/compile');
-      AddMode('auto', 'Auto — allow project tools');
       AddMode('always', 'Always — never prompt (like Build always-approve)');
     End;
 End;
@@ -6107,13 +6104,11 @@ Begin
   If (FActiveBackend = 'codex') Then
     Begin
       AddMode('ask', 'Ask before file changes and builds');
-      AddMode('auto', 'Auto: allow project tools');
       AddMode('always', 'Always: allow registered tools');
     End
   Else
     Begin
       AddMode('ask', 'Ask — confirm each write/compile');
-      AddMode('auto', 'Auto — allow project tools');
       AddMode('always', 'Always — never prompt (like Build always-approve)');
     End;
 End;
@@ -6162,7 +6157,7 @@ Var
   Connections: TAssistantConnections;
   Item: TAssistantConnection;
   Efforts: TStringList;
-  ModelId: String;
+  ModelId, ApprovalStored: String;
   Failed: Boolean;
 Begin
   Result := False;
@@ -6198,11 +6193,13 @@ Begin
         Item.ReasoningEffort := NewEffort;
       If UpdateApproval Then
         Begin
-          If Not ((NewApproval = 'ask') Or (NewApproval = 'auto') Or (NewApproval = 'always')) Or
-            (Item.ApprovalMode = NewApproval) Then
+          ApprovalStored := ApprovalModeToStr(StrToApprovalMode(NewApproval));
+          If (LowerCase(Trim(NewApproval)) <> 'ask') And (ApprovalStored = 'ask') Then
+            UpdateApproval := False
+          Else If Item.ApprovalMode = ApprovalStored Then
             UpdateApproval := False
           Else
-            Item.ApprovalMode := NewApproval;
+            Item.ApprovalMode := ApprovalStored;
         End;
       If UpdateModel And (Item.Backend = 'grok') And Not XaiModelAllowsEffort(Item.Model, Item.ReasoningEffort) Then
         Begin

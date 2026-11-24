@@ -33,7 +33,6 @@ object CodexConnectionFrame: TCodexConnectionFrame
       ItemIndex = 0
       Items.Strings = (
         'Ask before file changes and builds'
-        'Auto: allow project tools'
         'Always: allow registered tools'
       )
       Style = csDropDownList
@@ -45,7 +44,7 @@ object CodexConnectionFrame: TCodexConnectionFrame
       Top = 60
       Width = 620
       AutoSize = False
-      Caption = 'Ask is read-only; Plan can write Markdown. Auto and Always currently allow the same bounded Lazarus tools.'
+      Caption = 'Ask confirms each change. Always skips the dialog. The sandbox is unchanged.'
       ParentColor = False
       WordWrap = True
     end

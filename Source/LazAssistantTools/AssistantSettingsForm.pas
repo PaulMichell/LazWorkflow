@@ -330,10 +330,8 @@ End;
 
 Function ApprovalIndex(Const Mode: String): Integer;
 Begin
-  If Mode = 'auto' Then
+  If ApprovalModeToStr(StrToApprovalMode(Mode)) = 'always' Then
     Result := 1
-  Else If Mode = 'always' Then
-    Result := 2
   Else
     Result := 0;
 End;
@@ -341,8 +339,7 @@ End;
 Function ApprovalFromIndex(Index: Integer): String;
 Begin
   Case Index Of
-    1: Result := 'auto';
-    2: Result := 'always';
+    1: Result := 'always';
   Else
     Result := 'ask';
   End;
@@ -399,15 +396,15 @@ Procedure TAssistantSettingsForm.EnsureStaticChoices;
 Begin
   EnsureItems(SearchCombo, ['Off', 'Auto', 'On'], 0);
   EnsureItems(VerbosityCombo, ['Low', 'Medium', 'High'], 1);
-  EnsureItems(ApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
+  EnsureItems(ApprovalCombo, ['Ask — confirm each write/compile',
     'Always — never prompt (like Build always-approve)'], 0);
   EnsureItems(PresetCombo, ['OpenRouter', 'Custom'], 1);
   EnsureItems(KeySourceCombo, ['Environment variable', 'Stored key'], 0);
-  EnsureItems(CompatibleApprovalCombo, ['Ask — confirm each write/compile', 'Auto — allow project tools',
+  EnsureItems(CompatibleApprovalCombo, ['Ask — confirm each write/compile',
     'Always — never prompt (like Build always-approve)'], 0);
   { Claude Code's own tools only read; these choices govern the Lazarus tools, which the broker runs. }
   EnsureItems(ClaudeApprovalCombo, ['Ask — confirm each edit, save, build and git command',
-    'Auto — run them without asking', 'Always — run them without asking (the same as Auto for Claude)'], 0);
+    'Always — run them without asking'], 0);
   CompatibleWireLabel.Caption := 'Chat completions';
   CodexUsageLabel.Caption := 'This program did not report counts.';
   GrokUsageLabel.Caption := 'This connection did not report usage.';

@@ -67,7 +67,7 @@ Implementation
 
 Uses
   Dialogs, LCLIntf, Process, FileUtil, fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, LazFileUtils,
-  AssistantSettingsPages, AssistantConnections, AssistantSettingsForm;
+  AssistantSettingsPages, AssistantConnections, AssistantSettingsForm, AssistantConfig;
 
 Type
   TCodexSettingsPage = Class(TAssistantSettingsPage)
@@ -339,8 +339,8 @@ End;
 
 Function TCodexConnectionFrame.ApprovalMode: String;
 Begin
-  Case ApprovalCombo.ItemIndex Of 1: Result := 'auto';
-    2: Result := 'always';
+  Case ApprovalCombo.ItemIndex Of
+    1: Result := 'always';
   Else Result := 'ask';
   End;
 End;
@@ -565,8 +565,8 @@ Begin
       EffortCombo.ItemIndex := 1;
     End;
   ApprovalCombo.ItemIndex := 0;
-  If Approval = 'auto' Then ApprovalCombo.ItemIndex := 1
-  Else If Approval = 'always' Then ApprovalCombo.ItemIndex := 2;
+  If ApprovalModeToStr(StrToApprovalMode(Approval)) = 'always' Then
+    ApprovalCombo.ItemIndex := 1;
   BrowseRuntimeButton.Enabled := True;
   DetectRuntimeButton.Enabled := True;
   RuntimeEdit.Enabled := True;

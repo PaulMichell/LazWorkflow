@@ -48,8 +48,7 @@ Type
   { Tool approval policy (Grok Build permission mode analogue). }
   TAssistantApprovalMode = (
     aamAsk,     { Prompt before write/compile tools }
-    aamAuto,    { Auto-allow project tools (like acceptEdits / auto) }
-    aamAlways   { Never prompt (like always-approve) }
+    aamAlways   { Never prompt. An old auto spelling loads as this. }
   );
 
   TAssistantConfig = Class
@@ -258,7 +257,6 @@ Function ApprovalModeToStr(Mode: TAssistantApprovalMode): String;
 Begin
   Case Mode Of
     aamAsk: Result := 'ask';
-    aamAuto: Result := 'auto';
   Else
     Result := 'always';
   End;
@@ -271,9 +269,7 @@ Begin
   V := LowerCase(Trim(Value));
   If (V = 'ask') Or (V = 'default') Then
     Result := aamAsk
-  Else If (V = 'auto') Or (V = 'acceptedits') Then
-    Result := aamAuto
-  Else If (V = 'always') Then
+  Else If (V = 'always') Or (V = 'auto') Or (Copy(V, 1, 6) = 'accept') Then
     Result := aamAlways
   Else
     Result := aamAsk;
@@ -283,7 +279,6 @@ Function ApprovalModeCaption(Mode: TAssistantApprovalMode): String;
 Begin
   Case Mode Of
     aamAsk: Result := 'Ask';
-    aamAuto: Result := 'Auto';
   Else
     Result := 'Always';
   End;
@@ -881,9 +876,7 @@ Begin
   Item.Backend := Obj.Get('backend', Item.Backend);
   Item.Model := Obj.Get('model', '');
   Item.ReasoningEffort := Obj.Get('thinking', '');
-  Item.ApprovalMode := Obj.Get('approval', 'ask');
-  If Not ((Item.ApprovalMode = 'auto') Or (Item.ApprovalMode = 'always')) Then
-    Item.ApprovalMode := 'ask';
+  Item.ApprovalMode := ApprovalModeToStr(StrToApprovalMode(Obj.Get('approval', 'ask')));
   Item.ImageOutput := False;
   If Obj.Find('image_output') <> Nil Then
     Item.ImageOutput := Obj.Get('image_output', False);

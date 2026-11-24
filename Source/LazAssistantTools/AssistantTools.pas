@@ -377,9 +377,6 @@ Begin
     Mode := AssistantChatConfig.GetApprovalMode;
   If Mode = aamAlways Then
     Exit;
-  If Mode = aamAuto Then
-    { Auto: allow all project tools without a prompt (sandbox still applies). }
-    Exit;
   { Ask: confirm mutating tools. The dialog must run on the IDE thread.
     A nil waiter skips the call and emits no notice. Do not invent a tool id. }
   Handled := False;
