@@ -27,6 +27,8 @@ Const
   GitGraphDateGap = 12; { padding after the measured date column }
   GitGraphDetailBatch = 80;
   GitGraphPrefetchRows = 30;
+  { Newest commits requested before the rest of history. Enough for a tall window plus scroll. }
+  GitGraphHeadWindow = 400;
 
 Type
   TGitCommitRec = Record
@@ -77,6 +79,8 @@ Type
     Function ParseRevListParents(Const RevListText: String; Const PrimarySha: String = ''): Integer;
     { Merge SOH-delimited detail lines from FetchCommitDetails into matching rows. }
     Function ApplyDetailsText(Const DetailsText: String): Integer;
+    { Copy loaded subjects onto matching SHAs. Used when a fuller model replaces a head window. }
+    Procedure CopyDetailsFrom(Source: TGitGraphModel);
     { Collect SHAs in [First..Last] that still need details (inclusive). }
     Function CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
     Procedure RebuildLayout;
@@ -93,6 +97,9 @@ Type
     Property EdgeCount: Integer Read FEdgeCount;
     Property LaneCount: Integer Read FLaneCount;
   End;
+
+{ Leading commits of a rev-list, including a leading #primary line. Empty when none qualify. }
+Function GitRevListHead(Const RevListText: String; MaxCommits: Integer): String;
 
 Implementation
 
@@ -201,6 +208,32 @@ Begin
   While (Pos <= L) And (S[Pos] <> ' ') And (S[Pos] <> #9) And (S[Pos] <> #10) And (S[Pos] <> #13) Do
     Inc(Pos);
   Result := Copy(S, StartPos, Pos - StartPos);
+End;
+
+Function GitRevListHead(Const RevListText: String; MaxCommits: Integer): String;
+Var
+  Cursor, L, Count: Integer;
+  Sha: String;
+Begin
+  Result := '';
+  If (RevListText = '') Or (MaxCommits < 1) Then
+    Exit;
+  L := Length(RevListText);
+  Cursor := 1;
+  Count := 0;
+  While (Cursor <= L) And (Count < MaxCommits) Do
+    Begin
+      Sha := NextToken(RevListText, Cursor);
+      While (Cursor <= L) And (RevListText[Cursor] <> #10) And (RevListText[Cursor] <> #13) Do
+        Inc(Cursor);
+      SkipLineEnd(RevListText, Cursor);
+      If (Sha = '#primary') Or (Length(Sha) < 7) Then
+        Continue;
+      Inc(Count);
+    End;
+  If Count = 0 Then
+    Exit;
+  Result := Copy(RevListText, 1, Cursor - 1);
 End;
 
 Function TGitGraphModel.ParseRevListParents(Const RevListText: String; Const PrimarySha: String): Integer;
@@ -321,6 +354,27 @@ Begin
       FCommits[Idx].Refs := Refs;
       FCommits[Idx].DetailsLoaded := True;
       Inc(Result);
+    End;
+End;
+
+Procedure TGitGraphModel.CopyDetailsFrom(Source: TGitGraphModel);
+Var
+  I, Idx: Integer;
+Begin
+  If (Source = Nil) Or (Source = Self) Or (Source.FCount = 0) Or (FCount = 0) Then
+    Exit;
+  For I := 0 To Source.FCount - 1 Do
+    Begin
+      If Not Source.FCommits[I].DetailsLoaded Then
+        Continue;
+      Idx := IndexOf(Source.FCommits[I].Sha);
+      If Idx < 0 Then
+        Continue;
+      FCommits[Idx].Subject := Source.FCommits[I].Subject;
+      FCommits[Idx].Author := Source.FCommits[I].Author;
+      FCommits[Idx].CommitTime := Source.FCommits[I].CommitTime;
+      FCommits[Idx].Refs := Source.FCommits[I].Refs;
+      FCommits[Idx].DetailsLoaded := True;
     End;
 End;
 

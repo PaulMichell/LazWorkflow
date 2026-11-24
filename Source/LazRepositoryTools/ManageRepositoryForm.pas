@@ -4,7 +4,8 @@ Unit ManageRepositoryForm;
 
   Size note: exceeds the 1000 line preference. The .lfm remains the shell;
   History graph paint, Changes lists, and Files inspection live in coordinator units.
-  Reviewed 2026-08: job/window orchestration stays on the form. }
+  Commit indexing lives in GitHistoryIndex so the window stays usable while older
+  history loads. Reviewed 2026-11: job/window orchestration stays on the form. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -16,8 +17,8 @@ Interface
 Uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
   ComCtrls, Menus, ActnList, Clipbrd, LCLIntf, LCLType, SynEdit, SrcEditorIntf, SpellMemo, WorkflowEvents, StatusFooterFrame,
-  GitGraphModel, GitDiffView, GitJobRunner, GitService, ManageRepositoryHistory, ManageRepositoryChanges,
-  ManageRepositoryFiles;
+  GitGraphModel, GitDiffView, GitJobRunner, GitService, GitHistoryIndex, ManageRepositoryHistory,
+  ManageRepositoryChanges, ManageRepositoryFiles;
 
 Type
   { Background Fetch / Pull / Push (History toolbar). }
@@ -209,12 +210,15 @@ Type
     FAmendHead: Boolean;
     FClean: Boolean;
     FModel: TGitGraphModel;
+    FHistoryIndex: TGitHistoryIndex;
     FHistory: TManageHistoryGraph;
     FChanges: TManageChangesPane;
     FFiles: TManageFilesPane;
     FFilesNeedReload: Boolean;
     FSelectedIndex: Integer;
+    FAnchorSha: String;
     FIndexing: Boolean;
+    FHistoryPartial: Boolean;
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
     FJobBusy: Boolean;
@@ -256,7 +260,8 @@ Type
     Procedure ApplyCommitMessage(Const MessageText: String);
     Procedure ApplyIndexResult(Ok: Boolean; Const Payload: String);
     Procedure ApplyDetailsResult(Ok: Boolean; Const Payload: String);
-    Procedure ApplyFetchedHistory(Const IndexText, DetailsText: String; DetailsOk: Boolean);
+    Function AdoptHistory(Sender: TObject; Generation: Integer; Phase: TGitHistoryPhase;
+      Model: TGitGraphModel): Boolean;
     Procedure StartIndexLoad;
     Procedure ShowRepositoryNotice(Const MessageText: String; Kind: TMsgDlgType);
     Procedure PlaceNoticeOverManager(Dialog: TForm);
@@ -357,7 +362,9 @@ Begin
   FHeadPushedKnown := False;
   FAmendHead := False;
   FSelectedIndex := -1;
+  FAnchorSha := '';
   FIndexing := False;
+  FHistoryPartial := False;
   FDetailLoading := False;
   FRemoteOpBusy := False;
   FJobBusy := False;
@@ -374,6 +381,8 @@ Begin
   FLastProbeAt := 0;
   FProbeIntervalSec := 5;
   FModel := TGitGraphModel.Create;
+  FHistoryIndex := TGitHistoryIndex.Create;
+  FHistoryIndex.OnAdopt := @AdoptHistory;
   FHistory := TManageHistoryGraph.Create(Self);
   FChanges := TManageChangesPane.Create;
   FFiles := TManageFilesPane.Create;
@@ -411,7 +420,11 @@ Begin
   Inc(FDetailGen);
   FRemoteOpBusy := False;
   FIndexing := False;
+  FHistoryPartial := False;
   FDetailLoading := False;
+  If Assigned(FHistoryIndex) Then
+    FHistoryIndex.OnAdopt := Nil;
+  FreeAndNil(FHistoryIndex);
   FreeAndNil(FFiles);
   FreeAndNil(FChanges);
   FreeAndNil(FHistory);
@@ -684,6 +697,9 @@ Procedure TManageRepositoryForm.StopIndexLoad;
 Begin
   Inc(FIndexGen);
   FIndexing := False;
+  FHistoryPartial := False;
+  If Assigned(FHistoryIndex) Then
+    FHistoryIndex.Stop;
 End;
 
 Procedure TManageRepositoryForm.StopDetailLoad;
@@ -813,18 +829,15 @@ Begin
           End;
         If Msg = '' Then
           Msg := 'Done.';
+        { Start before the notice so the tip can paint while the dialog is open. }
+        If Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
+          StartIndexLoad;
         ShowRepositoryNotice(Msg, mtInformation);
         If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
           Exit;
-        If Job.IndexOk Then
-          Begin
-            ApplyFetchedHistory(Job.IndexText, Job.DetailsText, Job.DetailsOk);
-            RefreshRepositoryInfo;
-            If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
-              RefreshChanges;
-          End
-        Else
-          ManualRefresh;
+        RefreshRepositoryInfo;
+        If Assigned(Pages) And (Pages.ActivePage = ChangesTab) Then
+          RefreshChanges;
         UpdateStatus;
         If Assigned(StatusFooter) Then
           If Job.Kind = gjkPush Then
@@ -1240,51 +1253,125 @@ Begin
     End;
 End;
 
-Procedure TManageRepositoryForm.ApplyFetchedHistory(Const IndexText, DetailsText: String;
-  DetailsOk: Boolean);
+Function TManageRepositoryForm.AdoptHistory(Sender: TObject; Generation: Integer; Phase: TGitHistoryPhase;
+  Model: TGitGraphModel): Boolean;
 Var
-  Parsed: Integer;
+  SavedPos, OldIndex, NewIndex: Integer;
+  Lookup: String;
 Begin
-  If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
+  Result := False;
+  If (Sender <> FHistoryIndex) Or (csDestroying in ComponentState) Or (Generation <> FIndexGen) Or
+    Not Assigned(FHistory) Then
     Exit;
-  FIndexing := False;
-  Parsed := FModel.ParseRevListParents(IndexText);
-  If DetailsOk And (DetailsText <> '') Then
-    FModel.ApplyDetailsText(DetailsText);
-  FSelectedIndex := -1;
-  If Parsed > 0 Then
-    FSelectedIndex := 0;
-  FHistory.UpdateScrollRange;
-  If FSelectedIndex >= 0 Then
-    ShowCommitDetails(FSelectedIndex)
-  Else If Assigned(DiffView) Then
-    DiffView.Clear;
-  If Assigned(GraphPaintBox) Then
+  If Phase = hipFailed Then
     Begin
-      GraphPaintBox.Invalidate;
-      GraphPaintBox.Update;
+      FIndexing := False;
+      FHistoryPartial := False;
+      If Assigned(GraphPaintBox) Then
+        GraphPaintBox.Invalidate;
+      UpdateStatus;
+      Result := True;
+      Exit;
     End;
-  ScheduleVisibleDetails;
+  If Not Assigned(Model) Or Not Assigned(FModel) Then
+    Exit;
+
+  Lookup := SelectedSha;
+  If Lookup = '' Then
+    Lookup := FAnchorSha;
+  If (Lookup = '') And FRevealCheckedOut And (FHeadSha <> '') Then
+    Lookup := FHeadSha;
+  OldIndex := FSelectedIndex;
+  SavedPos := 0;
+  If Assigned(GraphScrollBar) Then
+    SavedPos := GraphScrollBar.Position;
+
+  Model.CopyDetailsFrom(FModel);
+  FHistory.Bind(GraphPaintBox, GraphScrollBar, Model);
+  FreeAndNil(FModel);
+  FModel := Model;
+  Result := True;
+  FIndexing := False;
+  FHistoryPartial := Phase = hipHead;
+  If Not FProbePending Then
+    FRevealCheckedOut := False;
+  FHistory.UpdateScrollRange;
+  If Assigned(GraphScrollBar) And (SavedPos <= GraphScrollBar.Max) Then
+    GraphScrollBar.Position := SavedPos;
+
+  NewIndex := -1;
+  If Lookup <> '' Then
+    NewIndex := FModel.IndexOf(Lookup);
+  If (NewIndex >= 0) And (NewIndex = OldIndex) Then
+    Begin
+      FAnchorSha := '';
+      FSelectedIndex := NewIndex;
+      FHistory.SelectedIndex := NewIndex;
+      If Assigned(GraphPaintBox) Then
+        GraphPaintBox.Invalidate;
+      ScheduleVisibleDetails;
+    End
+  Else If NewIndex >= 0 Then
+    Begin
+      FAnchorSha := '';
+      SelectRow(NewIndex, OldIndex < 0);
+    End
+  Else If (Phase = hipHead) And (Lookup <> '') Then
+    Begin
+      FAnchorSha := Lookup;
+      FSelectedIndex := -1;
+      FHistory.SelectedIndex := -1;
+      If Assigned(GraphPaintBox) Then
+        GraphPaintBox.Invalidate;
+      ScheduleVisibleDetails;
+    End
+  Else If FModel.Count > 0 Then
+    Begin
+      FAnchorSha := '';
+      SelectRow(0, True);
+    End
+  Else
+    Begin
+      FAnchorSha := '';
+      FSelectedIndex := -1;
+      FHistory.SelectedIndex := -1;
+      If Assigned(DiffView) Then
+        DiffView.Clear;
+      If Assigned(GraphPaintBox) Then
+        GraphPaintBox.Invalidate;
+    End;
   UpdateStatus;
+  If Phase = hipHead Then
+    WorkflowLogger.Info('ManageRepository', Format('Showing %d recent commits', [FModel.Count]))
+  Else
+    WorkflowLogger.Info('ManageRepository', Format('Indexed %d commits', [FModel.Count]));
 End;
 
 Procedure TManageRepositoryForm.StartIndexLoad;
-Var
-  Job: TGitJob;
 Begin
-  If FRepoPath = '' Then
+  If (FRepoPath = '') Or Not Assigned(FHistoryIndex) Then
     Exit;
   StopDetailLoad;
   StopIndexLoad;
-  FIndexing := True;
-  If Assigned(StatusFooter) Then
-    StatusFooter.SetRightText('Indexing…');
-  Job := TGitJob.Create(gjkIndexHistory);
-  Job.RepoPath := FRepoPath;
-  Job.Quiet := True;
-  Job.Tag := FIndexGen;
-  If Not SubmitGitJob(Job) Then
-    FIndexing := False;
+  If (FModel = Nil) Or (FModel.Count = 0) Then
+    Begin
+      FIndexing := True;
+      FHistoryPartial := False;
+      If Assigned(StatusFooter) Then
+        StatusFooter.SetRightText('Loading history…');
+    End
+  Else
+    Begin
+      FIndexing := False;
+      FHistoryPartial := True;
+      If FAnchorSha = '' Then
+        FAnchorSha := SelectedSha;
+      If Assigned(StatusFooter) Then
+        StatusFooter.SetRightText('Loading older commits…');
+    End;
+  FHistoryIndex.Start(FRepoPath, FIndexGen);
+  If Assigned(GraphPaintBox) Then
+    GraphPaintBox.Invalidate;
 End;
 
 Procedure TManageRepositoryForm.ApplyIndexResult(Ok: Boolean; Const Payload: String);
@@ -2742,7 +2829,15 @@ Begin
     CentreText := FRepoPath;
 
   If FIndexing Then
-    RightText := 'Indexing…'
+    RightText := 'Loading history…'
+  Else If FHistoryPartial And (FModel.Count > 0) Then
+    Begin
+      RightText := Format('%d commits · loading older…', [FModel.Count]);
+      If FClean Then
+        RightText := RightText + ' · Clean'
+      Else
+        RightText := RightText + ' · Dirty';
+    End
   Else If FModel.Count > 0 Then
     Begin
       RightText := Format('%d commits', [FModel.Count]);
@@ -2814,6 +2909,7 @@ End;
 Procedure TManageRepositoryForm.SetRepository(Const ARepoPath: String; ForceReload: Boolean);
 Var
   NewPath: String;
+  KeepHistory: Boolean;
 Begin
   If csDestroying in ComponentState Then
     Exit;
@@ -2847,13 +2943,25 @@ Begin
     FDetailTimer.Enabled := False;
   StopDetailLoad;
   StopIndexLoad;
-  If Assigned(DiffView) Then
-    DiffView.Clear;
+  KeepHistory := (FRepoPath <> '') And (CompareFilenames(NewPath, FRepoPath) = 0) And
+    Assigned(FModel) And (FModel.Count > 0);
+  If Not KeepHistory Then
+    Begin
+      If Assigned(DiffView) Then
+        DiffView.Clear;
+      FSelectedIndex := -1;
+      FAnchorSha := '';
+      If Assigned(FModel) Then
+        FModel.Clear;
+      If Assigned(GraphScrollBar) Then
+        GraphScrollBar.Position := 0;
+    End;
   FRepoPath := NewPath;
   If Assigned(FHistory) Then
     Begin
       FHistory.RepoPath := NewPath;
-      FHistory.SelectedIndex := -1;
+      If Not KeepHistory Then
+        FHistory.SelectedIndex := -1;
       FHistory.Indexing := False;
     End;
   If Assigned(FChanges) Then
@@ -2867,11 +2975,6 @@ Begin
   FLastHeadAge := -1;
   FLastIndexAge := -1;
   FLastProbeAt := 0;
-  FSelectedIndex := -1;
-  If Assigned(FModel) Then
-    FModel.Clear;
-  If Assigned(GraphScrollBar) Then
-    GraphScrollBar.Position := 0;
   If Assigned(GitClient) Then
     GitClient.RepoPath := NewPath;
   RefreshRepositoryInfo;

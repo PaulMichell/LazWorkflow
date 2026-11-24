@@ -1,7 +1,7 @@
 Program GitGraphModelTest;
 {$mode objfpc}{$H+}
 Uses Classes, SysUtils, GitGraphModel;
-Var M:TGitGraphModel; Lines:TStringList; Edges:TGitEdgeIndices;
+Var M, M2:TGitGraphModel; Lines:TStringList; Edges:TGitEdgeIndices;
   I,J,K,First,Last:Integer; E:TGitGraphEdge; Started, IndexedMs, ScanMs:QWord; Hits:Int64;
 Procedure Check(B:Boolean);
 Begin If Not B Then Raise Exception.Create('visible edge mismatch'); End;
@@ -34,6 +34,18 @@ Begin
   ScanMs:=GetTickCount64-Started; Check(Hits=0);
   WriteLn('ok 50,000 commits, long edges and 301 viewport comparisons');
   WriteLn('2,000 queries: indexed ',IndexedMs,' ms; full scan ',ScanMs,' ms');
+  M2:=TGitGraphModel.Create;
+  Try
+    Check(M2.ParseRevListParents(GitRevListHead(Lines.Text, 400))=400);
+    For I:=0 To 399 Do
+      Begin
+        Check(M2.Commit(I).Sha=M.Commit(I).Sha);
+        Check(M2.Commit(I).Lane=M.Commit(I).Lane);
+      End;
+    WriteLn('ok head window keeps the same lanes as the full index');
+  Finally
+    M2.Free;
+  End;
   M.Clear; Check(Length(M.VisibleEdges(0,10))=0);
   Lines.Clear;
   Lines.Add('#primary main1111');

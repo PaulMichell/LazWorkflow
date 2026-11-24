@@ -569,7 +569,7 @@ Begin
           PrepareGraphTextFont(FPaintBox.Canvas, False);
           Font.Color := clGrayText;
           Font.Size := 11;
-          TextOut(MsgPad, MsgPad, 'Indexing commit history…');
+          TextOut(MsgPad, MsgPad, 'Loading recent commits…');
           Exit;
         End;
 

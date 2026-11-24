@@ -173,8 +173,11 @@ Type
     Function ReadBlobBytes(Const Sha, Path: String; Staged: Boolean; Stream: TStream): Boolean;
     { Apply a unified diff to the index (partial stage/unstage). Reverse undoes it. }
     Function ApplyPatchToIndex(Const PatchText: String; Reverse: Boolean = False): Boolean;
-    { Full history index (SHA + parents only). Safe from worker threads. }
-    Function FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
+    { History index (SHA + parents only). Safe from worker threads.
+      MaxCount above zero stops after that many commits (newest first); zero walks everything. }
+    Function FetchRevListParents(Const WorkDir: String; Out RevListText: String; MaxCount: Integer = 0): Boolean;
+    { HEAD, every ref tip, and the shallow boundary. Unchanged text means the commit graph is unchanged. }
+    Function HistoryIdentity(Out Identity: String): Boolean;
     { Full rev-list plus the first DetailCount commit subjects for a single UI apply. }
     Function FetchHistoryPreview(Const WorkDir: String; DetailCount: Integer;
       Out RevListText, DetailsText: String; Out DetailsOk: Boolean): Boolean;
@@ -652,16 +655,37 @@ Begin
   Result := RunGitPump(FRepoPath, Args, Stream, ExitCode);
 End;
 
-Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String): Boolean;
+Function TGitService.FetchRevListParents(Const WorkDir: String; Out RevListText: String;
+  MaxCount: Integer): Boolean;
 Var
   ExitCode: Integer;
   Tip, OutputText: String;
+  Args: Array Of String;
 Begin
-  { Compact full-history index: one line per commit "sha [parent…]".
+  { Compact history index: one line per commit "sha [parent…]".
     Enough for lanes/edges without loading subjects for every commit.
-    #primary names the tip whose first-parent line stays on lane 0. }
+    #primary names the tip whose first-parent line stays on lane 0.
+    MaxCount stops after the newest commits so the graph can paint before the full walk. }
   RevListText := '';
-  Result := RunGitEx(WorkDir, ['rev-list', '--all', '--topo-order', '--parents'], RevListText, ExitCode);
+  If MaxCount > 0 Then
+    Begin
+      SetLength(Args, 6);
+      Args[0] := 'rev-list';
+      Args[1] := '--all';
+      Args[2] := '--topo-order';
+      Args[3] := '--parents';
+      Args[4] := '-n';
+      Args[5] := IntToStr(MaxCount);
+    End
+  Else
+    Begin
+      SetLength(Args, 4);
+      Args[0] := 'rev-list';
+      Args[1] := '--all';
+      Args[2] := '--topo-order';
+      Args[3] := '--parents';
+    End;
+  Result := RunGitEx(WorkDir, Args, RevListText, ExitCode);
   If Not Result Then
     Exit;
   Tip := '';
@@ -854,6 +878,58 @@ Function TGitService.RefDigest(Out Digest: String): Boolean;
 Var Code: Integer;
 Begin
   Result := RunGit(['for-each-ref', '--format=%(refname) %(objectname)', '--sort=refname'], Digest, Code);
+End;
+
+Function TGitService.HistoryIdentity(Out Identity: String): Boolean;
+Var
+  Head, Refs, ShallowRel, ShallowPath, ShallowNote: String;
+  ExitCode: Integer;
+  Lines: TStringList;
+Const
+  ShallowCap = 1024 * 1024;
+Begin
+  Identity := '';
+  Result := False;
+  If FRepoPath = '' Then
+    Exit;
+  { An unborn branch has no HEAD. The ref list is still a valid identity. }
+  Head := '';
+  GetHeadSha(Head);
+  If Not RefDigest(Refs) Then
+    Exit;
+  ShallowNote := '';
+  If RunGit(['rev-parse', '--git-path', 'shallow'], ShallowRel, ExitCode) And (ExitCode = 0) Then
+    Begin
+      ShallowRel := Trim(ShallowRel);
+      If ShallowRel <> '' Then
+        Begin
+          If FilenameIsAbsolute(ShallowRel) Then
+            ShallowPath := ShallowRel
+          Else
+            ShallowPath := IncludeTrailingPathDelimiter(FRepoPath) + ShallowRel;
+          If FileExistsUTF8(ShallowPath) And Not FileIsSymlink(ShallowPath) Then
+            Begin
+              If IsRegularFile(ShallowPath, ShallowCap) Then
+                Begin
+                  Lines := TStringList.Create;
+                  Try
+                    Try
+                      Lines.LoadFromFile(ShallowPath);
+                      ShallowNote := Lines.Text;
+                    Except
+                      ShallowNote := 'unreadable';
+                    End;
+                  Finally
+                    Lines.Free;
+                  End;
+                End
+              Else
+                ShallowNote := 'large:' + IntToStr(FileAge(ShallowPath));
+            End;
+        End;
+    End;
+  Identity := Head + #1 + Refs + #1 + ShallowNote;
+  Result := True;
 End;
 
 Function TGitService.ProbeRepository(Out HeadSha, Branch, Digest: String): Boolean;

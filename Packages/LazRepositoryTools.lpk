@@ -65,6 +65,10 @@
         <UnitName Value="GitGraphModel"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazRepositoryTools/GitHistoryIndex.pas"/>
+        <UnitName Value="GitHistoryIndex"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazRepositoryTools/GitConfig.pas"/>
         <UnitName Value="GitConfig"/>
       </Item>

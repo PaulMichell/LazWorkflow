@@ -215,7 +215,7 @@ Function GitJobKindCaption(Kind: TGitJobKind): String;
 Implementation
 
 Uses
-  WorkflowLog, WorkflowEvents, GitGraphModel, LazFileUtils;
+  WorkflowLog, WorkflowEvents, LazFileUtils;
 
 Type
   TGitJobWorker = Class(TThread)
@@ -696,27 +696,18 @@ Begin
         Job.FOk := Git.Fetch(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
-        If Job.FOk Then
-          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
-            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkPull:
       Begin
         Job.FOk := Git.Pull(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
-        If Job.FOk Then
-          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
-            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkPush:
       Begin
         Job.FOk := Git.Push(Summary);
         Job.FTransfer := Summary;
         Job.FErrorText := Summary.Message;
-        If Job.FOk Then
-          Job.FIndexOk := Git.FetchHistoryPreview(Job.RepoPath, GitGraphDetailBatch, Job.FIndexText,
-            Job.FDetailsText, Job.FDetailsOk);
       End;
     gjkCommit:
       Begin
