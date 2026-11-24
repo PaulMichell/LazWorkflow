@@ -1,7 +1,8 @@
 Program AssistantEditorEditsTest;
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Forms, Controls, Classes, SysUtils, Types, AssistantFormSave,
-  SynEdit, SrcEditorIntf, AssistantEditorEdits, AssistantToolBroker, AssistantProtocol, fpjson, jsonparser;
+  SynEdit, SrcEditorIntf, AssistantConversation, AssistantEditorEdits, AssistantToolBroker, AssistantProtocol, fpjson,
+  jsonparser;
 Type
   { Exercise the real IDE interface's ReplaceText with a real SynEdit Undo stack.
     Only the editor methods used by that operation are implemented. }

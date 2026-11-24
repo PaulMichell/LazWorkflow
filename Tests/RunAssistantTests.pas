@@ -907,7 +907,7 @@ Begin
     Result := 'stops at the Codex check "missing saved executable recovered without changing connection identity", ' +
       'and also fails "a new profile does not inherit image output"'
   Else If TestName = 'AssistantEditorEditsTest' Then
-    Result := 'fails "Plan advertises Markdown edits and saves"'
+    Result := 'fails "Plan Markdown edit still needs approval"'
   Else If TestName = 'AssistantMCPApprovalTest' Then
     Result := 'fails "the held call completes": still looks for bufferUpdated, which was removed';
 End;

@@ -44,8 +44,8 @@ stripped of debug sections, because Valgrind 3.24 aborts in its DWARF reader on 
 Known failures that predate the Claude connector work are printed by the runner as `KNOWN` and do not fail the suite.
 A `FAIL` line is a new regression. `AssistantSettingsTest` stops at the Codex check "missing saved executable recovered
 without changing connection identity", and also fails "a new profile does not inherit image output" once that first
-check is passed. `AssistantUsageTest` is not registered. `AssistantEditorEditsTest` fails "Plan advertises Markdown
-edits and saves". `AssistantMCPApprovalTest` fails "the held call completes": it still looks for `bufferUpdated`,
+check is passed. `AssistantUsageTest` is not registered. `AssistantEditorEditsTest` fails "Plan Markdown edit still needs approval". The earlier
+"Plan advertises Markdown edits and saves" check passes. Do not change the Plan write policy to make the later check pass. `AssistantMCPApprovalTest` fails "the held call completes": it still looks for `bufferUpdated`,
 which commit `d8c7e5c` removed from the broker's edit replies. Do not put `bufferUpdated` back. The `ToolId` calls in
 `AssistantWorkspaceTest` and `AssistantWorkTargetTest` are fixed; those programs are no longer known build breaks.
 

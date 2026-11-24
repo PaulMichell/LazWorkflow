@@ -113,6 +113,9 @@ Type
     FReceipts: TObjectList;
     FChangeBusy: Boolean;
     FChangeRun, FChangeIdentity: String;
+    { A started compile is still the current build until status says it is done.
+      A later run_compile with no job_id polls that build and does not ask again. }
+    FCompileOpen: Boolean;
     { Pictures read_image stored in this run, kept until the next BeginRun so the trace can show them. }
     FImages: TAssistantImageRefArray;
     Function ReadImage(Const Arguments: String; Out ResultText, ErrorText: String; Out Images: TMCPToolImages): Boolean;
@@ -198,6 +201,25 @@ Const
 Function Quoted(Const S: String): String;
 Begin
   Result := '"' + JsonEscapeText(S) + '"';
+End;
+
+Function CompileStatusIsDone(Const StatusText: String): Boolean;
+Var
+  Data: TJSONData;
+Begin
+  Result := False;
+  If Trim(StatusText) = '' Then Exit;
+  Data := Nil;
+  Try
+    Try
+      Data := GetJSON(StatusText);
+    Except
+      Exit;
+    End;
+    Result := (Data Is TJSONObject) And TJSONObject(Data).Get('done', False);
+  Finally
+    Data.Free;
+  End;
 End;
 
 Function GitCommandName(Const Arguments: String): String;
@@ -573,6 +595,7 @@ Begin
   If CreateGUID(Id) <> 0 Then Raise Exception.Create('Unable to create run identity');
   FAdapter.CancelBuild;
   FAdapter.CancelRunCommand;
+  FCompileOpen := False;
   FRunId := GUIDToString(Id);
   FIdentity := FAdapter.Identity;
   FCancelled := False;
@@ -1486,7 +1509,8 @@ Begin
               Result := FAdapter.StartTests(ActualPath, Text, NewText, ResultText, ErrorText);
               Exit;
             End;
-          If (Tool = 'run_compile') And Not Assigned(Args.Find('job_id')) And Not Assigned(Args.Find('detail')) Then
+          If (Tool = 'run_compile') And Not Assigned(Args.Find('job_id')) And Not Assigned(Args.Find('detail')) And
+            Not (FCompileOpen And Not Assigned(Args.Find('package'))) Then
             Begin
               ActualPath := '';
               Node := Args.Find('package');
@@ -1501,6 +1525,7 @@ Begin
                 End;
               If Not Approve(RunId, Tool, ActualPath, '', '', ErrorText) Then Exit;
               Result := FAdapter.StartBuild(ActualPath, ResultText, ErrorText);
+              If Result Then FCompileOpen := True;
             End
               Else
                 Begin
@@ -1541,6 +1566,8 @@ Begin
                         BuildReply.Free;
                       End;
                     End;
+                  If Result And (Tool = 'run_compile') And CompileStatusIsDone(ResultText) Then
+                    FCompileOpen := False;
                 End;
           Exit;
         End;
