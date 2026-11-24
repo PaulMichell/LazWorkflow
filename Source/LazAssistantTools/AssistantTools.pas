@@ -5,7 +5,7 @@ Unit AssistantTools;
   Size note: exceeds the 1000 line preference. The bodies are the single
   implementation behind DispatchAssistantTool. Splitting them by family would
   copy the path and editor helpers into each unit, which is the third copy this
-  executor refuses. Reviewed 2026-11-23: the dispatch table is the split; the
+  executor refuses. Reviewed 2026-11-24: revision and unique-match checks call AssistantExactReplace; the
   helpers stay here. }
 
 {$IFDEF FPC}
@@ -134,13 +134,19 @@ Uses
   AssistantSessionObserve,
   CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers, AssistantFormSave,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
-  AssistantSearchUtil, AssistantEditorEdits, AssistantGit, AssistantTestSettings, AssistantConnections,
+  AssistantSearchUtil, AssistantEditorEdits, AssistantExactReplace, AssistantGit, AssistantTestSettings, AssistantConnections,
   AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser,
   AssistantToolSpecs, AssistantToolWire;
 
 Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
 Function LoadProjectFileText(Const Resolved: String; Out Body: String; Out FromEditor: Boolean;
   Out ErrorText: String): Boolean; Forward;
+Function LoadExactProjectText(Const Resolved: String; Out Body, ErrorText: String): Boolean; Forward;
+Function ReadExactFileBytes(Const Path: String; Out Body, ErrorText: String): Boolean; Forward;
+Function SaveCheckedProjectFileText(Const Resolved, Content, ExpectedText: String; OpenAfter: Boolean;
+  Out Note, ErrorText: String): Boolean; Forward;
+Function SaveProjectFileTextChecked(Const Resolved, Content, ExpectedText: String; CheckExpected, OpenAfter: Boolean;
+  Out Note, ErrorText: String): Boolean; Forward;
 
 ThreadVar
   WriteImageTurnFailed: Boolean;
@@ -806,7 +812,7 @@ Function ToolReadFile(Const ArgumentsJson: String; Out ResultText, ErrorText: St
 Const
   ReadBufSize = 65536;
 Var
-  Path, Resolved, Chunk, Carry: String;
+  Path, Resolved, Chunk, Carry, FullText: String;
   MaxChars, StartLine, EndLine, LineLimit, LineNo, FirstOut, LastOut, FileBytes: Integer;
   Stream: TFileStream;
   Buf: Array[0..ReadBufSize - 1] Of Byte;
@@ -924,11 +930,31 @@ Var
       EmitLine(Copy(SourceText, StartAt, MaxInt));
   End;
 
-  Procedure FinishPagedResult(Const SourceLabel: String);
+  Function NoteNativeRevision(Const FullText: String; Out Revision: String): Boolean;
   Begin
+    Revision := '';
+    Result := True;
+    If Length(FullText) > ExactReplaceMaxBytes Then Exit;
+    Revision := RememberNativeRead(ExpandResolvedPath(Resolved), FullText);
+    Result := Revision <> '';
+    If Not Result Then
+      Begin
+        ErrorText := SnapshotBudgetMessage;
+        ResultText := '';
+      End;
+  End;
+
+  Procedure FinishPagedResult(Const SourceLabel, FullText: String; Remember: Boolean);
+  Var
+    Revision: String;
+  Begin
+    Revision := '';
     If LineNo < 1 Then
       Begin
+        If Remember And Not NoteNativeRevision(FullText, Revision) Then Exit;
         ResultText := Format('File: %s (empty, 0 lines)%s', [Resolved, SourceLabel]);
+        If Revision <> '' Then
+          ResultText := ResultText + '; revision ' + Revision;
         Result := True;
         Exit;
       End;
@@ -938,6 +964,7 @@ Var
           [StartLine, LineNo, Resolved]);
         Exit;
       End;
+    If Remember And Not NoteNativeRevision(FullText, Revision) Then Exit;
     If RequestedEnd < 1 Then
       RequestedEnd := LastOut;
     If Truncated Or HitEndLine Then
@@ -948,6 +975,8 @@ Var
       ResultText :=
         Format('File: %s (%d lines total)%s; lines %d–%d of requested %d–%d',
           [Resolved, LineNo, SourceLabel, FirstOut, LastOut, StartLine, RequestedEnd]);
+    If Revision <> '' Then
+      ResultText := ResultText + '; revision ' + Revision;
     ResultText := ResultText + LineEnding + Chunk;
     If Truncated Or ((RequestedEnd > 0) And (LastOut < RequestedEnd) And (Not HitEndLine)) Then
       ResultText := ResultText + LineEnding + Format(
@@ -985,12 +1014,36 @@ Begin
     Begin
       FileBytes := Length(Ed.SourceText);
       PageString(Ed.SourceText);
-      FinishPagedResult(' (open editor buffer)');
+      FinishPagedResult(' (open editor buffer)', Ed.SourceText, True);
       Exit;
     End;
   If Not FileExistsUTF8(Resolved) Then
     Begin
       ErrorText := 'File not found: ' + Resolved;
+      Exit;
+    End;
+  { A file within the snapshot cap is read whole so the revision is the text an edit will see.
+    A larger file keeps the streaming page and gets no revision. }
+  Stream := Nil;
+  Try
+    Try
+      Stream := TFileStream.Create(Resolved, fmOpenRead Or fmShareDenyNone);
+      FileBytes := Stream.Size;
+    Except
+      On E: Exception Do
+        Begin
+          ErrorText := E.Message;
+          Exit;
+        End;
+    End;
+  Finally
+    Stream.Free;
+  End;
+  If FileBytes <= ExactReplaceMaxBytes Then
+    Begin
+      If Not ReadExactFileBytes(Resolved, FullText, ErrorText) Then Exit;
+      PageString(FullText);
+      FinishPagedResult('', FullText, True);
       Exit;
     End;
   Stream := Nil;
@@ -1073,7 +1126,7 @@ Begin
         FinishLine;
       If (Not Truncated) And (Not HitEndLine) And (Carry <> '') Then
         FinishLine;
-      FinishPagedResult('');
+      FinishPagedResult('', '', False);
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -1736,6 +1789,54 @@ Begin
   End;
 End;
 
+Function ReadExactFileBytes(Const Path: String; Out Body, ErrorText: String): Boolean;
+Var
+  Stream: TFileStream;
+Begin
+  Result := False;
+  Body := '';
+  ErrorText := '';
+  Stream := Nil;
+  Try
+    Try
+      Stream := TFileStream.Create(Path, fmOpenRead Or fmShareDenyNone);
+      SetLength(Body, Stream.Size);
+      If Body <> '' Then
+        Stream.ReadBuffer(Body[1], Length(Body));
+      Result := True;
+    Except
+      On E: Exception Do
+        ErrorText := E.Message;
+    End;
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Function LoadExactProjectText(Const Resolved: String; Out Body, ErrorText: String): Boolean;
+Var
+  Ed: TSourceEditorInterface;
+  FullPath: String;
+Begin
+  Result := False;
+  Body := '';
+  ErrorText := '';
+  FullPath := ExpandResolvedPath(Resolved);
+  Ed := FindOpenEditor(FullPath);
+  If Assigned(Ed) Then
+    Begin
+      Body := Ed.SourceText;
+      Result := True;
+      Exit;
+    End;
+  If Not FileExistsUTF8(FullPath) Then
+    Begin
+      ErrorText := 'File not found: ' + FullPath;
+      Exit;
+    End;
+  Result := ReadExactFileBytes(FullPath, Body, ErrorText);
+End;
+
 Function ExpandResolvedPath(Const Path: String): String;
 Begin
   Result := ExpandFileNameUTF8(Path);
@@ -2072,12 +2173,12 @@ Begin
   End;
 End;
 
-Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean;
-  Out Note: String; Out ErrorText: String): Boolean;
+Function SaveProjectFileTextChecked(Const Resolved, Content, ExpectedText: String; CheckExpected, OpenAfter: Boolean;
+  Out Note, ErrorText: String): Boolean;
 Var
   Ed: TSourceEditorInterface;
   Stream: TFileStream;
-  Dir, FullPath, OpenNote: String;
+  Dir, FullPath, OpenNote, DiskText, Expected: String;
   EditAt: TPoint;
 Begin
   Result := False;
@@ -2111,7 +2212,11 @@ Begin
   If Assigned(Ed) Then
     Begin
       Try
-        If Not ApplyAssistantEditorText(Ed, Ed.SourceText, Content, EditAt, ErrorText) Then
+        If CheckExpected Then
+          Expected := ExpectedText
+        Else
+          Expected := Ed.SourceText;
+        If Not ApplyAssistantEditorText(Ed, Expected, Content, EditAt, ErrorText) Then
           Exit;
         { Show the change in its tab without activating it or taking the focus. }
         RevealAssistantEdit(Ed, EditAt);
@@ -2144,6 +2249,15 @@ Begin
         ErrorText := 'Could not create directory: ' + Dir;
         Exit;
       End;
+  If CheckExpected And FileExistsUTF8(FullPath) Then
+    Begin
+      If Not ReadExactFileBytes(FullPath, DiskText, ErrorText) Then Exit;
+      If DiskText <> ExpectedText Then
+        Begin
+          ErrorText := StaleBufferRevisionMessage;
+          Exit;
+        End;
+    End;
   Stream := Nil;
   Try
     Try
@@ -2184,6 +2298,18 @@ Begin
         { An edit never opens a source tab; the user's editor tabs stay as they were. }
         Note := Note + ' Not opened in the editor: edits are written without opening a tab.';
     End;
+End;
+
+Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean;
+  Out Note: String; Out ErrorText: String): Boolean;
+Begin
+  Result := SaveProjectFileTextChecked(Resolved, Content, '', False, OpenAfter, Note, ErrorText);
+End;
+
+Function SaveCheckedProjectFileText(Const Resolved, Content, ExpectedText: String; OpenAfter: Boolean;
+  Out Note, ErrorText: String): Boolean;
+Begin
+  Result := SaveProjectFileTextChecked(Resolved, Content, ExpectedText, True, OpenAfter, Note, ErrorText);
 End;
 
 Function FlushOpenEditorsUnderProject(Out ErrorText: String): Boolean;
@@ -2745,11 +2871,12 @@ End;
 
 Function ToolWriteFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Resolved, Content, Note: String;
-  OpenAfter, AddToProject, Created: Boolean;
+  Path, Resolved, Content, Note, Revision, Current: String;
+  OpenAfter, AddToProject, Created, Exists: Boolean;
   Proj: TLazProject;
   PF: TLazProjectFile;
   Meaningful: Boolean;
+  Ed: TSourceEditorInterface;
 Begin
   Result := False;
   ResultText := '';
@@ -2784,9 +2911,21 @@ Begin
     End;
   { Default: do not open a new editor tab for every write (avoids tab storms). }
   OpenAfter := JsonArgBool(ArgumentsJson, 'open', False);
-  Created := Not FileExistsUTF8(Resolved);
-  If Not SaveProjectFileText(Resolved, Content, OpenAfter, Note, ErrorText) Then
-    Exit;
+  Revision := JsonArgString(ArgumentsJson, 'revision');
+  Ed := FindOpenEditor(Resolved);
+  Exists := FileExistsUTF8(Resolved);
+  Created := Not Exists;
+  If Revision = '' Then
+    Begin
+      If Not AcceptNativeWrite(Resolved, '', '', Exists, Assigned(Ed), ErrorText) Then Exit;
+      If Not SaveProjectFileText(Resolved, Content, OpenAfter, Note, ErrorText) Then Exit;
+    End
+  Else
+    Begin
+      If Not LoadExactProjectText(Resolved, Current, ErrorText) Then Exit;
+      If Not NativeRevisionCurrent(Resolved, Revision, Current, ErrorText) Then Exit;
+      If Not SaveCheckedProjectFileText(Resolved, Content, Current, OpenAfter, Note, ErrorText) Then Exit;
+    End;
   ResultText := Format('Wrote %s (%d chars). %s',
     [ProjectRelativePath(Resolved), Length(Content), Note]);
   { Only auto-add substantial Pascal units — never empty probes. }
@@ -2822,8 +2961,8 @@ End;
 
 Function ToolReplaceInFile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
-  Path, Resolved, OldText, NewText, Body, Note, FileEol, AltOld: String;
-  ReplaceAll, FromEditor, OpenAfter: Boolean;
+  Path, Resolved, OldText, NewText, Body, Updated, Note, FileEol, AltOld, Revision: String;
+  ReplaceAll, OpenAfter: Boolean;
   Count, P: Integer;
 Begin
   Result := False;
@@ -2852,48 +2991,32 @@ Begin
     End;
   ReplaceAll := JsonArgBool(ArgumentsJson, 'replace_all', False);
   OpenAfter := JsonArgBool(ArgumentsJson, 'open', False);
-  If Not LoadProjectFileText(Resolved, Body, FromEditor, ErrorText) Then
+  Revision := JsonArgString(ArgumentsJson, 'revision');
+  Resolved := ExpandResolvedPath(Resolved);
+  If Not LoadExactProjectText(Resolved, Body, ErrorText) Then
     Exit;
   FileEol := DetectFileEol(Body);
   If Pos(OldText, Body) < 1 Then
     Begin
       AltOld := NormalizeToEol(OldText, FileEol);
       If (AltOld <> OldText) And (Pos(AltOld, Body) > 0) Then
-        OldText := AltOld
-      Else
-        Begin
-          If FromEditor Then
-            ErrorText := 'old_text not found in open editor buffer: ' + Resolved +
-              '. Re-read this file (read_file uses the buffer); the buffer can differ from disk. ' +
-              'Use a smaller unique snippet.'
-          Else
-            ErrorText := 'old_text not found in ' + Resolved +
-              '. Re-read this file and use a smaller unique snippet.';
-          Exit;
-        End;
+        OldText := AltOld;
     End;
   NewText := NormalizeToEol(NewText, FileEol);
-  If ReplaceAll Then
-    Begin
-      Count := 0;
-      P := 1;
-      While P <= Length(Body) Do
-        If Copy(Body, P, Length(OldText)) = OldText Then
-          Begin
-            Inc(Count);
-            Inc(P, Length(OldText));
-          End
-        Else
-          Inc(P);
-      Body := StringReplace(Body, OldText, NewText, [rfReplaceAll]);
-    End
-  Else
-    Begin
-      P := Pos(OldText, Body);
-      Body := Copy(Body, 1, P - 1) + NewText + Copy(Body, P + Length(OldText), MaxInt);
-      Count := 1;
-    End;
-  If Not SaveProjectFileText(Resolved, Body, OpenAfter, Note, ErrorText) Then
+  { ApplyExactReplace refuses a repeated old_text and leaves Updated empty. Do not save that. }
+  If Not PrepareNativeReplace(Resolved, Revision, Body, OldText, NewText, ReplaceAll, Updated, ErrorText) Then
+    Exit;
+  Count := 0;
+  P := 1;
+  While P <= Length(Body) - Length(OldText) + 1 Do
+    If Copy(Body, P, Length(OldText)) = OldText Then
+      Begin
+        Inc(Count);
+        Inc(P, Length(OldText));
+      End
+    Else
+      Inc(P);
+  If Not SaveCheckedProjectFileText(Resolved, Updated, Body, OpenAfter, Note, ErrorText) Then
     Exit;
   ResultText := Format('Replaced %d occurrence(s) in %s. %s',
     [Count, ProjectRelativePath(Resolved), Note]);

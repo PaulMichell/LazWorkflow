@@ -148,6 +148,10 @@
         <UnitName Value="AssistantEditorEdits"/>
       </Item>
       <Item>
+        <Filename Value="../Source/LazAssistantTools/AssistantExactReplace.pas"/>
+        <UnitName Value="AssistantExactReplace"/>
+      </Item>
+      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantModelProvider.pas"/>
         <UnitName Value="AssistantModelProvider"/>
       </Item>

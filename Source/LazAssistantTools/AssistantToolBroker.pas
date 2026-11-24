@@ -158,7 +158,7 @@ Implementation
 
 Uses
   jsonparser, AssistantProtocol, AssistantGit, AssistantPlan, AssistantTools, AssistantHarness, AssistantToolSpecs,
-  AssistantToolWire;
+  AssistantToolWire, AssistantExactReplace;
 
 Const
   MaxBufferBytes = 1048576;
@@ -1054,56 +1054,6 @@ Begin
   End;
 End;
 
-{ Exact match. Fails with Updated unused when old_text is missing or is not unique and ReplaceAll is false. }
-Function ApplyExactReplace(Const Source, OldText, NewText: String; ReplaceAll: Boolean;
-  Out Updated, ErrorText: String): Boolean;
-Var
-  Count, P: Integer;
-Begin
-  Result := False;
-  Updated := '';
-  ErrorText := '';
-  If OldText = '' Then
-    Begin
-      ErrorText := 'old_text must not be empty.';
-      Exit;
-    End;
-  Count := 0;
-  P := 1;
-  While P <= Length(Source) - Length(OldText) + 1 Do
-    If Copy(Source, P, Length(OldText)) = OldText Then
-      Begin
-        Inc(Count);
-        Inc(P, Length(OldText));
-        If (Count > 1) And Not ReplaceAll Then
-          Begin
-            ErrorText := 'old_text occurs more than once; set replace_all to replace every match.';
-            Exit;
-          End;
-      End
-    Else
-      Inc(P);
-  If Count = 0 Then
-    Begin
-      ErrorText := 'old_text not found in the buffer.';
-      Exit;
-    End;
-  If ReplaceAll Then
-    Updated := StringReplace(Source, OldText, NewText, [rfReplaceAll])
-  Else
-    Begin
-      P := Pos(OldText, Source);
-      Updated := Copy(Source, 1, P - 1) + NewText + Copy(Source, P + Length(OldText), MaxInt);
-    End;
-  If Length(Updated) > MaxBufferBytes Then
-    Begin
-      Updated := '';
-      ErrorText := 'Replacement exceeds the buffer limit.';
-      Exit;
-    End;
-  Result := True;
-End;
-
 Function TAssistantToolBroker.AppliedChangeReply(SetItem: TAssistantChangeSet): String;
 Var
   Data: TJSONData;
@@ -1992,7 +1942,7 @@ Begin
         If (Revision <> '') And (FSnapshots[I].Path = Path) And (FSnapshots[I].Revision = Revision) Then Index := I;
       If (Index < 0) Or (FSnapshots[Index].Text <> Text) Then
         Begin
-          ErrorText := 'Stale buffer revision; read the buffer again before using this request.';
+          ErrorText := StaleBufferRevisionMessage;
           Exit;
         End;
       If Tool = 'replace_in_file' Then
