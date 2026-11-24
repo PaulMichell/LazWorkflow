@@ -83,6 +83,11 @@ Var Root, Profile, Id, ErrorText, PolicyText, ToolsJson, Prompt: String; Guid: T
   Store: TAssistantConnections; Item: TAssistantConnection; Raised: Boolean; I: Integer; Policy, Names: TStringList;
   Call: TAssistantProfileCall;
 Begin
+  If ParamStr(1) = '--version' Then
+    Begin
+      WriteLn('codex-cli 0.167.0-alpha.3.2');
+      Halt;
+    End;
   TestConfigRoundTrip;
   CreateGUID(Guid); Root := GetTempDir + 'laz-connections-' + GUIDToString(Guid); ForceDirectories(Root);
   SetWorkflowSettingsDirectory(Root);
@@ -155,7 +160,7 @@ Begin
     Check('additional account gets a distinct profile', Store.ProfileDir(Item) = Derived(Root, Item.Id));
     Check('additional profile is not created until launch', Not DirectoryExists(Store.ProfileDir(Item)));
     Store.ActiveId := Item.Id; Store.Save; Store.Load;
-    Check('switching accounts applies Auto to project tools', AssistantChatConfig.GetApprovalMode = aamAuto);
+    Check('legacy Auto applies Always to project tools', AssistantChatConfig.GetApprovalMode = aamAlways);
     Check('save writes the IDE document and leaves legacy files in place',
       FileExists(WorkflowSettingsPath) And FileExists(Root + '/assistant-connections.ini') And FileExists(Root + '/assistant-backend.ini'));
     Policy := TStringList.Create;
@@ -178,7 +183,7 @@ Begin
     Check('a Claude model list is kept until Refresh models replaces it',
       (Store.Count = 3) And (Store[2].Backend = 'claude') And (Store[2].CachedModelsJson = ClaudeModelList));
     Store.Remove(2); Store.Save; Store.Load;
-    Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'auto') And (Store[0].ApprovalMode = 'ask'));
+    Check('reasoning and permissions belong to each connection', (Store.Active.ReasoningEffort = 'high') And (Store.Active.ApprovalMode = 'always') And (Store[0].ApprovalMode = 'ask'));
     Check('roundtrip preserves current connection', (Store.Active.Name = 'Second account') And (Store.Active.Model = 'model-two') And (Store.Active.Runtime = '/other/codex'));
     Store.ActiveId := 'grok'; Store.Save; Store.Load;
     Check('an unresolved Grok id does not create a row', (Store.Count = 2) And (Store.Active.Backend = 'codex') And (Store[1].Model = 'model-two'));
@@ -330,6 +335,17 @@ Begin
     ApplyImageOutputTurnedOn(Item);
     Check('Codex gets no image model and cannot draw',
       (Item.ImageModel = '') And (Item.Model = 'codex-model') And (Not AssistantBackendCanDraw('codex')));
+    Item.Runtime := ExpandFileName(ParamStr(0));
+    Store.ActiveId := Item.Id;
+    Check('qualified Codex profile saved', Store.Save);
+    Check('qualified parent offers PNG in writable modes', AssistantTurnOffersImageOutput(amBuild) And
+      AssistantTurnOffersImageOutput(amDocument) And AssistantTurnOffersImageOutput(amPlan));
+    Check('read-only modes omit PNG', Not AssistantTurnOffersImageOutput(amInspect) And Not AssistantTurnOffersImageOutput(amChat));
+    Check('child catalogue omits write_image', Pos('write_image', BuildAssistantToolsJsonForSession(amBuild, False, False)) = 0);
+    Item.ImageOutput := False;
+    Check('disabled Codex profile omits PNG', Store.Save And Not AssistantTurnOffersImageOutput(amBuild));
+    Store.ActiveId := 'compatible-draw';
+    Check('restore compatible profile', Store.Save);
     Item := Store.AddStored('claude-draw', 'Claude draw', 'claude');
     Item.Model := 'claude-model';
     Item.ImageOutput := True;

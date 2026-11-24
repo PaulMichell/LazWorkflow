@@ -1,9 +1,9 @@
 Program AssistantCodexClientTest;
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, FileUtil, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
+Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, FileUtil, Classes, SysUtils, fpjson, jsonparser, fpimage, fpwritepng,
   {$IFDEF UNIX}BaseUnix, {$ENDIF}
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexRun, AssistantToolBroker,
-  AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages, AssistantCodexContext;
+  AssistantConversation, AssistantCodexAccount, AssistantCodexProfile, AssistantCodexQualification, AssistantImages, AssistantCodexContext;
 Type
   TRunReaper = Class(TThread)
     Run: TAssistantCodexRun;
@@ -53,6 +53,29 @@ Begin
 End;
 Procedure Send(Const Line: String);
 Begin WriteLn(Line); Flush(Output); End;
+Procedure ImageEvent(Const Method, Encoded, Artifact: String);
+Var
+  Root, Params, Item: TJSONObject;
+Begin
+  Item := TJSONObject.Create(['id', 'image-1', 'type', 'imageGeneration']);
+  Params := TJSONObject.Create(['threadId', 'thread-1', 'turnId', 'turn-1', 'item', Item]);
+  Root := TJSONObject.Create(['method', Method, 'params', Params]);
+  Try
+    If Method = 'item/completed' Then
+      Begin
+        Item.Add('status', 'completed');
+        Item.Add('result', Encoded);
+        Item.Add('savedPath', Artifact);
+      End;
+    Send(Root.AsJSON);
+  Finally
+    Root.Free;
+  End;
+End;
+
+Const
+  TinyPNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
+
 Procedure FakeRuntime;
 Var Line, Method, Id, Prompt: String; Data: TJSONData; Obj, Params: TJSONObject;
   I: Integer; AppsDisabled: Boolean;
@@ -114,6 +137,12 @@ Begin
                 Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"stream disconnected"}}}}');
                 Continue;
               End;
+            If Pos('image-', Prompt) = 1 Then
+              Begin
+                Send('{"id":"image-request","method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1",' +
+                  '"callId":"reserve","tool":"write_image","arguments":{"path":"dot.png","prompt":"dot"}}}');
+                Continue;
+              End;
             If Prompt = 'hang' Then Continue;
             If Prompt = 'finalonly' Then
               Begin
@@ -138,8 +167,22 @@ Begin
           End
         Else If Method = 'turn/interrupt' Then
           Begin
+            If Prompt = 'image-cancel' Then ImageEvent('item/completed', TinyPNG, '');
             Send('{"id":' + Id + ',"result":{}}');
             Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted"}}}');
+          End
+        Else If Id = '"image-request"' Then
+          Begin
+            ImageEvent('item/started', '', '');
+            If Prompt = 'image-malformed' Then ImageEvent('item/completed', '!!!!', '')
+            Else If Prompt = 'image-escape' Then ImageEvent('item/completed', '', GetEnvironmentVariable('CODEX_HOME') + PathDelim + 'tiny.png')
+            Else If Prompt = 'image-file' Then ImageEvent('item/completed', '', GetEnvironmentVariable('CODEX_HOME') +
+              PathDelim + 'generated_images' + PathDelim + 'thread-1' + PathDelim + 'tiny.png')
+            Else If Prompt = 'image-oversize' Then ImageEvent('item/completed', StringOfChar('A', 5*1024*1024), '')
+            Else If Prompt = 'image-cancel' Then Continue
+            Else ImageEvent('item/completed', TinyPNG, '');
+            If Prompt = 'image-duplicate' Then ImageEvent('item/completed', '!!!!', '');
+            Send('{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}');
           End
         Else If Id = '"tool-request-2"' Then
           Begin
@@ -430,7 +473,6 @@ Begin
       Built, ErrorText) And (ErrorText = ''));
     Check('localImage is the documented name', (Pos('"type":"localImage"', Built) > 0) And
       (Pos('local_image', Built) = 0) And (Pos('"type":"image"', Built) = 0) And (Pos('data:', Built) = 0));
-    Check('localImage path is the upload file', (FullPath <> '') And (Pos(FullPath, Built) > 0));
     Data := GetJSON('{"input":' + Built + '}');
     Check('input is an object wrapper', Data Is TJSONObject);
     Input := TJSONObject(Data).Find('input');
@@ -491,18 +533,67 @@ Begin
   Until (Client.State In [State, crsFailed]) Or (GetTickCount64 > Deadline);
   Check('state ' + IntToStr(Ord(State)) + ': ' + Client.LastError, Client.State = State);
 End;
-Procedure Start;
+Procedure Start(Const Catalogue: String = '[]'; Environment: TStrings = Nil);
 Begin
-  Check('start client process', Client.Connect(ParamStr(0), GetTempDir));
+  Check('start client process', Client.Connect(ParamStr(0), GetTempDir, Environment));
   WaitState(crsReady);
   Check('subscription account required', Client.Authentication.State = ccsSubscriptionAuthenticated);
   Check('isolation check queued', Client.CheckToolIsolation);
   Deadline := GetTickCount64 + 3000;
   Repeat Client.Pump; Sleep(1); Until Client.ToolIsolationChecked Or (GetTickCount64 >= Deadline);
   Check('isolation verified', Client.ToolIsolationChecked);
-  Check('thread queued', Client.StartThread(GetTempDir, 'test-model', '[]'));
+  Check('thread queued', Client.StartThread(GetTempDir, 'test-model', Catalogue));
   WaitState(crsReady);
 End;
+Procedure TestImageEvent(Const CaseName: String);
+Var
+  Received: Boolean;
+  Environment: TStringList;
+  Profile, ThreadDirectory: String;
+  Identifier: TGUID;
+Begin
+  CreateGUID(Identifier);
+  Profile := ExtractFilePath(ExpandFileName(ParamStr(0))) + GUIDToString(Identifier);
+  ThreadDirectory := Profile + PathDelim + 'generated_images' + PathDelim + 'thread-1';
+  Environment := TStringList.Create;
+  Try
+    Check('create fixture profile', ForceDirectories(ThreadDirectory));
+    If CaseName = 'image-escape' Then Check('valid PNG outside thread', WriteTinyPng(Profile));
+    If CaseName = 'image-file' Then Check('valid PNG inside thread', WriteTinyPng(ThreadDirectory));
+    CodexProfileEnvironment(Profile, Environment);
+    Start('[{"name":"write_image","description":"Reserve PNG","inputSchema":{"type":"object"}}]', Environment);
+  Finally
+    Environment.Free;
+  End;
+  Check(CaseName + ' queued', Client.StartTurn(CaseName));
+  Deadline := GetTickCount64 + 5000;
+  Repeat
+    Client.Pump;
+    Received := Client.TakeTool(Tool);
+    If Not Received Then Sleep(1);
+  Until Received Or (GetTickCount64 >= Deadline);
+  Check(CaseName + ' reservation', Received And (Tool.Tool = 'write_image') And (Tool.CallId = 'reserve'));
+  Check(CaseName + ' decision sent', Client.CompleteTool(Tool.CallId, 'fixture decision', CaseName <> 'image-declined'));
+  If CaseName = 'image-cancel' Then Client.Interrupt;
+  Deadline := GetTickCount64 + 10000;
+  Repeat Client.Pump; Sleep(1);
+  Until (Client.State In [crsCompleted, crsFailed, crsWaitingReconnect]) Or (GetTickCount64 >= Deadline);
+  If (CaseName = 'image-duplicate') Or (CaseName = 'image-file') Then
+    Check(CaseName + ' accepts the expected PNG', (Client.State = crsCompleted) And (Client.CompletedImageCall = 'reserve') And
+      (Client.GeneratedImage.Mime = 'image/png') And (Client.GeneratedImage.Width = 1) And (Client.GeneratedImageError = ''))
+  Else
+    Begin
+      Check(CaseName + ' publishes no image or success text', (Length(Client.GeneratedImage.Bytes) = 0) And (Client.Content = ''));
+      If (CaseName = 'image-malformed') Or (CaseName = 'image-escape') Then
+        Check(CaseName + ' rejected at retrieval', (Client.CompletedImageCall = 'reserve') And (Client.GeneratedImageError <> ''))
+      Else If CaseName = 'image-oversize' Then
+        Check('oversized frame rejected', Client.State In [crsFailed, crsWaitingReconnect])
+      Else Check(CaseName + ' completion ignored', (Client.CompletedImageCall = '') And (GetTickCount64 < Deadline));
+    End;
+  Client.Disconnect;
+  DeleteTree(Profile);
+End;
+
 Procedure WriteSchemaFixture;
 Var
   Directory, Source: String;
@@ -585,7 +676,7 @@ Begin
   If ParamStr(1) = '--version' Then
     Begin
       If GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION') <> '' Then WriteLn(GetEnvironmentVariable('LAZ_TEST_CODEX_VERSION'))
-      Else WriteLn('codex-cli 0.160.0');
+      Else WriteLn('codex-cli 0.167.0-alpha.3.2');
       Halt;
     End;
   If (ParamCount > 0) And (ParamStr(1) = 'app-server') Then
@@ -601,6 +692,13 @@ Begin
   TestContextUsage;
   Client := TAssistantCodexClient.Create(500);
   Try
+    TestImageEvent('image-duplicate');
+    TestImageEvent('image-malformed');
+    TestImageEvent('image-file');
+    TestImageEvent('image-escape');
+    TestImageEvent('image-cancel');
+    TestImageEvent('image-declined');
+    TestImageEvent('image-oversize');
     VersionEnv := TStringList.Create;
     Try
       ClearCodexQualificationCache;

@@ -290,6 +290,7 @@ Var
   End;
   Procedure UseConnection(Const Backend, ImageModel, ApiBase: String);
   Begin
+    Store.ClearStored;
     Item := Store.AddStored(Backend + '-accept', Backend, Backend);
     Item.Model := 'kept-chat-model';
     Item.ImageModel := ImageModel;
