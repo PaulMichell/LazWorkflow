@@ -4,7 +4,7 @@ Unit AssistantConversationSurface;
 
   Size note: exceeds the 1000 line preference. The picture cache stays with
   this canvas so paint, hit-testing, and section height use one image row.
-  Reviewed 2026-09-26: picture colors stay in memory so paint does not depend on a device bitmap. }
+  Reviewed 2026-11-24: the preview cache shares the layout's image dimensions and lifetime. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -19,13 +19,17 @@ Uses
   StyledTextTypes, AssistantTrace, AssistantConversationLayout;
 
 Type
-  { Scaled attachment pixels. Device bitmaps are not used: GTK blits them as empty. }
+  {$IFDEF Windows}
+  TDisplayPicture = TBitmap;
+  {$ELSE}
+  { GTK device blits can paint an empty tile on the clipped conversation buffer. }
   TDisplayPicture = Class
   Public
     Width: Integer;
     Height: Integer;
     Colors: Array Of TColor;
   End;
+  {$ENDIF}
   TConversationPosition = Record
     Key: String;
     Text: TStyledPosition;
@@ -132,20 +136,19 @@ Implementation
 
 Uses
   Math, Clipbrd, LCLType, Forms, FPImage,
+  {$IFDEF Windows}IntfGraphics, GraphType,{$ENDIF}
   StyledCanvas, StyledTextDocument, AssistantImages, AssistantImageView;
 
 Const
   UserBubbleColor = TColor($00EFF8E5);
 
-{ GTK StretchDraw and CopyRect of a device bitmap paint nothing on this memory
-  buffer after the bubble clip, while FillRect still shows. Scale into memory
-  colors and paint those with FillRect, the same primitive as the missing tile. }
 
 Function PictureKey(Const Ref: TTraceImageRef; DisplayW, DisplayH: Integer): String;
 Begin
   Result := Ref.Id + #1 + Ref.DisplayPath + #1 + IntToStr(DisplayW) + 'x' + IntToStr(DisplayH);
 End;
 
+{$IFNDEF Windows}
 Function ChannelByte(Value: Word): Byte;
 Begin
   Result := Value Shr 8;
@@ -160,6 +163,8 @@ Function FPColorToPacked(Const Value: TFPColor): TColor;
 Begin
   Result := PackedColor(ChannelByte(Value.Red), ChannelByte(Value.Green), ChannelByte(Value.Blue));
 End;
+
+{$ENDIF}
 
 Function UserBubbleFPColor: TFPColor;
 Var
@@ -205,14 +210,20 @@ Var
   RedSum, GreenSum, BlueSum: Int64;
   Bubble, Flat: TFPColor;
   ZeroAlphaIsOpaque: Boolean;
+  {$IFDEF Windows}Pixels: TLazIntfImage;{$ENDIF}
 Begin
   Result := Nil;
   If (Not Assigned(Img)) Or (Img.Width < 1) Or (Img.Height < 1) Or (DestW < 1) Or (DestH < 1) Then Exit;
   Result := TDisplayPicture.Create;
+  {$IFDEF Windows}Pixels := Nil;{$ENDIF}
   Try
+    {$IFDEF Windows}
+    Pixels := TLazIntfImage.Create(DestW, DestH, [riqfRGB]);
+    {$ELSE}
     Result.Width := DestW;
     Result.Height := DestH;
     SetLength(Result.Colors, DestW * DestH);
+    {$ENDIF}
     ZeroAlphaIsOpaque := ZeroAlphaMeansOpaque(Img);
     Bubble := UserBubbleFPColor;
     For Y := 0 To DestH - 1 Do
@@ -253,17 +264,31 @@ Begin
             Flat.Red := RedSum Div Count;
             Flat.Green := GreenSum Div Count;
             Flat.Blue := BlueSum Div Count;
+            {$IFDEF Windows}
+            Pixels.Colors[X, Y] := Flat;
+            {$ELSE}
             Result.Colors[Y * DestW + X] := FPColorToPacked(Flat);
+            {$ENDIF}
           End;
       End;
+    {$IFDEF Windows}Result.LoadFromIntfImage(Pixels);{$ENDIF}
   Except
     FreeAndNil(Result);
   End;
+  {$IFDEF Windows}Pixels.Free;{$ENDIF}
 End;
 
 Procedure PaintDisplayPicture(Canvas: TCanvas; Const Dest, Clip: TRect; Picture: TDisplayPicture);
 Var
   Visible: TRect;
+  {$IFDEF Windows}
+  SourceRect: TRect;
+Begin
+  If Not IntersectRect(Visible, Dest, Clip) Then Exit;
+  SourceRect := Visible;
+  OffsetRect(SourceRect, -Dest.Left, -Dest.Top);
+  Canvas.CopyRect(Visible, Picture.Canvas, SourceRect);
+  {$ELSE}
   X, Y, RunX, SrcX, SrcY: Integer;
   Color: TColor;
   Function SourceColor(LocalX, LocalY: Integer): TColor;
@@ -321,6 +346,7 @@ Begin
         End;
       Inc(Y);
     End;
+  {$ENDIF}
 End;
 
 Constructor TAssistantConversationSurface.Create(AOwner: TComponent);
