@@ -17,7 +17,7 @@ Interface
 
 Uses
   Classes, SysUtils, AssistantCodexHandshake, AssistantCodexTransport, AssistantImages, AssistantCodexQualification,
-  AssistantCodexContext;
+  AssistantCodexContext, AssistantGeneratedImage;
 
 /// Shared catalogue items use function.parameters. Codex dynamicTools use name and inputSchema.
 Function CodexDynamicToolsFromCatalogue(Const CatalogueJson: String): String;
@@ -51,7 +51,9 @@ Type
     FHandshake: TAssistantCodexHandshake;
     FState: TCodexRunState;
     PendingImageCall, PendingImageItem, FCompletedImageCall: String;
-    FGeneratedImagePath, FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
+    ImageHome, FImageError: String;
+    FGeneratedImage: TAssistantGeneratedImage;
+    FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
     FContextUsage: TCodexContextUsage;
     FModelItems: String;
@@ -77,6 +79,7 @@ Type
     Procedure FlushHandshake;
     Procedure MessageText(Const ItemId, Text: String; Complete: Boolean);
     Procedure ReasoningText(Const ItemId, Text: String; SummaryIndex: Integer; Complete: Boolean);
+    Procedure CollectImage(Const ItemId, Encoded, SavedPath: String);
   Public
     Constructor Create(RequestTimeoutMs: Cardinal = 30000);
     Destructor Destroy; Override;
@@ -112,7 +115,9 @@ Type
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
     Property Content: String Read FContent;
     Property CompletedImageCall: String Read FCompletedImageCall;
-    Property GeneratedImagePath: String Read FGeneratedImagePath;
+    Property GeneratedImage: TAssistantGeneratedImage Read FGeneratedImage;
+    Property GeneratedImageError: String Read FImageError;
+
     Property Thinking: String Read FThinking;
     Property LastError: String Read FError;
     Property ModelsJson: String Read FModels;
@@ -125,7 +130,51 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantProtocol, AssistantCodexProfile, AssistantCodexWire, AssistantCodexDiagnostics,
-  AssistantToolWire;
+  AssistantToolWire, Base64, LazFileUtils, SafeFileAccess;
+
+Procedure TAssistantCodexClient.CollectImage(Const ItemId, Encoded, SavedPath: String);
+Var
+  Raw: RawByteString;
+  Data: TBytes;
+  Root, Folder, Path: String;
+Begin
+  If Encoded <> '' Then
+    Begin
+      FImageError := 'Invalid or oversized encoded image.';
+      If Length(Encoded) > 4*((AssistantImageMaxFileBytes+2) Div 3) Then Exit;
+      Try
+        Raw := DecodeStringBase64(Encoded, True);
+      Except
+        On E: Exception Do Exit;
+      End;
+      If (Length(Raw) = 0) Or (Length(Raw) > AssistantImageMaxFileBytes) Then Exit;
+      SetLength(Data, Length(Raw));
+      Move(Raw[1], Data[0], Length(Raw));
+    End
+  Else
+    Begin
+      FImageError := 'Missing or untrusted Codex image artifact.';
+      If (ImageHome = '') Or (FThreadId = '') Or (ExtractFileName(FThreadId) <> FThreadId) Or
+        (FThreadId = '.') Or (FThreadId = '..') Or Not FilenameIsAbsolute(SavedPath) Then Exit;
+      Root := IncludeTrailingPathDelimiter(ImageHome) + 'generated_images';
+      Folder := IncludeTrailingPathDelimiter(Root) + FThreadId;
+      Path := ExpandFileName(SavedPath);
+      If (Path <> SavedPath) Or (CompareFilenames(ExtractFileDir(Path), Folder) <> 0) Or
+        FileIsSymlink(ImageHome) Or FileIsSymlink(Root) Or FileIsSymlink(Folder) Or FileIsSymlink(Path) Then Exit;
+      If Not ReadBoundedArtifact(ImageHome, 'generated_images' + PathDelim + FThreadId + PathDelim + ExtractFileName(Path),
+        AssistantImageMaxFileBytes, Data) Then Exit;
+    End;
+  FGeneratedImage.Id := ItemId;
+  FGeneratedImage.Bytes := Data;
+  If MeasureStillImage(Data, FGeneratedImage.Mime, FGeneratedImage.Width, FGeneratedImage.Height) And
+    GeneratedImageBytesAccepted(FGeneratedImage, FImageError) And ValidateStillImage(Data, FImageError) Then
+    FImageError := ''
+  Else
+    Begin
+      ClearGeneratedImage(FGeneratedImage);
+      FImageError := 'Codex returned an invalid still image.';
+    End;
+End;
 
 Function Quote(Const S: String): String;
 Begin
@@ -332,7 +381,8 @@ Begin
   PendingImageCall := '';
   PendingImageItem := '';
   FCompletedImageCall := '';
-  FGeneratedImagePath := '';
+  ClearGeneratedImage(FGeneratedImage);
+  FImageError := '';
   FContent := '';
   FThinking := '';
   FModels := '';
@@ -362,6 +412,9 @@ Begin
   Disconnect;
   FError := '';
   Result := False;
+  ImageHome := '';
+  If Assigned(Environment) Then ImageHome := Environment.Values['CODEX_HOME'];
+  If Not FilenameIsAbsolute(ImageHome) Then ImageHome := '';
   If Not InspectCodexRuntime(ResolveCodexExecutable(Executable), Environment, FCompatibility, Reason, Cancelled) Then
     Begin
       Fail('Codex preflight: ' + Reason);
@@ -541,7 +594,8 @@ Begin
           PendingImageCall := '';
   PendingImageItem := '';
   FCompletedImageCall := '';
-  FGeneratedImagePath := '';
+  ClearGeneratedImage(FGeneratedImage);
+  FImageError := '';
   FContent := '';
           FThinking := '';
           FSeenCalls.Clear;
@@ -952,9 +1006,10 @@ Begin
                         If (PendingImageItem <> '') And (TJSONObject(Value).Get('id', '') = PendingImageItem) Then
                           Begin
                             FCompletedImageCall := PendingImageCall;
-                            FGeneratedImagePath := '';
+                            ClearGeneratedImage(FGeneratedImage);
+                            FImageError := 'Codex image generation did not complete.';
                             If TJSONObject(Value).Get('status', '') = 'completed' Then
-                              FGeneratedImagePath := TJSONObject(Value).Get('savedPath', '');
+                              CollectImage(PendingImageItem, TJSONObject(Value).Get('result', ''), TJSONObject(Value).Get('savedPath', ''));
                             PendingImageCall := '';
                             PendingImageItem := '';
                           End;

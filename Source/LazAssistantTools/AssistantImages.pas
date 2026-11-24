@@ -104,6 +104,9 @@ Function AssistantImageDisplayPresent(Const StoreDirectory, ImageId, DisplayPath
 /// MIME and pixel size from the still-image header. False when the bytes are not a known still image.
 Function MeasureStillImage(Const Data: TBytes; Out Mime: String; Out Width, Height: Integer): Boolean;
 
+/// Verify that the still image decodes within the display dimension limits.
+Function ValidateStillImage(Const Data: TBytes; Out ErrorText: String): Boolean;
+
 /// Copy a still image into the store. The file is not opened when it is over 8 MiB.
 Function StoreAssistantImageFromFile(Const ProjectRoot, SourcePath: String; Out Stored: TAssistantStoredImage;
   Out ErrorText: String): Boolean;
@@ -2823,6 +2826,15 @@ Begin
         Result[OutPos + 2] := '=';
       Result[OutPos + 3] := '=';
     End;
+End;
+
+Function ValidateStillImage(Const Data: TBytes; Out ErrorText: String): Boolean;
+Var
+  Reader: TFPCustomImageReaderClass;
+  Img: TFPMemoryImage;
+Begin
+  Result := FindReader(Data, Reader, ErrorText) And DecodeStillImage(Data, Reader, Img, ErrorText);
+  If Result Then Img.Free;
 End;
 
 Function LoadStoredAssistantImage(Const ProjectRoot, RelativePath: String; Out Img: TFPMemoryImage;

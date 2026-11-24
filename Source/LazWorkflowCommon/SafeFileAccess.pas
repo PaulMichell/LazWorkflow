@@ -22,6 +22,8 @@ Function CanCreateNewText: Boolean;
 Function CreateNewText(Const Root, RelativePath, Text: String; Out ErrorText: String): Boolean;
 /// Reads exactly ExpectedSize bytes without following a final symlink. Image-store errors are preserved.
 Function ReadAllNoFollow(Const Path: String; ExpectedSize: Int64; Out Data: TBytes; Out ErrorText: String): Boolean;
+/// Read a regular file beneath an absolute directory, rejecting redirected path components.
+Function ReadBoundedArtifact(Const Directory, RelativePath: String; MaxBytes: Integer; Out Data: TBytes): Boolean;
 /// Creates a new file and writes Data. An existing entry, including a symlink, is not replaced.
 Function CreateExclusiveNoFollow(Const Path: String; Const Data: TBytes; Out ErrorText: String): Boolean;
 /// Unix mode 0600. Windows has no mode bits and returns true.
@@ -448,6 +450,86 @@ Begin
   Result := PublishNewText(Root, RelativePath, Text, ErrorText);
   {$ELSE}
   ErrorText := NewTextUnsupportedError;
+  {$ENDIF}
+End;
+
+{$IFDEF WINDOWS}
+Function FinalHandlePath(Handle: THandle; Buffer: PWideChar; Capacity, Flags: DWORD): DWORD; StdCall;
+  External 'kernel32' Name 'GetFinalPathNameByHandleW';
+{$ENDIF}
+
+Function ReadBoundedArtifact(Const Directory, RelativePath: String; MaxBytes: Integer; Out Data: TBytes): Boolean;
+Var
+  Stream: THandleStream;
+  Size: Int64;
+  {$IFDEF UNIX}
+  Handle, Child: cint;
+  Rest, Part: String;
+  Slash: Integer;
+  Info: Stat;
+  {$ENDIF}
+  {$IFDEF WINDOWS}
+  Handle: THandle;
+  Info: TByHandleFileInformation;
+  Expected, Actual: UnicodeString;
+  Count: DWORD;
+  {$ENDIF}
+Begin
+  Result := False;
+  Data := Nil;
+  If (Directory = '') Or (RelativePath = '') Or (Pos(#0, RelativePath) <> 0) Or (MaxBytes <= 0) Then Exit;
+  {$IFDEF UNIX}
+  Handle := fpOpen(PChar(Directory), O_RDONLY Or DirectoryOpenFlag Or NoFollowOpenFlag);
+  If Handle < 0 Then Exit;
+  Try
+    Rest := RelativePath;
+    Repeat
+      Slash := Pos('/', Rest);
+      If Slash = 0 Then Part := Rest Else Part := Copy(Rest, 1, Slash-1);
+      If (Part = '') Or (Part = '.') Or (Part = '..') Then Exit;
+      If Slash = 0 Then
+        Child := OpenAt(Handle, PChar(Part), O_RDONLY Or O_NONBLOCK Or NoFollowOpenFlag, 0)
+      Else
+        Child := OpenAt(Handle, PChar(Part), O_RDONLY Or DirectoryOpenFlag Or NoFollowOpenFlag, 0);
+      If Child < 0 Then Exit;
+      fpClose(Handle);
+      Handle := Child;
+      Delete(Rest, 1, Slash);
+    Until Slash = 0;
+    If (fpFStat(Handle, Info) <> 0) Or Not fpS_ISREG(Info.st_mode) Or (Info.st_nlink <> 1) Then Exit;
+  {$ELSE}
+    {$IFDEF WINDOWS}
+    Expected := UTF8Decode(IncludeTrailingPathDelimiter(Directory) + RelativePath);
+    If (Pos(':', RelativePath) > 0) Or (Pos('/', RelativePath) > 0) Then Exit;
+    Handle := CreateFileW(PWideChar(Expected), GENERIC_READ, FILE_SHARE_READ, Nil, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, 0);
+    If Handle = INVALID_HANDLE_VALUE Then Exit;
+    Try
+      If Not GetFileInformationByHandle(Handle, Info) Or (Info.nNumberOfLinks <> 1) Or (GetFileType(Handle) <> FILE_TYPE_DISK) Or
+        ((Info.dwFileAttributes And (FILE_ATTRIBUTE_DIRECTORY Or FILE_ATTRIBUTE_REPARSE_POINT)) <> 0) Then Exit;
+      Expected := '\\?\' + Expected;
+      SetLength(Actual, Length(Expected)+1);
+      Count := FinalHandlePath(Handle, PWideChar(Actual), Length(Actual), 0);
+      If Count <> Length(Expected) Then Exit;
+      SetLength(Actual, Count);
+      If Actual <> Expected Then Exit;
+    {$ELSE}
+    Exit;
+    {$ENDIF}
+  {$ENDIF}
+  {$IF DEFINED(UNIX) OR DEFINED(WINDOWS)}
+    Stream := THandleStream.Create(Handle);
+    Try
+      Size := Stream.Size;
+      If (Size < 1) Or (Size > MaxBytes) Then Exit;
+      SetLength(Data, Size);
+      Result := (Stream.Read(Data[0], Length(Data)) = Size) And (Stream.Size = Size);
+      If Not Result Then Data := Nil;
+    Finally
+      Stream.Free;
+    End;
+  Finally
+    FileClose(Handle);
+  End;
   {$ENDIF}
 End;
 

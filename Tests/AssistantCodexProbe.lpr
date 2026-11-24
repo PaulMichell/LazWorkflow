@@ -3,7 +3,7 @@ Program AssistantCodexProbe;
   and does not print account identities, tokens, URLs, or raw protocol frames. }
 {$mode objfpc}{$H+}
 Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, fpjson, jsonparser,
-  AssistantCodexClient, AssistantCodexHandshake, AssistantCodexProfile;
+  AssistantCodexClient, AssistantCodexHandshake, AssistantCodexProfile, AssistantImages, SafeFileAccess;
 Var
   Client: TAssistantCodexClient;
   Env: TStringList;
@@ -16,6 +16,24 @@ Procedure Failed(Const Stage: String);
 Begin
   WriteLn(Stage, ' failed: ', Client.LastError);
   Halt(1);
+End;
+Procedure CheckArtifact;
+Var
+  Relative, Folder: String;
+  Entry: TSearchRec;
+  Bytes: TBytes;
+Begin
+  Relative := 'generated_images' + PathDelim + Client.ThreadId + PathDelim;
+  Folder := IncludeTrailingPathDelimiter(ParamStr(2)) + Relative;
+  If FindFirst(Folder + '*.png', faAnyFile, Entry) <> 0 Then Failed('Thread image artifact');
+  Try
+    If ReadBoundedArtifact(ParamStr(2), Relative + Entry.Name, 1, Bytes) Then Failed('Artifact size limit');
+    If Not ReadBoundedArtifact(ParamStr(2), Relative + Entry.Name, AssistantImageMaxFileBytes, Bytes) Then Failed('Artifact containment');
+    If (Length(Bytes) <> Length(Client.GeneratedImage.Bytes)) Or
+      Not CompareMem(@Bytes[0], @Client.GeneratedImage.Bytes[0], Length(Bytes)) Then Failed('Artifact contents');
+  Finally
+    FindClose(Entry);
+  End;
 End;
 Procedure WaitReady;
 Begin
@@ -90,16 +108,9 @@ Begin
           Sleep(5);
         Until (Client.State In [crsCompleted, crsFailed]) Or (GetTickCount64 >= Deadline);
         If Client.State <> crsCompleted Then Failed('Image turn');
-        If Not FileExists(Client.GeneratedImagePath) Then Failed('Image artifact');
-        With TFileStream.Create(Client.GeneratedImagePath, fmOpenRead Or fmShareDenyWrite) Do
-          Try
-            SetLength(ErrorText, 8);
-            ReadBuffer(ErrorText[1], 8);
-            If ErrorText <> #137'PNG'#13#10#26#10 Then Failed('PNG signature');
-            WriteLn('Retrieved generated PNG, ', Size, ' bytes.');
-          Finally
-            Free;
-          End;
+        If (Client.GeneratedImageError <> '') Or (Client.GeneratedImage.Mime <> 'image/png') Then Failed('Image validation');
+        CheckArtifact;
+        WriteLn('Retrieved generated PNG, ', Length(Client.GeneratedImage.Bytes), ' bytes.');
       End;
   Finally Client.Free; Env.Free; End;
 End.

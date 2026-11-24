@@ -12,11 +12,12 @@ Unit AssistantCodexRun;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext, AssistantEvents;
+  Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext, AssistantEvents, AssistantGeneratedImage;
 
 Type
   TCodexImageReservation = Record
-    RequestId, Destination, Artifact: String;
+    RequestId, Destination, ErrorText: String;
+    Image: TAssistantGeneratedImage;
     Overwrite, Finished: Boolean;
   End;
   TCodexRunSnapshot = Record
@@ -280,7 +281,12 @@ Begin
     If (Index >= 0) And Not FSnapshot.Images[Index].Finished And (FSnapshot.Images[Index].RequestId = Client.CompletedImageCall) Then
       Begin
         FSnapshot.Images := Copy(FSnapshot.Images);
-        FSnapshot.Images[Index].Artifact := Client.GeneratedImagePath;
+        FSnapshot.Images[Index].ErrorText := Client.GeneratedImageError;
+        If Client.GeneratedImageError = '' Then
+          If SameText(ExtractFileExt(FSnapshot.Images[Index].Destination), '.png') And (Client.GeneratedImage.Mime = 'image/png') Then
+            FSnapshot.Images[Index].Image := Client.GeneratedImage
+          Else
+            FSnapshot.Images[Index].ErrorText := 'Generated image format differs from the approved destination extension.';
         FSnapshot.Images[Index].Finished := True;
       End;
     FSnapshot.State := Client.State;
