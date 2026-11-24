@@ -1588,7 +1588,7 @@ Begin
       Rel := AssistantDocumentsDirName + PathDelim +
         'Plan-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.md';
     Content := DefaultNewPlanMarkdown(Title);
-    If Not WriteMarkdownFile(Rel, Content, True, Resolved, Err) Then
+    If Not WriteMarkdownFile(Rel, Content, Resolved, Err) Then
       Begin
         RunAssistantModal(Err, mtError, [mbOK], 0);
         Exit;

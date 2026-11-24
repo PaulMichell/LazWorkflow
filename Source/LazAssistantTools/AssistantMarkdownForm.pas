@@ -96,19 +96,24 @@ Type
 Const
   NewMarkdownDocumentTitle = '<New Markdown>';
 
-{ Opens an existing viewer for FileName, or creates one. Empty FileName shows the open dialog.
-  When the viewer is already open, reloads content from disk. }
+{ Foreground open for an explicit user request: the Open Markdown dialog, or Open Plan.
+  Empty FileName shows the open dialog. An already-open file is re-read and brought forward.
+  Assistant edits must not call this. }
 Function OpenMarkdownDocument(Const FileName: String = ''): TAssistantMarkdownForm;
 { Always opens a new window holding an untitled, unsaved document. }
 Function OpenNewMarkdownDocument: TAssistantMarkdownForm;
 { Where Save puts a new document first: the project's Documents folder, or the project root without one. }
 Function NewMarkdownDocumentFolder: String;
 Function FindMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;
-{ Same preview as a plan file, limited to one section. Reuses the window for Key. }
+{ Plan-item review. Opens in the foreground. Reuses the window for Key. }
 Function OpenMarkdownSnippet(Const Key, Title, Body: String): TAssistantMarkdownForm;
-{ Force-reload any open viewer for this path (no-op if none open). }
+{ Reload an open viewer. BringForward raises the window and is not for edits.
+  The default does not raise. No-op if none is open. }
 Function ReloadMarkdownDocument(Const FileName: String; Force: Boolean = True;
-  BringForward: Boolean = True): Boolean;
+  BringForward: Boolean = False): Boolean;
+{ Update an already-open viewer. Does not create a window, call Show, or change z-order.
+  A dirty viewer keeps its edits and notes a pending reload. No-op when none is open. }
+Function RefreshOpenMarkdownDocument(Const FileName: String): Boolean;
 { The first window holding unsaved edits to a named file, or Nil. An untitled new document is not a project file
   yet, and a snippet is read-only, so neither counts. }
 Function FirstUnsavedMarkdownDocument: TAssistantMarkdownForm;
@@ -203,6 +208,11 @@ Begin
     End;
 End;
 
+Function RefreshOpenMarkdownDocument(Const FileName: String): Boolean;
+Begin
+  Result := ReloadMarkdownDocument(FileName, False, False);
+End;
+
 Function FindMarkdownSnippet(Const Key: String): TAssistantMarkdownForm;
 Var
   I: Integer;
@@ -240,6 +250,7 @@ Begin
   Result := TAssistantMarkdownForm.Create(OwnerComp);
   Result.LoadSnippet(Key, Title, Body);
   Result.Show;
+  Result.BringToFront;
 End;
 
 Function OpenMarkdownDocument(Const FileName: String): TAssistantMarkdownForm;

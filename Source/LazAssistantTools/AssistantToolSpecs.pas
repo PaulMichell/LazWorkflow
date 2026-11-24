@@ -166,9 +166,10 @@ Begin
 
   Spec := Default(TAssistantToolSpec);
         Spec.Name := 'open_markdown';
-        Spec.Description := 'Open a Markdown document in an Assistant Markdown viewer window.';
-        Spec.BrokerDescription := 'Open a project Markdown file in its live viewer window, so the user can see it. During a plan run ' +
-          'the viewer is not opened and the plan summary updates instead. Does not change the file.';
+        Spec.Description := 'Does not open or raise a Markdown viewer. An already-open viewer for this path is refreshed in place ' +
+          'and keeps its z-order. The user opens a viewer from Open Markdown, Open Plan, or a plan-item double-click.';
+        Spec.BrokerDescription := 'Does not open or raise a Markdown viewer. Refreshes an already-open viewer in place without ' +
+          'changing z-order. Does not change the file.';
         Spec.Schema := '{"type":"object","properties":{"path":{"type":"string","description":"Path to a .md file under the project"}},' +
           '"required":["path"]}';
         Spec.Modes := [amInspect, amDocument, amPlan, amBuild];
@@ -205,7 +206,7 @@ Begin
         Spec.Name := 'open_file';
         Spec.Description := 'Open a project source file in the Lazarus source editor. Does not modify the file.';
         Spec.BrokerDescription := 'Open a project file in the Lazarus source editor and bring it forward, so the user can see it. ' +
-          'Reuses an open tab. Markdown files use open_markdown instead. Does not change the file.';
+          'Reuses an open tab. Markdown is not opened here. Does not change the file.';
         Spec.Schema := '{"type":"object","properties":{"path":{"type":"string","description":"Project-relative file path"}},' +
           '"required":["path"]}';
         Spec.Modes := [amInspect, amDocument, amBuild];
@@ -282,14 +283,13 @@ Begin
 
   Spec := Default(TAssistantToolSpec);
         Spec.Name := 'write_markdown';
-        Spec.Description := 'Create or overwrite a Markdown file under the project (prefer Documents/). Opens a live Markdown window. ' +
-          'Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. A ### heading without Status is a note, ' +
-          'not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; commit the ' +
-          'plan file after that change. Without a repository, complete needs no commit.';
+        Spec.Description := 'Create or overwrite a Markdown file under the project (prefer Documents/). Does not open or raise a viewer. ' +
+          'An already-open viewer is refreshed in place. Use for new or full rewrites of plans. Rejects a Status: line under a ## heading. ' +
+          'A ### heading without Status is a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has ' +
+          'succeeded in this turn; commit the plan file after that change. Without a repository, complete needs no commit.';
         Spec.Schema := '{"type":"object","properties":{' +
           '"path":{"type":"string","description":"Project-relative .md path (default Documents/Plan.md)"},' +
-          '"content":{"type":"string","description":"Full Markdown body to write"},' +
-          '"open":{"type":"boolean","description":"Open live viewer after write (default true). Ignored during a plan run."}},' +
+          '"content":{"type":"string","description":"Full Markdown body to write"}},' +
           '"required":["content"]}';
         Spec.Modes := [amDocument, amPlan, amBuild];
         Spec.Role := brMarkdown;
@@ -298,16 +298,16 @@ Begin
 
   Spec := Default(TAssistantToolSpec);
         Spec.Name := 'update_markdown';
-        Spec.Description := 'Exact text replacement in a project Markdown file (surgical edit). Prefer this over rewrite when ' +
-          'changing Status: lines or a single section. Rejects a Status: line under a ## heading. A ### heading without Status stays ' +
-          'a note, not a todo. In a Git repository, Status: complete is refused until run_git commit has succeeded in this turn; ' +
-          'commit the plan file after that change. Without a repository, complete needs no commit.';
+        Spec.Description := 'Exact text replacement in a project Markdown file (surgical edit). Does not open or raise a viewer. ' +
+          'An already-open viewer is refreshed in place. Prefer this over rewrite when changing Status: lines or a single section. ' +
+          'Rejects a Status: line under a ## heading. A ### heading without Status stays a note, not a todo. In a Git repository, ' +
+          'Status: complete is refused until run_git commit has succeeded in this turn; commit the plan file after that change. ' +
+          'Without a repository, complete needs no commit.';
         Spec.Schema := '{"type":"object","properties":{' +
           '"path":{"type":"string","description":"Project-relative .md path (default: active plan)"},' +
           '"old_text":{"type":"string","description":"Exact text to find"},' +
           '"new_text":{"type":"string","description":"Replacement text"},' +
-          '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-          '"open":{"type":"boolean","description":"Open live viewer after update (default true). Ignored during a plan run."}},' +
+          '"replace_all":{"type":"boolean","description":"Replace every match (default false)"}},' +
           '"required":["old_text","new_text"]}';
         Spec.Modes := [amDocument, amPlan, amBuild];
         Spec.Role := brMarkdown;
@@ -364,7 +364,7 @@ Begin
           '"path":{"type":"string","description":"Project-relative path e.g. Source/Foo.pas"},' +
           '"content":{"type":"string","description":"Full non-empty contents (reject empty/probe files)"},' +
           '"revision":{"type":"string","description":"Revision from read_file. Required when the file already exists."},' +
-          '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."},' +
+          '"open":{"type":"boolean","description":"Ignored for Markdown: an edit never opens or raises a viewer. A source file is never opened as a tab."},' +
           '"add_to_project":{"type":"boolean","description":"Add Pascal unit to the active project (default true only for non-empty units)"}},' +
           '"required":["path","content"]}';
         Spec.Modes := [amDocument, amPlan, amBuild];
@@ -384,7 +384,7 @@ Begin
           '"old_text":{"type":"string","description":"Exact text to find"},' +
           '"new_text":{"type":"string","description":"Replacement text"},' +
           '"replace_all":{"type":"boolean","description":"Replace every match (default false)"},' +
-          '"open":{"type":"boolean","description":"A Markdown path opens in the Assistant Markdown viewer (default false); use open_markdown. A source file is never opened as a tab."}},' +
+          '"open":{"type":"boolean","description":"Ignored for Markdown: an edit never opens or raises a viewer. A source file is never opened as a tab."}},' +
           '"required":["path","old_text","new_text"]}';
         Spec.Modes := [amDocument, amPlan, amBuild];
         Spec.Role := brMutate;

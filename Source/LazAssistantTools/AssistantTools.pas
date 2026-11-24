@@ -1245,20 +1245,16 @@ Begin
       ErrorText := 'Markdown file not found: ' + Resolved;
       Exit;
     End;
-  If AssistantPlanViewerQuiet Then
+  If Assigned(FindMarkdownDocument(Resolved)) Then
     Begin
-      If Assigned(FindMarkdownDocument(Resolved)) Then
-        ReloadMarkdownDocument(Resolved, False, False);
-      ResultText := 'Plan run in progress. The Markdown viewer was not opened. The plan summary updates from the file.';
-      Result := True;
-      Exit;
-    End;
-  If OpenMarkdownDocument(Resolved) = Nil Then
-    Begin
-      ErrorText := 'Failed to open Markdown window for ' + Resolved;
-      Exit;
-    End;
-  ResultText := 'Opened Markdown viewer for ' + Resolved;
+      If RefreshOpenMarkdownDocument(Resolved) Then
+        ResultText := 'Markdown viewer already open for ' + Resolved + '. Content refreshed. Z-order unchanged.'
+      Else
+        ResultText := 'Markdown viewer already open for ' + Resolved + '. Unsaved edits kept. Z-order unchanged.';
+    End
+  Else
+    ResultText := 'Markdown viewer was not opened for ' + Resolved +
+      '. The user opens a viewer from Open Markdown, Open Plan, or a plan-item double-click.';
   Result := True;
 End;
 
@@ -1327,7 +1323,7 @@ End;
 Function ToolWriteMarkdown(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, Content, Resolved, OldPlan, WrittenRel: String;
-  OpenAfter, ShowThinking: Boolean;
+  ShowThinking: Boolean;
   Mode: TAssistantMode;
 Begin
   Result := False;
@@ -1359,11 +1355,10 @@ Begin
       ErrorText := 'write_markdown requires content.';
       Exit;
     End;
-  OpenAfter := JsonArgBool(ArgumentsJson, 'open', True);
   If Not EnsureProjectDocumentsDir(ErrorText) Then
     { non-fatal if path is not under Documents }
     ErrorText := '';
-  If Not WriteMarkdownFile(Path, Content, OpenAfter, Resolved, ErrorText) Then
+  If Not WriteMarkdownFile(Path, Content, Resolved, ErrorText) Then
     Exit;
   WrittenRel := ProjectRelativePath(Resolved);
   If (GAssistantToolMode <> amDocument) And TextIsAssistantPlan(Content) And
@@ -1387,6 +1382,10 @@ Begin
   If GAssistantToolMode = amDocument Then
     RememberDocumentRelativePath(WrittenRel);
   ResultText := 'Wrote Markdown: ' + WrittenRel + ' (' + Resolved + ')';
+  If Assigned(FindMarkdownDocument(Resolved)) Then
+    ResultText := ResultText + ' Open viewer refreshed in place. Z-order unchanged.'
+  Else
+    ResultText := ResultText + ' Markdown viewer was not opened.';
   If (GAssistantToolMode <> amDocument) And TextIsAssistantPlan(Content) And
     SameText(WrittenRel, GetActivePlanRelativePath) Then
     Begin
@@ -1404,7 +1403,7 @@ End;
 Function ToolUpdateMarkdown(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Path, OldText, NewText, Resolved: String;
-  ReplaceAll, OpenAfter: Boolean;
+  ReplaceAll: Boolean;
   Count: Integer;
 Begin
   Result := False;
@@ -1436,14 +1435,16 @@ Begin
   OldText := JsonArgString(ArgumentsJson, 'old_text');
   NewText := JsonArgString(ArgumentsJson, 'new_text');
   ReplaceAll := JsonArgBool(ArgumentsJson, 'replace_all', False);
-  OpenAfter := JsonArgBool(ArgumentsJson, 'open', True);
-  If Not ReplaceInMarkdownFile(Path, OldText, NewText, ReplaceAll, OpenAfter, Resolved,
-    ErrorText, Count) Then
+  If Not ReplaceInMarkdownFile(Path, OldText, NewText, ReplaceAll, Resolved, ErrorText, Count) Then
     Exit;
   If GAssistantToolMode = amDocument Then
     RememberDocumentRelativePath(ProjectRelativePath(Resolved));
   ResultText := Format('Updated %s (%d replacement(s)).',
     [ProjectRelativePath(Resolved), Count]);
+  If Assigned(FindMarkdownDocument(Resolved)) Then
+    ResultText := ResultText + ' Open viewer refreshed in place. Z-order unchanged.'
+  Else
+    ResultText := ResultText + ' Markdown viewer was not opened.';
   Result := True;
 End;
 
@@ -2008,7 +2009,7 @@ Begin
   { Markdown belongs in the Assistant viewer. Do not create or reuse a source tab. }
   If IsMarkdownPath(FullPath) Then
     Begin
-      Note := 'Markdown files are not opened in the source editor. Use open_markdown.';
+      Note := 'Markdown files are not opened in the source editor.';
       Exit;
     End;
   Ed := FindOpenEditor(FullPath);
@@ -2245,6 +2246,21 @@ Begin
   End;
 End;
 
+Procedure NoteMarkdownViewerAfterWrite(Const FullPath: String; Var Note: String);
+Begin
+  If Not IsMarkdownPath(FullPath) Then
+    Exit;
+  If Not Assigned(FindMarkdownDocument(FullPath)) Then
+    Begin
+      Note := Note + ' Markdown viewer was not opened.';
+      Exit;
+    End;
+  If RefreshOpenMarkdownDocument(FullPath) Then
+    Note := Note + ' Open Markdown viewer refreshed in place. Z-order unchanged.'
+  Else
+    Note := Note + ' Open Markdown viewer kept unsaved edits. Z-order unchanged.';
+End;
+
 Function SaveProjectFileTextChecked(Const Resolved, Content, ExpectedText: String; CheckExpected, OpenAfter: Boolean;
   Out Note, ErrorText: String): Boolean;
 Var
@@ -2304,6 +2320,7 @@ Begin
               'The buffer is already changed; inspect/save it rather than repeating the edit.';
             Exit;
           End;
+        NoteMarkdownViewerAfterWrite(FullPath, Note);
         Result := True;
         Exit;
       Except
@@ -2350,26 +2367,10 @@ Begin
   Finally
     Stream.Free;
   End;
-  If OpenAfter Then
-    Begin
-      If IsMarkdownPath(FullPath) Then
-        Begin
-          { Same quiet rule as open_markdown: a plan run must not steal the window. }
-          If AssistantPlanViewerQuiet Then
-            Begin
-              If Assigned(FindMarkdownDocument(FullPath)) Then
-                ReloadMarkdownDocument(FullPath, False, False);
-              Note := Note + ' Plan run in progress. The Markdown viewer was not opened. Use open_markdown.';
-            End
-          Else If OpenMarkdownDocument(FullPath) = Nil Then
-            Note := Note + ' (Could not open the Markdown viewer. Use open_markdown.)'
-          Else
-            Note := Note + ' Opened in the Assistant Markdown viewer (open_markdown).';
-        End
-      Else
-        { An edit never opens a source tab; the user's editor tabs stay as they were. }
-        Note := Note + ' Not opened in the editor: edits are written without opening a tab.';
-    End;
+  NoteMarkdownViewerAfterWrite(FullPath, Note);
+  If OpenAfter And (Not IsMarkdownPath(FullPath)) Then
+    { An edit never opens a source tab; the user's editor tabs stay as they were. }
+    Note := Note + ' Not opened in the editor: edits are written without opening a tab.';
 End;
 
 Function SaveProjectFileText(Const Resolved, Content: String; OpenAfter: Boolean;
@@ -3350,7 +3351,7 @@ Begin
   If Not OpenEditorReuse(Resolved, Note) Then
     Begin
       { Markdown refusal is the tool error. Other failures keep the path. }
-      If Pos('open_markdown', Note) > 0 Then
+      If Pos('not opened in the source editor', Note) > 0 Then
         ErrorText := Note
       Else
         ErrorText := 'Failed to open editor for ' + Resolved + ' (' + Note + ')';

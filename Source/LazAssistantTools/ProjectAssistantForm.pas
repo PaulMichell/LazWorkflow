@@ -2341,7 +2341,7 @@ Begin
       FPlanWriteThisTurn := True;
       Exit;
     End;
-  If Not WriteMarkdownFile(PlanRel, Body + LineEnding, True, Resolved, Err) Then
+  If Not WriteMarkdownFile(PlanRel, Body + LineEnding, Resolved, Err) Then
     Begin
       WorkflowLogger.Warning('ProjectAssistant', 'Auto-save plan failed: ' + Err);
       If FDisplaySystemNote <> '' Then
@@ -8803,7 +8803,7 @@ Begin
     FileExistsUTF8(ExpandFileName(ProjectRootPath + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]))) Then
     Rel := AssistantDocumentsDirName + PathDelim + 'Plan-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.md';
   Content := DefaultNewPlanMarkdown(PlanTitle);
-  If Not WriteMarkdownFile(Rel, Content, False, Resolved, Err) Then
+  If Not WriteMarkdownFile(Rel, Content, Resolved, Err) Then
     Begin
       ErrorText := Err;
       Exit;

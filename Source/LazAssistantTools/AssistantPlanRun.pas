@@ -554,8 +554,8 @@ Begin
     'If the turn ends with Status complete and that plan file is still uncommitted, the assistant commits the plan file and keeps the status. ' +
     'If the working root has no Git repository, set Status to complete with no commit. ' +
     'Report a commit hash only from a successful ' + GitTool + ' result. If a tool fails, say so. ' +
-    'During a plan run, do not open the plan viewer. Status changes update the summary list. ' +
-    'If that Markdown window is already open, it is refreshed.';
+    'Do not open the Markdown viewer. An edit does not open a closed file and does not bring an open viewer forward. ' +
+    'Status changes update the summary list. If that window is already open, it is refreshed in place.';
 End;
 
 Function ClaudeDiscoverSentence(Const ToolsJson: String): String;

@@ -85,7 +85,7 @@ Function ReadAssistantPlanPreview(Const RelativeOrAbsolute: String; Out Truncate
 Function FormatPlanListCaption(Const Title, RelativePath: String): String;
 { Combo text is the title only. An empty title falls back to the file name, not the path. }
 Function PlanComboCaption(Const Title, RelativePath: String): String;
-{ While a plan run is in progress, plan writes refresh an open viewer and do not open a new one. }
+{ Still set around a plan run. Viewer policy does not depend on it: an edit never opens or raises a viewer. }
 Procedure SetAssistantPlanViewerQuiet(Quiet: Boolean);
 Function AssistantPlanViewerQuiet: Boolean;
 { Paths and Titles are created here. Missing files are dropped and the settings are saved.
@@ -113,10 +113,10 @@ Function DefaultNewPlanMarkdown(Const Title: String = ''): String;
 Function DetectFileEol(Const S: String): String;
 { Normalize to LF, then to Eol when that ending is not LF. }
 Function NormalizeToEol(Const S, Eol: String): String;
-Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter: Boolean;
+Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String;
   Out Resolved: String; Out ErrorText: String): Boolean;
 Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: String;
-  ReplaceAll, OpenAfter: Boolean; Out Resolved: String; Out ErrorText: String;
+  ReplaceAll: Boolean; Out Resolved: String; Out ErrorText: String;
   Out ReplaceCount: Integer): Boolean;
 
 Function PlanSectionStatusToStr(Status: TPlanSectionStatus): String;
@@ -160,7 +160,7 @@ Procedure NotePlanCompletionWrite(Const Path, PreviousBody: String; Existed: Boo
 Function StatusFollowsHeading(SL: TStringList; HeadingIndex: Integer; Out StatusText: String;
   Out StatusLine: Integer): Boolean; Forward;
 
-Procedure PublishPlanFileWrite(Const Resolved, Content: String; OpenAfter: Boolean);
+Procedure PublishPlanFileWrite(Const Resolved, Content: String);
 Begin
   { The progress list listens on the bus. Do not rely on a viewer being open. }
   If Assigned(WorkflowEventBus) And (Resolved <> '') Then
@@ -168,16 +168,8 @@ Begin
       WorkflowEventBus.NotifyDocumentSaved(Resolved);
       WorkflowEventBus.NotifyDocumentChanged(Resolved, Content);
     End;
-  { A plan run updates the summary list. Do not steal the window by opening a viewer. }
-  If PlanViewerQuiet Then
-    Begin
-      If Assigned(FindMarkdownDocument(Resolved)) Then
-        ReloadMarkdownDocument(Resolved, False, False);
-    End
-  Else If Assigned(FindMarkdownDocument(Resolved)) Then
-    ReloadMarkdownDocument(Resolved, True)
-  Else If OpenAfter Then
-    OpenMarkdownDocument(Resolved);
+  { An edit never opens a viewer and never changes z-order. A background window stays back. }
+  RefreshOpenMarkdownDocument(Resolved);
 End;
 
 Function PlanProjectRoot: String;
@@ -901,8 +893,8 @@ Begin
     'If the turn ends with Status complete and that plan file is still uncommitted, the assistant commits the plan file and keeps the status. ' +
     'If the working root has no Git repository, set Status to complete with no commit. ' +
     'Report a commit hash only from a successful run_git result. If a tool fails, say so. ' +
-    'During a plan run, do not open the plan viewer. Status changes update the summary list. ' +
-    'If that Markdown window is already open, it is refreshed.';
+    'Do not open the Markdown viewer. An edit does not open a closed file and does not bring an open viewer forward. ' +
+    'Status changes update the summary list. If that window is already open, it is refreshed in place.';
 End;
 
 Function DefaultNewPlanMarkdown(Const Title: String): String;
@@ -990,7 +982,7 @@ Begin
   Result := DetectFileEol(Raw);
 End;
 
-Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String; OpenAfter: Boolean;
+Function WriteMarkdownFile(Const RelativeOrAbsolute, Content: String;
   Out Resolved: String; Out ErrorText: String): Boolean;
 Var
   Dir, Previous: String;
@@ -1036,7 +1028,7 @@ Begin
       If PlanBodyIntroducesCompletion(Previous, Content) Then
         NotePlanCompletionWrite(Resolved, Previous, Existed);
       WorkflowLogger.Info('AssistantPlan', 'Wrote Markdown: ' + Resolved);
-      PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
+      PublishPlanFileWrite(Resolved, SL.Text);
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -1047,7 +1039,7 @@ Begin
 End;
 
 Function ReplaceInMarkdownFile(Const RelativeOrAbsolute, OldText, NewText: String;
-  ReplaceAll, OpenAfter: Boolean; Out Resolved: String; Out ErrorText: String;
+  ReplaceAll: Boolean; Out Resolved: String; Out ErrorText: String;
   Out ReplaceCount: Integer): Boolean;
 Var
   SL: TStringList;
@@ -1137,7 +1129,7 @@ Begin
         NotePlanCompletionWrite(Resolved, Previous, True);
       WorkflowLogger.Info('AssistantPlan',
         Format('Updated Markdown %s (%d replacement(s))', [Resolved, ReplaceCount]));
-      PublishPlanFileWrite(Resolved, SL.Text, OpenAfter);
+      PublishPlanFileWrite(Resolved, SL.Text);
     Except
       On E: Exception Do
         ErrorText := E.Message;
@@ -1599,7 +1591,7 @@ Begin
           Lines.Text := CompletionPrevious;
           Lines.LineBreak := DetectFileEol(CompletionPrevious);
           Lines.SaveToFile(CompletionPath);
-          PublishPlanFileWrite(CompletionPath, CompletionPrevious, False);
+          PublishPlanFileWrite(CompletionPath, CompletionPrevious);
           Result := 'The plan status was put back because the plan commit failed. ' +
             'Commit the finished work, set Status to complete, then commit the plan file.';
         Except
@@ -1976,7 +1968,7 @@ Begin
         WorkflowLogger.Info('AssistantPlan',
           Format('Set section "%s" to %s in %s',
             [Section.Title, PlanSectionStatusToStr(NewStatus), Resolved]));
-        PublishPlanFileWrite(Resolved, SL.Text, False);
+        PublishPlanFileWrite(Resolved, SL.Text);
       Except
         On E: Exception Do
           ErrorText := E.Message;
@@ -2119,7 +2111,7 @@ Begin
           Begin
             SL.LineBreak := PlanFileLineBreak(Resolved);
             SL.SaveToFile(Resolved);
-            PublishPlanFileWrite(Resolved, SL.Text, False);
+            PublishPlanFileWrite(Resolved, SL.Text);
             WorkflowLogger.Info('AssistantPlan',
               Format('Blocked section "%s" in %s', [Section.Title, Resolved]));
           End;

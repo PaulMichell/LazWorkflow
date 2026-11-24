@@ -659,7 +659,8 @@ Begin
           '3. Default / active plan path: **' + PlanPath + '**. Use that path unless the user names another. ' +
           '4. ' + AssistantPlanAuthoringRules + LineEnding +
           '5. Prefer `update_markdown` for Status: lines or a single section; `write_markdown` for new files or full plans. ' +
-          '6. After writing, you may call `set_active_plan` and `open_markdown` if helpful. ' +
+          '6. After writing, call `set_active_plan` when that file should be the active plan. Do not call `open_markdown`. ' +
+          'An edit does not open a closed file and does not bring an open viewer forward. ' +
           '7. Never edit source (.pas/.lfm) in Plan mode. ' +
           'Images use write_image. Other documents (.html, .txt, .svg, and the same family) use write_file.' + LineEnding +
           'Tools: read_file, read_image, list_directory, open_markdown, get_project_info, write_markdown, ' +
