@@ -94,6 +94,23 @@ Begin
     (Not OK) And (Text = MarkdownRefusal) And (SeenCalls = 0));
 End;
 
+Procedure TestWriteFileSummary;
+Var
+  Summary, LongBody: String;
+Begin
+  Summary := CodexToolApprovalSummary('{"path":"Unit.pas","content":"program x;"}');
+  Check('write_file content is not a no-op', Pos('no change', Summary) = 0);
+  Check('write_file content is shown', Pos('program x;', Summary) > 0);
+  LongBody := StringOfChar('y', 180);
+  Summary := CodexToolApprovalSummary('{"path":"Unit.pas","content":"' + LongBody + '"}');
+  Check('write_file snippet stays within 100 characters', Pos(StringOfChar('y', 101), Summary) = 0);
+  Check('new_text still wins over content',
+    Pos('no change', CodexToolApprovalSummary(
+      '{"path":"Unit.pas","old_text":"program x;","new_text":"program y;","content":"program x;"}')) = 0);
+  Summary := CodexToolApprovalSummary('{"path":"Unit.pas","text":"kept","content":"ignored"}');
+  Check('text still wins over content', (Pos('kept', Summary) > 0) And (Pos('ignored', Summary) = 0));
+End;
+
 Procedure TestAskOnce;
 Var
   Text, Arguments: String;
@@ -114,6 +131,7 @@ Begin
   Try
     TestInspectRefusal;
     TestMarkdownRefusal;
+    TestWriteFileSummary;
     TestAskOnce;
   Finally
     SetAssistantRemoteApproval(Nil);

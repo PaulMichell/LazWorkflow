@@ -65,6 +65,9 @@ Type
     Procedure QueueToolForTest(Const ToolName, ArgumentsJson: String);
   End;
 
+/// Ask summary for one Codex tool call. content is the new text when new_text and text are empty.
+Function CodexToolApprovalSummary(Const ArgumentsJson: String): String;
+
 Implementation
 
 Uses
@@ -299,6 +302,9 @@ Begin
       NewText := Obj.Get('new_text', '');
       If NewText = '' Then
         NewText := Obj.Get('text', '');
+      { write_file and write_markdown send the body in content, not new_text or text. }
+      If NewText = '' Then
+        NewText := Obj.Get('content', '');
     End;
   Data.Free;
   If (Path = '') And (OldText = '') And (NewText = '') Then
