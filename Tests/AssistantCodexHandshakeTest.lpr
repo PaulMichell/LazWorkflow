@@ -1,6 +1,32 @@
 Program AssistantCodexHandshakeTest;
 {$mode objfpc}{$H+}
-Uses Classes, SysUtils, fpjson, jsonparser, AssistantCodexHandshake;
+Uses Classes, SysUtils, Process, fpjson, jsonparser, AssistantCodexHandshake
+  {$IFDEF WINDOWS}, Windows, ShellApi{$ENDIF};
+Function NativeArgument(Index: Integer): String;
+{$IFDEF WINDOWS}
+Type
+  TArguments = Array[0..65535] Of PWideChar;
+  PArguments = ^TArguments;
+Var
+  Values: PArguments;
+  Count: LongInt;
+{$ENDIF}
+Begin
+  {$IFDEF WINDOWS}
+  { Codex uses Windows argument parsing. FPC ParamStr also strips single
+    quotes, so it cannot stand in for the receiving runtime in this test. }
+  Values := PArguments(CommandLineToArgvW(GetCommandLineW, @Count));
+  If Values = Nil Then Raise Exception.Create('Cannot parse command line');
+  Try
+    If Index >= Count Then Raise Exception.Create('Missing argument');
+    Result := UTF8Encode(UnicodeString(Values^[Index]));
+  Finally
+    LocalFree(HLOCAL(Values));
+  End;
+  {$ELSE}
+  Result := ParamStr(Index);
+  {$ENDIF}
+End;
 Procedure Check(Const Title: String; Value: Boolean);
 Begin If Not Value Then Raise Exception.Create(Title); WriteLn('ok ', Title); End;
 Function Take(Session: TAssistantCodexHandshake; Const Method: String): Int64;
@@ -45,16 +71,45 @@ Begin
   Take(Session, 'initialized');
   Result := Take(Session, 'account/read');
 End;
-Var Session: TAssistantCodexHandshake; Id, OldId: Int64; Frame: String; Args: TStringList;
+Procedure CheckArgumentTransport(Args: TStrings);
+Var
+  Child: TProcess;
+  I: Integer;
+Begin
+  Child := TProcess.Create(Nil);
+  Try
+    Child.Executable := ParamStr(0);
+    Child.Parameters.Add('--check-arguments');
+    For I := 0 To Args.Count - 1 Do Child.Parameters.Add(Args[I]);
+    Child.Options := [poWaitOnExit];
+    Child.Execute;
+    Check('runtime arguments survive process launch', Child.ExitStatus = 0);
+  Finally
+    Child.Free;
+  End;
+End;
+Var Session: TAssistantCodexHandshake; Id, OldId: Int64; Frame: String; Args: TStringList; I: Integer;
 Begin
   Session := TAssistantCodexHandshake.Create;
   Args := TStringList.Create;
   Try
     CodexSubscriptionArguments(Args);
-    Check('runtime forced to ChatGPT login', Args.IndexOf('forced_login_method="chatgpt"') >= 0);
-    Check('runtime forced to OpenAI provider', Args.IndexOf('model_provider="openai"') >= 0);
+    If ParamStr(1) = '--check-arguments' Then
+      Begin
+        If ParamCount <> Args.Count + 1 Then Halt(1);
+        For I := 0 To Args.Count - 1 Do
+          If NativeArgument(I + 2) <> Args[I] Then
+            Begin
+              WriteLn('Argument ', I, ': expected ', Args[I], '; received ', NativeArgument(I + 2));
+              Halt(1);
+            End;
+        Halt(0);
+      End;
+    CheckArgumentTransport(Args);
+    Check('runtime forced to ChatGPT login', Args.IndexOf('forced_login_method=''chatgpt''') >= 0);
+    Check('runtime forced to OpenAI provider', Args.IndexOf('model_provider=''openai''') >= 0);
     Check('automatic ChatGPT app connectors disabled', Args.IndexOf('features.apps=false') >= 0);
-    Check('minimal filesystem profile defined', Args.IndexOf('permissions.lazarus_ide.filesystem={":minimal"="read"}') >= 0);
+    Check('minimal filesystem profile defined', Args.IndexOf('permissions.lazarus_ide.filesystem={'':minimal''=''read''}') >= 0);
     Check('profile command network disabled', Args.IndexOf('permissions.lazarus_ide.network.enabled=false') >= 0);
     Check('private stdio transport', Args.IndexOf('stdio://') >= 0);
     Id := Initialize(Session);
