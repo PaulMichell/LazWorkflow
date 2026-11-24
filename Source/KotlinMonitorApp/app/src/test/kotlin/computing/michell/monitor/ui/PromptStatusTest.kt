@@ -37,6 +37,11 @@ class PromptStatusTest {
     assertFalse(sendActionEnabled(running, false, LinkPhase.Live, false))
     assertFalse(newConversationEnabled(running, false, LinkPhase.Live, false))
     assertTrue(sendActionEnabled(idle.copy(canSteer = true), false, LinkPhase.Live, false))
+    val publishedOff = idle.copy(available = true, canSend = false)
+    assertFalse(sendActionEnabled(publishedOff, false, LinkPhase.Live, false))
+    val claudeTurn = idle.copy(available = true, sending = true, busy = true, canSend = false, canSteer = false)
+    assertEquals("Send", actionCaption(claudeTurn))
+    assertFalse(sendActionEnabled(claudeTurn, false, LinkPhase.Live, false))
   }
 
   @Test

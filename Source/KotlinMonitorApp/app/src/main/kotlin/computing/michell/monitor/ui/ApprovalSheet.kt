@@ -1,6 +1,6 @@
 package computing.michell.monitor.ui
 
-/* Approval sheet. Codex and Claude turns do not raise this message (c) 2026 Michell Computing. */
+/* Approval sheet. ChatGPT and Claude approvals use this same card (c) 2026 Michell Computing. */
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

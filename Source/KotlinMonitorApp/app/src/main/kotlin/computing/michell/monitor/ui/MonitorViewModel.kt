@@ -350,7 +350,8 @@ fun actionEnabled(view: WireView): Boolean {
   return view.canSend || view.canSteer
 }
 
-/** A live idle link can send before the first status frame sets canSend. A running turn still cannot.
+/** Before the first status frame, available is still false and an idle live link may send.
+    An explicit canSend false from the host wins. A running turn follows canSteer.
     Syncing is not a disconnect: the buttons stay up, and the coordinator holds the command. Callers pass
     syncing for a link that is down but coming back too, so a prompt can wait for it. */
 fun sendActionEnabled(
@@ -364,7 +365,7 @@ fun sendActionEnabled(
   // A recovered canSend must not start another turn while the host is still working.
   if (view.sending || view.busy || view.planRunning || planRunning) return view.canSteer
   if (view.canSend || view.canSteer) return true
-  return true
+  return !view.available
 }
 
 /** New stays available through a short sync. A running turn still cannot start another conversation. */
