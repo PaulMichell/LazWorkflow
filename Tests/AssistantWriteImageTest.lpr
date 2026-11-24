@@ -26,7 +26,7 @@ Uses
   {$ENDIF}
   Interfaces, Classes, SysUtils, base64, fpimage, fpwritejpeg, fpjson, jsonparser,
   AssistantCodexProfile, AssistantCodexQualification, AssistantCodexWire, AssistantToolWire, AssistantToolBroker, AssistantProtocol, AssistantConfig, AssistantConnections, AssistantConversation,
-  AssistantHarness, AssistantImageAdapters, AssistantImages, AssistantTools, AssistantWorkTarget,
+  AssistantHarness, AssistantGeneratedImage, AssistantImageAdapters, AssistantImages, AssistantTools, AssistantWorkTarget,
   WorkflowSettings;
 
 Const
@@ -451,6 +451,8 @@ Var
   GrokItem, CompatibleItem, ClaudeItem, CodexItem, EmptyModel: TAssistantConnection;
   SavedApproval: TAssistantApprovalMode;
   Kept: TBytes;
+  NativeImage: TAssistantGeneratedImage;
+  Destination: String;
   PostsBefore: Integer;
   Overwrite: Boolean;
 Begin
@@ -540,6 +542,26 @@ Begin
     Check('Codex approval names final PNG before generation',
       CodexImageDestination(ArgsFor('icons/example.jpg', 'a dot', ''), Reply, Slice, Note, Overwrite) And
       SameText(Reply, ProjectFile(Project, 'icons/example.png')) And (Pos(Reply, Slice) > 0) And Not FileExists(Reply));
+    Destination := Reply;
+    NativeImage.Bytes := PngBytes;
+    NativeImage.Mime := 'image/png';
+    NativeImage.Width := 1;
+    NativeImage.Height := 1;
+    ForceDirectories(ExtractFileDir(Destination));
+    WriteText(Destination + '.bak', 'keep-backup');
+    Check('native completion publishes the approved relative path and one attachment',
+      SaveGeneratedImage(Destination, False, NativeImage, Reply, Note, LastRefs) And
+      (Pos('icons/example.png', Reply) > 0) And (Length(LastRefs) = 1) And SameBytes(ReadBytes(Destination), PngBytes));
+    Check('repeat without overwrite returns no receipt or attachment',
+      Not SaveGeneratedImage(Destination, False, NativeImage, Reply, Note, LastRefs) And
+      (Reply = '') And (Length(LastRefs) = 0) And SameBytes(ReadBytes(Destination), PngBytes));
+    NativeImage.Bytes := Nil;
+    Check('failed attachment preparation preserves the previous destination',
+      Not SaveGeneratedImage(Destination, True, NativeImage, Reply, Note, LastRefs) And
+      (Reply = '') And (Length(LastRefs) = 0) And SameBytes(ReadBytes(Destination), PngBytes));
+    NativeImage.Bytes := PngBytes;
+    Check('approved replacement preserves the existing backup filename',
+      SaveGeneratedImage(Destination, True, NativeImage, Reply, Note, LastRefs) And FileExists(Destination + '.bak'));
     Check('SVG uses the document route', Not CodexImageDestination(ArgsFor('icons/example.svg', 'a dot', ''), Reply, Slice, Note, Overwrite));
     Check('a subagent tool list has no write_image',
       (Pos('write_image', BuildAssistantToolsJsonForSession(amBuild, True, False)) = 0) And

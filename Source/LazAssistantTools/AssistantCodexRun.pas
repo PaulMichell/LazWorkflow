@@ -16,7 +16,7 @@ Uses
 
 Type
   TCodexImageReservation = Record
-    RequestId, Destination, ErrorText: String;
+    RequestId, ThreadId, TurnId, TargetIdentity, Destination, ErrorText: String;
     Image: TAssistantGeneratedImage;
     Overwrite, Finished: Boolean;
   End;
@@ -38,9 +38,11 @@ Type
     FTool: TCodexToolRequest;
     FToolPending, FToolServicing, FToolReady, FToolSuccess: Boolean;
     FToolResult, FSteer: String;
-    ReplayUnsafe: Boolean;
+    ReplayUnsafe, ImageReady: Boolean;
+    ImageFailure: String;
     FTimeout, ReconnectDelayMs: Cardinal;
     FCancelled: LongInt;
+    Procedure ServiceImage;
     Function Cancelled: Boolean;
     Procedure Publish(Client: TAssistantCodexClient);
     Procedure NoteEvent(Kind: TAssistantEventKind; Const Text: String = ''; Const ToolName: String = '';
@@ -278,7 +280,10 @@ Begin
   EnterCriticalSection(FLock);
   Try
     Index := High(FSnapshot.Images);
-    If (Index >= 0) And Not FSnapshot.Images[Index].Finished And (FSnapshot.Images[Index].RequestId = Client.CompletedImageCall) Then
+    If (Index >= 0) And Not FSnapshot.Images[Index].Finished And Not Cancelled And
+      (FSnapshot.Images[Index].RequestId = Client.CompletedImageCall) And
+      (FSnapshot.Images[Index].ThreadId = Client.ThreadId) And (FSnapshot.Images[Index].TurnId = Client.TurnId) And
+      Not (Client.State In [crsFailed, crsWaitingReconnect]) Then
       Begin
         FSnapshot.Images := Copy(FSnapshot.Images);
         FSnapshot.Images[Index].ErrorText := Client.GeneratedImageError;
@@ -288,6 +293,14 @@ Begin
           Else
             FSnapshot.Images[Index].ErrorText := 'Generated image format differs from the approved destination extension.';
         FSnapshot.Images[Index].Finished := True;
+        ImageReady := True;
+      End;
+    If (Index >= 0) And Not FSnapshot.Images[Index].Finished And (Client.State In [crsCompleted, crsFailed, crsWaitingReconnect]) Then
+      Begin
+        FSnapshot.Images := Copy(FSnapshot.Images);
+        FSnapshot.Images[Index].Finished := True;
+        ImageFailure := 'Image generation failed before a completed image was received.';
+        NoteEvent(aekToolCompleted, ImageFailure, 'write_image', FSnapshot.Images[Index].RequestId, False);
       End;
     FSnapshot.State := Client.State;
     FSnapshot.Content := Client.Content;
@@ -351,6 +364,49 @@ Begin
   NoteEvent(aekToolStarted, ArgumentsJson, ToolName, 'test-call');
 End;
 
+Procedure TAssistantCodexRun.ServiceImage;
+Var
+  Reservation: TCodexImageReservation;
+  SavedText, Failure: String;
+  Refs: TAssistantImageRefArray;
+  OK: Boolean;
+Begin
+  EnterCriticalSection(FLock);
+  Try
+    If Not ImageReady Or Cancelled Then Exit;
+    Reservation := FSnapshot.Images[High(FSnapshot.Images)];
+    OK := False;
+    Try
+      If Reservation.ErrorText <> '' Then
+        Begin
+          If Reservation.ErrorText = 'Codex image generation did not complete.' Then
+            Failure := 'Image generation failed.'
+          Else
+            Failure := 'Image retrieval failed. ' + Reservation.ErrorText;
+        End
+      Else If Reservation.TargetIdentity <> AssistantTarget.Identity Then
+        Failure := 'Image saving failed. The approved target changed.'
+      Else If SaveGeneratedImage(Reservation.Destination, Reservation.Overwrite, Reservation.Image, SavedText, Failure, Refs) Then
+        OK := True
+      Else
+        Failure := 'Image saving failed. ' + Failure;
+    Except
+      On E: Exception Do Failure := 'Image saving failed. ' + E.Message;
+    End;
+    If Not OK Then
+      Begin
+        ImageFailure := Failure;
+        SavedText := Failure;
+      End;
+    NoteEvent(aekToolCompleted, SavedText, 'write_image', Reservation.RequestId, OK, AssistantImageRefsToJson(Refs));
+    ImageReady := False;
+    FSnapshot.Images := Copy(FSnapshot.Images);
+    ClearGeneratedImage(FSnapshot.Images[High(FSnapshot.Images)].Image);
+  Finally
+    LeaveCriticalSection(FLock);
+  End;
+End;
+
 Procedure TAssistantCodexRun.ServiceTool;
 Var
   Tool: TCodexToolRequest;
@@ -368,6 +424,7 @@ Var
   ImageRefs: TAssistantImageRefArray;
 Begin
   Result := False;
+  ServiceImage;
   Tool := Default(TCodexToolRequest);
   Text := '';
   OK := False;
@@ -417,6 +474,9 @@ Begin
               Index := Length(FSnapshot.Images);
               SetLength(FSnapshot.Images, Index + 1);
               FSnapshot.Images[Index].RequestId := Tool.CallId;
+              FSnapshot.Images[Index].ThreadId := Tool.ThreadId;
+              FSnapshot.Images[Index].TurnId := Tool.TurnId;
+              FSnapshot.Images[Index].TargetIdentity := TargetIdentity;
               FSnapshot.Images[Index].Destination := Destination;
               FSnapshot.Images[Index].Overwrite := Overwrite;
               OK := True;
@@ -454,7 +514,7 @@ Begin
       LeaveCriticalSection(FLock);
     End;
   End;
-  If Result Then
+  If Result And Not (OK And (Tool.Tool = 'write_image')) Then
     NoteEvent(aekToolCompleted, Text, Tool.Tool, Tool.CallId, OK, Attachments);
 End;
 
@@ -630,6 +690,15 @@ Begin
             End;
           End;
         Publish(Client);
+        Repeat
+          EnterCriticalSection(FLock);
+          Try
+            IdeWaiting := ImageReady And Not Cancelled;
+          Finally
+            LeaveCriticalSection(FLock);
+          End;
+          If IdeWaiting Then Sleep(5);
+        Until Not IdeWaiting;
         If Client.State In [crsFailed, crsCompleted] Then Break;
         Sleep(5);
       Until False;
@@ -655,6 +724,9 @@ Begin
       If Not ReplayUnsafe And Not Cancelled And (FSnapshot.ErrorText <> '') And
         (ClassifyDroppedTransport(CodexRetryPrefix + FSnapshot.ErrorText, '', False).Action = araRetryLastAction) Then
         FSnapshot.ErrorText := CodexRetryPrefix + FSnapshot.ErrorText;
+      If ImageFailure <> '' Then FSnapshot.ErrorText := Trim(FSnapshot.ErrorText + LineEnding + ImageFailure);
+      FSnapshot.Images := Nil;
+      ImageReady := False;
       FSnapshot.Done := True;
       FToolPending := False;
     Finally

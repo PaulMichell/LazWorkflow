@@ -16,7 +16,7 @@ Unit AssistantTools;
 Interface
 
 Uses
-  Classes, SysUtils, AssistantConversation, AssistantImages;
+  Classes, SysUtils, AssistantConversation, AssistantImages, AssistantGeneratedImage;
 
 Const
   AssistantToolMaxReadChars = 48000;
@@ -53,6 +53,8 @@ Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: Stri
   SkipApproval: Boolean = False): Boolean;
 /// Resolves and checks the final raster destination before approval or generation.
 Function ResolveImageDestination(Const Path: String; Overwrite: Boolean; Out Resolved, Relative, ErrorText: String): Boolean;
+Function SaveGeneratedImage(Const Destination: String; Overwrite: Boolean; Const Image: TAssistantGeneratedImage;
+  Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
 /// Clears a failed write_image stop. Call at turn start on the thread that runs tools.
 Procedure BeginWriteImageTurn;
 Function FindLazbuildExecutable: String;
@@ -144,7 +146,7 @@ Uses
   CodeToolManager, AssistantCodeToolsGuard, AssistantFormMembers, AssistantFormSave,
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantExactReplace, AssistantGit, AssistantTestSettings, AssistantConnections,
-  AssistantGeneratedImage, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser,
+  SafeFileAccess, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser,
   AssistantToolSpecs, AssistantToolWire;
 
 Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
@@ -3994,9 +3996,8 @@ End;
 Function PublishImageBytes(Const Resolved: String; Const Data: TBytes; Overwrite: Boolean;
   Out ErrorText: String): Boolean;
 Var
-  Parent, TempPath, BackupPath: String;
-  Stream: TFileStream;
-  Existed: Boolean;
+  Parent, TempPath: String;
+  UniqueId: TGUID;
 Begin
   Result := False;
   ErrorText := '';
@@ -4014,49 +4015,47 @@ Begin
         ErrorText := 'Could not create the image directory.';
         Exit;
       End;
-  Existed := FileExistsUTF8(Resolved) Or FileIsSymlink(Resolved);
-  TempPath := Resolved + '.writing';
-  BackupPath := Resolved + '.bak';
-  If FileExistsUTF8(TempPath) Or FileIsSymlink(TempPath) Then
-    DeleteFileUTF8(TempPath);
-  Stream := Nil;
-  Try
-    Try
-      Stream := TFileStream.Create(TempPath, fmCreate);
-      If Length(Data) > 0 Then
-        Stream.WriteBuffer(Data[0], Length(Data));
-    Except
-      On E: Exception Do
-        Begin
-          DeleteFileUTF8(TempPath);
-          ErrorText := 'Could not write the image.';
-          Exit;
-        End;
+  If CreateGUID(UniqueId) <> 0 Then
+    Begin
+      ErrorText := 'Could not allocate a temporary image name.';
+      Exit;
     End;
+  TempPath := IncludeTrailingPathDelimiter(Parent) + GUIDToString(UniqueId) + '.writing';
+  If Not CreateExclusiveNoFollow(TempPath, Data, ErrorText) Then Exit;
+  Try
+    Result := InstallImageFile(TempPath, Resolved, Overwrite);
+    If Not Result Then ErrorText := 'Could not install the image at the approved destination.';
+  Finally
+    DeleteFileUTF8(TempPath);
+  End;
+End;
+
+Function SaveGeneratedImage(Const Destination: String; Overwrite: Boolean; Const Image: TAssistantGeneratedImage;
+  Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+Var
+  Resolved, Relative: String;
+  Stored: TAssistantStoredImage;
+  Stream: TBytesStream;
+Begin
+  Result := False;
+  ResultText := '';
+  ImageRefs := Nil;
+  If Not ResolveImageDestination(Destination, Overwrite, Resolved, Relative, ErrorText) Then Exit;
+  If Resolved <> Destination Then
+    Begin
+      ErrorText := 'Image destination changed after approval.';
+      Exit;
+    End;
+  Stream := TBytesStream.Create(Image.Bytes);
+  Try
+    If Not StoreAssistantImageFromStream(ProjectRootPath, ExtractFileName(Resolved), Stream, Stored, ErrorText) Then Exit;
   Finally
     Stream.Free;
   End;
-  If Existed Then
-    Begin
-      If FileExistsUTF8(BackupPath) Or FileIsSymlink(BackupPath) Then
-        DeleteFileUTF8(BackupPath);
-      If Not RenameFileUTF8(Resolved, BackupPath) Then
-        Begin
-          DeleteFileUTF8(TempPath);
-          ErrorText := 'Could not replace the existing image.';
-          Exit;
-        End;
-    End;
-  If Not RenameFileUTF8(TempPath, Resolved) Then
-    Begin
-      If Existed Then
-        RenameFileUTF8(BackupPath, Resolved);
-      DeleteFileUTF8(TempPath);
-      ErrorText := 'Could not write the image.';
-      Exit;
-    End;
-  If Existed Then
-    DeleteFileUTF8(BackupPath);
+  If Not PublishImageBytes(Resolved, Image.Bytes, Overwrite, ErrorText) Then Exit;
+  SetLength(ImageRefs, 1);
+  ImageRefs[0] := ImageRefFromStored(Stored);
+  ResultText := GeneratedImageResultText(Relative, Image);
   Result := True;
 End;
 
@@ -4082,7 +4081,6 @@ Var
   Path, Prompt, Shape, Resolved, Relative, RequestedRelative, ExpectedMime, SniffedMime, ImageModel, ChosenExt: String;
   Overwrite: Boolean;
   Image: TAssistantGeneratedImage;
-  Stored: TAssistantStoredImage;
   Profile: TAssistantProfileCall;
   Width, Height: Integer;
   Procedure FailWrite;
@@ -4194,23 +4192,16 @@ Begin
   Image.Mime := SniffedMime;
   Image.Width := Width;
   Image.Height := Height;
-  If Not PublishImageBytes(Resolved, Image.Bytes, Overwrite, ErrorText) Then
+  If Not SaveGeneratedImage(Resolved, Overwrite, Image, ResultText, ErrorText, ImageRefs) Then
     Begin
       FailWrite;
       Exit;
     End;
-  ResultText := GeneratedImageResultText(Relative, Image);
   If RequestedRelative <> Relative Then
     ResultText := ResultText + LineEnding + 'requested=' + RequestedRelative + LineEnding + 'chosen=' + SniffedMime;
   If ImageModel <> '' Then
     ResultText := ResultText + LineEnding + 'model=' + ImageModel;
-  If Not StoreAssistantImageFromFile(ProjectRootPath, Resolved, Stored, ErrorText) Then
-    Begin
-      FailWrite;
-      Exit;
-    End;
-  SetLength(ImageRefs, 1);
-  ImageRefs[0] := ImageRefFromStored(Stored);
+
   Result := True;
 End;
 

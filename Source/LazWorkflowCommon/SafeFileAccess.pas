@@ -39,6 +39,8 @@ Function PathEntryExists(Const Path: String): Boolean;
 Function TryExclusiveCreate(Const Path: String; Out Handle: THandle; Out ErrorText: String): Boolean;
 /// Replaces DestinationPath with the exclusive file. Caller closes any handle on SourcePath first.
 Function ReplaceWithExclusiveFile(Const SourcePath, DestinationPath: String; Out ErrorText: String): Boolean;
+/// Install a complete sibling file atomically, respecting overwrite permission.
+Function InstallImageFile(Const SourcePath, DestinationPath: String; Overwrite: Boolean): Boolean;
 /// Git null-device argument: NUL on Windows, /dev/null elsewhere. Not a file to open.
 Function NullDevicePath: String;
 
@@ -714,6 +716,25 @@ Begin
     Result := True;
     {$ELSE}
     ErrorText := RestoreConfigError;
+    {$ENDIF}
+  {$ENDIF}
+End;
+
+Function InstallImageFile(Const SourcePath, DestinationPath: String; Overwrite: Boolean): Boolean;
+Begin
+  {$IFDEF UNIX}
+  If Overwrite Then
+    Result := fpRename(SourcePath, DestinationPath) = 0
+  Else
+    Result := fpLink(SourcePath, DestinationPath) = 0;
+  {$ELSE}
+    {$IFDEF WINDOWS}
+    If Overwrite Then
+      Result := MoveFileExW(PWideChar(UTF8Decode(SourcePath)), PWideChar(UTF8Decode(DestinationPath)), MOVEFILE_REPLACE_EXISTING)
+    Else
+      Result := MoveFileW(PWideChar(UTF8Decode(SourcePath)), PWideChar(UTF8Decode(DestinationPath)));
+    {$ELSE}
+    Result := False;
     {$ENDIF}
   {$ENDIF}
 End;

@@ -961,7 +961,10 @@ Begin
             If Not (Value Is TJSONObject) Then Exit;
             Turn := TJSONObject(Value);
             If (FTurnId = '') Or (Turn.Get('id', '') <> FTurnId) Then Exit;
+            PendingImageCall := '';
+            PendingImageItem := '';
             Status := Turn.Get('status', '');
+            If Status <> 'completed' Then FCompletedImageCall := '';
             If Status = 'failed' Then
               Begin
                 Value := Turn.FindPath('error.message');
@@ -990,7 +993,7 @@ Begin
               Begin
                 If Method = 'item/agentMessage/delta' Then
                   MessageText(Params.Get('itemId', ''), Params.Get('delta', ''), False)
-                Else If (Method = 'item/started') And (PendingImageCall <> '') And (PendingImageItem = '') Then
+                Else If (FState = crsRunning) And (Method = 'item/started') And (PendingImageCall <> '') And (PendingImageItem = '') Then
                   Begin
                     Value := Params.Find('item');
                     If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'imageGeneration') Then
@@ -1003,7 +1006,7 @@ Begin
                       MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True)
                     Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'imageGeneration') Then
                       Begin
-                        If (PendingImageItem <> '') And (TJSONObject(Value).Get('id', '') = PendingImageItem) Then
+                        If (FState = crsRunning) And (PendingImageItem <> '') And (TJSONObject(Value).Get('id', '') = PendingImageItem) Then
                           Begin
                             FCompletedImageCall := PendingImageCall;
                             ClearGeneratedImage(FGeneratedImage);
