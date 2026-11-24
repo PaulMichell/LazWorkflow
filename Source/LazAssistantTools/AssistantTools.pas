@@ -1668,83 +1668,88 @@ Begin
   Result := (Ext = '.lpi') Or (Ext = '.lps');
 End;
 
-Function IsSearchableTextExtension(Const Path: String): Boolean; Forward;
+Function ReadConfiguredUnitOutputDirectory: String; Forward;
 
-Function IsSkippedSearchDirectory(Const DirName: String): Boolean;
+Type
+  TUnitOutputCapture = Class
+    Directory: String;
+    Procedure Execute;
+  End;
+
+{ Empty when the active project or package has no separate unit-output directory.
+  The project root itself is never treated as output, or a search would hide every source file. }
+Function ReadConfiguredUnitOutputDirectory: String;
 Var
-  N: String;
+  Options: TLazCompilerOptions;
+  Base, Path, Root: String;
 Begin
-  N := LowerCase(DirName);
-  Result := (N = '.git') Or (N = '.svn') Or (N = '.hg') Or (N = 'node_modules') Or
-    (N = '__pycache__') Or (N = 'backup') Or (N = 'lib') Or (N = 'units') Or
-    (N = '.grok') Or (N = '.assistant') Or (N = 'temporary');
+  Result := '';
+  Options := Nil;
+  Base := '';
+  Try
+    If AssistantTarget.Kind = atkPackage Then
+      Begin
+        If Assigned(AssistantTarget.Package) Then
+          Begin
+            Options := AssistantTarget.Package.LazCompilerOptions;
+            Base := ExtractFilePath(AssistantTarget.Manifest);
+          End;
+      End
+    Else If AssistantTarget.Kind = atkProject Then
+      Begin
+        If Assigned(LazarusIDE) And Assigned(LazarusIDE.ActiveProject) Then
+          Begin
+            Options := LazarusIDE.ActiveProject.LazCompilerOptions;
+            Base := ExtractFilePath(LazarusIDE.ActiveProject.ProjectInfoFile);
+          End;
+      End;
+    If Not Assigned(Options) Then Exit;
+    Path := Trim(Options.GetUnitOutputDirectory(False));
+    If (Path = '') Or (Pos('$(', Path) > 0) Then Exit;
+    If Not FilenameIsAbsolute(Path) Then
+      Begin
+        If Trim(Base) = '' Then Exit;
+        Path := IncludeTrailingPathDelimiter(Base) + Path;
+      End;
+    Path := ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(Path));
+    If Path = '' Then Exit;
+    Root := ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(ProjectRootPath));
+    If (Root <> '') And (CompareFilenames(Path, Root) = 0) Then Exit;
+    If (Trim(Base) <> '') And (CompareFilenames(Path, ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(Base))) = 0) Then
+      Exit;
+    Result := Path;
+  Except
+    Result := '';
+  End;
+End;
+
+Procedure TUnitOutputCapture.Execute;
+Begin
+  Directory := ReadConfiguredUnitOutputDirectory;
+End;
+
+{ Compiler options are an IDE object. The disk walk may run on the worker. }
+Function CaptureSearchUnitOutput: String;
+Var
+  Capture: TUnitOutputCapture;
+Begin
+  If GetCurrentThreadID = MainThreadID Then
+    Exit(ReadConfiguredUnitOutputDirectory);
+  Capture := TUnitOutputCapture.Create;
+  Try
+    Capture.Directory := '';
+    TThread.Synchronize(Nil, @Capture.Execute);
+    Result := Capture.Directory;
+  Finally
+    Capture.Free;
+  End;
 End;
 
 Function CollectSearchableFiles(Const DirPath, Glob: String; Files: TStringList;
   Var FileCount, WalkCount: Integer): Boolean;
-Var
-  Info: TDirectoryScan;
-  Child: String;
-  Code: Integer;
 Begin
-  Result := True;
-  If FileCount >= AssistantToolMaxSearchFiles Then
-    Exit;
-  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
-  Try
-    While Code = 0 Do
-      Begin
-        If ToolsShouldStop Then
-          Begin
-            Result := False;
-            Exit;
-          End;
-        Inc(WalkCount);
-        If WalkCount > 20000 Then
-          Begin
-            Result := False;
-            Exit;
-          End;
-        If (Info.Name <> '.') And (Info.Name <> '..') Then
-          Begin
-            Child := IncludeTrailingPathDelimiter(DirPath) + Info.Name;
-            If (Info.Attr And faDirectory) <> 0 Then
-              Begin
-                If Not IsSkippedSearchDirectory(Info.Name) Then
-                  If Not CollectSearchableFiles(Child, Glob, Files, FileCount, WalkCount) Then
-                    Begin
-                      Result := False;
-                      Exit;
-                    End;
-              End
-            Else If IsSearchableTextExtension(Child) And FileMatchesSearchGlob(Child, Glob) Then
-              Begin
-                Files.Add(Child);
-                Inc(FileCount);
-                If FileCount >= AssistantToolMaxSearchFiles Then
-                  Exit;
-              End;
-          End;
-        If FileCount >= AssistantToolMaxSearchFiles Then
-          Exit;
-        Code := AdvanceDirectoryScan(Info);
-      End;
-  Finally
-    CloseDirectoryScan(Info);
-  End;
-End;
-
-Function IsSearchableTextExtension(Const Path: String): Boolean;
-Var
-  Ext: String;
-Begin
-  Ext := LowerCase(ExtractFileExt(Path));
-  Result := (Ext = '') Or (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.lpr') Or
-    (Ext = '.lfm') Or (Ext = '.lrs') Or (Ext = '.inc') Or (Ext = '.txt') Or
-    (Ext = '.md') Or (Ext = '.json') Or (Ext = '.xml') Or (Ext = '.lpi') Or
-    (Ext = '.lpk') Or (Ext = '.rc') Or (Ext = '.sql') Or (Ext = '.sh') Or
-    (Ext = '.bat') Or (Ext = '.csv') Or (Ext = '.ini') Or (Ext = '.cfg') Or
-    (Ext = '.yml') Or (Ext = '.yaml') Or (Ext = '.html') Or (Ext = '.css');
+  Result := AssistantSearchUtil.CollectSearchableFiles(DirPath, Glob, CaptureSearchUnitOutput, Files, FileCount,
+    WalkCount, AssistantToolMaxSearchFiles, 20000, @ToolsShouldStop);
 End;
 
 Function IsPascalUnitPath(Const Path: String): Boolean;

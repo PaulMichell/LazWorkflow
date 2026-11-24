@@ -1,6 +1,6 @@
 Unit AssistantSearchUtil;
 
-{ Grep glob / regex detection and read_file line-range helpers (c) 2026 Michell Computing. }
+{ Grep glob, regex, line ranges, and which directories search may enter (c) 2026 Michell Computing. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -11,6 +11,10 @@ Interface
 
 Uses
   Classes;
+
+Type
+  { Nil means the walk does not stop. }
+  TSearchStopQuery = Function: Boolean;
 
 { True when the pattern is almost certainly a regex (unescaped | is the usual case). }
 Function PatternLooksLikeRegex(Const Pattern: String): Boolean;
@@ -30,13 +34,25 @@ Function MatchSearchLines(Const Query, RelativePath: String; Lines: TStrings; Us
 Function SearchTextMatches(Const Query, RelativePath, Text: String; FilesOnly: Boolean; MaxResults: Integer;
   Out ResultText, ErrorText: String): Boolean;
 
+{ VCS metadata, package caches, and local copies. Not lib or units: those names also hold source. }
+Function IsAlwaysSkippedSearchDirectory(Const DirName: String): Boolean;
+{ KnownUnitOutput empty means the project output path is unknown.
+  A known unit-output directory is skipped even if it contains source. A lib or units directory is skipped
+  only when it contains no .pas, .pp, .inc, .lfm, or .lpr. The search walk does not enter a skipped directory. }
+Function ShouldSkipSearchDirectory(Const DirectoryPath, DirectoryName, KnownUnitOutput: String;
+  ShouldStop: TSearchStopQuery): Boolean;
+{ Disk walk used by grep. WalkCount counts entries this walk opens, not files inside a skipped directory. }
+Function CollectSearchableFiles(Const DirPath, Glob, KnownUnitOutput: String; Files: TStrings;
+  Var FileCount, WalkCount: Integer; MaxFiles, MaxWalk: Integer; ShouldStop: TSearchStopQuery): Boolean;
+
 Implementation
 
 Uses
-  SysUtils, RegExpr;
+  SysUtils, LazFileUtils, DirectoryListing, RegExpr;
 
 Const
   SearchMatchLineChars = 512;
+  SearchSourceProbeMaxDepth = 40;
 
 Function PatternLooksLikeRegex(Const Pattern: String): Boolean;
 Begin
@@ -250,6 +266,173 @@ Begin
       MatchCount, ResultText, Capped, ErrorText);
   Finally
     Lines.Free;
+  End;
+End;
+
+Function IsAlwaysSkippedSearchDirectory(Const DirName: String): Boolean;
+Var
+  N: String;
+Begin
+  N := LowerCase(DirName);
+  Result := (N = '.git') Or (N = '.svn') Or (N = '.hg') Or (N = 'node_modules') Or
+    (N = '__pycache__') Or (N = 'backup') Or (N = 'temporary') Or (N = '.grok') Or (N = '.assistant');
+End;
+
+Function IsLibOrUnitsDirectoryName(Const DirName: String): Boolean;
+Var
+  N: String;
+Begin
+  N := LowerCase(DirName);
+  Result := (N = 'lib') Or (N = 'units');
+End;
+
+Function SameSearchDirectory(Const Left, Right: String): Boolean;
+Var
+  LeftPath, RightPath: String;
+Begin
+  LeftPath := ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(Trim(Left)));
+  RightPath := ExcludeTrailingPathDelimiter(ExpandFileNameUTF8(Trim(Right)));
+  Result := (LeftPath <> '') And (RightPath <> '') And (CompareFilenames(LeftPath, RightPath) = 0);
+End;
+
+Function IsSearchableSourceExtension(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.inc') Or (Ext = '.lfm') Or (Ext = '.lpr');
+End;
+
+Function IsSearchableTextExtension(Const Path: String): Boolean;
+Var
+  Ext: String;
+Begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  Result := (Ext = '') Or (Ext = '.pas') Or (Ext = '.pp') Or (Ext = '.lpr') Or
+    (Ext = '.lfm') Or (Ext = '.lrs') Or (Ext = '.inc') Or (Ext = '.txt') Or
+    (Ext = '.md') Or (Ext = '.json') Or (Ext = '.xml') Or (Ext = '.lpi') Or
+    (Ext = '.lpk') Or (Ext = '.rc') Or (Ext = '.sql') Or (Ext = '.sh') Or
+    (Ext = '.bat') Or (Ext = '.csv') Or (Ext = '.ini') Or (Ext = '.cfg') Or
+    (Ext = '.yml') Or (Ext = '.yaml') Or (Ext = '.html') Or (Ext = '.css');
+End;
+
+{ Depth past the limit is treated as source so a link cycle cannot hide a real tree. }
+Function DirectoryContainsSearchableSource(Const DirPath, KnownUnitOutput: String; Depth: Integer;
+  ShouldStop: TSearchStopQuery): Boolean;
+Var
+  Info: TDirectoryScan;
+  Code: Integer;
+  Child: String;
+Begin
+  Result := False;
+  If Depth > SearchSourceProbeMaxDepth Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If Assigned(ShouldStop) And ShouldStop() Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  If (KnownUnitOutput <> '') And SameSearchDirectory(DirPath, KnownUnitOutput) Then Exit;
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
+  Try
+    While Code = 0 Do
+      Begin
+        If (Info.Name <> '.') And (Info.Name <> '..') Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(DirPath) + Info.Name;
+            If (Info.Attr And faDirectory) <> 0 Then
+              Begin
+                If Not IsAlwaysSkippedSearchDirectory(Info.Name) And
+                  DirectoryContainsSearchableSource(Child, KnownUnitOutput, Depth + 1, ShouldStop) Then
+                  Exit(True);
+              End
+            Else If IsSearchableSourceExtension(Info.Name) Then
+              Exit(True);
+          End;
+        Code := AdvanceDirectoryScan(Info);
+      End;
+  Finally
+    CloseDirectoryScan(Info);
+  End;
+End;
+
+Function ShouldSkipSearchDirectory(Const DirectoryPath, DirectoryName, KnownUnitOutput: String;
+  ShouldStop: TSearchStopQuery): Boolean;
+Begin
+  If IsAlwaysSkippedSearchDirectory(DirectoryName) Then
+    Exit(True);
+  If (KnownUnitOutput <> '') And SameSearchDirectory(DirectoryPath, KnownUnitOutput) Then
+    Exit(True);
+  If IsLibOrUnitsDirectoryName(DirectoryName) Then
+    Exit(Not DirectoryContainsSearchableSource(DirectoryPath, KnownUnitOutput, 0, ShouldStop));
+  Result := False;
+End;
+
+Function CollectSearchableFiles(Const DirPath, Glob, KnownUnitOutput: String; Files: TStrings;
+  Var FileCount, WalkCount: Integer; MaxFiles, MaxWalk: Integer; ShouldStop: TSearchStopQuery): Boolean;
+Var
+  Info: TDirectoryScan;
+  Child: String;
+  Code: Integer;
+Begin
+  Result := True;
+  If Not Assigned(Files) Then
+    Begin
+      Result := False;
+      Exit;
+    End;
+  If Assigned(ShouldStop) And ShouldStop() Then
+    Begin
+      Result := False;
+      Exit;
+    End;
+  If (MaxFiles > 0) And (FileCount >= MaxFiles) Then Exit;
+  { A skipped directory is not opened, so its object files are not walked one by one. }
+  If ShouldSkipSearchDirectory(DirPath, ExtractFileName(ExcludeTrailingPathDelimiter(DirPath)), KnownUnitOutput,
+    ShouldStop) Then
+    Exit;
+  Code := StartDirectoryScan(IncludeTrailingPathDelimiter(DirPath) + '*', faAnyFile, Info);
+  Try
+    While Code = 0 Do
+      Begin
+        If Assigned(ShouldStop) And ShouldStop() Then
+          Begin
+            Result := False;
+            Exit;
+          End;
+        Inc(WalkCount);
+        If (MaxWalk > 0) And (WalkCount > MaxWalk) Then
+          Begin
+            Result := False;
+            Exit;
+          End;
+        If (Info.Name <> '.') And (Info.Name <> '..') Then
+          Begin
+            Child := IncludeTrailingPathDelimiter(DirPath) + Info.Name;
+            If (Info.Attr And faDirectory) <> 0 Then
+              Begin
+                If Not CollectSearchableFiles(Child, Glob, KnownUnitOutput, Files, FileCount, WalkCount, MaxFiles,
+                  MaxWalk, ShouldStop) Then
+                  Begin
+                    Result := False;
+                    Exit;
+                  End;
+              End
+            Else If IsSearchableTextExtension(Child) And FileMatchesSearchGlob(Child, Glob) Then
+              Begin
+                Files.Add(Child);
+                Inc(FileCount);
+                If (MaxFiles > 0) And (FileCount >= MaxFiles) Then Exit;
+              End;
+          End;
+        If (MaxFiles > 0) And (FileCount >= MaxFiles) Then Exit;
+        Code := AdvanceDirectoryScan(Info);
+      End;
+  Finally
+    CloseDirectoryScan(Info);
   End;
 End;
 
