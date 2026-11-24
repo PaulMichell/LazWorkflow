@@ -741,9 +741,4 @@ Begin
     End;
 End;
 
-Function SpecCount: Integer;
-Begin
-  Result := TableCount;
-End;
-
 End.

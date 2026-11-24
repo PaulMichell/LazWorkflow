@@ -180,18 +180,6 @@
         <UnitName Value="AssistantCompatibleSettings"/>
       </Item>
       <Item>
-        <Filename Value="../Source/LazAssistantTools/AssistantGrokSettings.pas"/>
-        <UnitName Value="AssistantGrokSettings"/>
-      </Item>
-      <Item>
-        <Filename Value="../Source/LazAssistantTools/AssistantClaudeSettings.pas"/>
-        <UnitName Value="AssistantClaudeSettings"/>
-      </Item>
-      <Item>
-        <Filename Value="../Source/LazAssistantTools/AssistantCompatibleSettings.pas"/>
-        <UnitName Value="AssistantCompatibleSettings"/>
-      </Item>
-      <Item>
         <Filename Value="../Source/LazAssistantTools/AssistantGrokBackend.pas"/>
         <UnitName Value="AssistantGrokBackend"/>
       </Item>
