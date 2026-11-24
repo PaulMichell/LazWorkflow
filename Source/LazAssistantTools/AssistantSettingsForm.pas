@@ -1296,7 +1296,7 @@ Var
 Begin
   Found := DetectClaudeExecutable;
   If Found = '' Then
-    ClaudeStatusLabel.Caption := 'Claude Code was not found on PATH. Use Browse to select the installed executable. ' +
+    ClaudeStatusLabel.Caption := 'Claude Code was not found in the Claude app or on PATH. Use Browse to select the installed executable. ' +
       ClaudeKeepsSessionText
   Else
     Begin

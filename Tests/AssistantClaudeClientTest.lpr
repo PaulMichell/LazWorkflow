@@ -12,8 +12,8 @@ Uses
   {$IFDEF UNIX}
   cthreads, BaseUnix,
   {$ENDIF}
-  Classes, SysUtils, fpjson, jsonparser, AssistantConversation, AssistantClaudeClient, AssistantClaudeStream,
-  AssistantClaudeInput,
+  Interfaces, Classes, SysUtils, LazFileUtils, fpjson, jsonparser, AssistantConversation, AssistantClaudeClient,
+  AssistantClaudeStream, AssistantClaudeInput,
   AssistantImages, ClaudeCaptureSupport;
 
 Const
@@ -270,6 +270,150 @@ End;
 Function SourceContains(Const Source, Needle: String): Boolean;
 Begin
   Result := Pos(LowerCase(Needle), LowerCase(Source)) > 0;
+End;
+
+{ The desktop app keeps Claude Code off PATH. A planted tree checks version and finished-download selection. }
+Procedure TestClaudeDesktopDetect;
+Var
+  Temporary, Root, DirectRoot, PartialRoot, BinaryName, Winner, Newer, Direct, Only, Found: String;
+
+  Function Join(Const Parts: Array Of String): String;
+  Var
+    Part: String;
+  Begin
+    Result := '';
+    For Part In Parts Do
+      If Result = '' Then
+        Result := Part
+      Else
+        Result := IncludeTrailingPathDelimiter(Result) + Part;
+  End;
+
+  Procedure RemoveTree(Const Directory: String);
+  Var
+    Info: TSearchRec;
+    Child: String;
+  Begin
+    If Not DirectoryExists(Directory) Then
+      Exit;
+    If FindFirst(IncludeTrailingPathDelimiter(Directory) + '*', faAnyFile, Info) = 0 Then
+      Try
+        Repeat
+          If (Info.Name = '.') Or (Info.Name = '..') Then
+            Continue;
+          Child := IncludeTrailingPathDelimiter(Directory) + Info.Name;
+          If (Info.Attr And faDirectory) <> 0 Then
+            RemoveTree(Child)
+          Else
+            DeleteFile(Child);
+        Until FindNext(Info) <> 0;
+      Finally
+        FindClose(Info);
+      End;
+    RemoveDir(Directory);
+  End;
+
+  Procedure Plant(Const Path: String; Verified: Boolean);
+  Var
+    Handle: THandle;
+    Marker: String;
+  Begin
+    If Not ForceDirectories(ExtractFilePath(Path)) Then
+      Begin
+        WriteLn('FAIL could not create ', ExtractFilePath(Path));
+        Halt(1);
+      End;
+    Handle := FileCreate(Path);
+    If Handle = THandle(-1) Then
+      Begin
+        WriteLn('FAIL could not create ', Path);
+        Halt(1);
+      End;
+    FileClose(Handle);
+    {$IFDEF UNIX}
+    If fpchmod(Path, &755) <> 0 Then
+      Begin
+        WriteLn('FAIL could not mark executable ', Path);
+        Halt(1);
+      End;
+    {$ENDIF}
+    If Not Verified Then
+      Exit;
+    Marker := IncludeTrailingPathDelimiter(ExtractFilePath(Path)) + '.verified';
+    Handle := FileCreate(Marker);
+    If Handle = THandle(-1) Then
+      Begin
+        WriteLn('FAIL could not create ', Marker);
+        Halt(1);
+      End;
+    FileClose(Handle);
+  End;
+
+  Procedure MarkVerified(Const Executable: String);
+  Begin
+    Plant(IncludeTrailingPathDelimiter(ExtractFilePath(Executable)) + '.verified', False);
+  End;
+
+Begin
+  Temporary := '';
+  If DirectoryExists('Tests') And DirectoryExists('Source') Then
+    Temporary := IncludeTrailingPathDelimiter(ExpandFileName('Temporary'))
+  Else If DirectoryExists('../Tests') And DirectoryExists('../Source') Then
+    Temporary := IncludeTrailingPathDelimiter(ExpandFileName('../Temporary'));
+  Check('fixture directory can be placed under Temporary', Temporary <> '');
+  If Not ForceDirectories(Temporary) Then
+    Begin
+      WriteLn('FAIL could not create ', Temporary);
+      Halt(1);
+    End;
+  {$IFDEF WINDOWS}
+  BinaryName := 'claude.exe';
+  {$ELSE}
+  BinaryName := 'claude';
+  {$ENDIF}
+  Root := Temporary + 'ClaudeDetectFixture';
+  DirectRoot := Temporary + 'ClaudeDetectDirect';
+  PartialRoot := Temporary + 'ClaudeDetectPartial';
+  RemoveTree(Root);
+  RemoveTree(DirectRoot);
+  RemoveTree(PartialRoot);
+  Try
+    Plant(Join([Root, 'claude_app', 'claude-code', '2.1.9', 'old', BinaryName]), True);
+    Winner := Join([Root, 'claude_app', 'claude-code', '2.1.330', 'current', BinaryName]);
+    Plant(Winner, True);
+    Newer := Join([Root, 'claude_app', 'claude-code', '2.1.400', 'partial', BinaryName]);
+    Plant(Newer, False);
+    Plant(Join([Root, 'claude_app', 'claude-code-vm', '9.9.9', 'vm', BinaryName]), True);
+    Plant(Join([Root, 'app', BinaryName]), True);
+    Plant(Join([Root, 'only-partial', 'claude-code', '3.0.0', 'build', BinaryName]), False);
+    Found := FindClaudeInDesktopData(Root);
+    Check('desktop search prefers 2.1.330 over 2.1.9', Found = Winner);
+    Check('desktop search ignores an unfinished newer build', Found <> Newer);
+    Check('desktop search ignores the vm copy', Pos('claude-code-vm', Found) = 0);
+    MarkVerified(Newer);
+    Check('a finished newer build replaces the previous one', FindClaudeInDesktopData(Root) = Newer);
+    Direct := Join([DirectRoot, 'claude-code', '1.2.3', 'build', BinaryName]);
+    Plant(Direct, True);
+    Check('a data directory that is itself the profile is found', FindClaudeInDesktopData(DirectRoot) = Direct);
+    Only := Join([PartialRoot, 'profile', 'claude-code', '3.0.0', 'build', BinaryName]);
+    Plant(Only, False);
+    Check('an unfinished build is used when it is the only one', FindClaudeInDesktopData(PartialRoot) = Only);
+    Check('missing desktop data is empty', FindClaudeInDesktopData(Join([Root, 'missing'])) = '');
+  Finally
+    RemoveTree(Root);
+    RemoveTree(DirectRoot);
+    RemoveTree(PartialRoot);
+  End;
+  {$IFDEF WINDOWS}
+  Root := GetEnvironmentVariable('LOCALAPPDATA');
+  If Root <> '' Then
+    Begin
+      Found := FindClaudeInDesktopData(IncludeTrailingPathDelimiter(Root) + 'Claude-Data');
+      If Found <> '' Then
+        Check('auto-detect finds a program when the desktop app has stored one',
+          FileIsExecutable(DetectClaudeExecutable));
+    End;
+  {$ENDIF}
 End;
 
 Var
@@ -636,6 +780,8 @@ Begin
     Stream.Tools[0].Done And (Not Stream.Tools[0].IsError));
   Check('the trace keeps the tool text, not the echoed picture data',
     (Length(Stream.Tools) = 1) And (Stream.Tools[0].Output = 'The picture follows.'));
+
+  TestClaudeDesktopDetect;
 
   Source := UnitSource;
   Check('client unit is available to scan', Source <> '');

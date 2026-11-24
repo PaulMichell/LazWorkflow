@@ -10,7 +10,10 @@ Unit AssistantClaudeClient;
   through the MCP server named in its config file. The first request of a session also receives the harness
   prompt (policy, mode overlay, skills and AGENTS.md) via --append-system-prompt. Claude Code stores that
   prompt and reuses it on resume. This client does not receive the assistant's own tool list or transcript
-  compactor, and it never reads Claude sign-in files or sets a billing flag. }
+  compactor, and it never reads Claude sign-in files or sets a billing flag.
+
+  Size note: over the 1000 line preference. The turn runner and the desktop-app executable
+  search are one client. Reviewed 2026-11-24. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -131,8 +134,11 @@ Const
     than ClaudeReadImageNote. A longer harness prompt is reported and still sent. }
   ClaudeFixtureAcceptedTextChars = 5560;
 
-/// The claude program on PATH, or empty.
+/// The claude program on PATH, the native install, or the copy kept by the Claude desktop app. Empty when none is there.
 Function DetectClaudeExecutable: String;
+/// Newest Claude Code binary under a desktop data directory, or empty. The app stores it at
+/// <profile>/claude-code/<version>/<build>/claude, which is not on PATH.
+Function FindClaudeInDesktopData(Const DataRoot: String): String;
 /// The expanded path when it names an executable file, otherwise empty.
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
 /// AssistantWriteScopeForMode. Kept so a Claude call site names the same map as Codex.
@@ -195,12 +201,19 @@ Procedure ForgetClaudeAccounts;
 Implementation
 
 Uses
-  SysUtils, Process, Pipes, FileUtil, LazFileUtils, fpjson, jsonparser, ProcessSession, AssistantMCPProtocol;
+  SysUtils, Process, Pipes, FileUtil, LazFileUtils, DirectoryListing, fpjson, jsonparser, ProcessSession,
+  AssistantMCPProtocol;
 
 Type
   TClaudeStopQuery = Function: Boolean Of Object;
   TClaudeStartedEvent = Procedure Of Object;
   TClaudeLineEvent = Procedure(Const Line: String) Of Object;
+  { Best desktop-app binary seen while scanning. Path empty means none yet. }
+  TClaudeDesktopHit = Record
+    Version: String;
+    Verified: Boolean;
+    Path: String;
+  End;
 
 Const
   ClaudeTurnTimeoutMs = 120000;
@@ -208,6 +221,13 @@ Const
   { Each of these selects an API key, a gateway, or a cloud provider instead of the subscription. }
   ClaudeMeteredVariables: Array[0..5] Of String = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY');
+  { The desktop app's own folder name. A sibling such as claude-code-vm is a different program and is not entered. }
+  ClaudeDesktopCodeDirectory = 'claude-code';
+  {$IFDEF WINDOWS}
+  ClaudeProgramFileName = 'claude.exe';
+  {$ELSE}
+  ClaudeProgramFileName = 'claude';
+  {$ENDIF}
 
 Var
   { Executables whose account was confirmed as a subscription in this IDE session. }
@@ -215,9 +235,221 @@ Var
   HarnessSessions: TStringList;
   AccountLock: TRTLCriticalSection;
 
+{ First three numeric groups, so 2.1.330 sorts after 2.1.9. }
+Function CompareClaudeVersions(Const Left, Right: String): Integer;
+Var
+  L, R, A, B: String;
+  I, J: Integer;
+
+  Function Number(Var Text: String): String;
+  Begin
+    While (Text <> '') And Not (Text[1] In ['0'..'9']) Do
+      Delete(Text, 1, 1);
+    Result := '';
+    While (Text <> '') And (Text[1] In ['0'..'9']) Do
+      Begin
+        Result := Result + Text[1];
+        Delete(Text, 1, 1);
+      End;
+    While (Length(Result) > 1) And (Result[1] = '0') Do
+      Delete(Result, 1, 1);
+  End;
+
+Begin
+  L := Left;
+  R := Right;
+  For I := 1 To 3 Do
+    Begin
+      A := Number(L);
+      B := Number(R);
+      J := Length(A) - Length(B);
+      If J <> 0 Then
+        Exit(J);
+      J := CompareStr(A, B);
+      If J <> 0 Then
+        Exit(J);
+    End;
+  Result := 0;
+End;
+
+{ A newer download that has not been marked finished must not hide the last finished build. }
+Function ClaudeDesktopHitIsBetter(Const Version: String; Verified: Boolean; Const Best: TClaudeDesktopHit): Boolean;
+Var
+  Compared: Integer;
+Begin
+  If Best.Path = '' Then
+    Exit(True);
+  Compared := CompareClaudeVersions(Version, Best.Version);
+  If Compared > 0 Then
+    Exit(Verified Or (Not Best.Verified));
+  If Compared < 0 Then
+    Exit(False);
+  Result := Verified And (Not Best.Verified);
+End;
+
+Procedure NoteClaudeDesktopHit(Const Version, Path: String; Verified: Boolean; Var Best: TClaudeDesktopHit);
+Begin
+  If (Path = '') Or (Not ClaudeDesktopHitIsBetter(Version, Verified, Best)) Then
+    Exit;
+  Best.Version := Version;
+  Best.Verified := Verified;
+  Best.Path := Path;
+End;
+
+Procedure ScanClaudeBuildDirectory(Const Version, BuildDir: String; Var Best: TClaudeDesktopHit);
+Var
+  Candidate: String;
+Begin
+  Candidate := IncludeTrailingPathDelimiter(BuildDir) + ClaudeProgramFileName;
+  If Not FileIsExecutable(Candidate) Then
+    Exit;
+  NoteClaudeDesktopHit(Version, Candidate, FileExistsUTF8(IncludeTrailingPathDelimiter(BuildDir) + '.verified'), Best);
+End;
+
+Procedure ScanClaudeVersionDirectory(Const VersionDir: String; Var Best: TClaudeDesktopHit);
+Var
+  Version: String;
+  Builds: TStringList;
+  I: Integer;
+Begin
+  Version := ExtractFileName(ExcludeTrailingPathDelimiter(VersionDir));
+  ScanClaudeBuildDirectory(Version, VersionDir, Best);
+  Builds := TStringList.Create;
+  Try
+    CollectChildDirectories(VersionDir, Builds);
+    For I := 0 To Builds.Count - 1 Do
+      ScanClaudeBuildDirectory(Version, Builds[I], Best);
+  Finally
+    Builds.Free;
+  End;
+End;
+
+Procedure ScanClaudeCodeDirectory(Const CodeRoot: String; Var Best: TClaudeDesktopHit);
+Var
+  Versions: TStringList;
+  I: Integer;
+Begin
+  If Not DirectoryExistsUTF8(CodeRoot) Then
+    Exit;
+  Versions := TStringList.Create;
+  Try
+    CollectChildDirectories(CodeRoot, Versions);
+    For I := 0 To Versions.Count - 1 Do
+      ScanClaudeVersionDirectory(Versions[I], Best);
+  Finally
+    Versions.Free;
+  End;
+End;
+
+Procedure ScanClaudeProfile(Const ProfileDir: String; Var Best: TClaudeDesktopHit);
+Begin
+  ScanClaudeCodeDirectory(IncludeTrailingPathDelimiter(ProfileDir) + ClaudeDesktopCodeDirectory, Best);
+End;
+
+Procedure ScanClaudeDesktopRoot(Const DataRoot: String; Var Best: TClaudeDesktopHit);
+Var
+  Profiles: TStringList;
+  I: Integer;
+Begin
+  If (DataRoot = '') Or (Not DirectoryExistsUTF8(DataRoot)) Then
+    Exit;
+  { The data directory may be the profile itself, or a parent of several profiles. }
+  ScanClaudeProfile(DataRoot, Best);
+  Profiles := TStringList.Create;
+  Try
+    CollectChildDirectories(DataRoot, Profiles);
+    For I := 0 To Profiles.Count - 1 Do
+      ScanClaudeProfile(Profiles[I], Best);
+  Finally
+    Profiles.Free;
+  End;
+End;
+
+Function FindClaudeInDesktopData(Const DataRoot: String): String;
+Var
+  Best: TClaudeDesktopHit;
+Begin
+  Best := Default(TClaudeDesktopHit);
+  ScanClaudeDesktopRoot(DataRoot, Best);
+  Result := Best.Path;
+End;
+
+Function FindClaudeDesktopExecutable: String;
+Var
+  Best: TClaudeDesktopHit;
+  Root: String;
+Begin
+  Best := Default(TClaudeDesktopHit);
+  {$IFDEF WINDOWS}
+  { Store and packaged builds keep a profile directory here. The program is not added to PATH. }
+  Root := GetEnvironmentVariable('LOCALAPPDATA');
+  If Root <> '' Then
+    ScanClaudeDesktopRoot(IncludeTrailingPathDelimiter(Root) + 'Claude-Data', Best);
+  Root := GetEnvironmentVariable('APPDATA');
+  If Root <> '' Then
+    ScanClaudeDesktopRoot(IncludeTrailingPathDelimiter(Root) + 'Claude', Best);
+  {$ENDIF}
+  {$IFDEF DARWIN}
+  ScanClaudeDesktopRoot(IncludeTrailingPathDelimiter(GetUserDir) + 'Library' + PathDelim + 'Application Support' +
+    PathDelim + 'Claude', Best);
+  {$ENDIF}
+  {$IFDEF LINUX}
+  ScanClaudeDesktopRoot(IncludeTrailingPathDelimiter(GetUserDir) + '.config' + PathDelim + 'Claude', Best);
+  ScanClaudeDesktopRoot(IncludeTrailingPathDelimiter(GetUserDir) + '.local' + PathDelim + 'share' + PathDelim + 'Claude',
+    Best);
+  {$ENDIF}
+  Result := Best.Path;
+End;
+
+Function FindClaudeNativeExecutable: String;
+Var
+  Candidate: String;
+Begin
+  Result := '';
+  Candidate := IncludeTrailingPathDelimiter(GetUserDir) + '.local' + PathDelim + 'bin' + PathDelim + ClaudeProgramFileName;
+  If FileIsExecutable(Candidate) Then
+    Exit(Candidate);
+  {$IFDEF WINDOWS}
+  Candidate := GetEnvironmentVariable('LOCALAPPDATA');
+  If Candidate = '' Then
+    Exit;
+  Candidate := IncludeTrailingPathDelimiter(Candidate) + 'Microsoft' + PathDelim + 'WinGet' + PathDelim + 'Links' +
+    PathDelim + 'claude.exe';
+  If FileIsExecutable(Candidate) Then
+    Result := Candidate;
+  {$ENDIF}
+End;
+
+Function FindClaudeNpmExecutable: String;
+Var
+  Root: String;
+Begin
+  Result := '';
+  {$IFDEF WINDOWS}
+  Root := GetEnvironmentVariable('APPDATA');
+  If Root = '' Then
+    Exit;
+  Root := IncludeTrailingPathDelimiter(Root) + 'npm' + PathDelim;
+  If FileIsExecutable(Root + 'claude.cmd') Then
+    Exit(Root + 'claude.cmd');
+  If FileIsExecutable(Root + 'claude.exe') Then
+    Result := Root + 'claude.exe';
+  {$ENDIF}
+End;
+
 Function DetectClaudeExecutable: String;
 Begin
+  { A command the user installed comes first. The desktop app does not put its copy on PATH. }
   Result := FindDefaultExecutablePath('claude');
+  If Result <> '' Then
+    Exit;
+  Result := FindClaudeNativeExecutable;
+  If Result <> '' Then
+    Exit;
+  Result := FindClaudeDesktopExecutable;
+  If Result <> '' Then
+    Exit;
+  Result := FindClaudeNpmExecutable;
 End;
 
 Function ClaudeRuntimeFromBrowsedPath(Const BrowsedPath: String): String;
