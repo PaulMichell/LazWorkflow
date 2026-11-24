@@ -28,6 +28,10 @@ Const
   AssistantToolMaxSearchFileBytes = 2097152;
   AssistantToolMaxSearchLineChars = 512;
   AssistantToolMaxCompileMs = 600000;
+  { A chatty or runaway child must not fill RAM and swap the machine to a halt. }
+  AssistantToolMaxProcessOutput = 2097152;
+  { One assistant compile must not take every core. The desktop and Stop stay scheduled. }
+  AssistantToolMaxCompileProcesses = 2;
 
 Function BuildAssistantToolsJsonForMode(Mode: TAssistantMode): String;
 Function BuildAssistantToolsJsonForSession(Mode: TAssistantMode; AllowSubagents, OfferWriteImage: Boolean): String;
@@ -113,6 +117,11 @@ Procedure BindToolAbortThread(Worker: TThread);
 Procedure BindToolStopFlag(Flag: PLongInt);
 Procedure UnbindToolAbortThread;
 Function ToolsShouldStop: Boolean;
+/// Stop. Every running child and IDE-thread tool must see this, including one already inside ProcessMessages.
+Procedure RequestAssistantToolStop;
+Procedure ClearAssistantToolStop;
+/// True while an assistant tool is on the IDE thread. Stop must not free that tool's caller.
+Function AssistantIdeToolBusy: Boolean;
 
 Type
   { True when this wait must deny: Terminated, FTerminalNoted, or ServiceWasDetached. }
@@ -147,7 +156,7 @@ Uses
   AssistantLfm, AssistantWorkTarget, AssistantProjectPaths, PackageIntf, IDEOptionsIntf,
   AssistantSearchUtil, AssistantEditorEdits, AssistantExactReplace, AssistantGit, AssistantTestSettings, AssistantConnections,
   SafeFileAccess, AssistantImageAdapters, AssistantSymbolTools, fpjson, jsonparser,
-  AssistantToolSpecs, AssistantToolWire;
+  AssistantToolSpecs, AssistantToolWire, ProcessSession;
 
 Function AssistantAddUnitRefused(Out ErrorText: String): Boolean; Forward;
 Function LoadProjectFileText(Const Resolved: String; Out Body: String; Out FromEditor: Boolean;
@@ -178,6 +187,7 @@ ThreadVar
   GToolAbortThread: TThread;
   GToolStopFlag: PLongInt;
   GCaptureDepth: Integer;
+  GIdeToolDepth: Integer;
 
 Type
   { Access TThread.Terminated, which is protected on FPC. }
@@ -212,8 +222,24 @@ Var
   Flag: PLongInt;
 Begin
   Flag := GToolStopFlag;
-  Result := (Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested) Or
+  Result := ProcessStopRequested Or
+    (Assigned(GToolAbortThread) And TToolAbortThread(GToolAbortThread).StopRequested) Or
     (Assigned(Flag) And (Flag^ <> 0));
+End;
+
+Procedure RequestAssistantToolStop;
+Begin
+  RequestProcessStop;
+End;
+
+Procedure ClearAssistantToolStop;
+Begin
+  ClearProcessStop;
+End;
+
+Function AssistantIdeToolBusy: Boolean;
+Begin
+  Result := GIdeToolDepth > 0;
 End;
 
 Function ExpandResolvedPath(Const Path: String): String; Forward;
@@ -2074,6 +2100,7 @@ Begin
     Proc.Parameters.Clear;
     For I := 0 To High(Args) Do
       Proc.Parameters.Add(Args[I]);
+    PreferBackgroundPriority(Proc);
     Try
       Proc.Execute;
       { EOF on stdin. jq, cat, and anything else that reads a filter from the
@@ -2100,19 +2127,34 @@ Begin
             Begin
               BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
               If BytesRead > 0 Then
-                Mem.WriteBuffer(Buf[0], BytesRead);
+                Begin
+                  If Mem.Size + BytesRead > AssistantToolMaxProcessOutput Then
+                    BytesRead := AssistantToolMaxProcessOutput - Mem.Size;
+                  If BytesRead > 0 Then
+                    Mem.WriteBuffer(Buf[0], BytesRead);
+                  If Mem.Size >= AssistantToolMaxProcessOutput Then
+                    Begin
+                      SetLength(OutputText, Mem.Size);
+                      If Mem.Size > 0 Then
+                        Move(Mem.Memory^, OutputText[1], Mem.Size);
+                      Result := AbortRunning('Process output exceeded 2 MiB and was stopped.');
+                      Exit;
+                    End;
+                End;
             End
           Else If Proc.Running Then
             Sleep(5);
           PumpIdeThread;
         End;
-      While Proc.Output.NumBytesAvailable > 0 Do
+      While (Proc.Output.NumBytesAvailable > 0) And (Mem.Size < AssistantToolMaxProcessOutput) Do
         Begin
           BytesRead := Proc.Output.Read(Buf[0], SizeOf(Buf));
-          If BytesRead > 0 Then
-            Mem.WriteBuffer(Buf[0], BytesRead)
-          Else
+          If BytesRead <= 0 Then
             Break;
+          If Mem.Size + BytesRead > AssistantToolMaxProcessOutput Then
+            BytesRead := AssistantToolMaxProcessOutput - Mem.Size;
+          If BytesRead > 0 Then
+            Mem.WriteBuffer(Buf[0], BytesRead);
         End;
       ExitCode := Proc.ExitStatus;
       SetLength(OutputText, Mem.Size);
@@ -2488,18 +2530,19 @@ Begin
         If AssistantTarget.Kind = atkFolder Then
           ErrorText := 'lazbuild not found on PATH or next to the IDE. A folder target is not compiled with the IDE active project.'
         Else
-          ErrorText := 'lazbuild not found on PATH or next to the IDE. Use ui=true for IDE compile.';
+          ErrorText := 'lazbuild not found on PATH or next to the IDE. An IDE compile was not started because it blocks Lazarus and cannot be stopped.';
         Exit;
       End;
     If Not FlushOpenEditorsUnderProject(ErrorText) Then
       Exit;
-    Extra := 0;
+    Extra := 1;
     If KindBuild Then
-      Extra := 1;
+      Extra := 2;
     Args := Nil;
     SetLength(Args, Manifests.Count + Extra);
+    Args[0] := '--max-process-count=' + IntToStr(AssistantToolMaxCompileProcesses);
     If KindBuild Then
-      Args[0] := '--build-all';
+      Args[1] := '--build-all';
     For I := 0 To Manifests.Count - 1 Do
       Args[I + Extra] := Manifests[I];
     If Not RunProcessCapture(Lazbuild, WorkDir, Args, OutputText, ExitCode, ErrorText) Then
@@ -2510,7 +2553,7 @@ Begin
       Format('quiet lazbuild finished: ok=%s exit=%d errors=%d warnings=%d hints/notes=%d',
         [BoolToStr(BuildOk, True), ExitCode, ErrorCount, WarningCount, HintCount]) +
       LineEnding +
-      '(non-visual compile — Messages window not updated; use ui=true for IDE Messages build)' +
+      '(non-visual compile — Messages window not updated. An IDE Messages build is not used because it cannot be stopped.)' +
       LineEnding + LineEnding + Diag;
     If AssistantTarget.Kind = atkFolder Then
       Begin
@@ -3193,9 +3236,6 @@ End;
 Function ToolRunCompile(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Kind: String;
-  Reason: TCompileReason;
-  BuildResult: TModalResult;
-  MsgText: String;
   ErrorCount, WarningCount, HintCount: Integer;
   BuildOk, UseUi: Boolean;
 Begin
@@ -3210,72 +3250,21 @@ Begin
   Kind := LowerCase(Trim(JsonArgString(ArgumentsJson, 'kind')));
   If Kind = '' Then
     Kind := 'compile';
-  { Default quiet (lazbuild, no Messages UI). ui=true runs the full IDE compile
-    for a final visual check. }
+  { ui=true used to call DoBuildProject on the IDE thread. That build cannot be stopped
+    and can take every core, so Stop would not run until it finished. Always use lazbuild. }
   UseUi := JsonArgBool(ArgumentsJson, 'ui', False);
-  If (Not UseUi) And (Kind = 'build') And (JsonArgString(ArgumentsJson, 'ui') = '') Then
-    UseUi := False; { still quiet unless ui=true }
-  { A folder has no single IDE project. ui=true would compile whatever project is open. }
-  If AssistantTarget.Kind = atkFolder Then
-    UseUi := False;
-  If Not UseUi Then
-    Begin
-      If Not RunQuietLazbuild(Kind = 'build', ResultText, ErrorText,
-        ErrorCount, WarningCount, HintCount, BuildOk) Then
-        Begin
-          { Fall back to IDE compile if lazbuild missing. A folder must not fall back:
-            that compiles the open project instead of the packages under the target. }
-          If (AssistantTarget.Kind = atkFolder) Or (Pos('lazbuild not found', ErrorText) = 0) Then
-            Exit;
-          WorkflowLogger.Warning('AssistantTools', ErrorText + ' — falling back to IDE compile.');
-          UseUi := True;
-          ErrorText := '';
-        End
-      Else
-        Begin
-          GLastCompileClean := BuildOk And (ErrorCount = 0);
-          ResultText := ResultText + LineEnding + CompileCleanSuffix(GLastCompileClean);
-          GLastCompileLog := ResultText;
-          Result := True;
-          WorkflowLogger.Info('AssistantTools',
-            Format('run_compile quiet ok=%s e=%d w=%d',
-              [BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount]));
-          Exit;
-        End;
-    End;
-
-  If Kind = 'build' Then
-    Reason := crBuild
-  Else
-    Reason := crCompile;
-  Try
-    { pbfDoNotSaveEditorFiles: we already flushed project buffers when quiet path ran;
-      for pure UI path, IDE still saves as usual. }
-    If AssistantTarget.Kind=atkPackage Then
-    Begin
-      If Reason=crBuild Then BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfCleanCompile,pcfDoNotSaveEditorFiles],False)
-      Else BuildResult := PackageEditingInterface.DoCompilePackage(AssistantTarget.Package,[pcfDoNotSaveEditorFiles],False);
-    End
-  Else BuildResult := LazarusIDE.DoBuildProject(Reason, []);
-    BuildOk := BuildResult = mrOk;
-  Except
-    On E: Exception Do
-      Begin
-        ErrorText := 'Build failed to start: ' + E.Message;
-        Exit;
-      End;
-  End;
-  MsgText := CollectIdeMessagesSummary(ErrorCount, WarningCount, HintCount);
+  If Not RunQuietLazbuild(Kind = 'build', ResultText, ErrorText,
+    ErrorCount, WarningCount, HintCount, BuildOk) Then
+    Exit;
+  If UseUi Then
+    ResultText := ResultText + LineEnding +
+      'ui=true was ignored. An IDE Messages build blocks Lazarus and cannot be stopped.';
   GLastCompileClean := BuildOk And (ErrorCount = 0);
-  ResultText :=
-    Format('IDE %s finished: ok=%s errors=%d warnings=%d hints/notes=%d',
-      [Kind, BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount, HintCount]) +
-    LineEnding + LineEnding + MsgText;
   ResultText := ResultText + LineEnding + CompileCleanSuffix(GLastCompileClean);
   GLastCompileLog := ResultText;
   Result := True;
   WorkflowLogger.Info('AssistantTools',
-    Format('run_compile ui ok=%s e=%d w=%d',
+    Format('run_compile quiet ok=%s e=%d w=%d',
       [BoolToStr(GLastCompileClean, True), ErrorCount, WarningCount]));
 End;
 
@@ -4387,26 +4376,35 @@ Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: Stri
   SkipApproval: Boolean = False): Boolean;
 Var
   Name, TargetIdentity: String;
+  OnIde: Boolean;
 Begin
   Result := False;
   ResultText := '';
   ErrorText := '';
   ImageRefs := Nil;
-  Name := LowerCase(Trim(ToolName));
-  GAssistantToolMode := Mode;
-  If Not AssistantToolPreflight(ToolName, ArgumentsJson, Mode, ErrorText) Then Exit;
-  TargetIdentity := AssistantTarget.Identity;
-  If Not SkipApproval Then
-    If Not ApproveToolIfNeeded(Name, ToolId, ArgumentsJson, ErrorText) Then
-      Exit;
-  If TargetIdentity <> AssistantTarget.Identity Then
-    Begin
-      ErrorText := 'Assistant target changed during approval.';
-      Exit;
-    End;
-  { Repeat the package check after Ask. A switch during the dialog must not write. }
-  If Not AssistantPackageTargetAllows(ToolName, ArgumentsJson, ErrorText) Then Exit;
-  Result := ExecuteAssistantTool(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
+  OnIde := GetCurrentThreadID = MainThreadID;
+  If OnIde Then
+    Inc(GIdeToolDepth);
+  Try
+    Name := LowerCase(Trim(ToolName));
+    GAssistantToolMode := Mode;
+    If Not AssistantToolPreflight(ToolName, ArgumentsJson, Mode, ErrorText) Then Exit;
+    TargetIdentity := AssistantTarget.Identity;
+    If Not SkipApproval Then
+      If Not ApproveToolIfNeeded(Name, ToolId, ArgumentsJson, ErrorText) Then
+        Exit;
+    If TargetIdentity <> AssistantTarget.Identity Then
+      Begin
+        ErrorText := 'Assistant target changed during approval.';
+        Exit;
+      End;
+    { Repeat the package check after Ask. A switch during the dialog must not write. }
+    If Not AssistantPackageTargetAllows(ToolName, ArgumentsJson, ErrorText) Then Exit;
+    Result := ExecuteAssistantTool(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
+  Finally
+    If OnIde And (GIdeToolDepth > 0) Then
+      Dec(GIdeToolDepth);
+  End;
 End;
 
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;

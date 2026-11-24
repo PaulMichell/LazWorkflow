@@ -156,6 +156,8 @@ Type
     { Starts background SSE stream; OnToken is Synchronized to the main thread. }
     Function StartStream(OnToken: TAssistantStreamEvent): Boolean;
     Procedure CancelStream;
+    { Signal the actor and its children. Does not wait. Safe while an IDE-thread tool is on the stack. }
+    Procedure RequestCancel;
     Procedure DetachStreamCallbacks;
     { Call from the stream callback when IsFinished is True (main thread). }
     Procedure MarkStreamComplete;
@@ -690,8 +692,7 @@ Begin
         'Required for form wiring; do not claim LFM changes without calling this or editing the .lfm.' + LineEnding +
         '- `add_unit_to_project` — register an existing .pas with the .lpi' + LineEnding +
         '- `open_file` — open in the IDE editor' + LineEnding +
-        '- `run_compile` — **prefer quiet** (default): non-visual lazbuild, no Messages UI. ' +
-        'Use `ui=true` only for a final IDE Messages check.' + LineEnding +
+        '- `run_compile` — cancellable lazbuild. It does not run the IDE Messages build, because that build cannot be stopped.' + LineEnding +
         '- `run_project` — start the built executable directly. No shell and no debugger.' + LineEnding +
         '- `run_tests` — run the enabled test command for this target. Arguments are not passed through a shell. ' +
         'Do not enable it to run a script.' + LineEnding +
@@ -2146,14 +2147,23 @@ Begin
     TAssistantActor(FStreamThread).DetachCallbacks;
 End;
 
-Procedure TAssistantService.CancelStream;
+Procedure TAssistantService.RequestCancel;
 Begin
   CancelSubagents;
+  If Not Assigned(FStreamThread) Then
+    Exit;
+  WorkflowLogger.Info('AssistantService', 'Stream cancel requested');
+  If FStreamThread Is TAssistantActor Then
+    TAssistantActor(FStreamThread).Cancel
+  Else
+    FStreamThread.Terminate;
+End;
+
+Procedure TAssistantService.CancelStream;
+Begin
+  RequestCancel;
   If Assigned(FStreamThread) Then
-    Begin
-      WorkflowLogger.Info('AssistantService', 'Stream cancel requested');
-      ClearStreamThread;
-    End
+    ClearStreamThread
   Else
     FBusy := False;
 End;

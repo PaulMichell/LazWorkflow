@@ -3619,6 +3619,11 @@ Begin
     Exit;
   FPollingTurn := True;
   Try
+    If ToolsShouldStop Then
+      Begin
+        StopStream;
+        Exit;
+      End;
     CodexRun := FCodexRun;
     ClaudeRun := FClaudeRun;
     If Assigned(CodexRun) Then
@@ -3645,6 +3650,11 @@ Begin
         CodexRun.ServiceOneTool(Tool, ToolText, OK);
         If FCodexRun <> CodexRun Then
           Exit;
+        If ToolsShouldStop Then
+          Begin
+            StopStream;
+            Exit;
+          End;
         ApplyTurnEvents(CodexRun.TakeEvents);
         Turn := CodexRun.TurnSnapshot;
         If Turn.Done Then
@@ -3775,6 +3785,8 @@ Begin
       If FSending And (FStatusPhase <> '') Then
         StatusFooter.SetRightActivityText(FormatElapsedStatus(AssistantProgressPhase(FStatusPhase)),
           StatusActivityReserve(AssistantProgressPhase(FStatusPhase)));
+      If AssistantIdeToolBusy Then
+        Exit;
       If Assigned(FCodexRun) Or Assigned(FClaudeRun) Then
         Begin
           PollTurn;
@@ -4121,6 +4133,7 @@ Begin
   If Assigned(TargetBrowseButton) Then TargetBrowseButton.Enabled := Not IsSending;
   If IsSending And (Not WasSending) Then
     Begin
+      ClearAssistantToolStop;
       FPlanNewChatThisStep := False;
       If FPlanAgentRunning Then
         MarkPlanAgentAlive;
@@ -5599,7 +5612,21 @@ Var
 Begin
   If Not FSending Then
     Exit;
+  { First, before any free or wait. A tool already on this thread sees the flag and kills its child. }
+  RequestAssistantToolStop;
   FUserCancelled := True;
+  If AssistantIdeToolBusy Then
+    Begin
+      If Assigned(FCodexRun) Then
+        FCodexRun.Cancel;
+      If Assigned(FClaudeRun) Then
+        FClaudeRun.Cancel;
+      If Assigned(FToolBroker) Then
+        FToolBroker.Cancel;
+      If Assigned(AssistantClient) Then
+        AssistantClient.RequestCancel;
+      Exit;
+    End;
   ClearTransportWait;
   FCodexLaunchReady := False;
   FClaudeLaunchReady := False;

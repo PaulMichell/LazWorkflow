@@ -148,6 +148,7 @@ Begin
     FProcess.InputDescriptor.CustomHandleIsInheritable := True;
     ReadHandle := 0;
     {$ENDIF}
+    PreferBackgroundPriority(FProcess);
     FProcess.Execute;
     {$IFNDEF WINDOWS}
     If Not SetPipeNonBlocking(FProcess.Input.Handle) Then

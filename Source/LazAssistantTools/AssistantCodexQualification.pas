@@ -146,6 +146,7 @@ Begin
     If Assigned(Environment) Then Proc.Environment.Assign(Environment);
     Try
       If Not StartInOwnSession(Proc) Then Raise Exception.Create('session');
+      PreferBackgroundPriority(Proc);
       Proc.Execute;
       Deadline := GetTickCount64 + ProbeTimeoutMs;
       Repeat

@@ -395,7 +395,7 @@ Begin
         Spec.Name := 'run_compile';
         Spec.Description := 'Compile the work target. A project or package uses that manifest. A folder compiles every .lpk under ' +
           'the folder, or every .lpi when the folder has no package. It does not compile the IDE active project. Default is quiet ' +
-          'lazbuild. Set ui=true only for a final IDE Messages check of a project or package. Pass job_id to poll a build already ' +
+          'cancellable lazbuild, at most two compiler processes. ui=true is ignored because an IDE Messages build cannot be stopped. Pass job_id to poll a build already ' +
           'started through this tool; detail manifest returns the observed-input list.';
         Spec.Schema := '{"type":"object","properties":{' +
           '"kind":{"type":"string","description":"compile (default) or build (rebuild-all when quiet)"},' +

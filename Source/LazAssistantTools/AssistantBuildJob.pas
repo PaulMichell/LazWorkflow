@@ -408,6 +408,7 @@ Begin
       P.Options := [poUsePipes, poStderrToOutPut];
       If Not StartInOwnSession(P) Then
         Raise Exception.Create('Unable to start the build in its own session.');
+      PreferBackgroundPriority(P);
       P.Execute;
       Value.ProcessStarted := True;
       Publish;
@@ -415,8 +416,13 @@ Begin
       Repeat
         Drain(P.Output);
         If GetTickCount64 - LastPublish >= 100 Then Publish;
-        Value.Cancelled := InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0;
+        Value.Cancelled := (InterlockedCompareExchange(FState.Cancelled, 0, 0) <> 0) Or ProcessStopRequested;
         If Value.Cancelled Then Break;
+        If Value.OutputTruncated Then
+          Begin
+            Value.ErrorText := 'Process output exceeded 1 MiB and was stopped.';
+            Break;
+          End;
         If GetTickCount64 >= Deadline Then
           Begin
             If Value.Kind = 'command' Then

@@ -182,7 +182,7 @@ Begin
     'identify it and the affected operation without extending that limitation to unrelated tools.' + LineEnding +
     'Use `grep` / `search_in_project` before a stack of `read_file` calls. Page large files with start_line/end_line.' + LineEnding +
     '`replace_in_file` needs an exact unique old_text match. Prefer small surgical hunks.' + LineEnding +
-    '`run_compile` is quiet lazbuild by default; set ui=true only for a final IDE Messages check.' + LineEnding +
+    '`run_compile` is a cancellable lazbuild. It does not run the IDE Messages build, because that build cannot be stopped.' + LineEnding +
     'Use `read_skill` to load a catalogued SKILL.md. Use `todo_write` for the current Build turn''s short checklist.' + LineEnding;
   If OfferSubagents Then
     Result := Result +

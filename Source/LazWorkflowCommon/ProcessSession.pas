@@ -20,6 +20,12 @@ Uses
 
 /// Installs setsid on Unix, or poNewProcessGroup on Windows, before Execute.
 Function StartInOwnSession(Process: TProcess): Boolean;
+/// Call before Execute. The child, and processes it starts, run below the desktop.
+Procedure PreferBackgroundPriority(Process: TProcess);
+/// Set by Stop. A running child must end; it must not keep the machine busy.
+Procedure RequestProcessStop;
+Procedure ClearProcessStop;
+Function ProcessStopRequested: Boolean;
 /// Term, a short wait, then kill. Unix signals the process group. Callers do not kill again.
 Procedure TerminateSession(Process: TProcess);
 /// True when the child died by signal. ExitCode is then 0 and is not a status.
@@ -100,6 +106,32 @@ End;
 Var
   PipeSerial: Integer;
 {$ENDIF}
+
+Var
+  GProcessStop: LongInt;
+
+Procedure RequestProcessStop;
+Begin
+  InterlockedExchange(GProcessStop, 1);
+End;
+
+Procedure ClearProcessStop;
+Begin
+  InterlockedExchange(GProcessStop, 0);
+End;
+
+Function ProcessStopRequested: Boolean;
+Begin
+  Result := InterlockedCompareExchange(GProcessStop, 0, 0) <> 0;
+End;
+
+Procedure PreferBackgroundPriority(Process: TProcess);
+Begin
+  If Not Assigned(Process) Then
+    Exit;
+  { Inherited by compilers this process starts. The desktop must stay scheduled. }
+  Process.Priority := ppBelowNormal;
+End;
 
 Function StartInOwnSession(Process: TProcess): Boolean;
 Begin

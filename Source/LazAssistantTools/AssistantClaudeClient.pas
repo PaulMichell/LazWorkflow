@@ -586,6 +586,7 @@ Begin
       ClaudeProcess.Environment.Assign(Environment);
     { Own process group, so a stop also ends the commands and servers Claude Code started. }
     StartInOwnSession(ClaudeProcess);
+    PreferBackgroundPriority(ClaudeProcess);
     Try
       ClaudeProcess.Execute;
     Except
