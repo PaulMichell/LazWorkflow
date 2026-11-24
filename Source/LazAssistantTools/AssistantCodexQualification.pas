@@ -30,6 +30,7 @@ Const
   CodexCompatibilityRevision = 1;
 
   /// Release shape is informational only. Prereleases are qualified by contract.
+Function CodexVersionOffersImageGeneration(Const VersionLine: String): Boolean;
 Function CodexVersionIsRelease(Const Line: String): Boolean;
 Function CodexVersionReportLine(Const Line: String): String;
 Function ReadCodexVersion(Const Executable: String; Environment: TStrings; Out VersionLine, ErrorText: String;
@@ -526,6 +527,11 @@ Begin
   If Not Result Then Exit;
   Result := Evidence.Support[ccRun] = csSupported;
   If Not Result Then ErrorText := 'Codex IDE execution is unavailable: ' + Evidence.Reason[ccRun];
+End;
+
+Function CodexVersionOffersImageGeneration(Const VersionLine: String): Boolean;
+Begin
+  Result := VersionLine = 'codex-cli 0.167.0-alpha.3.2';
 End;
 
 Function CodexVersionIsRelease(Const Line: String): Boolean;

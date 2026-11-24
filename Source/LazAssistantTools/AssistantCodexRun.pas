@@ -15,9 +15,14 @@ Uses
   Classes, SysUtils, AssistantCodexClient, AssistantConversation, AssistantCodexContext, AssistantEvents;
 
 Type
+  TCodexImageReservation = Record
+    RequestId, Destination, Artifact: String;
+    Overwrite, Finished: Boolean;
+  End;
   TCodexRunSnapshot = Record
     State: TCodexRunState;
     Content, Thinking, ErrorText: String;
+    Images: Array Of TCodexImageReservation;
     ContextUsage: TCodexContextUsage;
     Done: Boolean;
   End;
@@ -72,7 +77,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages, AssistantRecovery,
-  AssistantConfig, AssistantMCPBridge, AssistantWorkTarget;
+  AssistantToolBroker, AssistantConfig, AssistantMCPBridge, AssistantWorkTarget;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
@@ -266,9 +271,18 @@ Begin
 End;
 
 Procedure TAssistantCodexRun.Publish(Client: TAssistantCodexClient);
+Var
+  Index: Integer;
 Begin
   EnterCriticalSection(FLock);
   Try
+    Index := High(FSnapshot.Images);
+    If (Index >= 0) And Not FSnapshot.Images[Index].Finished And (FSnapshot.Images[Index].RequestId = Client.CompletedImageCall) Then
+      Begin
+        FSnapshot.Images := Copy(FSnapshot.Images);
+        FSnapshot.Images[Index].Artifact := Client.GeneratedImagePath;
+        FSnapshot.Images[Index].Finished := True;
+      End;
     FSnapshot.State := Client.State;
     FSnapshot.Content := Client.Content;
     FSnapshot.Thinking := Client.Thinking;
@@ -342,7 +356,9 @@ End;
 
 Function TAssistantCodexRun.ServiceOneTool(Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
 Var
-  ErrorText, Attachments, TargetIdentity: String;
+  ErrorText, Attachments, TargetIdentity, Destination, ApprovalSummary: String;
+  Overwrite, PendingImage: Boolean;
+  Index: Integer;
   ImageRefs: TAssistantImageRefArray;
 Begin
   Result := False;
@@ -354,6 +370,8 @@ Begin
   Try
     If Cancelled Or FSnapshot.Done Or Not FToolPending Or FToolReady Or FToolServicing Then Exit;
     Tool := FTool;
+    Index := High(FSnapshot.Images);
+    PendingImage := (Index >= 0) And Not FSnapshot.Images[Index].Finished;
     ReplayUnsafe := True;
     FToolServicing := True;
   Finally
@@ -363,12 +381,17 @@ Begin
     { One executor. Preflight is the Grok gate before Ask. After Ask succeeds, that gate runs
       with approval skipped so the dialog is not shown twice. }
     TargetIdentity := AssistantTarget.Identity;
+    ApprovalSummary := CodexToolApprovalSummary(Tool.Arguments);
     If Not AssistantToolPreflight(Tool.Tool, Tool.Arguments, FMode, ErrorText) Then
       Begin
         OK := False;
         Text := ErrorText;
       End
-    Else If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, CodexToolApprovalSummary(Tool.Arguments), ErrorText) Then
+    Else If (Tool.Tool = 'write_image') And PendingImage Then
+      Text := 'The previous image request is still pending.'
+    Else If (Tool.Tool = 'write_image') And Not CodexImageDestination(Tool.Arguments, Destination, ApprovalSummary, ErrorText, Overwrite) Then
+      Text := ErrorText
+    Else If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, ApprovalSummary, ErrorText) Then
       Begin
         OK := False;
         Text := ErrorText;
@@ -378,6 +401,24 @@ Begin
         OK := False;
         ErrorText := 'Assistant target changed during approval.';
         Text := ErrorText;
+      End
+    Else If Tool.Tool = 'write_image' Then
+      Begin
+        EnterCriticalSection(FLock);
+        Try
+          If Not Cancelled Then
+            Begin
+              Index := Length(FSnapshot.Images);
+              SetLength(FSnapshot.Images, Index + 1);
+              FSnapshot.Images[Index].RequestId := Tool.CallId;
+              FSnapshot.Images[Index].Destination := Destination;
+              FSnapshot.Images[Index].Overwrite := Overwrite;
+              OK := True;
+              Text := 'Destination reserved. Invoke native image generation exactly once with the requested prompt.';
+            End;
+        Finally
+          LeaveCriticalSection(FLock);
+        End;
       End
     Else
       Begin

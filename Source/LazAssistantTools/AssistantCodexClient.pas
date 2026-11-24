@@ -50,6 +50,7 @@ Type
     FTransport: TAssistantCodexTransport;
     FHandshake: TAssistantCodexHandshake;
     FState: TCodexRunState;
+    PendingImageCall, PendingImageItem, FCompletedImageCall: String;
     FGeneratedImagePath, FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
     FContextUsage: TCodexContextUsage;
@@ -69,7 +70,7 @@ Type
     FRequestTimeout: Cardinal;
     FTools: Array Of TCodexToolRequest;
     FSeenCalls: TStringList;
-    FToolTaken: Boolean;
+    FToolTaken, ImageOffered: Boolean;
     Function Request(Const Method, Params: String): Boolean;
     Procedure Fail(Const Reason: String);
     Procedure HandleFrame(Const Frame: String);
@@ -110,6 +111,7 @@ Type
     Property State: TCodexRunState Read FState;
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
     Property Content: String Read FContent;
+    Property CompletedImageCall: String Read FCompletedImageCall;
     Property GeneratedImagePath: String Read FGeneratedImagePath;
     Property Thinking: String Read FThinking;
     Property LastError: String Read FError;
@@ -327,6 +329,9 @@ Begin
   FContextUsage := EmptyCodexContextUsage;
   FPendingId := '';
   FPendingMethod := '';
+  PendingImageCall := '';
+  PendingImageItem := '';
+  FCompletedImageCall := '';
   FGeneratedImagePath := '';
   FContent := '';
   FThinking := '';
@@ -472,6 +477,7 @@ Function TAssistantCodexClient.StartThread(Const WorkingDirectory, Model, ToolsJ
 Var
   Data: TJSONData;
   Dynamic: String;
+  I: Integer;
 Begin
   Result := False;
   If (FHandshake.State <> ccsSubscriptionAuthenticated) Or
@@ -485,6 +491,14 @@ Begin
   Data := GetJSON(Dynamic);
   Try
     If Not (Data Is TJSONArray) Then Exit;
+    ImageOffered := False;
+    For I := 0 To Data.Count - 1 Do
+      If (Data.Items[I] Is TJSONObject) And (TJSONObject(Data.Items[I]).Get('name', '') = 'write_image') Then ImageOffered := True;
+    If ImageOffered And Not CodexVersionOffersImageGeneration(FCompatibility.Version) Then
+      Begin
+        Fail('The active Codex runtime has not been qualified for image generation.');
+        Exit;
+      End;
     { Built-in actions have no write permission. Approvals must be serviced by
       this client, which rejects them. Developer instructions come from the harness. }
     Result := Request('thread/start', AssistantCodexWire.CodexThreadStartParams(WorkingDirectory, Model, Dynamic,
@@ -524,7 +538,10 @@ Begin
     Begin
       If FState <> crsWaitingReconnect Then
         Begin
-          FGeneratedImagePath := '';
+          PendingImageCall := '';
+  PendingImageItem := '';
+  FCompletedImageCall := '';
+  FGeneratedImagePath := '';
   FContent := '';
           FThinking := '';
           FSeenCalls.Clear;
@@ -729,6 +746,7 @@ Begin
       Fail(FTransport.LastError);
       Exit;
     End;
+  If Success And (FTools[0].Tool = 'write_image') Then PendingImageCall := CallId;
   For I := 1 To High(FTools) Do FTools[I - 1] := FTools[I];
   SetLength(FTools, Length(FTools) - 1);
   FToolTaken := False;
@@ -843,6 +861,7 @@ Begin
           If FTools[I].RequestId = Tool.RequestId Then Exit;
         If (Tool.ThreadId <> FThreadId) Or (Tool.TurnId <> FTurnId) Then Status := 'Stale tool request.'
         Else If (Tool.CallId = '') Or (Tool.Tool = '') Or Not (Value Is TJSONObject) Then Status := 'Invalid tool request.'
+        Else If (Tool.Tool = 'write_image') And Not ImageOffered Then Status := 'Unknown tool: write_image'
         Else If FSeenCalls.IndexOf(Tool.CallId) >= 0 Then Status := 'Duplicate tool call. The original call may already have executed.'
         Else If Length(FTools) >= 16 Then Status := 'Tool queue full. Retry after outstanding calls finish.'
         Else If FSeenCalls.Count >= 1024 Then Status := 'Tool call limit reached for this turn.'
@@ -917,6 +936,12 @@ Begin
               Begin
                 If Method = 'item/agentMessage/delta' Then
                   MessageText(Params.Get('itemId', ''), Params.Get('delta', ''), False)
+                Else If (Method = 'item/started') And (PendingImageCall <> '') And (PendingImageItem = '') Then
+                  Begin
+                    Value := Params.Find('item');
+                    If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'imageGeneration') Then
+                      PendingImageItem := TJSONObject(Value).Get('id', '');
+                  End
                 Else If Method = 'item/completed' Then
                   Begin
                     Value := Params.Find('item');
@@ -924,8 +949,15 @@ Begin
                       MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True)
                     Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'imageGeneration') Then
                       Begin
-                        If TJSONObject(Value).Get('status', '') = 'completed' Then
-                          FGeneratedImagePath := TJSONObject(Value).Get('savedPath', '');
+                        If (PendingImageItem <> '') And (TJSONObject(Value).Get('id', '') = PendingImageItem) Then
+                          Begin
+                            FCompletedImageCall := PendingImageCall;
+                            FGeneratedImagePath := '';
+                            If TJSONObject(Value).Get('status', '') = 'completed' Then
+                              FGeneratedImagePath := TJSONObject(Value).Get('savedPath', '');
+                            PendingImageCall := '';
+                            PendingImageItem := '';
+                          End;
                       End
                     Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'reasoning') Then
                       Begin

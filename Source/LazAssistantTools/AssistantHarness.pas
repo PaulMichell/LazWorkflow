@@ -89,7 +89,12 @@ Begin
     PlanRel := GetActivePlanRelativePath;
     If Assigned(WorkflowAssistantHarness) Then
       { ChatGPT cannot run a child. Do not name spawn_subagent in the instructions. }
-      Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel, True, False);
+      Begin
+          Result := WorkflowAssistantHarness.BuildSystemPrompt(Mode, Names, Root, PlanRel, True, False);
+          If AssistantTurnOffersImageOutput(Mode) Then
+            Result := Result + LineEnding + 'For raster images, first reserve the destination with write_image. ' +
+              'After approval, use native image generation once. Use write_file for SVG.';
+        End;
   Finally
     Names.Free;
   End;

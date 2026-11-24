@@ -448,7 +448,7 @@ Begin
       ImageModelLabel.Caption := 'Image model';
       Exit;
     End;
-  CanDraw := AssistantBackendCanDraw(Item.Backend);
+  CanDraw := AssistantBackendCanDraw(Item.Backend, Item.Runtime);
   ImageOutputCheck.Enabled := CanDraw;
   ImageOutputCheck.Checked := Item.ImageOutput And CanDraw;
   ImageModelCombo.Items.BeginUpdate;
@@ -463,7 +463,7 @@ Begin
     ImageModelCombo.Items.EndUpdate;
   End;
   ImageModelCombo.Text := Item.ImageModel;
-  ImageModelCombo.Enabled := CanDraw;
+  ImageModelCombo.Enabled := CanDraw And (Item.Backend <> 'codex');
   If CanDraw Then
     ImageModelLabel.Caption := 'Image model'
   Else
@@ -738,7 +738,7 @@ Begin
   If Trim(ConnectionNameEdit.Text) <> '' Then
     Item.Name := Trim(ConnectionNameEdit.Text);
   { Capability only. The selected chat model is stored by the kind-specific block below. }
-  If Not AssistantBackendCanDraw(Item.Backend) Then
+  If Not AssistantBackendCanDraw(Item.Backend, Item.Runtime) Then
     Item.ImageOutput := False
   Else
     Begin

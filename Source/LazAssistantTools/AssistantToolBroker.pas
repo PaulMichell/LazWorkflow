@@ -157,6 +157,9 @@ Type
     Property RunId: String Read FRunId;
   End;
 
+/// Checks the requested path and the final PNG path before presenting the latter for approval.
+Function CodexImageDestination(Const Arguments: String; Out Destination, Summary, ErrorText: String; Out Overwrite: Boolean): Boolean;
+
 Implementation
 
 Uses
@@ -239,6 +242,35 @@ Begin
     Args := TJSONObject(Data).Find('arguments');
     If (Args Is TJSONArray) And (Args.Count > 0) And (Args.Items[0].JSONType = jtString) Then
       Result := Args.Items[0].AsString;
+  Finally
+    Data.Free;
+  End;
+End;
+
+Function CodexImageDestination(Const Arguments: String; Out Destination, Summary, ErrorText: String; Out Overwrite: Boolean): Boolean;
+Var
+  Data: TJSONData;
+  Path, Prompt, Resolved, Relative: String;
+Begin
+  Result := False;
+  Data := GetJSON(Arguments);
+  Try
+    If Not (Data Is TJSONObject) Then Exit;
+    Path := Trim(TJSONObject(Data).Get('path', ''));
+    Prompt := Trim(TJSONObject(Data).Get('prompt', ''));
+    Overwrite := TJSONObject(Data).Get('overwrite', False);
+    If (Path = '') Or (Prompt = '') Then
+      Begin
+        ErrorText := 'write_image requires a prompt and a project-relative path.';
+        Exit;
+      End;
+    If Not ResolveImageDestination(Path, Overwrite, Resolved, Relative, ErrorText) Then Exit;
+    If Not SameText(ExtractFileExt(Relative), '.png') Then Relative := ChangeFileExt(Relative, '.png');
+    If Not ResolveImageDestination(Relative, Overwrite, Destination, Path, ErrorText) Then Exit;
+    Summary := Destination;
+    If Overwrite Then Summary := Summary + LineEnding + 'Overwrite permitted.';
+    Summary := Summary + LineEnding + Copy(Prompt, 1, 240);
+    Result := True;
   Finally
     Data.Free;
   End;

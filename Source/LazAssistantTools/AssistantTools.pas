@@ -51,6 +51,8 @@ Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: Stri
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray;
   SkipApproval: Boolean = False): Boolean;
+/// Resolves and checks the final raster destination before approval or generation.
+Function ResolveImageDestination(Const Path: String; Overwrite: Boolean; Out Resolved, Relative, ErrorText: String): Boolean;
 /// Clears a failed write_image stop. Call at turn start on the thread that runs tools.
 Procedure BeginWriteImageTurn;
 Function FindLazbuildExecutable: String;
@@ -410,6 +412,7 @@ Begin
   Summary := Copy(Trim(ArgumentsJson), 1, 240);
   If Length(Trim(ArgumentsJson)) > 240 Then
     Summary := Summary + '…';
+  If Name = 'write_image' Then Summary := ArgumentsJson;
   Ask := TToolApprovalAsk.Create;
   Try
     Ask.Prompt := 'Project Assistant wants to run tool:' + LineEnding + LineEnding +
@@ -3963,6 +3966,31 @@ Begin
   Result := False;
 End;
 
+Function ResolveImageDestination(Const Path: String; Overwrite: Boolean; Out Resolved, Relative, ErrorText: String): Boolean;
+Begin
+  Result := False;
+  If SameText(ExtractFileExt(Path), '.svg') Then
+    Begin
+      ErrorText := 'Use write_file for SVG documents.';
+      Exit;
+    End;
+  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then Exit;
+  Resolved := ExpandResolvedPath(Resolved);
+  Relative := ImageProjectRelative(Resolved);
+  If ImageOutputPathRefused(Relative, ErrorText) Then Exit;
+  If Not AssistantTarget.AllowsWrite(Resolved) Then
+    Begin
+      ErrorText := AssistantTarget.ScopeRefusal('write', Relative);
+      Exit;
+    End;
+  If SymlinkLeavesProject(Resolved) Then
+    Begin
+      ErrorText := 'Refusing a symbolic link that leaves the project.';
+      Exit;
+    End;
+  Result := Not ImageDestinationBlocked(Resolved, Overwrite, ErrorText);
+End;
+
 Function PublishImageBytes(Const Resolved: String; Const Data: TBytes; Overwrite: Boolean;
   Out ErrorText: String): Boolean;
 Var
@@ -4096,30 +4124,12 @@ Begin
       FailWrite;
       Exit;
     End;
-  If Not ResolveProjectPath(Path, Resolved, ErrorText) Then
+  If Not ResolveImageDestination(Path, Overwrite, Resolved, Relative, ErrorText) Then
     Begin
       FailWrite;
       Exit;
     End;
-  Resolved := ExpandResolvedPath(Resolved);
-  Relative := ImageProjectRelative(Resolved);
   RequestedRelative := Relative;
-  If ImageOutputPathRefused(Relative, ErrorText) Then
-    Begin
-      FailWrite;
-      Exit;
-    End;
-  If SymlinkLeavesProject(Resolved) Then
-    Begin
-      ErrorText := 'Refusing a symbolic link that leaves the project.';
-      FailWrite;
-      Exit;
-    End;
-  If ImageDestinationBlocked(Resolved, Overwrite, ErrorText) Then
-    Begin
-      FailWrite;
-      Exit;
-    End;
   { A missing or unknown extension means the format was not specified. }
   ExpectedMime := '';
   ImageExtensionMime(Resolved, ExpectedMime);

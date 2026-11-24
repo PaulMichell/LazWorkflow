@@ -8,7 +8,9 @@ Var
   Client: TAssistantCodexClient;
   Env: TStringList;
   Deadline: QWord;
-  ErrorText, Model: String;
+  ErrorText, Model, Catalogue: String;
+  Tool: TCodexToolRequest;
+  Reserved: Boolean;
   Data, Item: TJSONData;
 Procedure Failed(Const Stage: String);
 Begin
@@ -65,16 +67,27 @@ Begin
     Repeat Client.Pump; Sleep(5);
     Until Client.ToolIsolationChecked Or (Client.State = crsFailed) Or (GetTickCount64 >= Deadline);
     If Not Client.ToolIsolationChecked Then Failed('Tool isolation');
-    If Not Client.StartThread(ParamStr(2), Model,
-      '[{"name":"diagnostic","description":"Diagnostic only","inputSchema":{"type":"object","properties":{}}}]') Then Failed('Queue thread');
+    Catalogue := '[{"name":"diagnostic","description":"Diagnostic only","inputSchema":{"type":"object","properties":{}}}]';
+    If ParamCount = 3 Then
+      Catalogue := '[{"name":"write_image","description":"Reserve the diagnostic image destination","inputSchema":{"type":"object","properties":{}}}]';
+    If Not Client.StartThread(ParamStr(2), Model, Catalogue) Then Failed('Queue thread');
     WaitReady;
     If Client.State <> crsReady Then Failed('Thread policy');
     WriteLn('Dynamic-tool thread and isolation policy passed.');
     If ParamCount = 3 Then
       Begin
-        If Not Client.StartTurn('Use native image generation to draw a blue circle on white.') Then Failed('Queue image turn');
+        If Not Client.StartTurn('Call write_image once, then use native image generation once to draw a blue circle on white.') Then Failed('Queue image turn');
         Deadline := GetTickCount64 + 300000;
-        Repeat Client.Pump; Sleep(5);
+        Reserved := False;
+        Repeat
+          Client.Pump;
+          If Client.TakeTool(Tool) Then
+            Begin
+              If Reserved Or (Tool.Tool <> 'write_image') Then Failed('Unexpected image request');
+              Reserved := Client.CompleteTool(Tool.CallId, 'Reserved. Generate the requested image once.', True);
+              If Not Reserved Then Failed('Reservation');
+            End;
+          Sleep(5);
         Until (Client.State In [crsCompleted, crsFailed]) Or (GetTickCount64 >= Deadline);
         If Client.State <> crsCompleted Then Failed('Image turn');
         If Not FileExists(Client.GeneratedImagePath) Then Failed('Image artifact');

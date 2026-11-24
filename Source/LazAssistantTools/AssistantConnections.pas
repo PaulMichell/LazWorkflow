@@ -75,8 +75,8 @@ Type
     Property Items[Index: Integer]: TAssistantConnection Read GetItem; Default;
   End;
 
-/// True when the registry delivers image output. Claude and ChatGPT are withheld. OpenAI-compatible keeps its adapter.
-Function AssistantBackendCanDraw(Const Backend: String): Boolean;
+/// Checks the qualified runtime for subscription profiles.
+Function AssistantBackendCanDraw(Const Backend: String; Const Runtime: String = ''): Boolean;
 /// Sets the Grok image model when drawing is turned on and none is stored.
 /// Does not copy the chat model. Other backends are left unchanged.
 Procedure ApplyImageOutputTurnedOn(Item: TAssistantConnection);
@@ -89,7 +89,7 @@ Function AssistantTurnOffersImageOutput(Mode: TAssistantMode): Boolean;
 Type
   { Fields needed to call this profile's own image endpoint. Do not log KeyValue. }
   TAssistantProfileCall = Record
-    Backend, Model, ApiBase, Preset, KeySource, KeyEnv, KeyValue: String;
+    Backend, Runtime, Model, ApiBase, Preset, KeySource, KeyEnv, KeyValue: String;
     ImageOutput: Boolean;
     ImageModel: String;
   End;
@@ -111,7 +111,7 @@ Implementation
 
 Uses
   AssistantConfig, WorkflowSettings, AssistantCapabilities, AssistantGrokBackend, AssistantChatGPTBackend,
-  AssistantClaudeBackend, AssistantCompatibleBackend;
+  AssistantClaudeBackend, AssistantCompatibleBackend, AssistantCodexQualification, AssistantCodexProfile;
 
 Type
   TConnectionConfigHook = Record
@@ -348,8 +348,13 @@ Begin
   Result := AssistantCapabilityDelivered(Backend, acContextCompaction);
 End;
 
-Function AssistantBackendCanDraw(Const Backend: String): Boolean;
+Function AssistantBackendCanDraw(Const Backend: String; Const Runtime: String): Boolean;
+Var
+  VersionLine, ErrorText: String;
 Begin
+  If Backend = 'codex' Then
+    Exit((Runtime <> '') And ReadCodexVersion(ResolveCodexExecutable(Runtime), Nil, VersionLine, ErrorText) And
+      CodexVersionOffersImageGeneration(VersionLine));
   Result := AssistantCapabilityDelivered(Backend, acImageOutput);
 End;
 
@@ -358,7 +363,7 @@ Begin
   If Not Assigned(Item) Then
     Exit;
   { Only a Grok row with no stored image model receives the default.
-    Claude and Codex cannot draw. OpenAI-compatible keeps an empty id until the user sets one. }
+    OpenAI-compatible keeps an empty id until the user sets one. }
   If (Item.Backend = 'grok') And (Trim(Item.ImageModel) = '') Then
     Item.ImageModel := AssistantGrokImageModel;
 End;
@@ -366,6 +371,7 @@ End;
 Procedure ClearProfileCall(Out Profile: TAssistantProfileCall);
 Begin
   Profile.Backend := '';
+  Profile.Runtime := '';
   Profile.Model := '';
   Profile.ApiBase := '';
   Profile.Preset := '';
@@ -407,6 +413,7 @@ Begin
         If Obj.Get('id', '') <> ActiveId Then
           Continue;
         Profile.Backend := Obj.Get('backend', '');
+        Profile.Runtime := Obj.Get('runtime', '');
         Profile.Model := Obj.Get('model', '');
         Profile.ApiBase := Obj.Get('api_base', '');
         Profile.Preset := Obj.Get('preset', '');
@@ -419,6 +426,7 @@ Begin
         { A migrated file keeps those keys on the backend object. Flat keys still win when config is absent. }
         If Obj.Find('config') Is TJSONObject Then
           Begin
+            Profile.Runtime := TJSONObject(Obj.Find('config')).Get('runtime', Profile.Runtime);
             If TJSONObject(Obj.Find('config')).Find('api_base') <> Nil Then
               Profile.ApiBase := TJSONObject(Obj.Find('config')).Get('api_base', Profile.ApiBase);
             If TJSONObject(Obj.Find('config')).Find('preset') <> Nil Then
@@ -446,9 +454,8 @@ Function ActiveProfileImageOutput: Boolean;
 Var
   Profile: TAssistantProfileCall;
 Begin
-  { A Claude or Codex row saved with image_output is ignored here, not rewritten: those backends cannot draw. }
   If ReadActiveProfileCall(Profile) Then
-    Result := Profile.ImageOutput And AssistantBackendCanDraw(Profile.Backend)
+    Result := Profile.ImageOutput And AssistantBackendCanDraw(Profile.Backend, Profile.Runtime)
   Else
     Result := False;
 End;

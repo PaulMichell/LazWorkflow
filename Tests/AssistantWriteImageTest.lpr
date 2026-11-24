@@ -25,7 +25,7 @@ Uses
   BaseUnix,
   {$ENDIF}
   Interfaces, Classes, SysUtils, base64, fpimage, fpwritejpeg, fpjson, jsonparser,
-  AssistantConfig, AssistantConnections, AssistantConversation,
+  AssistantCodexProfile, AssistantCodexQualification, AssistantCodexWire, AssistantToolWire, AssistantToolBroker, AssistantProtocol, AssistantConfig, AssistantConnections, AssistantConversation,
   AssistantHarness, AssistantImageAdapters, AssistantImages, AssistantTools, AssistantWorkTarget,
   WorkflowSettings;
 
@@ -452,6 +452,7 @@ Var
   SavedApproval: TAssistantApprovalMode;
   Kept: TBytes;
   PostsBefore: Integer;
+  Overwrite: Boolean;
 Begin
   Root := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-write-image-fixture-' + IntToStr(GetProcessID);
   Project := IncludeTrailingPathDelimiter(Root) + 'project';
@@ -529,6 +530,17 @@ Begin
       (Pos('image_id', Prompt) = 0) And (Pos('cannot write image files', Prompt) = 0) And
       (Pos('grok-imagine-image-2.0', Prompt) = 0) And
       ToolAllowedInMode('write_image', amBuild));
+    Check('Inspect and Chat with an enabled profile deny image output',
+      (Not ToolAllowedInMode('write_image', amInspect)) And (Not ToolAllowedInMode('write_image', amChat)) And
+      (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amInspect)) = 0) And
+      (Pos('"name":"write_image"', BuildAssistantToolsJsonForMode(amChat)) = 0));
+    Check('only the qualified Codex version offers generation',
+      CodexVersionOffersImageGeneration('codex-cli 0.167.0-alpha.3.2') And
+      Not CodexVersionOffersImageGeneration('codex-cli 0.167.0-alpha.3.1'));
+    Check('Codex approval names final PNG before generation',
+      CodexImageDestination(ArgsFor('icons/example.jpg', 'a dot', ''), Reply, Slice, Note, Overwrite) And
+      SameText(Reply, ProjectFile(Project, 'icons/example.png')) And (Pos(Reply, Slice) > 0) And Not FileExists(Reply));
+    Check('SVG uses the document route', Not CodexImageDestination(ArgsFor('icons/example.svg', 'a dot', ''), Reply, Slice, Note, Overwrite));
     Check('a subagent tool list has no write_image',
       (Pos('write_image', BuildAssistantToolsJsonForSession(amBuild, True, False)) = 0) And
       (Pos('write_image', BuildAssistantToolsJsonForSession(amBuild, False, False)) = 0) And
@@ -630,6 +642,23 @@ Begin
       (MockCalls = 0) And (Note = 'Unknown tool: write_image') And
       (Not FileExists(ProjectFile(Project, 'icons/codex.png'))));
 
+    If ParamStr(1) = '--qualified-codex' Then
+      Begin
+        CodexItem.Runtime := FindCodexExecutable;
+        Check('qualified Codex profile saved', Store.Save);
+        Check('eligible Codex parent offers the destination in all writing modes',
+          AssistantTurnOffersImageOutput(amPlan) And AssistantTurnOffersImageOutput(amDocument) And AssistantTurnOffersImageOutput(amBuild));
+        ToolsJson := OpenAIToolsToCodex(BuildAssistantToolsJsonForMode(amPlan));
+        Check('eligible parent enables native generation', Pos('"features.image_generation":true',
+          CodexThreadStartParams(Project, ChatModel, ToolsJson, '')) > 0);
+        ToolsJson := OpenAIToolsToCodex(BuildAssistantToolsJsonForSession(amBuild, False, False));
+        Check('Codex child disables native generation', Pos('"features.image_generation":false',
+          CodexThreadStartParams(Project, ChatModel, ToolsJson, '')) > 0);
+        Check('Codex Inspect and Chat deny execution', Not ToolAllowedInMode('write_image', amInspect) And Not ToolAllowedInMode('write_image', amChat));
+        CodexItem.ImageOutput := False;
+        Check('Codex preference disables the offer', Store.Save And Not AssistantTurnOffersImageOutput(amBuild));
+      End;
+
     EmptyModel := Store.AddStored('empty-model', 'Empty model', 'openai-compatible');
     EmptyModel.Model := ChatModel;
     EmptyModel.ImageModel := '';
@@ -667,7 +696,7 @@ Begin
       (Pos('outside', Note) > 0) And (MockCalls = 0) And (ReadText(Outside) = 'keep-outside'));
     BeginWriteImageTurn;
     CheckNoted('absolute path escape is refused before the post', Note,
-      (Not CallWrite(amBuild, '{"path":"' + Outside + '","prompt":"a red dot"}', Reply, Note)) And
+      (Not CallWrite(amBuild, '{"path":"' + JsonEscapeText(Outside) + '","prompt":"a red dot"}', Reply, Note)) And
       (Pos('outside', Note) > 0) And (MockCalls = 0) And (ReadText(Outside) = 'keep-outside'));
     {$IFDEF UNIX}
     Check('escape link created', fpSymlink(PChar(Outside), PChar(ProjectFile(Project, 'escape.png'))) = 0);
