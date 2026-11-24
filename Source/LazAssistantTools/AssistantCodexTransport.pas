@@ -252,7 +252,7 @@ Begin
       End
             Else
               Begin
-                If Length(FBuffer) >= CodexMaxFrameBytes Then
+                If Length(FBuffer) >= CodexMaxQueueBytes Then
                   Begin
                     Fail('Oversized incoming Codex frame.');
                     Exit;

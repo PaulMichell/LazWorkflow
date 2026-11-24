@@ -1,8 +1,8 @@
 Program AssistantCodexProbe;
-{ Explicit diagnostic, excluded from normal tests. Does not start model turns
-  or print account identities, tokens, URLs, or raw protocol frames. }
+{ Explicit diagnostic, excluded from normal tests. Starts a model turn only with --image
+  and does not print account identities, tokens, URLs, or raw protocol frames. }
 {$mode objfpc}{$H+}
-Uses cthreads, Interfaces, Classes, SysUtils, fpjson, jsonparser,
+Uses {$IFDEF UNIX}cthreads,{$ENDIF} Interfaces, Classes, SysUtils, fpjson, jsonparser,
   AssistantCodexClient, AssistantCodexHandshake, AssistantCodexProfile;
 Var
   Client: TAssistantCodexClient;
@@ -25,8 +25,8 @@ Begin
     (Client.Authentication.State = ccsNeedsSignIn) Or (GetTickCount64 >= Deadline);
 End;
 Begin
-  If ParamCount <> 2 Then
-    Begin WriteLn('Usage: AssistantCodexProbe /absolute/path/to/codex /isolated/codex/home'); Halt(2); End;
+  If (ParamCount <> 2) And Not ((ParamCount = 3) And (ParamStr(3) = '--image')) Then
+    Begin WriteLn('Usage: AssistantCodexProbe /absolute/path/to/codex /isolated/codex/home [--image]'); Halt(2); End;
   If Not DirectoryExists(ParamStr(2)) Then
     Begin WriteLn('Create the isolated Codex home first.'); Halt(2); End;
   Env := TStringList.Create;
@@ -35,7 +35,8 @@ Begin
     If Not PrepareCodexProfile(ParamStr(2), ErrorText) Then
       Begin WriteLn(ErrorText); Halt(1); End;
     CodexProfileEnvironment(ParamStr(2), Env);
-    If Not Client.Connect(ParamStr(1), ParamStr(2), Env) Then Failed('Qualification');
+    If ParamStr(1) = '--auto' Then Model := FindCodexExecutable Else Model := ParamStr(1);
+    If Not Client.Connect(Model, ParamStr(2), Env) Then Failed('Qualification');
     WaitReady;
     If Client.Authentication.State = ccsNeedsSignIn Then
       Begin WriteLn('Qualified runtime initialized; ChatGPT sign-in required.'); Halt(1); End;
@@ -68,6 +69,24 @@ Begin
       '[{"name":"diagnostic","description":"Diagnostic only","inputSchema":{"type":"object","properties":{}}}]') Then Failed('Queue thread');
     WaitReady;
     If Client.State <> crsReady Then Failed('Thread policy');
-    WriteLn('Dynamic-tool thread, provider, approval and read-only/no-network policy passed. No model turn sent.');
+    WriteLn('Dynamic-tool thread and isolation policy passed.');
+    If ParamCount = 3 Then
+      Begin
+        If Not Client.StartTurn('Use native image generation to draw a blue circle on white.') Then Failed('Queue image turn');
+        Deadline := GetTickCount64 + 300000;
+        Repeat Client.Pump; Sleep(5);
+        Until (Client.State In [crsCompleted, crsFailed]) Or (GetTickCount64 >= Deadline);
+        If Client.State <> crsCompleted Then Failed('Image turn');
+        If Not FileExists(Client.GeneratedImagePath) Then Failed('Image artifact');
+        With TFileStream.Create(Client.GeneratedImagePath, fmOpenRead Or fmShareDenyWrite) Do
+          Try
+            SetLength(ErrorText, 8);
+            ReadBuffer(ErrorText[1], 8);
+            If ErrorText <> #137'PNG'#13#10#26#10 Then Failed('PNG signature');
+            WriteLn('Retrieved generated PNG, ', Size, ' bytes.');
+          Finally
+            Free;
+          End;
+      End;
   Finally Client.Free; Env.Free; End;
 End.

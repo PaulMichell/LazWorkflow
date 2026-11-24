@@ -50,7 +50,7 @@ Type
     FTransport: TAssistantCodexTransport;
     FHandshake: TAssistantCodexHandshake;
     FState: TCodexRunState;
-    FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
+    FGeneratedImagePath, FThreadId, FTurnId, FContent, FThinking, FError, FModels, FRateLimits: String;
     FToolIsolationChecked: Boolean;
     FContextUsage: TCodexContextUsage;
     FModelItems: String;
@@ -110,6 +110,7 @@ Type
     Property State: TCodexRunState Read FState;
     Property Authentication: TAssistantCodexHandshake Read FHandshake;
     Property Content: String Read FContent;
+    Property GeneratedImagePath: String Read FGeneratedImagePath;
     Property Thinking: String Read FThinking;
     Property LastError: String Read FError;
     Property ModelsJson: String Read FModels;
@@ -326,6 +327,7 @@ Begin
   FContextUsage := EmptyCodexContextUsage;
   FPendingId := '';
   FPendingMethod := '';
+  FGeneratedImagePath := '';
   FContent := '';
   FThinking := '';
   FModels := '';
@@ -522,7 +524,8 @@ Begin
     Begin
       If FState <> crsWaitingReconnect Then
         Begin
-          FContent := '';
+          FGeneratedImagePath := '';
+  FContent := '';
           FThinking := '';
           FSeenCalls.Clear;
         End;
@@ -919,6 +922,11 @@ Begin
                     Value := Params.Find('item');
                     If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'agentMessage') Then
                       MessageText(TJSONObject(Value).Get('id', ''), TJSONObject(Value).Get('text', ''), True)
+                    Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'imageGeneration') Then
+                      Begin
+                        If TJSONObject(Value).Get('status', '') = 'completed' Then
+                          FGeneratedImagePath := TJSONObject(Value).Get('savedPath', '');
+                      End
                     Else If (Value Is TJSONObject) And (TJSONObject(Value).Get('type', '') = 'reasoning') Then
                       Begin
                         Parts := TJSONObject(Value).Find('summary');
