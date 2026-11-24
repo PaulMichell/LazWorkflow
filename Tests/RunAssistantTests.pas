@@ -35,12 +35,12 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..64] Of String = (
+  CoreTestNames: Array[0..65] Of String = (
     'CanvasSmoothShapesTest', 'AssistantUtf8StreamTest', 'AssistantClaudeClientTest', 'AssistantOfferSnapshotTest',
     'AssistantCapabilityTest',
     'ClaudeCaptureTest', 'AssistantMCPProtocolTest',
     'AssistantMCPListenerTest',
-    'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest', 'AssistantApprovalIdTest',
+    'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest', 'AssistantApprovalIdTest', 'AssistantCodexGateTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
     'AssistantArchiveRollbackTest', 'AssistantConversationIdentityTest', 'AssistantMonitorMirrorTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
     'AssistantLfmTest', 'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest',

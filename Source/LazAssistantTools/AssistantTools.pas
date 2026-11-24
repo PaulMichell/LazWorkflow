@@ -39,6 +39,9 @@ Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
 /// The one name-to-body table. Approval stays with the caller. There is no alias branch.
 Function DispatchAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
+/// Mode, image-offer, Markdown-editor, and package-target checks. No approval and no write.
+Function AssistantToolPreflight(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ErrorText: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
   Out ResultText: String; Out ErrorText: String): Boolean;
 Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
@@ -4155,47 +4158,48 @@ End;
 Function ExecuteAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode; Out ResultText: String;
   Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean; Forward;
 
-Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
-  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray;
-  SkipApproval: Boolean = False): Boolean;
+Function AssistantPackageTargetAllows(Const ToolName, ArgumentsJson: String; Out ErrorText: String): Boolean;
 Var
-  Name, Path, ResolvedPath, TargetIdentity: String;
-  Function CheckTarget: Boolean;
-  Begin
-    Result := True;
-    If AssistantTarget.Kind<>atkPackage Then Exit;
-    If Name='add_unit_to_project' Then
-      Begin
-        Result := Not AssistantAddUnitRefused(ErrorText);
-        Exit;
-      End;
-    If (Name='write_file') Or (Name='replace_in_file') Or (Name='ensure_form_component') Or
-      (Name='write_markdown') Or (Name='update_markdown') Or (Name='delete_path') Or (Name='rename_path') Then
-      Begin
-        Path := JsonArgString(ArgumentsJson, 'path');
-        If Name = 'rename_path' Then
-          Begin
-            Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
-            If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
-            If Result Then
-              Begin
-                Path := JsonArgString(ArgumentsJson, 'new_path');
-                Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
-              End;
-          End
-        Else
+  Name, Path, ResolvedPath: String;
+Begin
+  Result := True;
+  ErrorText := '';
+  Name := LowerCase(Trim(ToolName));
+  If AssistantTarget.Kind <> atkPackage Then Exit;
+  If Name = 'add_unit_to_project' Then
+    Begin
+      Result := Not AssistantAddUnitRefused(ErrorText);
+      Exit;
+    End;
+  If (Name = 'write_file') Or (Name = 'replace_in_file') Or (Name = 'ensure_form_component') Or
+    (Name = 'write_markdown') Or (Name = 'update_markdown') Or (Name = 'delete_path') Or (Name = 'rename_path') Then
+    Begin
+      Path := JsonArgString(ArgumentsJson, 'path');
+      If Name = 'rename_path' Then
+        Begin
           Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
-        If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
-        If Not Result And (ErrorText='') Then ErrorText := AssistantTarget.ScopeRefusal('write', Path);
-      End;
-  End;
+          If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
+          If Result Then
+            Begin
+              Path := JsonArgString(ArgumentsJson, 'new_path');
+              Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+            End;
+        End
+      Else
+        Result := ResolveProjectPath(Path, ResolvedPath, ErrorText);
+      If Result Then Result := AssistantTarget.AllowsWrite(ResolvedPath);
+      If Not Result And (ErrorText = '') Then ErrorText := AssistantTarget.ScopeRefusal('write', Path);
+    End;
+End;
+
+Function AssistantToolPreflight(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
+  Out ErrorText: String): Boolean;
+Var
+  Name: String;
 Begin
   Result := False;
-  ResultText := '';
   ErrorText := '';
-  ImageRefs := Nil;
   Name := LowerCase(Trim(ToolName));
-  GAssistantToolMode := Mode;
   { Not registered for this turn. A hallucinated name is unknown and writes nothing. }
   If (Name = 'write_image') And (Not AssistantTurnOffersImageOutput(Mode)) Then
     Begin
@@ -4215,10 +4219,25 @@ Begin
         [ToolName, AssistantModeToStr(Mode)]);
       Exit;
     End;
-  TargetIdentity := AssistantTarget.Identity;
   { Refuse a Markdown editor path before scope checks or an Ask dialog. }
   If MarkdownEditorToolRefused(Name, ArgumentsJson, ErrorText) Then Exit;
-  If Not CheckTarget Then Exit;
+  Result := AssistantPackageTargetAllows(ToolName, ArgumentsJson, ErrorText);
+End;
+
+Function ExecuteAssistantToolForMode(Const ToolName, ArgumentsJson, ToolId: String; Mode: TAssistantMode;
+  Out ResultText: String; Out ErrorText: String; Out ImageRefs: TAssistantImageRefArray;
+  SkipApproval: Boolean = False): Boolean;
+Var
+  Name, TargetIdentity: String;
+Begin
+  Result := False;
+  ResultText := '';
+  ErrorText := '';
+  ImageRefs := Nil;
+  Name := LowerCase(Trim(ToolName));
+  GAssistantToolMode := Mode;
+  If Not AssistantToolPreflight(ToolName, ArgumentsJson, Mode, ErrorText) Then Exit;
+  TargetIdentity := AssistantTarget.Identity;
   If Not SkipApproval Then
     If Not ApproveToolIfNeeded(Name, ToolId, ArgumentsJson, ErrorText) Then
       Exit;
@@ -4227,7 +4246,8 @@ Begin
       ErrorText := 'Assistant target changed during approval.';
       Exit;
     End;
-  If Not CheckTarget Then Exit;
+  { Repeat the package check after Ask. A switch during the dialog must not write. }
+  If Not AssistantPackageTargetAllows(ToolName, ArgumentsJson, ErrorText) Then Exit;
   Result := ExecuteAssistantTool(ToolName, ArgumentsJson, Mode, ResultText, ErrorText, ImageRefs);
 End;
 

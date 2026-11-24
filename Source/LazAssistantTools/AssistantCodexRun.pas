@@ -69,7 +69,7 @@ Implementation
 
 Uses
   fpjson, jsonparser, AssistantCodexHandshake, AssistantCodexProfile, AssistantTools, AssistantImages, AssistantRecovery,
-  AssistantConfig, AssistantMCPBridge;
+  AssistantConfig, AssistantMCPBridge, AssistantWorkTarget;
 
 Constructor TAssistantCodexRun.Create(Const Executable, Cwd, Model, Prompt,
     ToolsJson, RunId: String; TimeoutMs: Cardinal; Const ProfileDir: String; Const Effort: String;
@@ -336,7 +336,7 @@ End;
 
 Function TAssistantCodexRun.ServiceOneTool(Out Tool: TCodexToolRequest; Out Text: String; Out OK: Boolean): Boolean;
 Var
-  ErrorText, Attachments: String;
+  ErrorText, Attachments, TargetIdentity: String;
   ImageRefs: TAssistantImageRefArray;
 Begin
   Result := False;
@@ -354,16 +354,30 @@ Begin
     LeaveCriticalSection(FLock);
   End;
   Try
-    { One executor. Ask uses the broker summary and the Codex call id, then DispatchAssistantTool runs the body.
-      An unknown name is an error. There is no second dispatcher and no approval skip. }
-    If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, CodexToolApprovalSummary(Tool.Arguments), ErrorText) Then
+    { One executor. Preflight is the Grok gate before Ask. After Ask succeeds, that gate runs
+      with approval skipped so the dialog is not shown twice. }
+    TargetIdentity := AssistantTarget.Identity;
+    If Not AssistantToolPreflight(Tool.Tool, Tool.Arguments, FMode, ErrorText) Then
       Begin
         OK := False;
         Text := ErrorText;
       End
+    Else If Not ApproveToolIfNeeded(Tool.Tool, Tool.CallId, CodexToolApprovalSummary(Tool.Arguments), ErrorText) Then
+      Begin
+        OK := False;
+        Text := ErrorText;
+      End
+    Else If AssistantTarget.Identity <> TargetIdentity Then
+      Begin
+        OK := False;
+        ErrorText := 'Assistant target changed during approval.';
+        Text := ErrorText;
+      End
     Else
-      OK := DispatchAssistantTool(Tool.Tool, Tool.Arguments, FMode, Text, ErrorText, ImageRefs);
-    If Not OK Then Text := ErrorText;
+      Begin
+        OK := ExecuteAssistantToolForMode(Tool.Tool, Tool.Arguments, Tool.CallId, FMode, Text, ErrorText, ImageRefs, True);
+        If Not OK Then Text := ErrorText;
+      End;
     Attachments := '';
     If OK Then Attachments := AssistantImageRefsToJson(ImageRefs);
     Result := True;
