@@ -104,6 +104,8 @@ Begin
           '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}},"required":[]}';
         Result.Modes := [amInspect, amDocument, amPlan, amBuild];
         Result.Role := brNone;
+        { The disk walk stays on the worker. Open buffers are snapshotted in a short IDE-thread pass. }
+        Result.IdeThread := False;
       End;
     2:
       Begin
@@ -180,6 +182,8 @@ Begin
           '"max_matches":{"type":"integer","description":"Max matches to return (default 50)"}},"required":["query"]}';
         Result.Modes := [amInspect, amDocument, amBuild];
         Result.Role := brInspect;
+        { Same split as grep: the walk is not IdeThread; the editor overlay is. }
+        Result.IdeThread := False;
       End;
     8:
       Begin

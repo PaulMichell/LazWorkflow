@@ -36,6 +36,10 @@ Function AssistantParentToolsJson(Mode: TAssistantMode): String;
 Function ToolAllowedInMode(Const ToolName: String; Mode: TAssistantMode): Boolean;
 { True when the tool must run on the IDE/LCL thread (editors, forms, project API). }
 Function ToolNeedsIdeThread(Const ToolName: String): Boolean;
+{ Copies open-editor text for grep. Off the IDE thread this returns false and does not touch the editor manager. }
+Function AssistantCaptureSearchEditors(Const Root, Glob: String; Paths, Texts, Oversized: TStrings): Boolean;
+Function AssistantSearchEditorManagerReads: Integer;
+Procedure AssistantResetSearchEditorManagerReads;
 /// The one name-to-body table. Approval stays with the caller. There is no alias branch.
 Function DispatchAssistantTool(Const ToolName, ArgumentsJson: String; Mode: TAssistantMode;
   Out ResultText, ErrorText: String; Out ImageRefs: TAssistantImageRefArray): Boolean;
@@ -2645,14 +2649,118 @@ Begin
   End;
 End;
 
+Var
+  SearchEditorManagerReads: Integer;
+
+Function AssistantSearchEditorManagerReads: Integer;
+Begin
+  Result := SearchEditorManagerReads;
+End;
+
+Procedure AssistantResetSearchEditorManagerReads;
+Begin
+  SearchEditorManagerReads := 0;
+End;
+
+Function SameSearchPath(Const Left, Right: String): Boolean;
+Begin
+  Result := CompareFilenames(ExpandResolvedPath(Left), ExpandResolvedPath(Right)) = 0;
+End;
+
+Function SearchOverlayIndex(Const FilePath: String; Paths: TStrings): Integer;
+Var
+  I: Integer;
+Begin
+  Result := -1;
+  If Not Assigned(Paths) Then Exit;
+  For I := 0 To Paths.Count - 1 Do
+    If SameSearchPath(Paths[I], FilePath) Then
+      Exit(I);
+End;
+
+Function AssistantCaptureSearchEditors(Const Root, Glob: String; Paths, Texts, Oversized: TStrings): Boolean;
+Var
+  I: Integer;
+  Ed: TSourceEditorInterface;
+  EditorPath: String;
+Begin
+  Result := False;
+  { The worker must not touch the editor manager. The caller marshals this onto the IDE thread. }
+  If GetCurrentThreadID <> MainThreadID Then Exit;
+  If Not Assigned(Paths) Or Not Assigned(Texts) Then Exit;
+  If Not Assigned(SourceEditorManagerIntf) Then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  Inc(SearchEditorManagerReads);
+  Result := True;
+  Try
+    For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
+      Begin
+        Ed := SourceEditorManagerIntf.SourceEditors[I];
+        If Not Assigned(Ed) Or (Ed.FileName = '') Then Continue;
+        EditorPath := ExpandResolvedPath(Ed.FileName);
+        If Not FileMatchesSearchGlob(EditorPath, Glob) And Not FileMatchesSearchGlob(Ed.FileName, Glob) Then Continue;
+        If Not SameSearchPath(EditorPath, Root) And Not IsPathUnderRoot(Root, EditorPath) And
+          Not IsPathUnderRoot(Root, Ed.FileName) Then Continue;
+        If Length(Ed.SourceText) > AssistantToolMaxSearchFileBytes Then
+          Begin
+            If Assigned(Oversized) Then Oversized.Add(EditorPath);
+          End
+        Else
+          Begin
+            Paths.Add(EditorPath);
+            Texts.Add(Ed.SourceText);
+          End;
+      End;
+  Except
+    On E: Exception Do
+      ReportPluginException('AssistantCaptureSearchEditors', E);
+  End;
+End;
+
+Type
+  TSearchEditorCapture = Class
+    Root, Glob: String;
+    Paths, Texts, Oversized: TStrings;
+    Procedure Execute;
+  End;
+
+Procedure TSearchEditorCapture.Execute;
+Begin
+  AssistantCaptureSearchEditors(Root, Glob, Paths, Texts, Oversized);
+End;
+
+Procedure CaptureSearchEditorsOnIdeThread(Const Root, Glob: String; Paths, Texts, Oversized: TStrings);
+Var
+  Capture: TSearchEditorCapture;
+Begin
+  If GetCurrentThreadID = MainThreadID Then
+    Begin
+      AssistantCaptureSearchEditors(Root, Glob, Paths, Texts, Oversized);
+      Exit;
+    End;
+  Capture := TSearchEditorCapture.Create;
+  Try
+    Capture.Root := Root;
+    Capture.Glob := Glob;
+    Capture.Paths := Paths;
+    Capture.Texts := Texts;
+    Capture.Oversized := Oversized;
+    TThread.Synchronize(Nil, @Capture.Execute);
+  Finally
+    Capture.Free;
+  End;
+End;
+
 Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorText: String): Boolean;
 Var
   Query, Path, Resolved, Glob, Rel: String;
-  MaxMatches, MatchCount, FileCount, WalkCount, I: Integer;
-  Files: TStringList;
+  MaxMatches, MatchCount, FileCount, WalkCount, I, OverlayAt: Integer;
+  Files, OverlayPaths, OverlayTexts, Oversized: TStringList;
   SL: TStringList;
-  WalkComplete, UseRegex, FilesOnly, Stopped, SingleFile, Capped: Boolean;
-  Editor: TSourceEditorInterface;
+  WalkComplete, UseRegex, FilesOnly, Stopped, SingleFile, Missing, Capped: Boolean;
   Deadline: QWord;
 Begin
   Result := False;
@@ -2679,6 +2787,9 @@ Begin
   FilesOnly := JsonArgBool(ArgumentsJson, 'files_only', False);
   Files := TStringList.Create;
   SL := TStringList.Create;
+  OverlayPaths := TStringList.Create;
+  OverlayTexts := TStringList.Create;
+  Oversized := TStringList.Create;
   Deadline := GetTickCount64 + AssistantToolMaxSearchMs;
   Stopped := False;
   Try
@@ -2686,6 +2797,7 @@ Begin
     WalkCount := 0;
     WalkComplete := True;
     SingleFile := FileExistsUTF8(Resolved) And (Not DirectoryExistsUTF8(Resolved));
+    Missing := False;
     If SingleFile Then
       Begin
         If FileMatchesSearchGlob(Resolved, Glob) Then
@@ -2701,11 +2813,14 @@ Begin
         ResultText := Format('Search for "%s" under %s', [Query, Resolved]) + LineEnding;
       End
     Else
+      Missing := True;
+    { Disk walk is done. Open buffers are copied on the IDE thread, then searched here. }
+    CaptureSearchEditorsOnIdeThread(Resolved, Glob, OverlayPaths, OverlayTexts, Oversized);
+    If Missing Then
       Begin
-        Editor := FindOpenEditor(Resolved);
-        If Assigned(Editor) Then
+        If SearchOverlayIndex(Resolved, OverlayPaths) >= 0 Then
           Begin
-            Files.Add(Resolved);
+            Files.Add(ExpandResolvedPath(Resolved));
             FileCount := 1;
             ResultText := Format('Search for "%s" in %s', [Query, Resolved]) + LineEnding;
           End
@@ -2722,17 +2837,10 @@ Begin
       ResultText := ResultText + Format('[… stopped after listing %d text files …]',
         [AssistantToolMaxSearchFiles]) + LineEnding;
     { A buffer that has never been saved is not in the directory walk. Search it too. }
-    If DirectoryExistsUTF8(Resolved) And Assigned(SourceEditorManagerIntf) Then
-      For I := 0 To SourceEditorManagerIntf.SourceEditorCount - 1 Do
-        Begin
-          Editor := SourceEditorManagerIntf.SourceEditors[I];
-          If Not Assigned(Editor) Or (Editor.FileName = '') Or Not FileMatchesSearchGlob(Editor.FileName, Glob) Then
-            Continue;
-          If Not IsPathUnderRoot(Resolved, Editor.FileName) Then
-            Continue;
-          If Files.IndexOf(Editor.FileName) < 0 Then
-            Files.Add(Editor.FileName);
-        End;
+    If DirectoryExistsUTF8(Resolved) Then
+      For I := 0 To OverlayPaths.Count - 1 Do
+        If SearchOverlayIndex(OverlayPaths[I], Files) < 0 Then
+          Files.Add(OverlayPaths[I]);
     For I := 0 To Files.Count - 1 Do
       Begin
         If ToolsShouldStop Or (GetTickCount64 >= Deadline) Then
@@ -2740,13 +2848,11 @@ Begin
             Stopped := True;
             Break;
           End;
-        Editor := FindOpenEditor(Files[I]);
-        If Assigned(Editor) Then
-          Begin
-            If Length(Editor.SourceText) > AssistantToolMaxSearchFileBytes Then
-              Continue;
-            SL.Text := Editor.SourceText;
-          End
+        If SearchOverlayIndex(Files[I], Oversized) >= 0 Then
+          Continue;
+        OverlayAt := SearchOverlayIndex(Files[I], OverlayPaths);
+        If OverlayAt >= 0 Then
+          SL.Text := OverlayTexts[OverlayAt]
         Else
           Begin
             If FileSizeUTF8(Files[I]) > AssistantToolMaxSearchFileBytes Then
@@ -2775,6 +2881,9 @@ Begin
     ResultText := ResultText + Format('Matches: %d (scanned %d text files).', [MatchCount, Files.Count]);
     Result := True;
   Finally
+    Oversized.Free;
+    OverlayTexts.Free;
+    OverlayPaths.Free;
     SL.Free;
     Files.Free;
   End;
