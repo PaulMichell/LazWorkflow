@@ -23,6 +23,8 @@ The qualified configuration uses Codex `0.167.0-alpha.3.2`, a signed-in ChatGPT 
 
 All five Win64 packages compiled with zero errors and warnings. The nested verification folder contained one file, `Temporary/SignedInIDE32/kingfisher.png` (2,151,859 bytes). The IDE image reader decoded it at 1254 × 1254. Requesting that same destination with overwrite disabled returned “File already exists” before generation. Its SHA-256 digest matched before and after the refusal.
 
-The connection and writer regressions passed with image output disabled. Interactive checks still awaiting confirmation include the original generation count, opening the separate viewer, the generated attachment count after reopening the conversation, the phone preview if connected, and declining the IDE overwrite prompt.
+The connection and writer regressions passed with image output disabled. The original generation count, the separate viewer, the attachment count after reopening the conversation and the phone preview (if connected) still require manual confirmation.
 
 In the reported disabled-output turn the assistant indicated that image output was unavailable. A subsequent directory check found only `kingfisher.png` and no `disabled.png`. In the replacement turn, the IDE reported “Image generation failed before a completed image was received.” This message is emitted for a pending reservation when the client completes, fails or enters reconnect handling. It does not confirm an overwrite decline. The directory check found the original filename at the previously recorded size. Its contents were not compared after this attempt.
+
+On the subsequent replacement request with overwrite enabled, the user declined the IDE approval prompt. The request stopped before generation, preserved the original PNG and published no new attachment.
