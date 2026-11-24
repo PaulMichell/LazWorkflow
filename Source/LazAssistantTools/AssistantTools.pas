@@ -188,6 +188,7 @@ ThreadVar
   GToolStopFlag: PLongInt;
   GCaptureDepth: Integer;
   GIdeToolDepth: Integer;
+  GLastIdePump: QWord;
 
 Type
   { Access TThread.Terminated, which is protected on FPC. }
@@ -1776,11 +1777,23 @@ Begin
   End;
 End;
 
+Function SearchShouldStop: Boolean;
+Begin
+  { The walk itself does not own the message loop. Without this, Stop cannot be clicked until the walk ends. }
+  If GetCurrentThreadID = MainThreadID Then
+    If GetTickCount64 - GLastIdePump >= 100 Then
+      Begin
+        GLastIdePump := GetTickCount64;
+        Application.ProcessMessages;
+      End;
+  Result := ToolsShouldStop;
+End;
+
 Function CollectSearchableFiles(Const DirPath, Glob: String; Files: TStringList;
   Var FileCount, WalkCount: Integer): Boolean;
 Begin
   Result := AssistantSearchUtil.CollectSearchableFiles(DirPath, Glob, CaptureSearchUnitOutput, Files, FileCount,
-    WalkCount, AssistantToolMaxSearchFiles, 20000, @ToolsShouldStop);
+    WalkCount, AssistantToolMaxSearchFiles, 20000, @SearchShouldStop);
 End;
 
 Function IsPascalUnitPath(Const Path: String): Boolean;
@@ -2929,7 +2942,7 @@ Begin
           End;
     For I := 0 To Files.Count - 1 Do
       Begin
-        If ToolsShouldStop Or (GetTickCount64 >= Deadline) Then
+        If SearchShouldStop Or (GetTickCount64 >= Deadline) Then
           Begin
             Stopped := True;
             Break;
