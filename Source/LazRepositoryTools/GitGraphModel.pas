@@ -29,6 +29,8 @@ Const
   GitGraphPrefetchRows = 30;
   { Newest commits requested before the rest of history. Enough for a tall window plus scroll. }
   GitGraphHeadWindow = 400;
+  { Visible rows plus ref badges refreshed after push, fetch, or pull. }
+  GitGraphRefRefreshBatch = 400;
 
 Type
   TGitCommitRec = Record
@@ -83,6 +85,8 @@ Type
     Procedure CopyDetailsFrom(Source: TGitGraphModel);
     { Collect SHAs in [First..Last] that still need details (inclusive). }
     Function CollectMissingShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
+    { Visible rows and every commit that currently shows a ref badge. Push moves those badges. }
+    Function CollectRefreshShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
     Procedure RebuildLayout;
     Function Commit(Index: Integer): TGitCommitRec;
     /// Row of a commit SHA, or -1. Match is case-insensitive.
@@ -402,6 +406,35 @@ Begin
         If Result >= GitGraphDetailBatch Then
           Break;
       End;
+End;
+
+Function TGitGraphModel.CollectRefreshShas(FirstIndex, LastIndex: Integer; Out Shas: TStringList): Integer;
+Var
+  I: Integer;
+Begin
+  Shas := TStringList.Create;
+  Shas.Sorted := True;
+  Shas.Duplicates := dupIgnore;
+  Shas.Capacity := GitGraphRefRefreshBatch;
+  Result := 0;
+  If FCount = 0 Then
+    Exit;
+  { Badges first. A push moves them even when they are outside the current window. }
+  For I := 0 To FCount - 1 Do
+    If (FCommits[I].Refs <> '') And (Shas.Count < GitGraphRefRefreshBatch) Then
+      Shas.Add(FCommits[I].Sha);
+  If FirstIndex < 0 Then
+    FirstIndex := 0;
+  If LastIndex >= FCount Then
+    LastIndex := FCount - 1;
+  If FirstIndex <= LastIndex Then
+    For I := FirstIndex To LastIndex Do
+      Begin
+        If Shas.Count >= GitGraphRefRefreshBatch Then
+          Break;
+        Shas.Add(FCommits[I].Sha);
+      End;
+  Result := Shas.Count;
 End;
 
 Procedure TGitGraphModel.LayoutLanes;

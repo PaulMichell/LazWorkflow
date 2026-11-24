@@ -219,6 +219,7 @@ Type
     FAnchorSha: String;
     FIndexing: Boolean;
     FHistoryPartial: Boolean;
+    FRefreshRefs: Boolean;
     FDetailLoading: Boolean;
     FRemoteOpBusy: Boolean;
     FJobBusy: Boolean;
@@ -365,6 +366,7 @@ Begin
   FAnchorSha := '';
   FIndexing := False;
   FHistoryPartial := False;
+  FRefreshRefs := False;
   FDetailLoading := False;
   FRemoteOpBusy := False;
   FJobBusy := False;
@@ -698,6 +700,7 @@ Begin
   Inc(FIndexGen);
   FIndexing := False;
   FHistoryPartial := False;
+  FRefreshRefs := False;
   If Assigned(FHistoryIndex) Then
     FHistoryIndex.Stop;
 End;
@@ -1353,6 +1356,8 @@ Begin
     Exit;
   StopDetailLoad;
   StopIndexLoad;
+  { Push, fetch, and pull move ref badges. The copied graph still has the old ones. }
+  FRefreshRefs := True;
   If (FModel = Nil) Or (FModel.Count = 0) Then
     Begin
       FIndexing := True;
@@ -1370,6 +1375,8 @@ Begin
         StatusFooter.SetRightText('Loading older commits…');
     End;
   FHistoryIndex.Start(FRepoPath, FIndexGen);
+  If (FModel <> Nil) And (FModel.Count > 0) Then
+    ScheduleVisibleDetails;
   If Assigned(GraphPaintBox) Then
     GraphPaintBox.Invalidate;
 End;
@@ -1424,7 +1431,10 @@ Begin
   If (csDestroying in ComponentState) Or Not Assigned(FModel) Then
     Exit;
   If Ok Then
-    FModel.ApplyDetailsText(Payload);
+    Begin
+      FModel.ApplyDetailsText(Payload);
+      FRefreshRefs := False;
+    End;
   { Do not reload the commit SynEdit here. Scrolling fetches details for newly
     visible rows; rewriting the selected diff on every batch is the flicker. }
   If Assigned(GraphPaintBox) Then
@@ -1471,10 +1481,14 @@ Begin
   FHistory.GetVisibleRange(First, Last);
   First := Max(0, First - GitGraphPrefetchRows);
   Last := Min(FModel.Count - 1, Last + GitGraphPrefetchRows);
-  Missing := FModel.CollectMissingShas(First, Last, Shas);
+  If FRefreshRefs Then
+    Missing := FModel.CollectRefreshShas(First, Last, Shas)
+  Else
+    Missing := FModel.CollectMissingShas(First, Last, Shas);
   If Missing = 0 Then
     Begin
       Shas.Free;
+      FRefreshRefs := False;
       Exit;
     End;
 
