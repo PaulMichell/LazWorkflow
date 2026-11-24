@@ -3057,16 +3057,22 @@ Begin
       Else
         Try
           PF := Proj.CreateProjectFile(Resolved);
-          If Assigned(PF) Then
+          If Not Assigned(PF) Then
             Begin
-              Proj.AddFile(PF, False);
-              MarkProjectStructureDirty;
-              AssistantFlushProjectIfDirty;
-              ResultText := ResultText + ' Added to project (project file saved).';
+              Result := FailWriteFileProjectRegistration(Resolved, 'CreateProjectFile returned nil.', ErrorText);
+              Exit;
             End;
+          Proj.AddFile(PF, False);
+          MarkProjectStructureDirty;
+          AssistantFlushProjectIfDirty;
+          ResultText := ResultText + ' Added to project (project file saved).';
         Except
           On E: Exception Do
-            ResultText := ResultText + ' (add_to_project failed: ' + E.Message + ')';
+            Begin
+              { The unit is already on disk. Do not delete it because registration failed. }
+              Result := FailWriteFileProjectRegistration(Resolved, E.Message, ErrorText);
+              Exit;
+            End;
         End;
     End;
   If Created Then

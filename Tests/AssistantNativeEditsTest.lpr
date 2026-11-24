@@ -111,9 +111,31 @@ Begin
   End;
 End;
 
+Procedure TestRegistrationFailureKeepsFile;
+Var
+  Dir, Path, Body, Err: String;
+Begin
+  Dir := IncludeTrailingPathDelimiter(GetTempDir) + 'laz-native-edits-reg';
+  ForceDirectories(Dir);
+  Path := IncludeTrailingPathDelimiter(Dir) + 'KeptUnit.pas';
+  Body := 'Unit KeptUnit;' + LineEnding + 'Begin End;' + LineEnding;
+  WriteBytes(Path, Body);
+  Try
+    Check('registration failure is not success',
+      Not FailWriteFileProjectRegistration(Path, 'CreateProjectFile returned nil.', Err));
+    Check('error says the file was written', Pos('The file was written', Err) = 1);
+    Check('error says the project was not updated', Pos('the project was not updated', Err) > 0);
+    Check('written unit is not deleted', FileExists(Path) And (ReadBytes(Path) = Body));
+  Finally
+    DeleteFile(Path);
+    RemoveDir(Dir);
+  End;
+End;
+
 Begin
   ResetNativeReads;
   TestRevisionGate;
   TestUniqueMatchLeavesDisk;
+  TestRegistrationFailureKeepsFile;
   WriteLn('AssistantNativeEditsTest passed');
 End.

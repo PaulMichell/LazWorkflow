@@ -20,6 +20,7 @@ Const
   SnapshotBudgetMessage = 'Snapshot budget exhausted.';
   EditorOwnsPathMessage = 'An editor buffer already owns this path; use its revision tools.';
   DestinationExistsMessage = 'Destination already exists; new-file creation never overwrites.';
+  FileWrittenProjectNotUpdatedMessage = 'The file was written and the project was not updated.';
 
 /// Exact match. Fails with Updated unused when old_text is missing or is not unique and ReplaceAll is false.
 Function ApplyExactReplace(Const Source, OldText, NewText: String; ReplaceAll: Boolean;
@@ -37,6 +38,8 @@ Function AcceptNativeWrite(Const Path, Revision, CurrentText: String; Exists, Ed
 /// caller must not write.
 Function PrepareNativeReplace(Const Path, Revision, CurrentText, OldText, NewText: String; ReplaceAll: Boolean;
   Out Updated, ErrorText: String): Boolean;
+/// Registration was requested and failed after the unit was written. Returns false. Does not delete WrittenPath.
+Function FailWriteFileProjectRegistration(Const WrittenPath, Reason: String; Out ErrorText: String): Boolean;
 /// Drops the session snapshots. A test uses this so one process can start from an empty store.
 Procedure ResetNativeReads;
 
@@ -175,6 +178,17 @@ Begin
   If Not NativeRevisionCurrent(Path, Revision, CurrentText, ErrorText) Then Exit;
   Result := ApplyExactReplace(CurrentText, OldText, NewText, ReplaceAll, Updated, ErrorText);
   If Not Result Then Updated := '';
+End;
+
+Function FailWriteFileProjectRegistration(Const WrittenPath, Reason: String; Out ErrorText: String): Boolean;
+Begin
+  Result := False;
+  ErrorText := FileWrittenProjectNotUpdatedMessage;
+  If Trim(Reason) <> '' Then
+    ErrorText := ErrorText + ' ' + Trim(Reason);
+  { WrittenPath is the unit already saved. This failure must not remove it. }
+  If Trim(WrittenPath) <> '' Then
+    ErrorText := ErrorText + ' (' + Trim(WrittenPath) + ' remains on disk.)';
 End;
 
 Procedure ResetNativeReads;
