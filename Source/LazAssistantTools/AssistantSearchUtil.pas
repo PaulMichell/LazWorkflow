@@ -30,6 +30,11 @@ Function SearchPatternError(Const Query: String; ExplicitRegex: Boolean): String
 Function MatchSearchLines(Const Query, RelativePath: String; Lines: TStrings; UseRegex, FilesOnly: Boolean;
   MaxResults, MaxLineChars: Integer; Var MatchCount: Integer; Var ResultText: String; Out Capped: Boolean;
   Out ErrorText: String): Boolean;
+{ Same rules against one buffer. Line numbers come from #13/#10 offsets. A final break does not add a blank line.
+  Do not assign TStringList.Text for the scan. }
+Function MatchSearchText(Const Query, RelativePath, Text: String; UseRegex, FilesOnly: Boolean;
+  MaxResults, MaxLineChars: Integer; Var MatchCount: Integer; Var ResultText: String; Out Capped: Boolean;
+  Out ErrorText: String): Boolean;
 { Search one text with those rules. MaxResults must be 1..200. }
 Function SearchTextMatches(Const Query, RelativePath, Text: String; FilesOnly: Boolean; MaxResults: Integer;
   Out ResultText, ErrorText: String): Boolean;
@@ -238,10 +243,104 @@ Begin
   End;
 End;
 
+{ #13, #10, and #13#10 are breaks. A final break does not invent the extra blank line TStringList.Text can add. }
+Function NextSearchLine(Const Text: String; Var Position: Integer; Out LineText: String): Boolean;
+Var
+  Start, Len: Integer;
+Begin
+  Len := Length(Text);
+  If (Position < 1) Or (Position > Len) Then
+    Exit(False);
+  Start := Position;
+  While (Position <= Len) And (Text[Position] <> #10) And (Text[Position] <> #13) Do
+    Inc(Position);
+  LineText := Copy(Text, Start, Position - Start);
+  If (Position <= Len) And (Text[Position] = #13) Then
+    Inc(Position);
+  If (Position <= Len) And (Text[Position] = #10) Then
+    Inc(Position);
+  Result := True;
+End;
+
+Function MatchSearchText(Const Query, RelativePath, Text: String; UseRegex, FilesOnly: Boolean;
+  MaxResults, MaxLineChars: Integer; Var MatchCount: Integer; Var ResultText: String; Out Capped: Boolean;
+  Out ErrorText: String): Boolean;
+Var
+  Re: TRegExpr;
+  Position, LineNo: Integer;
+  LineText, LowerQuery: String;
+  Hit, Emitted: Boolean;
+Begin
+  Result := False;
+  Capped := False;
+  ErrorText := '';
+  Re := Nil;
+  If UseRegex Or PatternLooksLikeRegex(Query) Then
+    Begin
+      Re := TRegExpr.Create;
+      ErrorText := CompileSearchExpression(Re, Query);
+      If ErrorText <> '' Then
+        Begin
+          FreeAndNil(Re);
+          Exit;
+        End;
+    End;
+  Try
+    LowerQuery := LowerCase(Query);
+    Emitted := False;
+    Position := 1;
+    LineNo := 0;
+    While NextSearchLine(Text, Position, LineText) Do
+      Begin
+        Inc(LineNo);
+        If Assigned(Re) Then
+          Begin
+            If Length(LineText) > MaxLineChars Then
+              Continue;
+            Try
+              Hit := Re.Exec(LineText);
+            Except
+              On E: Exception Do
+                Begin
+                  ErrorText := 'Invalid regular expression: ' + E.Message;
+                  Exit;
+                End;
+            End;
+          End
+        Else
+          Hit := Pos(LowerQuery, LowerCase(LineText)) > 0;
+        If Not Hit Then
+          Continue;
+        If FilesOnly Then
+          Begin
+            If Emitted Then
+              Continue;
+            Emitted := True;
+            Inc(MatchCount);
+            ResultText := ResultText + RelativePath + LineEnding;
+          End
+        Else
+          Begin
+            Inc(MatchCount);
+            ResultText := ResultText + Format('%s:%d: %s', [RelativePath, LineNo, Trim(LineText)]) + LineEnding;
+          End;
+        If MatchCount >= MaxResults Then
+          Begin
+            ResultText := ResultText + Format('[… capped at %d matches …]', [MaxResults]);
+            Capped := True;
+            Result := True;
+            Exit;
+          End;
+      End;
+    Result := True;
+  Finally
+    Re.Free;
+  End;
+End;
+
 Function SearchTextMatches(Const Query, RelativePath, Text: String; FilesOnly: Boolean; MaxResults: Integer;
   Out ResultText, ErrorText: String): Boolean;
 Var
-  Lines: TStringList;
   MatchCount: Integer;
   Capped: Boolean;
 Begin
@@ -258,15 +357,9 @@ Begin
       ErrorText := 'max_results must be an integer from 1 to 200.';
       Exit;
     End;
-  Lines := TStringList.Create;
-  Try
-    Lines.Text := Text;
-    MatchCount := 0;
-    Result := MatchSearchLines(Query, RelativePath, Lines, False, FilesOnly, MaxResults, SearchMatchLineChars,
-      MatchCount, ResultText, Capped, ErrorText);
-  Finally
-    Lines.Free;
-  End;
+  MatchCount := 0;
+  Result := MatchSearchText(Query, RelativePath, Text, False, FilesOnly, MaxResults, SearchMatchLineChars,
+    MatchCount, ResultText, Capped, ErrorText);
 End;
 
 Function IsAlwaysSkippedSearchDirectory(Const DirName: String): Boolean;

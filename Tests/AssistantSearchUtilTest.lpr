@@ -339,9 +339,89 @@ Begin
   End;
 End;
 
+Function LoadFileText(Const FileName: String): String;
+Var
+  Stream: TFileStream;
+Begin
+  Stream := TFileStream.Create(FileName, fmOpenRead Or fmShareDenyNone);
+  Try
+    SetLength(Result, Stream.Size);
+    If Result <> '' Then
+      Stream.ReadBuffer(Result[1], Length(Result));
+  Finally
+    Stream.Free;
+  End;
+End;
+
+Procedure TestRawSearchMatchesLineList;
+Var
+  Root, FileName, Raw, OldText, NewText, ErrorText, Line: String;
+  Lines: TStringList;
+  I, Count: Integer;
+  Capped, Ok: Boolean;
+Begin
+  Root := FixtureRoot('raw');
+  FileName := IncludeTrailingPathDelimiter(Root) + 'Large.pas';
+  Try
+    Lines := TStringList.Create;
+    Try
+      For I := 1 To 40000 Do
+        Begin
+          If I = 25001 Then
+            Lines.Add(StringOfChar(' ', 600) + 'UniqueLongLineToken')
+          Else If I Mod 1000 = 0 Then
+            Lines.Add('  Procedure UniqueLargeToken' + IntToStr(I) + ';')
+          Else
+            Lines.Add('  // filler ' + IntToStr(I));
+        End;
+      Lines.SaveToFile(FileName);
+      Raw := LoadFileText(FileName);
+      Lines.LoadFromFile(FileName);
+      Count := 0;
+      OldText := '';
+      Ok := MatchSearchLines('UniqueLargeToken|UniqueLongLineToken', 'Large.pas', Lines, False, False, 50, 512, Count,
+        OldText, Capped, ErrorText);
+      Check('old line list search runs', Ok And (ErrorText = ''));
+      Count := 0;
+      NewText := '';
+      Ok := MatchSearchText('UniqueLargeToken|UniqueLongLineToken', 'Large.pas', Raw, False, False, 50, 512, Count,
+        NewText, Capped, ErrorText);
+      Check('raw search runs', Ok And (ErrorText = ''));
+      { TStringList.Text can invent one trailing blank line. This fixture's reported lines must still match. }
+      Lines.Text := Raw;
+      Count := 0;
+      Line := '';
+      MatchSearchLines('UniqueLargeToken|UniqueLongLineToken', 'Large.pas', Lines, False, False, 50, 512, Count, Line,
+        Capped, ErrorText);
+      Check('raw search matches LoadFromFile lines', NewText = OldText);
+      Check('raw search matches the Text assignment lines', NewText = Line);
+      Count := 0;
+      OldText := '';
+      Ok := MatchSearchLines('UniqueLongLineToken', 'Large.pas', Lines, False, False, 20, 512, Count, OldText, Capped,
+        ErrorText);
+      Count := 0;
+      NewText := '';
+      Ok := Ok And MatchSearchText('UniqueLongLineToken', 'Large.pas', Raw, False, False, 20, 512, Count, NewText, Capped,
+        ErrorText);
+      Check('plain search reports the long line like the line list', Ok And (NewText = OldText) And
+        (Pos('UniqueLongLineToken', NewText) > 0));
+      Count := 0;
+      Line := '';
+      ErrorText := '';
+      Ok := MatchSearchText('UniqueLongLineToken', 'Large.pas', Raw, True, False, 20, 512, Count, Line, Capped, ErrorText);
+      Check('regex still skips a line longer than 512', Ok And (ErrorText = '') And (Pos('UniqueLongLineToken', Line) = 0));
+    Finally
+      Lines.Free;
+    End;
+  Finally
+    DeleteTree(Root);
+  End;
+End;
+
 Begin
   FailCount := 0;
   TestRegexDetect;
+  TestRawSearchMatchesLineList;
   TestGlob;
   TestInvalidRegex;
   TestReadRange;

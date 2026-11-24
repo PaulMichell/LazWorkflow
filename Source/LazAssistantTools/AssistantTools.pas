@@ -2672,15 +2672,37 @@ Begin
   Result := CompareFilenames(ExpandResolvedPath(Left), ExpandResolvedPath(Right)) = 0;
 End;
 
-Function SearchOverlayIndex(Const FilePath: String; Paths: TStrings): Integer;
+Function SearchPathKey(Const Path: String): String;
+Begin
+  Result := LowerCase(ExpandResolvedPath(Path));
+End;
+
+Function NewSearchPathSet: TStringList;
+Begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.CaseSensitive := True;
+  Result.Duplicates := dupIgnore;
+End;
+
+Procedure AddSearchPath(Paths: TStringList; Const Path: String; Index: Integer);
 Var
-  I: Integer;
+  At: Integer;
+  Key: String;
+Begin
+  If Not Assigned(Paths) Then Exit;
+  Key := SearchPathKey(Path);
+  If Paths.Find(Key, At) Then Exit;
+  Paths.AddObject(Key, TObject(PtrInt(Index)));
+End;
+
+Function SearchPathIndex(Paths: TStringList; Const Path: String): Integer;
+Var
+  At: Integer;
 Begin
   Result := -1;
-  If Not Assigned(Paths) Then Exit;
-  For I := 0 To Paths.Count - 1 Do
-    If SameSearchPath(Paths[I], FilePath) Then
-      Exit(I);
+  If Not Assigned(Paths) Or Not Paths.Find(SearchPathKey(Path), At) Then Exit;
+  Result := PtrInt(Paths.Objects[At]);
 End;
 
 Function AssistantCaptureSearchEditors(Const Root, Glob: String; Paths, Texts, Oversized: TStrings): Boolean;
@@ -2763,8 +2785,8 @@ Function ToolSearchInProject(Const ArgumentsJson: String; Out ResultText, ErrorT
 Var
   Query, Path, Resolved, Glob, Rel: String;
   MaxMatches, MatchCount, FileCount, WalkCount, I, OverlayAt: Integer;
-  Files, OverlayPaths, OverlayTexts, Oversized: TStringList;
-  SL: TStringList;
+  Files, OverlayPaths, OverlayTexts, Oversized, FileSet, OverlaySet, OversizedSet: TStringList;
+  Buffer: String;
   WalkComplete, UseRegex, FilesOnly, Stopped, SingleFile, Missing, Capped: Boolean;
   Deadline: QWord;
 Begin
@@ -2791,10 +2813,12 @@ Begin
   Glob := Trim(JsonArgString(ArgumentsJson, 'glob'));
   FilesOnly := JsonArgBool(ArgumentsJson, 'files_only', False);
   Files := TStringList.Create;
-  SL := TStringList.Create;
   OverlayPaths := TStringList.Create;
   OverlayTexts := TStringList.Create;
   Oversized := TStringList.Create;
+  FileSet := NewSearchPathSet;
+  OverlaySet := NewSearchPathSet;
+  OversizedSet := NewSearchPathSet;
   Deadline := GetTickCount64 + AssistantToolMaxSearchMs;
   Stopped := False;
   Try
@@ -2821,9 +2845,13 @@ Begin
       Missing := True;
     { Disk walk is done. Open buffers are copied on the IDE thread, then searched here. }
     CaptureSearchEditorsOnIdeThread(Resolved, Glob, OverlayPaths, OverlayTexts, Oversized);
+    For I := 0 To OverlayPaths.Count - 1 Do
+      AddSearchPath(OverlaySet, OverlayPaths[I], I);
+    For I := 0 To Oversized.Count - 1 Do
+      AddSearchPath(OversizedSet, Oversized[I], I);
     If Missing Then
       Begin
-        If SearchOverlayIndex(Resolved, OverlayPaths) >= 0 Then
+        If SearchPathIndex(OverlaySet, Resolved) >= 0 Then
           Begin
             Files.Add(ExpandResolvedPath(Resolved));
             FileCount := 1;
@@ -2841,11 +2869,16 @@ Begin
     If FileCount >= AssistantToolMaxSearchFiles Then
       ResultText := ResultText + Format('[… stopped after listing %d text files …]',
         [AssistantToolMaxSearchFiles]) + LineEnding;
+    For I := 0 To Files.Count - 1 Do
+      AddSearchPath(FileSet, Files[I], I);
     { A buffer that has never been saved is not in the directory walk. Search it too. }
     If DirectoryExistsUTF8(Resolved) Then
       For I := 0 To OverlayPaths.Count - 1 Do
-        If SearchOverlayIndex(OverlayPaths[I], Files) < 0 Then
-          Files.Add(OverlayPaths[I]);
+        If SearchPathIndex(FileSet, OverlayPaths[I]) < 0 Then
+          Begin
+            Files.Add(OverlayPaths[I]);
+            AddSearchPath(FileSet, OverlayPaths[I], Files.Count - 1);
+          End;
     For I := 0 To Files.Count - 1 Do
       Begin
         If ToolsShouldStop Or (GetTickCount64 >= Deadline) Then
@@ -2853,25 +2886,27 @@ Begin
             Stopped := True;
             Break;
           End;
-        If SearchOverlayIndex(Files[I], Oversized) >= 0 Then
+        If SearchPathIndex(OversizedSet, Files[I]) >= 0 Then
           Continue;
-        OverlayAt := SearchOverlayIndex(Files[I], OverlayPaths);
+        OverlayAt := SearchPathIndex(OverlaySet, Files[I]);
         If OverlayAt >= 0 Then
-          SL.Text := OverlayTexts[OverlayAt]
+          Buffer := OverlayTexts[OverlayAt]
         Else
           Begin
             If FileSizeUTF8(Files[I]) > AssistantToolMaxSearchFileBytes Then
               Continue;
-            Try
-              SL.LoadFromFile(Files[I]);
-            Except
-              Continue;
-            End;
+            If Not ReadExactFileBytes(Files[I], Buffer, ErrorText) Then
+              Begin
+                ErrorText := '';
+                Continue;
+              End;
+            If (Length(Buffer) >= 3) And (Buffer[1] = #$EF) And (Buffer[2] = #$BB) And (Buffer[3] = #$BF) Then
+              Delete(Buffer, 1, 3);
           End;
         Rel := ProjectRelativePath(Files[I]);
         If Rel = '' Then
           Rel := Files[I];
-        If Not MatchSearchLines(Query, Rel, SL, UseRegex, FilesOnly, MaxMatches, AssistantToolMaxSearchLineChars,
+        If Not MatchSearchText(Query, Rel, Buffer, UseRegex, FilesOnly, MaxMatches, AssistantToolMaxSearchLineChars,
           MatchCount, ResultText, Capped, ErrorText) Then
             Exit;
         If Capped Then
@@ -2886,10 +2921,12 @@ Begin
     ResultText := ResultText + Format('Matches: %d (scanned %d text files).', [MatchCount, Files.Count]);
     Result := True;
   Finally
+    OversizedSet.Free;
+    OverlaySet.Free;
+    FileSet.Free;
     Oversized.Free;
     OverlayTexts.Free;
     OverlayPaths.Free;
-    SL.Free;
     Files.Free;
   End;
 End;
