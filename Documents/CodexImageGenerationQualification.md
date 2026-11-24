@@ -16,3 +16,15 @@ An IDE-brokered stdio client launched the server with AssistantCodexHandshake’
 The identifiers above are aliases from the second run. The image notifications matched the active threadId and turnId and shared the same item.id. The completed item carried type, id, status, revisedPrompt, result, transparentBackground, failure, savedPath, generationId, startedAtMs and completedAtMs. Base64 decoding result yielded 968,373 bytes with the PNG signature. The broker process read identical bytes from savedPath. Retrieval by fileId and interruption after an image item starts remain untested.
 
 The captured completion line measured 1,292,138 bytes before the newline. The production transport now accepts inbound frames up to its 4 MiB queue budget. In a repeat signed-in turn, `AssistantCodexProbe --auto <IDE-managed-profile> --image` used the production client to receive the completed item and open its `savedPath`. The artifact measured 1,007,867 bytes and had the eight-byte PNG signature. The probe reports the size without logging the path or image payload.
+
+## Win64 IDE verification
+
+The qualified configuration uses Codex `0.167.0-alpha.3.2`, a signed-in ChatGPT account in the IDE-managed profile, and image output enabled for that connection. Start the request from a parent turn in Plan, Document or Build.
+
+All five Win64 packages compiled with zero errors and warnings. The nested verification folder contained one file, `Temporary/SignedInIDE32/kingfisher.png` (2,151,859 bytes). The IDE image reader decoded it at 1254 × 1254. Requesting that same destination with overwrite disabled returned “File already exists” before generation. Its SHA-256 digest matched before and after the refusal.
+
+The connection and writer regressions passed with image output disabled. The user confirmed that the original request generated the kingfisher once, the PNG opened in the separate IDE viewer, and the reopened conversation displayed exactly one image attachment. No phone was connected during verification, so the phone preview was untested.
+
+In the reported disabled-output turn the assistant indicated that image output was unavailable. A subsequent directory check found only `kingfisher.png` and no `disabled.png`. In the replacement turn, the IDE reported “Image generation failed before a completed image was received.” This message is emitted for a pending reservation when the client completes, fails or enters reconnect handling. It does not confirm an overwrite decline. The directory check found the original filename at the previously recorded size. Its contents were not compared after this attempt.
+
+On the subsequent replacement request with overwrite enabled, the user declined the IDE approval prompt. The request stopped before generation, preserved the original PNG and published no new attachment.
