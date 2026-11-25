@@ -183,6 +183,11 @@ class PulseLoop(
     clock.wake()
   }
 
+  /** Bearer token for the next pulse. Does not leave Unpaired or pin mismatch. */
+  fun useToken(value: String) {
+    token = value
+  }
+
   fun disconnect() {
     running = false
     if (states.value !is LinkState.Unpaired && states.value !is LinkState.PinMismatch) {

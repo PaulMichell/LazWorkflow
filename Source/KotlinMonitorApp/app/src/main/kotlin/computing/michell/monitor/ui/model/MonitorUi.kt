@@ -85,7 +85,8 @@ data class MonitorUi(
   val planRevision: String = "",
   val planReceived: Long = 0,
   val planTotal: Long = 0,
-  val planIncomplete: Boolean = false
+  val planIncomplete: Boolean = false,
+  val linkKind: MonitorLink = MonitorLink.Stopped
 )
 
 fun emptyView(): WireView {

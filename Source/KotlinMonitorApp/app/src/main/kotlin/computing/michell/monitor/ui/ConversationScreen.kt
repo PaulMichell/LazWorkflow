@@ -77,14 +77,12 @@ import computing.michell.monitor.ui.model.WireBlock
 import computing.michell.monitor.ui.model.WireImage
 import computing.michell.monitor.ui.model.WireTurn
 import computing.michell.monitor.ui.model.actionCaption
-import computing.michell.monitor.ui.model.activityCaption
 import computing.michell.monitor.ui.model.heldPromptActivity
 import computing.michell.monitor.ui.model.ideLinkLive
 import computing.michell.monitor.ui.model.newConversationEnabled
 import computing.michell.monitor.ui.model.runtimeCaption
 import computing.michell.monitor.ui.model.sendActionEnabled
 import computing.michell.monitor.ui.model.statusConnectionLabel
-import computing.michell.monitor.ui.model.turnStillRunning
 import computing.michell.monitor.dictation.DictationListeningMessage
 import computing.michell.monitor.dictation.DictationPhase
 import computing.michell.monitor.dictation.DictationState
@@ -440,35 +438,22 @@ fun ActivityStatus(
 ) {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
   var usageOpen by remember { mutableStateOf(false) }
-  val blocks = displayBlocks(ui.live)
   val pending = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
   val linkLive = ideLinkLive(ui.disconnected, phase)
-  val running = turnStillRunning(ui.view, pending, blocks, ui.live)
-  val planRunning = ui.planRunning || ui.view.planRunning
-  // A host sample may move the start. That must not restart the one-second tick.
-  LaunchedEffect(running, planRunning, linkLive) {
-    if ((!running && !planRunning) || !linkLive) return@LaunchedEffect
+  // The pulse start is fixed. The one-second tick moves the clock without a new pulse.
+  val ticking = screenClockRunning(ui) && linkLive
+  LaunchedEffect(ticking) {
+    if (!ticking) return@LaunchedEffect
     while (true) {
       now = System.currentTimeMillis()
       delay(1000)
     }
   }
   val model = runtimeCaption(ui.view.model, ui.modelChoices)
-  val activity = activityCaption(
-    ui.view, pending, ui.pendingKind, ui.activityStartedMs, now, blocks, ui.live, linkLive,
-    planRunning, ui.planRunStartedMs
-  )
-  // A prompt waiting for the link is still busy. An in-use retry says Reconnecting, not Offline.
+  val activity = screenActivity(ui, phase, now, pending)
   val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else heldPromptActivity(pending, phase)
   val statusStyle = MaterialTheme.typography.bodySmall
-  val chip = connectionChip(
-    phase,
-    ui.reconnectable,
-    ui.statusBusy,
-    ui.lastSyncMs,
-    banner = ui.linkBanner,
-    openBehind = ui.openBehind
-  )
+  val chip = monitorChip(ui.linkKind, ui.statusBusy)
   val connectionText = statusConnectionLabel(chip.label, ui.banner)
   // The link is plain on the left. Notices are toasts, not a second chip.
   // The model wears the rounded mark; a touch opens credit usage. Progress stays right.

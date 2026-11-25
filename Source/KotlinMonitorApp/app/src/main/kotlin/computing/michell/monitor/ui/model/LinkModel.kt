@@ -22,6 +22,15 @@ enum class LinkPhase {
   Paused
 }
 
+/** Link the chip reads. Busy is not a link state; it comes from the pulse. */
+enum class MonitorLink {
+  Stopped,
+  Retrying,
+  Connected,
+  Unpaired,
+  PinChanged
+}
+
 data class LinkStatus(
   val phase: LinkPhase = LinkPhase.Idle,
   val banner: String = "",

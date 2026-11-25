@@ -12,6 +12,7 @@ import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import androidx.room3.Transaction
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 abstract class MonitorDao {
@@ -33,6 +34,9 @@ abstract class MonitorDao {
   @Query("SELECT * FROM conversation ORDER BY updatedAt, id")
   abstract fun conversations(): List<ConversationRow>
 
+  @Query("SELECT * FROM conversation ORDER BY updatedAt, id")
+  abstract fun observeConversations(): Flow<List<ConversationRow>>
+
   @Query("SELECT * FROM conversation WHERE id = :id")
   abstract fun conversation(id: String): ConversationRow?
 
@@ -48,6 +52,9 @@ abstract class MonitorDao {
   @Query("SELECT * FROM turn WHERE conversationId = :conversationId ORDER BY turnIndex, id")
   abstract fun turns(conversationId: String): List<TurnRow>
 
+  @Query("SELECT * FROM turn ORDER BY turnIndex, id")
+  abstract fun observeTurns(): Flow<List<TurnRow>>
+
   @Query("SELECT * FROM turn WHERE id = :id")
   abstract fun turn(id: String): TurnRow?
 
@@ -62,6 +69,9 @@ abstract class MonitorDao {
 
   @Query("SELECT * FROM item WHERE turnId = :turnId ORDER BY ordinal, id")
   abstract fun items(turnId: String): List<ItemRow>
+
+  @Query("SELECT * FROM item ORDER BY ordinal, id")
+  abstract fun observeItems(): Flow<List<ItemRow>>
 
   @Query("SELECT * FROM item WHERE id = :id")
   abstract fun item(id: String): ItemRow?
@@ -81,6 +91,9 @@ abstract class MonitorDao {
   @Query("SELECT * FROM image ORDER BY name, id")
   abstract fun imagesByName(): List<ImageRow>
 
+  @Query("SELECT * FROM image ORDER BY name, id")
+  abstract fun observeImages(): Flow<List<ImageRow>>
+
   @Query("SELECT * FROM image ORDER BY modifiedAt, id")
   abstract fun images(): List<ImageRow>
 
@@ -90,6 +103,9 @@ abstract class MonitorDao {
   @Query("SELECT * FROM plan ORDER BY path, host")
   abstract fun plans(): List<PlanCacheRow>
 
+  @Query("SELECT * FROM plan ORDER BY path, host")
+  abstract fun observePlans(): Flow<List<PlanCacheRow>>
+
   @Query("SELECT * FROM plan WHERE host = :host AND path = :path")
   abstract fun plan(host: String, path: String): PlanCacheRow?
 
@@ -98,6 +114,9 @@ abstract class MonitorDao {
 
   @Query("SELECT * FROM outbox ORDER BY createdAt, commandId")
   abstract fun outbox(): List<OutboxRow>
+
+  @Query("SELECT * FROM outbox ORDER BY createdAt, commandId")
+  abstract fun observeOutbox(): Flow<List<OutboxRow>>
 
   @Query("SELECT * FROM outbox WHERE commandId = :id")
   abstract fun outboxItem(id: String): OutboxRow?

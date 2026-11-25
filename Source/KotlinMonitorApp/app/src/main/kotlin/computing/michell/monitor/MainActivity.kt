@@ -80,7 +80,7 @@ import computing.michell.monitor.ui.SaveQuestionDialog
 import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.ConversationScreen
 import computing.michell.monitor.ui.MainTabs
-import computing.michell.monitor.ui.ShellViewModel
+import computing.michell.monitor.ui.MonitorViewModel
 import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
 import computing.michell.monitor.ui.planLoaded
@@ -99,7 +99,7 @@ private val MonitorQuiet = Color(0xFF666666)
 
 
 class MainActivity : ComponentActivity() {
-  private val model: ShellViewModel by viewModels()
+  private val model: MonitorViewModel by viewModels()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -138,7 +138,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MonitorShell(model: ShellViewModel) {
+private fun MonitorShell(model: MonitorViewModel) {
   val ui by model.ui.collectAsState()
   val tab by model.tab.collectAsState()
   val dictation by model.dictation.collectAsState()

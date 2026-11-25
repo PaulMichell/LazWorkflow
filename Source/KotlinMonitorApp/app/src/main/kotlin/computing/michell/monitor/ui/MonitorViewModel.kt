@@ -1,33 +1,40 @@
 package computing.michell.monitor.ui
 
-/* Temporary screen host while the phone link is rebuilt (c) 2026 Michell Computing.
+/* Screen host for the pulse-and-fetch link (c) 2026 Michell Computing.
 
-   Holds an empty conversation and the rebuild banner. Does not open a socket.
-   The first start deletes the old Room file and image cache. Catalogue 3 was removed. */
+   Builds MonitorUi from Room, the latest pulse and the link state. Dictation,
+   drafts and display preferences stay in PromptController. Commands that are
+   not yet connected remain no-ops until their own items. */
 
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import computing.michell.monitor.ui.model.ConversationRecord
-import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.LinkStatus
 import computing.michell.monitor.ui.model.MonitorDatabaseName
 import computing.michell.monitor.ui.model.MonitorImageDirectoryName
-import computing.michell.monitor.ui.model.MonitorLimits
+import computing.michell.monitor.ui.model.MonitorLink
 import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.PlanRow
-import computing.michell.monitor.ui.model.RebuildBanner
-import computing.michell.monitor.ui.model.shellUi
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
-class ShellViewModel(application: Application) : AndroidViewModel(application) {
+class MonitorViewModel(application: Application) : AndroidViewModel(application) {
   private val preferences = application.getSharedPreferences(DisplayPreferenceFile, Context.MODE_PRIVATE)
-  private val uiState = MutableStateFlow(shellUi())
+
+  init {
+    clearCatalogue3Files(application)
+  }
+
+  private val session = MonitorSession(application)
+  private val uiState = MutableStateFlow(MonitorUi(disconnected = true, linkKind = MonitorLink.Unpaired))
   private val prompts = PromptController(
     application,
     viewModelScope,
@@ -40,11 +47,11 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
   val tab: StateFlow<AppTab> = tabState.asStateFlow()
   val dictation = prompts.dictation
   val dictationPermissionRequest = prompts.dictationPermissionRequest
-  val link = MutableStateFlow(LinkStatus(phase = LinkPhase.Idle, banner = RebuildBanner))
+  val link = MutableStateFlow(LinkStatus(phase = linkPhaseOf(MonitorLink.Unpaired), failureReason = "Unpaired"))
   val incidentRingText = MutableStateFlow("")
   val bitmaps = MutableStateFlow(emptyMap<String, android.graphics.Bitmap>())
   val pairAddress = MutableStateFlow(preferences.getString(AddressKey, "").orEmpty())
-  val pairPort = MutableStateFlow(preferences.getString(PortKey, MonitorLimits.ListenPort.toString()).orEmpty())
+  val pairPort = MutableStateFlow(preferences.getString(PortKey, computing.michell.monitor.ui.model.MonitorLimits.ListenPort.toString()).orEmpty())
   val pairCode = MutableStateFlow("")
   val conversationCapText = MutableStateFlow(prompts.conversationCapText())
   val imageBudgetText = MutableStateFlow(prompts.imageBudgetText())
@@ -53,27 +60,55 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
   val storedBoard = MutableStateFlow<BoardContent?>(null)
   val cacheRows = MutableStateFlow(emptyList<ConversationRecord>())
   val cacheBackToList = MutableStateFlow(false)
+  private val dao = session.database.monitor()
 
   init {
-    uiState.value = shellUi().copy(showThinking = prompts.thinking(), showTools = prompts.tools())
-    clearCatalogue3Files(application)
+    uiState.value = uiState.value.copy(showThinking = prompts.thinking(), showTools = prompts.tools())
+    session.retarget(pairAddress.value, savedMonitorPort(pairPort.value))
+    viewModelScope.launch(Dispatchers.IO) {
+      merge(
+        dao.observeTurns(),
+        dao.observeItems(),
+        dao.observeImages(),
+        dao.observeConversations(),
+        dao.observePlans(),
+        dao.observeOutbox()
+      ).collect { publish() }
+    }
+    viewModelScope.launch(Dispatchers.IO) { session.link.collect { publish() } }
+    viewModelScope.launch(Dispatchers.IO) { session.pulseJson.collect { publish() } }
   }
 
-  fun enterForeground() {}
+  override fun onCleared() {
+    session.close()
+    super.onCleared()
+  }
+
+  fun enterForeground() {
+    session.foreground()
+  }
 
   fun leaveForeground() {
     prompts.leave()
+    session.background(screenClockRunning(uiState.value))
   }
 
-  fun noteUserActivity() {}
+  fun noteUserActivity() {
+    session.touch()
+  }
 
-  fun noteScreenOff(@Suppress("UNUSED_PARAMETER") taskResumed: Boolean) {}
+  fun noteScreenOff(@Suppress("UNUSED_PARAMETER") taskResumed: Boolean) {
+    if (!taskResumed) session.background(screenClockRunning(uiState.value))
+  }
 
-  fun noteScreenOn() {}
+  fun noteScreenOn() {
+    session.foreground()
+  }
 
   fun selectTab(tab: AppTab) {
     if (tab != AppTab.Conversation) prompts.leave()
     tabState.value = tab
+    session.planOpen(tab == AppTab.Plan)
   }
 
   fun requestMenuChoices(@Suppress("UNUSED_PARAMETER") live: Boolean) {}
@@ -100,7 +135,7 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
   fun connectFromPair() {
     preferences.edit().putString(AddressKey, pairAddress.value).putString(PortKey, pairPort.value).apply()
-    uiState.update { it.copy(banner = RebuildBanner) }
+    session.retarget(pairAddress.value, savedMonitorPort(pairPort.value))
   }
 
   fun setShowThinking(value: Boolean) {
@@ -123,9 +158,15 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
     imageBudgetText.value = text
   }
 
-  fun copyDiagnostics(): String = RebuildBanner
+  fun copyDiagnostics(): String {
+    val state = uiState.value
+    return "${monitorChip(state.linkKind, state.statusBusy).label} ${state.hostEpoch} ${state.banner}".trim()
+  }
 
-  fun restartTransient() {}
+  fun restartTransient() {
+    session.touch()
+    session.foreground()
+  }
 
   fun setMode(@Suppress("UNUSED_PARAMETER") mode: String) {}
 
@@ -151,7 +192,9 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
   fun newConversation() {}
 
-  fun noteReading(@Suppress("UNUSED_PARAMETER") demand: ReadingDemand) {}
+  fun noteReading(demand: ReadingDemand) {
+    session.followHead(demand.followingHead)
+  }
 
   fun noteViewWidth(@Suppress("UNUSED_PARAMETER") px: Int) {}
 
@@ -191,7 +234,11 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
   fun continuePlanFetch() {}
 
-  fun readPlanWindow(@Suppress("UNUSED_PARAMETER") row: PlanRow?): String = ""
+  fun readPlanWindow(row: PlanRow?): String {
+    val body = uiState.value.planBody
+    if (row == null) return body
+    return planSectionExcerpt(body, row)
+  }
 
   fun openCachedRow(@Suppress("UNUSED_PARAMETER") row: ConversationRecord) {}
 
@@ -203,9 +250,38 @@ class ShellViewModel(application: Application) : AndroidViewModel(application) {
 
   fun denyApproval() {}
 
-  fun dismissApproval() {}
+  fun dismissApproval() {
+    uiState.update { it.copy(approvalOpen = false) }
+  }
 
-  fun answerSaveQuestion(@Suppress("UNUSED_PARAMETER") save: Boolean) {}
+  fun answerSaveQuestion(@Suppress("UNUSED_PARAMETER") save: Boolean) {
+    uiState.update { it.copy(saveQuestion = "") }
+  }
+
+  private fun publish() {
+    val projected = projectMonitor(
+      dao,
+      session.pulseJson.value,
+      session.link.value,
+      session.seenAtMs.value,
+      session.paired,
+      uiState.value
+    )
+    uiState.update { current ->
+      projected.copy(
+        draft = current.draft,
+        settingsOpen = current.settingsOpen,
+        showThinking = current.showThinking,
+        showTools = current.showTools
+      )
+    }
+    val shown = uiState.value
+    link.value = LinkStatus(
+      phase = linkPhaseOf(shown.linkKind),
+      banner = shown.linkBanner,
+      failureReason = linkFailureOf(shown.linkKind)
+    )
+  }
 }
 
 private const val DisplayPreferenceFile = "monitor-display"

@@ -11,6 +11,7 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.ui.model.BackgroundBanner
 import computing.michell.monitor.ui.model.IdleOfflineBanner
 import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.MonitorLink
 import computing.michell.monitor.ui.model.WaitingForWifiBanner
 import java.time.Instant
 import java.time.ZoneId
@@ -23,6 +24,8 @@ const val ChipBusy = "Busy"
 const val ChipCatchingUp = "Catching up"
 const val ChipReconnecting = "Reconnecting"
 const val ChipConnecting = "Connecting"
+const val ChipUnpaired = "Unpaired"
+const val ChipPinChanged = "Pin changed"
 const val PairedElsewhereLabel = "Paired elsewhere"
 const val ReplacedReason = "replaced"
 
@@ -37,6 +40,21 @@ fun linkSyncing(
 ): Boolean {
   if (pairedElsewhere || !catchingUp) return false
   return phase == LinkPhase.Live || phase == LinkPhase.Connecting || !disconnected
+}
+
+/**
+ * Live, Busy, Reconnecting, Offline, Unpaired or Pin changed.
+ * Busy is the pulse flag. A clock does not clear it and does not change the label.
+ */
+fun monitorChip(link: MonitorLink, busy: Boolean): ConnectionChip {
+  val label = when (link) {
+    MonitorLink.Connected -> if (busy) ChipBusy else ChipLive
+    MonitorLink.Retrying -> ChipReconnecting
+    MonitorLink.Stopped -> ChipOffline
+    MonitorLink.Unpaired -> ChipUnpaired
+    MonitorLink.PinChanged -> ChipPinChanged
+  }
+  return ConnectionChip(label)
 }
 
 /**
