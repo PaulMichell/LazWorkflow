@@ -112,6 +112,7 @@ class SyncEngine(
   private var plansEtag = ""
   private var tasksEtag = ""
   private var approvalFetchedId = ""
+  @Volatile private var approvalBody = ""
   private var knownPlanPath = ""
   private var knownPlanEtag = ""
   private var documentForEtag = ""
@@ -127,6 +128,9 @@ class SyncEngine(
       ready.signalAll()
     }
   }
+
+  /** Last GET /v4/approval body. Empty when the pulse has no approval id. */
+  fun approvalDetail(): String = approvalBody
 
   /** Item text the follower asked for. A close is not held back by the cadence. */
   fun pullItem(json: String, closing: Boolean = false) {
@@ -298,7 +302,10 @@ class SyncEngine(
     if (pulse.listTasks != tasksEtag) want(listJob(pulse, FetchKind.TaskList, "list:tasks", "tasks", pulse.listTasks))
     val approvalId = pulse.approvalId
     if (approvalId != null && approvalId != approvalFetchedId) want(approvalJob(pulse, approvalId))
-    if (approvalId == null) approvalFetchedId = ""
+    if (approvalId == null) {
+      approvalFetchedId = ""
+      approvalBody = ""
+    }
     watchingLiveId = pulse.liveTurnId
     watchingLiveIndex = pulse.liveTurnIndex
   }
@@ -439,7 +446,10 @@ class SyncEngine(
         FetchKind.ConversationList -> applyConversationList(job, body)
         FetchKind.PlanList -> plansEtag = job.planEtag
         FetchKind.TaskList -> tasksEtag = job.planEtag
-        FetchKind.Approval -> approvalFetchedId = job.planEtag
+        FetchKind.Approval -> {
+          approvalFetchedId = job.planEtag
+          approvalBody = body
+        }
       }
     }
   }

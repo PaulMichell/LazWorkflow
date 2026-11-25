@@ -30,7 +30,8 @@ Uses
   BaseUnix, cthreads,
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
-  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands, AssistantMonitorPair;
+  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands, AssistantMonitorPair,
+  AssistantMonitorApproval;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -297,6 +298,13 @@ Begin
           AResponse.ContentType := 'application/json; charset=utf-8';
           AResponse.Content := ImageError;
         End;
+      Exit;
+    End;
+  If (Method = 'GET') And (Path = '/v4/approval') Then
+    Begin
+      AResponse.Code := 200;
+      AResponse.ContentType := 'application/json; charset=utf-8';
+      AResponse.Content := MonitorApprovalJson;
       Exit;
     End;
   If (Method = 'GET') And ServeMonitorRead(Path, ARequest.URI, ARequest.GetFieldByName('If-None-Match'),

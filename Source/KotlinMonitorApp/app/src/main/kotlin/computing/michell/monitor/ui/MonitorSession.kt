@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import computing.michell.monitor.data.MonitorDatabase
 import computing.michell.monitor.data.openMonitorDatabase
 import computing.michell.monitor.net.CommandSender
+import computing.michell.monitor.net.SaveQuestion
 import computing.michell.monitor.net.LinkState
 import computing.michell.monitor.net.MonitorHttp
 import computing.michell.monitor.net.PairingStore
@@ -48,8 +49,27 @@ class MonitorSession(private val application: Application) : AutoCloseable {
   private var loop: PulseLoop? = null
   private var sync: SyncEngine? = null
   private var commands: CommandSender? = null
+  var onSaveQuestion: (SaveQuestion) -> Unit = {}
 
   fun sendPrompt(text: String): String = commands?.send(text).orEmpty()
+
+  fun runPlan(): String = commands?.runPlan().orEmpty()
+
+  fun stopPlan(): String = commands?.stopPlan().orEmpty()
+
+  fun workOnPlan(section: Int): String = commands?.workOnPlan(section).orEmpty()
+
+  fun runTask(taskId: String, note: String): String = commands?.runTask(taskId, note).orEmpty()
+
+  fun insertTask(taskId: String, note: String): String = commands?.insertTask(taskId, note).orEmpty()
+
+  fun decideApproval(toolId: String, decision: String): String = commands?.approval(toolId, decision).orEmpty()
+
+  fun confirmSave(id: String) { commands?.confirmSave(id) }
+
+  fun declineSave(id: String) { commands?.declineSave(id) }
+
+  fun approvalDetail(): String = sync?.approvalDetail().orEmpty()
 
   fun steerPrompt(text: String): String = commands?.steer(text).orEmpty()
 
@@ -113,7 +133,7 @@ class MonitorSession(private val application: Application) : AutoCloseable {
     val created = PulseLoop(PulseSource { query -> requestPulse(http.pulse, url, query) })
     val endpoint = "$address:$port"
     val engine = SyncEngine(database, http.reads, url, endpoint, token)
-    val sender = CommandSender(database, http.commands, url, endpoint, token)
+    val sender = CommandSender(database, http.commands, url, endpoint, token, onSaveQuestion = { question -> onSaveQuestion(question) })
     sender.noteLink(false)
     created.useToken(token)
     loop = created

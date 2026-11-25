@@ -82,6 +82,12 @@ class CommandSender(
 
   fun stopPlan(): String = actNow("stop_plan", "{}")
 
+  fun runPlan(): String = actNow("run_plan", planArgs(false), holdSave = true)
+
+  fun workOnPlan(section: Int): String = actNow("work_on_plan", """{"section":$section}""")
+
+  fun insertTask(taskId: String, note: String): String = actNow("insert_task", taskArgs(taskId, note, false))
+
   fun approval(toolId: String, decision: String): String {
     return actNow("approval", """{"tool_id":${jsonString(toolId)},"decision":${jsonString(decision)}}""")
   }
@@ -105,18 +111,15 @@ class CommandSender(
   }
 
   fun confirmSave(id: String) {
-    lock.withLock {
+    val held = lock.withLock {
       if (saveHoldId != id) return
       val row = dao.outboxItem(id) ?: return
-      val args = if (row.type == "run_task") {
-        taskArgs(parseJson(row.argsJson)?.text("task_id").orEmpty(), parseJson(row.argsJson)?.text("note").orEmpty(), true)
-      } else {
-        textArgs(parseJson(row.argsJson)?.text("text").orEmpty(), true)
-      }
+      val args = savedArgs(row)
       dao.replaceOutbox(row.copy(argsJson = args, state = OutboxPending, lastError = ""))
       saveHoldId = null
+      row.copy(argsJson = args, state = OutboxPending)
     }
-    pump()
+    if (held.type == "run_plan") resend(held) else pump()
   }
 
   fun declineSave(id: String) {
@@ -151,7 +154,7 @@ class CommandSender(
     return id
   }
 
-  private fun actNow(type: String, argsJson: String): String {
+  private fun actNow(type: String, argsJson: String, holdSave: Boolean = false): String {
     val id = newId()
     val row = lock.withLock {
       ensureHost()
@@ -164,8 +167,17 @@ class CommandSender(
       return id
     }
     val answer = post(row, retryReset = false)
-    if (answer != null) applyAnswer(row, answer, queued = false)
+    if (answer != null) applyAnswer(row, answer, queued = false, holdSave = holdSave)
     return id
+  }
+
+  private fun resend(row: OutboxRow) {
+    if (!linkUp) {
+      fail(row, "The link is down.")
+      return
+    }
+    val answer = post(row, retryReset = false)
+    if (answer != null) applyAnswer(row, answer, queued = false, holdSave = true)
   }
 
   private fun pump() {
@@ -178,7 +190,7 @@ class CommandSender(
     }
     try {
       val answer = post(row, retryReset = true)
-      if (answer != null) applyAnswer(row, answer, queued = true)
+      if (answer != null) applyAnswer(row, answer, queued = true, holdSave = false)
       else lock.withLock { posting = false }
     } catch (error: Exception) {
       lock.withLock {
@@ -226,13 +238,13 @@ class CommandSender(
     }
   }
 
-  private fun applyAnswer(row: OutboxRow, answer: HttpAnswer, queued: Boolean) {
+  private fun applyAnswer(row: OutboxRow, answer: HttpAnswer, queued: Boolean, holdSave: Boolean) {
     val parsed = parseJson(answer.body)
     val reason = parsed?.text("reason").orEmpty()
     val state = parsed?.text("state").orEmpty()
     val turnId = parsed?.text("turn_id").orEmpty()
     val message = parsed?.text("message").orEmpty()
-    if (answer.code == 409 && reason == "unsaved_edits" && queued) {
+    if (answer.code == 409 && reason == "unsaved_edits" && (queued || holdSave)) {
       lock.withLock {
         posting = false
         saveHoldId = row.commandId
@@ -318,6 +330,17 @@ private fun textArgs(text: String, saveFirst: Boolean): String {
 
 private fun taskArgs(taskId: String, note: String, saveFirst: Boolean): String {
   return """{"task_id":${jsonString(taskId)},"note":${jsonString(note)},"save_first":$saveFirst}"""
+}
+
+private fun planArgs(saveFirst: Boolean): String = """{"save_first":$saveFirst}"""
+
+private fun savedArgs(row: OutboxRow): String {
+  val parsed = parseJson(row.argsJson)
+  return when (row.type) {
+    "run_task" -> taskArgs(parsed?.text("task_id").orEmpty(), parsed?.text("note").orEmpty(), true)
+    "run_plan" -> planArgs(true)
+    else -> textArgs(parsed?.text("text").orEmpty(), true)
+  }
 }
 
 internal fun jsonString(text: String): String {

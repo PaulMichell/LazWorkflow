@@ -67,8 +67,13 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var keepDraft = true
   private var editingCommandId = ""
   private var reviewedId = ""
+  private var saveCommandId = ""
 
   init {
+    session.onSaveQuestion = { question ->
+      saveCommandId = question.id
+      uiState.update { it.copy(saveQuestion = computing.michell.monitor.ui.model.SaveBeforeTurnQuestion) }
+    }
     uiState.value = uiState.value.copy(showThinking = prompts.thinking(), showTools = prompts.tools())
     session.retarget(pairAddress.value, savedMonitorPort(pairPort.value))
     viewModelScope.launch(Dispatchers.IO) {
@@ -183,8 +188,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun selectConversation(@Suppress("UNUSED_PARAMETER") id: String) {}
 
-  fun selectTask(@Suppress("UNUSED_PARAMETER") id: String) {}
-
   fun changePrompt(text: String, selectionStart: Int, selectionEnd: Int) {
     keepDraft = true
     prompts.changePrompt(text, selectionStart, selectionEnd, uiState.value.pendingPrompt)
@@ -252,11 +255,30 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun retryUndelivered() {}
 
-  fun selectPlan(@Suppress("UNUSED_PARAMETER") index: Int) {}
+  fun selectPlan(index: Int) {
+    uiState.update { it.copy(selectedPlan = index) }
+  }
 
-  fun runPlan() {}
+  fun runPlan() {
+    viewModelScope.launch(Dispatchers.IO) { session.runPlan() }
+  }
 
-  fun stopPlan() {}
+  fun stopPlan() {
+    viewModelScope.launch(Dispatchers.IO) { session.stopPlan() }
+  }
+
+  fun workOnPlan() {
+    val row = uiState.value.planRows.getOrNull(uiState.value.selectedPlan) ?: return
+    viewModelScope.launch(Dispatchers.IO) { session.workOnPlan(row.index) }
+  }
+
+  fun selectTask(id: String) {
+    viewModelScope.launch(Dispatchers.IO) { session.runTask(id, "") }
+  }
+
+  fun insertTask(id: String) {
+    viewModelScope.launch(Dispatchers.IO) { session.insertTask(id, "") }
+  }
 
   fun newPlan() {}
 
@@ -299,16 +321,30 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
   }
 
-  fun allowApproval() {}
+  fun allowApproval() {
+    val notice = uiState.value.approval ?: return
+    if (!notice.decisionsAccepted) return
+    viewModelScope.launch(Dispatchers.IO) { session.decideApproval(notice.toolId, "allow") }
+  }
 
-  fun denyApproval() {}
+  fun denyApproval() {
+    val notice = uiState.value.approval ?: return
+    if (!notice.decisionsAccepted) return
+    viewModelScope.launch(Dispatchers.IO) { session.decideApproval(notice.toolId, "deny") }
+  }
 
   fun dismissApproval() {
     uiState.update { it.copy(approvalOpen = false) }
   }
 
-  fun answerSaveQuestion(@Suppress("UNUSED_PARAMETER") save: Boolean) {
+  fun answerSaveQuestion(save: Boolean) {
+    val id = saveCommandId
+    saveCommandId = ""
     uiState.update { it.copy(saveQuestion = "") }
+    if (id.isEmpty()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      if (save) session.confirmSave(id) else session.declineSave(id)
+    }
   }
 
   private fun publish() {
@@ -320,7 +356,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       session.seenAtMs.value,
       session.paired,
       uiState.value,
-      reviewedId = reviewedId
+      reviewedId = reviewedId,
+      approvalDetail = session.approvalDetail()
     )
     uiState.update { current ->
       projected.copy(

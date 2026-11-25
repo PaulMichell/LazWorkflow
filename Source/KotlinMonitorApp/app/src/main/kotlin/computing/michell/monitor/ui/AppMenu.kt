@@ -360,7 +360,8 @@ fun AppMenu(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onTask: (String) -> Unit
+  onTask: (String) -> Unit,
+  onInsertTask: (String) -> Unit = {}
 ) {
   Column(
     Modifier
@@ -386,7 +387,8 @@ fun AppMenu(
         onMode = onMode,
         onPlan = onPlan,
         onConversation = onConversation,
-        onTask = onTask
+        onTask = onTask,
+        onInsertTask = onInsertTask
       )
     }
   }
@@ -402,7 +404,8 @@ private fun MenuHeading(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onTask: (String) -> Unit
+  onTask: (String) -> Unit,
+  onInsertTask: (String) -> Unit = {}
 ) {
   val density = LocalDensity.current
   val host = LocalView.current
@@ -481,7 +484,8 @@ private fun MenuHeading(
           onMode,
           onPlan,
           onConversation,
-          onTask
+          onTask,
+          onInsertTask
         )
       }
     }
@@ -498,7 +502,8 @@ private fun MenuFlyout(
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onTask: (String) -> Unit
+  onTask: (String) -> Unit,
+  onInsertTask: (String) -> Unit = {}
 ) {
   Surface(
     modifier = Modifier.width(width).heightIn(max = maxHeight).menuLeftSwipeToClose(onDismissFlyout),
@@ -535,6 +540,17 @@ private fun MenuFlyout(
             }
           }
         }
+      }
+      if (section.kind == MenuSectionKind.Task && section.currentId.isNotEmpty() && section.enabled) {
+        Text(
+          "Insert",
+          color = MaterialTheme.colorScheme.primary,
+          modifier = Modifier.fillMaxWidth().clickable {
+            onDismissFlyout()
+            onClose()
+            onInsertTask(section.currentId)
+          }.padding(horizontal = 16.dp, vertical = 12.dp)
+        )
       }
       if (section.note.isNotEmpty()) {
         Text(

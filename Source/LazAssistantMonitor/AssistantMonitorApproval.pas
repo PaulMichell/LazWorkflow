@@ -21,11 +21,13 @@ Function AssistantMonitorApprovalWait(Const ToolName, ToolId, ArgumentsJson: Str
 /// In-memory flag. A settings save updates the next tool prompt and does not touch the socket.
 Procedure ApplyMonitorRemoteApproval(Enabled: Boolean);
 Function MonitorRemoteApprovalEnabled: Boolean;
+/// GET /v4/approval. An inactive notice is an empty id, not an error.
+Function MonitorApprovalJson: String;
 
 Implementation
 
 Uses
-  Classes, SyncObjs, AssistantConfig, AssistantSessionObserve;
+  Classes, SyncObjs, fpjson, AssistantConfig, AssistantSessionObserve;
 
 Var
   ApprovalLock: TRTLCriticalSection;
@@ -134,6 +136,25 @@ Begin
     Result := RemoteApproval;
   Finally
     LeaveCriticalSection(ApprovalLock);
+  End;
+End;
+
+Function MonitorApprovalJson: String;
+Var
+  Notice: TAssistantApprovalNotice;
+  Root: TJSONObject;
+Begin
+  Notice := CurrentAssistantApproval;
+  Root := TJSONObject.Create;
+  Try
+    Root.Add('id', Notice.ToolId);
+    Root.Add('tool_name', Notice.ToolName);
+    Root.Add('summary', Notice.Summary);
+    Root.Add('mode_caption', Notice.ModeCaption);
+    Root.Add('decisions_accepted', Notice.DecisionsAccepted And Notice.Active);
+    Result := Root.AsJSON;
+  Finally
+    Root.Free;
   End;
 End;
 

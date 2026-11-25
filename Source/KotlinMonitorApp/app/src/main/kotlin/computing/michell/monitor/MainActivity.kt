@@ -264,7 +264,7 @@ private fun MonitorShell(model: MonitorViewModel) {
             ) {
               AppMenu(
                 ui, shownFlyout, { menuFlyout = it }, dismissDrawer,
-                model::setMode, model::selectPlanPath, model::selectConversation, model::selectTask
+                model::setMode, model::selectPlanPath, model::selectConversation, model::selectTask, model::insertTask
               )
             }
           },
@@ -326,6 +326,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                     }
                     AppTab.Plan -> PlanScreen(
                       ui, model::selectPlan, model::runPlan, model::stopPlan, model::newPlan, model::closePlan,
+                      onWork = model::workOnPlan,
                       onPreview = {
                         planPreviewOpen = true
                         sectionPreview = null

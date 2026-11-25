@@ -78,6 +78,10 @@ fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !runn
 
 fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
 
+fun planWorkEnabled(loaded: Boolean, online: Boolean, running: Boolean, selected: Int): Boolean {
+  return loaded && online && !running && selected >= 0
+}
+
 fun keptPlanBody(
   previousPath: String,
   previousBody: String,
@@ -206,6 +210,7 @@ fun PlanScreen(
   onStop: () -> Unit,
   onNew: () -> Unit,
   onClose: () -> Unit,
+  onWork: () -> Unit = {},
   onPreview: () -> Unit,
   onPreviewSection: (PlanRow) -> Unit,
   onCancelFetch: () -> Unit = {},
@@ -244,6 +249,7 @@ fun PlanScreen(
       Button(onClick = onNew, enabled = planNewEnabled(online, running)) { Text("New") }
       Button(onClick = onPreview, enabled = planOpenEnabled(loaded, running)) { Text("Open") }
       Button(onClick = onClose, enabled = planHostButtonEnabled(loaded, online, running)) { Text("Close") }
+      Button(onClick = onWork, enabled = planWorkEnabled(loaded, online, running, ui.selectedPlan)) { Text("Work") }
     }
     if (planFetchVisible(ui.planTotal, ui.planReceived, ui.planIncomplete)) {
       PlanFetchCard(ui.planReceived, ui.planTotal, ui.planIncomplete, onCancelFetch, onContinueFetch)

@@ -113,7 +113,8 @@ fun projectMonitor(
   paired: Boolean,
   previous: MonitorUi = MonitorUi(),
   @Suppress("UNUSED_PARAMETER") nowMs: Long = seenAtMs,
-  reviewedId: String = ""
+  reviewedId: String = "",
+  approvalDetail: String = ""
 ): MonitorUi {
   val kind = monitorLinkOf(link, paired)
   val root = if (pulseJson.isEmpty()) null else parseJson(pulseJson)
@@ -131,7 +132,8 @@ fun projectMonitor(
   val plan = plans.firstOrNull { it.path == planPath } ?: plans.firstOrNull()
   val planRows = planRowsOf(plan?.rowsJson.orEmpty())
   val planItem = root?.field("plan")?.text("item").orEmpty()
-  val selectedPlan = planRows.indexOfFirst { row -> row.title == planItem || row.index.toString() == planItem }
+  val matchedPlan = planRows.indexOfFirst { row -> row.title == planItem || row.index.toString() == planItem }
+  val selectedPlan = if (matchedPlan >= 0) matchedPlan else previous.selectedPlan
   val storedTurns = turns.filter { it.id != liveId }.map { row -> wireTurn(row, dao.items(row.id), images, false) }
   val live = liveTurn(turns.firstOrNull { it.id == liveId }, liveId, pulse?.liveTurnIndex ?: 0, status.mode, dao, images)
   val queued = queuedPrompts(dao.outbox())
@@ -140,7 +142,7 @@ fun projectMonitor(
   val seenCommands = turns.map { it.clientCommandId }.filter { it.isNotEmpty() }.toSet()
   val marks = pendingPromptMarks(queued, seenCommands, storedTurns, live, baseline)
   val waiting = waitingPromptBanner(marks.size)
-  val notice = approvalOf(root)
+  val notice = approvalNotice(pulseJson, approvalDetail)
   val hostEpoch = pulse?.epoch ?: previous.hostEpoch
   val hostGeneration = if (hostEpoch.isNotEmpty() && hostEpoch != previous.hostEpoch) previous.hostGeneration + 1 else previous.hostGeneration
   val runningPlan = status.planRunning || root?.field("plan")?.bool("running") == true
@@ -424,17 +426,23 @@ private fun planRowsOf(json: String): List<PlanRow> {
   }
 }
 
-private fun approvalOf(root: JsonValue?): ApprovalNotice? {
+/** Pulse id opens the sheet. GET /v4/approval fills the summary and whether the phone may answer. */
+fun approvalNotice(pulseJson: String, detailJson: String): ApprovalNotice? {
+  val root = if (pulseJson.isEmpty()) null else parseJson(pulseJson)
   val approval = root?.field("approval") as? JsonValue.Obj ?: return null
   val id = approval.text("id")
   if (id.isEmpty()) return null
+  val detail = parseJson(detailJson)
+  val detailId = detail?.text("id").orEmpty().ifEmpty { detail?.text("tool_id").orEmpty() }
+  val same = detailId == id
+  val remote = root.field("status")?.bool("remote_approval") == true
   return ApprovalNotice(
     active = true,
     toolId = id,
-    toolName = approval.text("tool_name"),
-    summary = "",
-    modeCaption = "",
-    decisionsAccepted = false
+    toolName = approval.text("tool_name").ifEmpty { if (same) detail?.text("tool_name").orEmpty() else "" },
+    summary = if (same) detail?.text("summary").orEmpty() else "",
+    modeCaption = if (same) detail?.text("mode_caption").orEmpty() else "",
+    decisionsAccepted = if (same) detail?.bool("decisions_accepted") == true else remote
   )
 }
 
