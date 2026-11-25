@@ -4,10 +4,12 @@ Unit AssistantMonitorForm;
 
   Static layout. The listener outlives the dialog. The phone connects to the
   shown endpoint, which is the default-route address rather than a virtual
-  adapter such as WSL. Pairing codes are single-use and expire after two minutes.
-  Require pairing code, on by default, can be turned off so any phone that reaches
-  the endpoint pairs without one. The change reaches a running listener at once.
-  Start and Stop open and close the HTTPS listener.
+  adapter such as WSL. The certificate fingerprint is the SHA-256 of that host
+  certificate, grouped in pairs. Pairing codes are single-use and expire after
+  two minutes. Require pairing code, on by default, can be turned off so any
+  phone that reaches the endpoint pairs without one. The pairing store reads the
+  saved choice on the next attempt. Start and Stop open and close the HTTPS
+  listener. Catalogue 3 frame counters are not shown.
   LCL has no adapter list. Adapter enumeration lives in AssistantMonitorSettings.
 
   LoadFields sets FieldsLoading while it fills the controls. Setting
@@ -46,6 +48,7 @@ Type
     RevokeAllButton: TButton;
     CloseButton: TButton;
     EndpointLabel: TLabel;
+    FingerprintLabel: TLabel;
     StatusMemo: TMemo;
     ClientList: TListBox;
     StatusTimer: TTimer;
@@ -91,7 +94,8 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantMonitorSettings, AssistantMonitorApproval, AssistantMonitorMain, AssistantMonitorPair, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorApproval, AssistantMonitorMain, AssistantMonitorPair, AssistantMonitorServer,
+  AssistantMonitorTls, WorkflowLog;
 
 Function IsLoopback(Const Address: String): Boolean;
 Begin
@@ -277,7 +281,7 @@ End;
 
 Procedure TAssistantMonitorForm.RefreshState;
 Var
-  Status, NoteError: String;
+  Status, NoteError, Fingerprint, FingerprintError: String;
   Running: Boolean;
   NoteSettings: TMonitorSettings;
 Begin
@@ -297,10 +301,21 @@ Begin
   PortEdit.Enabled := Not Running;
   BindAllCheck.Enabled := Not Running;
   EndpointLabel.Caption := EndpointCaption;
-  Status := 'Listener stopped';
+  If MonitorHostFingerprint(Fingerprint, FingerprintError) Then
+    FingerprintLabel.Caption := 'Fingerprint  ' + MonitorFingerprintText(Fingerprint)
+  Else If FingerprintError <> '' Then
+    FingerprintLabel.Caption := 'Fingerprint  ' + FingerprintError
+  Else
+    FingerprintLabel.Caption := 'Fingerprint';
+  If Running Then
+    Status := 'Listener listening' + LineEnding + 'Bound ' + MonitorHttpsAddress + ' port ' + IntToStr(MonitorHttpsPort)
+  Else
+    Status := 'Listener stopped';
+  If Not LoadMonitorSettings(NoteSettings, NoteError) Then
+    Status := Status + LineEnding + NoteError
+  Else If NoteSettings.LegacyNote Then
+    Status := Status + LineEnding + MonitorLegacyPairingNote;
   StatusMemo.Text := Status;
-  If LoadMonitorSettings(NoteSettings, NoteError) And NoteSettings.LegacyNote Then
-    StatusMemo.Text := Status + LineEnding + MonitorLegacyPairingNote;
 End;
 
 Procedure TAssistantMonitorForm.FormCreate(Sender: TObject);

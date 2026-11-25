@@ -172,6 +172,17 @@ object AssistantMonitorForm: TAssistantMonitorForm
     Caption = 'Choose an endpoint, then Enable.'
     WordWrap = True
   end
+  object FingerprintLabel: TLabel
+    Left = 12
+    Height = 36
+    Top = 197
+    Width = 696
+    Align = alTop
+    BorderSpacing.Left = 12
+    BorderSpacing.Right = 12
+    Caption = 'Fingerprint'
+    WordWrap = True
+  end
   object StatusMemo: TMemo
     Left = 8
     Height = 110
