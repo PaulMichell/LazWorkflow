@@ -104,15 +104,9 @@ data class ApprovalNotice(
 
 data class PlanChoice(val path: String, val caption: String)
 
-data class TargetChoice(val path: String, val caption: String)
-
 data class ConversationChoice(val id: String, val title: String, val current: Boolean)
 
-data class ModelChoice(val id: String, val caption: String)
-
-data class ReasoningChoice(val id: String, val caption: String)
-
-data class PermissionChoice(val id: String, val caption: String)
+data class TaskChoice(val id: String, val caption: String)
 
 /** Local browse copy. Not a wire frame. */
 data class OfflineCacheDocument(

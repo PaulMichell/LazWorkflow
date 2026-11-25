@@ -1,15 +1,12 @@
 package computing.michell.monitor.ui
 
-/* App menu sections: host check, empty lists, disconnect (c) 2026 Michell Computing. */
+/* App menu sections follow host capabilities (c) 2026 Michell Computing. */
 
 import computing.michell.monitor.ui.model.ConversationChoice
 import computing.michell.monitor.ui.model.MonitorUi
-import computing.michell.monitor.ui.model.emptyView
-import computing.michell.monitor.ui.model.ModelChoice
-import computing.michell.monitor.ui.model.PermissionChoice
 import computing.michell.monitor.ui.model.PlanChoice
-import computing.michell.monitor.ui.model.ReasoningChoice
-import computing.michell.monitor.ui.model.TargetChoice
+import computing.michell.monitor.ui.model.TaskChoice
+import computing.michell.monitor.ui.model.emptyView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -18,49 +15,46 @@ import org.junit.Test
 
 class AppMenuTest {
   @Test
-  fun menuChoicesWaitForAnEmptyListAndALiveLink() {
+  fun menuChoicesWaitForAnEmptyConversationAndALiveLink() {
     val empty = sample()
     assertTrue(menuListStillEmpty(empty))
     assertTrue(menuChoicesNeeded(empty, true))
     assertFalse(menuChoicesNeeded(empty, false))
     assertFalse(menuChoicesNeeded(empty.copy(disconnected = true), true))
-    val filled = empty.copy(
-      targetChoices = listOf(TargetChoice("", "Current Project")),
-      conversationChoices = listOf(ConversationChoice("", "Current", true)),
-      modelChoices = listOf(ModelChoice("grok-4", "grok-4")),
-      reasoningChoices = listOf(ReasoningChoice("high", "High")),
-      permissionChoices = listOf(PermissionChoice("ask", "Ask — confirm each write/compile"))
-    )
+    val filled = empty.copy(conversationChoices = listOf(ConversationChoice("c1", "Chat", true)))
     assertFalse(menuListStillEmpty(filled))
     assertFalse(menuChoicesNeeded(filled, true))
-    val noted = empty.copy(
-      targetChoices = filled.targetChoices,
-      conversationChoices = filled.conversationChoices,
-      modelNote = "No connection is selected.",
-      reasoningNote = "This connection does not set an effort level.",
-      permissionNote = "No connection is selected."
-    )
-    assertFalse(menuListStillEmpty(noted))
-    assertFalse(menuChoicesNeeded(noted, true))
+    val withoutConversation = empty.copy(capabilities = KeptCommands - CommandSelectConversation)
+    assertFalse(menuListStillEmpty(withoutConversation))
   }
 
   @Test
-  fun aLiveLinkWithNoModelStillAsks() {
-    val empty = sample()
-    assertTrue(statusModelNeeded(empty, true))
-    assertFalse(statusModelNeeded(empty, false))
-    assertFalse(statusModelNeeded(empty.copy(disconnected = true), true))
-    assertFalse(statusModelNeeded(empty.copy(view = empty.view.copy(model = "grok-4")), true))
-    assertTrue(statusModelNeeded(empty.copy(view = empty.view.copy(model = "Model")), true))
-  }
-
-  @Test
-  fun sectionsStayInDrawerOrder() {
+  fun omittedCapabilitiesHideModelReasoningTargetAndPermissions() {
     val labels = appMenuSections(sample()).map { it.label }
-    assertEquals(
-      listOf("Target", "Mode", "Conversation", "Plan", "Model", "Reasoning Level", "Tool Permissions"),
-      labels
-    )
+    assertEquals(listOf("Mode", "Conversation", "Plan", "Task"), labels)
+    assertTrue(labels.none { it == "Model" || it == "Reasoning" || it == "Target" || it == "Tool Permissions" })
+    assertTrue(appMenuSections(sample()).none { it.command == "set_model" || it.command == "set_reasoning" || it.command == "select_target" || it.command == "set_permissions" })
+  }
+
+  @Test
+  fun aHostThatAdvertisesSetModelShowsAStub() {
+    val ui = sample().copy(capabilities = KeptCommands + "set_model")
+    val stub = appMenuSections(ui).first { it.command == "set_model" }
+    assertTrue(stub.stub)
+    assertEquals(MenuSectionKind.Stub, stub.kind)
+    assertEquals("Model", stub.label)
+    assertEquals(listOf(StubEntryCaption), stub.rows.map { it.caption })
+    assertFalse(stub.enabled)
+    val labels = appMenuSections(ui).map { it.label }
+    assertEquals(listOf("Mode", "Conversation", "Plan", "Task", "Model"), labels)
+  }
+
+  @Test
+  fun keptControlsStayHiddenUntilTheirCommandIsAdvertised() {
+    val bare = appMenuSections(sample().copy(capabilities = emptySet()))
+    assertTrue(bare.isEmpty())
+    val modeOnly = appMenuSections(sample().copy(capabilities = setOf(CommandSetMode)))
+    assertEquals(listOf(CommandSetMode), modeOnly.map { it.command })
   }
 
   @Test
@@ -71,12 +65,8 @@ class AppMenuTest {
   @Test
   fun missingListsAreOneQuietSentence() {
     val empty = appMenuSections(sample()).filter { it.rows.isEmpty() }
-    assertEquals(
-      listOf(MenuSectionKind.Target, MenuSectionKind.Conversation, MenuSectionKind.Model, MenuSectionKind.Reasoning, MenuSectionKind.Permissions),
-      empty.map { it.kind }
-    )
+    assertEquals(listOf(MenuSectionKind.Conversation, MenuSectionKind.Task), empty.map { it.kind })
     assertEquals("Nothing to choose.", MenuEmptySentence)
-    assertTrue(empty.all { it.rows.isEmpty() })
   }
 
   @Test
@@ -90,50 +80,6 @@ class AppMenuTest {
     assertEquals(listOf("Alpha", "Beta"), plan.rows.map { it.caption })
     assertEquals("a.md", menuCheckedId(plan.currentId))
     assertFalse(plan.rows.any { it.id == "missing.md" })
-  }
-
-  @Test
-  fun targetSectionUsesChoiceCaptions() {
-    val choices = listOf(TargetChoice("", "ignored"), TargetChoice("/work/Other", "Other"))
-    val ui = sample().copy(
-      view = sample().view.copy(targetDisplay = "LazWorkflow", targetKind = "project", targetRoot = "/work/LazWorkflow"),
-      targetChoices = choices,
-      targetCurrent = ""
-    )
-    val target = appMenuSections(ui).first { it.kind == MenuSectionKind.Target }
-    assertEquals(listOf(CurrentProjectCaption, "Other"), target.rows.map { it.caption })
-    assertEquals(listOf("", "/work/Other"), target.rows.map { it.id })
-    assertEquals("", target.currentId)
-    assertEquals("LazWorkflow", menuHeader(ui))
-    assertEquals(MenuTap.CloseOnly, menuTap("", target.currentId, target.enabled))
-    assertEquals(MenuTap.CloseAndSend, menuTap("/work/Other", target.currentId, target.enabled))
-    assertTrue(target.enabled)
-  }
-
-  @Test
-  fun aPackageTargetChecksNoRow() {
-    val ui = sample().copy(
-      view = sample().view.copy(targetDisplay = "Tools", targetKind = "package", targetRoot = "/work/Tools.lpk"),
-      targetChoices = listOf(TargetChoice("", "Current Project"), TargetChoice("/work/Other", "Other")),
-      targetCurrent = "/work/Tools.lpk"
-    )
-    val target = appMenuSections(ui).first { it.kind == MenuSectionKind.Target }
-    assertTrue(target.rows.none { it.id == target.currentId })
-    assertEquals("Tools", menuHeader(ui))
-  }
-
-  @Test
-  fun targetRowsDisableWhileBusy() {
-    assertFalse(targetRowsEnabled(true, false, false))
-    assertFalse(targetRowsEnabled(false, true, false))
-    assertFalse(targetRowsEnabled(false, false, true))
-    assertTrue(targetRowsEnabled(false, false, false))
-    val busy = sample().copy(
-      view = sample().view.copy(sending = true),
-      targetChoices = listOf(TargetChoice("", "Current Project")),
-      targetCurrent = ""
-    )
-    assertFalse(appMenuSections(busy).first { it.kind == MenuSectionKind.Target }.enabled)
   }
 
   @Test
@@ -151,11 +97,6 @@ class AppMenuTest {
     assertEquals(MenuTap.CloseAndSend, menuTap("20261019T120000000", section.currentId, section.enabled))
     assertEquals(OlderConversationsSentence, section.note)
     assertTrue(section.enabled)
-    val byId = sample().copy(
-      conversationChoices = listOf(ConversationChoice("archive-1", "Yesterday", false)),
-      conversationCurrent = "archive-1"
-    )
-    assertEquals("archive-1", appMenuSections(byId).first { it.kind == MenuSectionKind.Conversation }.currentId)
   }
 
   @Test
@@ -164,181 +105,23 @@ class AppMenuTest {
     assertFalse(conversationRowsEnabled(false, true))
     assertTrue(conversationRowsEnabled(false, false))
     val rows = listOf(ConversationChoice("", "Current", true))
-    val sending = sample().copy(
-      view = sample().view.copy(sending = true, planRunning = true),
-      planRunning = true,
-      conversationChoices = rows
-    )
+    val sending = sample().copy(view = sample().view.copy(sending = true), conversationChoices = rows)
     val section = appMenuSections(sending).first { it.kind == MenuSectionKind.Conversation }
     assertFalse(section.enabled)
     assertEquals(rows.map { it.title }, section.rows.map { it.caption })
-    val planning = sample().copy(view = sample().view.copy(planRunning = true), planRunning = true, conversationChoices = rows)
-    assertTrue(appMenuSections(planning).first { it.kind == MenuSectionKind.Conversation }.enabled)
   }
 
   @Test
-  fun modelSectionUsesCaptionsAndTheStatusModel() {
-    val choices = listOf(ModelChoice("grok-4", "grok-4 — 256k context"), ModelChoice("grok-3", "grok-3"))
+  fun taskSectionUsesTheStoredId() {
     val ui = sample().copy(
-      view = sample().view.copy(model = "grok-4"),
-      modelChoices = choices,
-      modelBackend = "grok",
-      modelNote = "The rest of this list is in desktop Settings."
+      taskChoices = listOf(TaskChoice("review", "Review"), TaskChoice("build", "Build")),
+      taskCurrent = "review"
     )
-    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Model }
-    assertEquals(listOf("grok-4 — 256k context", "grok-3"), section.rows.map { it.caption })
-    assertEquals(listOf("grok-4", "grok-3"), section.rows.map { it.id })
-    assertEquals("grok-4", section.currentId)
-    assertEquals(MenuTap.CloseOnly, menuTap("grok-4", section.currentId, section.enabled))
-    assertEquals(MenuTap.CloseAndSend, menuTap("grok-3", section.currentId, section.enabled))
-    assertEquals("The rest of this list is in desktop Settings.", section.note)
-    assertTrue(section.enabled)
-  }
-
-  @Test
-  fun modelRowsDisableWhileDisconnectedSendingOrPlanning() {
-    assertFalse(modelRowsEnabled(true, false, false))
-    assertFalse(modelRowsEnabled(false, true, false))
-    assertFalse(modelRowsEnabled(false, false, true))
-    assertTrue(modelRowsEnabled(false, false, false))
-    val rows = listOf(ModelChoice("grok-4", "grok-4"))
-    val planning = sample().copy(
-      view = sample().view.copy(planRunning = true, model = "grok-4"),
-      planRunning = true,
-      modelChoices = rows
-    )
-    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Model }
-    assertFalse(section.enabled)
-    assertEquals(listOf("grok-4"), section.rows.map { it.caption })
-  }
-
-  @Test
-  fun reasoningSectionUsesTheStoredIdNotTheEffortCaption() {
-    val choices = listOf(ReasoningChoice("", "Model default"), ReasoningChoice("high", "High"))
-    val ui = sample().copy(
-      view = sample().view.copy(effort = "Default"),
-      reasoningChoices = choices,
-      reasoningCurrent = "",
-      reasoningNote = ""
-    )
-    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Reasoning }
-    assertEquals("Reasoning Level", section.label)
-    assertEquals(listOf("", "high"), section.rows.map { it.id })
-    assertEquals(listOf("Model default", "High"), section.rows.map { it.caption })
-    assertEquals("", section.currentId)
-    assertEquals("", menuCheckedId(section.currentId))
-    assertEquals(MenuTap.CloseOnly, menuTap("", section.currentId, section.enabled))
-    assertEquals(MenuTap.CloseAndSend, menuTap("high", section.currentId, section.enabled))
-    assertTrue(section.rows.any { it.id.isEmpty() })
-    val captionOnly = ui.copy(view = ui.view.copy(effort = "High"))
-    val still = appMenuSections(captionOnly).first { it.kind == MenuSectionKind.Reasoning }
-    assertEquals("", still.currentId)
-    assertEquals(choices.map { it.id }, still.rows.map { it.id })
-  }
-
-  @Test
-  fun reasoningNoteDoesNotInventRows() {
-    val ui = sample().copy(
-      view = sample().view.copy(effort = "High"),
-      reasoningNote = "This connection does not set an effort level."
-    )
-    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Reasoning }
-    assertTrue(section.rows.isEmpty())
-    assertEquals("This connection does not set an effort level.", section.note)
-    assertEquals("", section.currentId)
-  }
-
-  @Test
-  fun reasoningRowsDisableWhileDisconnectedSendingOrPlanning() {
-    assertFalse(reasoningRowsEnabled(true, false, false))
-    assertFalse(reasoningRowsEnabled(false, true, false))
-    assertFalse(reasoningRowsEnabled(false, false, true))
-    assertTrue(reasoningRowsEnabled(false, false, false))
-    val rows = listOf(ReasoningChoice("high", "High"))
-    val planning = sample().copy(
-      view = sample().view.copy(planRunning = true, effort = "High"),
-      planRunning = true,
-      reasoningChoices = rows,
-      reasoningCurrent = "high"
-    )
-    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Reasoning }
-    assertFalse(section.enabled)
-    assertEquals(listOf("High"), section.rows.map { it.caption })
-    assertEquals("high", section.currentId)
-  }
-
-  @Test
-  fun permissionsSectionUsesTheStoredIdNotTheApprovalCaption() {
-    val choices = listOf(
-      PermissionChoice("ask", "Ask — confirm each write/compile"),
-      PermissionChoice("auto", "Auto — allow project tools"),
-      PermissionChoice("always", "Always — never prompt (like Build always-approve)")
-    )
-    val ui = sample().copy(
-      view = sample().view.copy(approvalCaption = "Always"),
-      permissionChoices = choices,
-      permissionCurrent = "ask",
-      permissionNote = ""
-    )
-    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Permissions }
-    assertEquals("Tool Permissions", section.label)
-    assertEquals(listOf("ask", "auto", "always"), section.rows.map { it.id })
-    assertEquals(choices.map { it.caption }, section.rows.map { it.caption })
-    assertEquals("ask", section.currentId)
-    assertEquals("ask", menuCheckedId(section.currentId))
-    assertEquals(MenuTap.CloseOnly, menuTap("ask", section.currentId, section.enabled))
-    assertEquals(MenuTap.CloseAndSend, menuTap("always", section.currentId, section.enabled))
-    assertTrue(section.enabled)
-    val captionOnly = ui.copy(view = ui.view.copy(approvalCaption = "Auto"))
-    val still = appMenuSections(captionOnly).first { it.kind == MenuSectionKind.Permissions }
-    assertEquals("ask", still.currentId)
-    assertEquals(choices.map { it.id }, still.rows.map { it.id })
-  }
-
-  @Test
-  fun permissionsNoteDoesNotInventRows() {
-    val ui = sample().copy(
-      view = sample().view.copy(approvalCaption = "Ask"),
-      permissionNote = "No connection is selected."
-    )
-    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Permissions }
-    assertTrue(section.rows.isEmpty())
-    assertEquals("No connection is selected.", section.note)
-    assertEquals("", section.currentId)
-    assertFalse(section.rows.any { it.id == "ask" || it.id == "auto" || it.id == "always" })
-  }
-
-  @Test
-  fun permissionRowsDisableWhileDisconnectedSendingOrPlanning() {
-    assertFalse(permissionRowsEnabled(true, false, false))
-    assertFalse(permissionRowsEnabled(false, true, false))
-    assertFalse(permissionRowsEnabled(false, false, true))
-    assertTrue(permissionRowsEnabled(false, false, false))
-    val rows = listOf(PermissionChoice("auto", "Auto: allow project tools"))
-    val planning = sample().copy(
-      view = sample().view.copy(planRunning = true, approvalCaption = "Auto"),
-      planRunning = true,
-      permissionChoices = rows,
-      permissionCurrent = "auto"
-    )
-    val section = appMenuSections(planning).first { it.kind == MenuSectionKind.Permissions }
-    assertFalse(section.enabled)
-    assertEquals(listOf("Auto: allow project tools"), section.rows.map { it.caption })
-    assertEquals("auto", section.currentId)
-    assertNull(menuTap("always", section.currentId, section.enabled))
-  }
-
-  @Test
-  fun activePlanUsesTheChoiceList() {
-    val plan = appMenuSections(sample()).first { it.kind == MenuSectionKind.Plan }
-    assertEquals(listOf("Alpha", "Beta"), plan.rows.map { it.caption })
-    assertEquals(listOf("a.md", "b.md"), plan.rows.map { it.id })
-    assertEquals("a.md", plan.currentId)
-    assertEquals(MenuTap.CloseOnly, menuTap(plan.currentId, plan.currentId, plan.enabled))
-    assertEquals(MenuTap.CloseAndSend, menuTap("b.md", plan.currentId, plan.enabled))
-    assertFalse(plan.rows.any { it.id == "not-in-list.md" })
-    val empty = appMenuSections(sample().copy(planChoices = emptyList())).first { it.kind == MenuSectionKind.Plan }
-    assertTrue(empty.rows.isEmpty())
+    val section = appMenuSections(ui).first { it.kind == MenuSectionKind.Task }
+    assertEquals(listOf("review", "build"), section.rows.map { it.id })
+    assertEquals("review", section.currentId)
+    assertEquals(MenuTap.CloseOnly, menuTap("review", section.currentId, section.enabled))
+    assertEquals(MenuTap.CloseAndSend, menuTap("build", section.currentId, section.enabled))
   }
 
   @Test
@@ -355,9 +138,9 @@ class AppMenuTest {
 
   @Test
   fun aHeadingTapOpensThatFlyoutAndASecondTapClosesIt() {
-    assertEquals(MenuSectionKind.Model, menuFlyoutAfterTap(null, MenuSectionKind.Model))
-    assertNull(menuFlyoutAfterTap(MenuSectionKind.Model, MenuSectionKind.Model))
-    assertEquals(MenuSectionKind.Plan, menuFlyoutAfterTap(MenuSectionKind.Model, MenuSectionKind.Plan))
+    assertEquals(CommandSetMode, menuFlyoutAfterTap(null, CommandSetMode))
+    assertNull(menuFlyoutAfterTap(CommandSetMode, CommandSetMode))
+    assertEquals(CommandSelectPlan, menuFlyoutAfterTap(CommandSetMode, CommandSelectPlan))
   }
 
   @Test
@@ -371,10 +154,6 @@ class AppMenuTest {
     val plan = appMenuSections(sample()).first { it.kind == MenuSectionKind.Plan }
     assertEquals("Alpha", menuCurrentCaption(plan))
     assertEquals("", menuCurrentCaption(plan.copy(currentId = "missing")))
-    val modelDefault = MenuSectionModel(
-      MenuSectionKind.Reasoning, "Reasoning Level", listOf(MenuRow("", "Model default")), "", true
-    )
-    assertEquals("Model default", menuCurrentCaption(modelDefault))
   }
 
   @Test
@@ -387,9 +166,6 @@ class AppMenuTest {
     val beside = menuFlyoutOrigin(16, 120, 800, 600, 164, 280, 200, 8)
     assertEquals(180, beside.x)
     assertEquals(120, beside.y)
-    val shifted = menuFlyoutOrigin(0, 500, 400, 600, 164, 280, 200, 8)
-    assertEquals(112, shifted.x)
-    assertEquals(392, shifted.y)
   }
 
   @Test
@@ -416,12 +192,15 @@ class AppMenuTest {
     assertFalse(locked.first { it.kind == MenuSectionKind.Plan }.enabled)
     assertEquals(5, locked.first { it.kind == MenuSectionKind.Mode }.rows.size)
   }
+}
 
-  private fun sample(): MonitorUi {
-    return MonitorUi(
-      view = emptyView().copy(mode = "plan", canChangeMode = true, targetDisplay = "Data Browser"),
-      planChoices = listOf(PlanChoice("a.md", "Alpha"), PlanChoice("b.md", "Beta")),
-      planPath = "a.md"
-    )
-  }
+private val KeptCommands = setOf(CommandSetMode, CommandSelectConversation, CommandSelectPlan, CommandRunTask)
+
+private fun sample(): MonitorUi {
+  return MonitorUi(
+    view = emptyView().copy(mode = "plan", canChangeMode = true, targetDisplay = "Data Browser"),
+    planChoices = listOf(PlanChoice("a.md", "Alpha"), PlanChoice("b.md", "Beta")),
+    planPath = "a.md",
+    capabilities = KeptCommands
+  )
 }

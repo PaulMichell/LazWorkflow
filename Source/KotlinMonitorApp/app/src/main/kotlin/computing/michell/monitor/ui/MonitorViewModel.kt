@@ -172,15 +172,9 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
   fun selectPlanPath(@Suppress("UNUSED_PARAMETER") path: String) {}
 
-  fun selectTarget(@Suppress("UNUSED_PARAMETER") path: String) {}
-
   fun selectConversation(@Suppress("UNUSED_PARAMETER") id: String) {}
 
-  fun selectModel(@Suppress("UNUSED_PARAMETER") id: String) {}
-
-  fun selectReasoning(@Suppress("UNUSED_PARAMETER") id: String) {}
-
-  fun selectPermissions(@Suppress("UNUSED_PARAMETER") id: String) {}
+  fun selectTask(@Suppress("UNUSED_PARAMETER") id: String) {}
 
   fun changePrompt(text: String, selectionStart: Int, selectionEnd: Int) {
     prompts.changePrompt(text, selectionStart, selectionEnd, uiState.value.pendingPrompt)

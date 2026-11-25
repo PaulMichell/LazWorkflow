@@ -70,7 +70,6 @@ import computing.michell.monitor.ui.model.statusNotice
 import computing.michell.monitor.ui.ActivityStatus
 import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
-import computing.michell.monitor.ui.MenuSectionKind
 import computing.michell.monitor.ui.MenuSheetWidth
 import computing.michell.monitor.ui.menuEdgeSwipeEnabled
 import computing.michell.monitor.ui.menuEdgeSwipeToOpen
@@ -171,7 +170,7 @@ private fun MonitorShell(model: MonitorViewModel) {
   val drawerState = rememberDrawerState(DrawerValue.Closed) { next ->
     next != DrawerValue.Open || menuMayOpenDrawer(model.ui.value.approvalOpen)
   }
-  var menuFlyout by remember { mutableStateOf<MenuSectionKind?>(null) }
+  var menuFlyout by remember { mutableStateOf<String?>(null) }
   var hostWidthPx by remember { mutableIntStateOf(0) }
   var sheetWidthPx by remember { mutableIntStateOf(0) }
   var planPreviewOpen by remember { mutableStateOf(false) }
@@ -265,8 +264,7 @@ private fun MonitorShell(model: MonitorViewModel) {
             ) {
               AppMenu(
                 ui, shownFlyout, { menuFlyout = it }, dismissDrawer,
-                model::setMode, model::selectPlanPath, model::selectTarget, model::selectConversation,
-                model::selectModel, model::selectReasoning, model::selectPermissions
+                model::setMode, model::selectPlanPath, model::selectConversation, model::selectTask
               )
             }
           },

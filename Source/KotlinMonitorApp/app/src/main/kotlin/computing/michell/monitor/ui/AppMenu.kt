@@ -52,20 +52,17 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import computing.michell.monitor.R
 import computing.michell.monitor.ui.model.ConversationChoice
-import computing.michell.monitor.ui.model.ModelChoice
 import computing.michell.monitor.ui.model.MonitorUi
-import computing.michell.monitor.ui.model.PermissionChoice
-import computing.michell.monitor.ui.model.PlanChoice
-import computing.michell.monitor.ui.model.ReasoningChoice
-import computing.michell.monitor.ui.model.shownModel
-import computing.michell.monitor.ui.model.TargetChoice
 import kotlin.math.roundToInt
 
 /** One quiet sentence for a section that has no tappable row. */
 const val MenuEmptySentence = "Nothing to choose."
 
-/** Empty path is the open project, not a folder caption. */
-const val CurrentProjectCaption = "Current Project"
+const val CommandSetMode = "set_mode"
+const val CommandSelectConversation = "select_conversation"
+const val CommandSelectPlan = "select_plan"
+const val CommandRunTask = "run_task"
+const val StubEntryCaption = "Not on this phone yet."
 
 /** Material will not draw a modal sheet narrower than this. It is the heading column. */
 val MenuSheetWidth = 240.dp
@@ -82,44 +79,16 @@ private val MenuFlyoutScrimReserve = 48.dp
 
 private val MenuFlyoutShape = RoundedCornerShape(12.dp)
 
-fun targetChoiceCaption(choice: TargetChoice): String {
-  if (choice.path.isEmpty()) return CurrentProjectCaption
-  return choice.caption
-}
-
-/** Target rows stay put while disconnected, sending, or a plan run. */
-fun targetRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
-  return !disconnected && !sending && !planRunning
-}
-
 /** Shown under the history list when the host omitted older archives. */
 const val OlderConversationsSentence = "Older conversations stay on the desktop."
 
-/** Model rows stay put while disconnected, sending, or a plan run. */
-fun modelRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
-  return !disconnected && !sending && !planRunning
-}
-
-/** Reasoning rows use the same gate as the model list. */
-fun reasoningRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
-  return modelRowsEnabled(disconnected, sending, planRunning)
-}
-
-/** Permission rows use the same gate. This is the footer mode, not the approval sheet. */
-fun permissionRowsEnabled(disconnected: Boolean, sending: Boolean, planRunning: Boolean): Boolean {
-  return modelRowsEnabled(disconnected, sending, planRunning)
-}
-
 /**
- * A cleared list is still waiting for its frame. A note means that frame arrived with nothing to choose.
- * Plan is not in this check: an empty plan is a real desktop list, and the Plan tab already asks for it.
+ * The conversation list is the only host list the drawer still waits for.
+ * Plan and task may be empty. A missing capability is not an empty list.
  */
 fun menuListStillEmpty(ui: MonitorUi): Boolean {
-  if (ui.targetChoices.isEmpty() || ui.conversationChoices.isEmpty()) return true
-  if (ui.modelChoices.isEmpty() && ui.modelNote.isEmpty()) return true
-  if (ui.reasoningChoices.isEmpty() && ui.reasoningNote.isEmpty()) return true
-  if (ui.permissionChoices.isEmpty() && ui.permissionNote.isEmpty()) return true
-  return false
+  if (CommandSelectConversation !in ui.capabilities) return false
+  return ui.conversationChoices.isEmpty()
 }
 
 /** One request when the drawer opens, the link is live, and a list is still empty. Not on every open. */
@@ -128,10 +97,6 @@ fun menuChoicesNeeded(ui: MonitorUi, linkLive: Boolean): Boolean {
 }
 
 /** A live link with no model name still needs the footer list. The drawer is not the only ask. */
-fun statusModelNeeded(ui: MonitorUi, linkLive: Boolean): Boolean {
-  return linkLive && !ui.disconnected && shownModel(ui.view.model).isEmpty()
-}
-
 /** History rows stay put while disconnected or sending. A plan run does not lock them. */
 fun conversationRowsEnabled(disconnected: Boolean, sending: Boolean): Boolean {
   return !disconnected && !sending
@@ -145,13 +110,11 @@ fun conversationSelectedId(choices: List<ConversationChoice>, current: String): 
 }
 
 enum class MenuSectionKind {
-  Target,
   Mode,
   Conversation,
   Plan,
-  Model,
-  Reasoning,
-  Permissions
+  Task,
+  Stub
 }
 
 enum class MenuTap {
@@ -163,11 +126,13 @@ data class MenuRow(val id: String, val caption: String)
 
 data class MenuSectionModel(
   val kind: MenuSectionKind,
+  val command: String,
   val label: String,
   val rows: List<MenuRow>,
   val currentId: String,
   val enabled: Boolean,
-  val note: String = ""
+  val note: String = "",
+  val stub: Boolean = false
 )
 
 data class MenuFlyoutPoint(val x: Int, val y: Int)
@@ -181,8 +146,8 @@ fun menuCurrentCaption(section: MenuSectionModel): String {
   return section.rows.firstOrNull { it.id == checked }?.caption ?: ""
 }
 
-/** The same heading again closes its flyout. A different heading switches. */
-fun menuFlyoutAfterTap(open: MenuSectionKind?, tapped: MenuSectionKind): MenuSectionKind? {
+/** The same command again closes its flyout. A different command switches. */
+fun menuFlyoutAfterTap(open: String?, tapped: String): String? {
   if (open == tapped) return null
   return tapped
 }
@@ -326,72 +291,76 @@ fun menuTap(rowId: String, currentId: String, enabled: Boolean): MenuTap? {
 fun menuHeader(ui: MonitorUi): String = ui.view.targetDisplay
 
 /**
- * Seven sections in drawer order. Mode and Plan are already on the phone.
- * Target, Conversation, Model, Reasoning, and Tool Permissions fill from their host frames.
- * Disconnect disables rows and does not clear lists.
+ * Host controls in a fixed order. A section is absent unless its command is in
+ * capabilities. A command this phone no longer owns, such as set_model, is a
+ * stub so a later host can restore it without a layout change.
  */
 fun appMenuSections(ui: MonitorUi): List<MenuSectionModel> {
+  val advertised = ui.capabilities
+  val known = HostSlots.map { it.command }.toSet()
+  val shown = ArrayList<MenuSectionModel>()
+  for (slot in HostSlots) {
+    if (slot.command !in advertised) continue
+    shown += if (slot.kept) keptSection(ui, slot) else stubSection(slot.command, slot.label)
+  }
+  for (command in advertised.filter { it !in known }.sorted()) shown += stubSection(command, command)
+  return shown
+}
+
+private data class HostSlot(val command: String, val kind: MenuSectionKind, val label: String, val kept: Boolean)
+
+private val HostSlots = listOf(
+  HostSlot(CommandSetMode, MenuSectionKind.Mode, "Mode", true),
+  HostSlot(CommandSelectConversation, MenuSectionKind.Conversation, "Conversation", true),
+  HostSlot(CommandSelectPlan, MenuSectionKind.Plan, "Plan", true),
+  HostSlot(CommandRunTask, MenuSectionKind.Task, "Task", true),
+  HostSlot("select_target", MenuSectionKind.Stub, "Target", false),
+  HostSlot("set_model", MenuSectionKind.Stub, "Model", false),
+  HostSlot("set_reasoning", MenuSectionKind.Stub, "Reasoning", false),
+  HostSlot("set_permissions", MenuSectionKind.Stub, "Tool Permissions", false)
+)
+
+private fun keptSection(ui: MonitorUi, slot: HostSlot): MenuSectionModel {
   val linkUp = !ui.disconnected
-  // Mode sends set_mode only when canChangeMode is true and the link is up, the same gate setMode can complete.
   val canSend = linkUp && ui.view.canChangeMode
-  val targetEnabled = targetRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val historyEnabled = conversationRowsEnabled(ui.disconnected, ui.view.sending)
-  val modelEnabled = modelRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
-  val reasoningEnabled = reasoningRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
-  val permissionEnabled = permissionRowsEnabled(ui.disconnected, ui.view.sending, ui.view.planRunning || ui.planRunning)
   val historyNote = if (ui.conversationsTruncated) OlderConversationsSentence else ""
-  return listOf(
-    MenuSectionModel(
-      MenuSectionKind.Target, "Target",
-      ui.targetChoices.map { MenuRow(it.path, targetChoiceCaption(it)) },
-      ui.targetCurrent, targetEnabled
-    ),
-    MenuSectionModel(
-      MenuSectionKind.Mode, "Mode", ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
-    ),
-    MenuSectionModel(
-      MenuSectionKind.Conversation, "Conversation",
+  return when (slot.kind) {
+    MenuSectionKind.Mode -> MenuSectionModel(
+      slot.kind, slot.command, slot.label, ModeChoices.map { MenuRow(it.first, modeCaption(it.first)) }, ui.view.mode, canSend
+    )
+    MenuSectionKind.Conversation -> MenuSectionModel(
+      slot.kind, slot.command, slot.label,
       ui.conversationChoices.map { MenuRow(it.id, it.title) },
       conversationSelectedId(ui.conversationChoices, ui.conversationCurrent),
       historyEnabled, historyNote
-    ),
-    // Captions from planChoices. The check is planPath. A different row calls selectPlanPath.
-    MenuSectionModel(
-      MenuSectionKind.Plan, "Plan", ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
-    ),
-    MenuSectionModel(
-      MenuSectionKind.Model, "Model",
-      ui.modelChoices.map { MenuRow(it.id, it.caption) },
-      ui.view.model, modelEnabled, ui.modelNote
-    ),
-    // The check is reasoningCurrent. view.effort is a caption and must not select a row.
-    MenuSectionModel(
-      MenuSectionKind.Reasoning, "Reasoning Level",
-      ui.reasoningChoices.map { MenuRow(it.id, it.caption) },
-      ui.reasoningCurrent, reasoningEnabled, ui.reasoningNote
-    ),
-    // The check is permissionCurrent. view.approvalCaption is a short word and must not select a row.
-    MenuSectionModel(
-      MenuSectionKind.Permissions, "Tool Permissions",
-      ui.permissionChoices.map { MenuRow(it.id, it.caption) },
-      ui.permissionCurrent, permissionEnabled, ui.permissionNote
     )
+    MenuSectionKind.Plan -> MenuSectionModel(
+      slot.kind, slot.command, slot.label, ui.planChoices.map { MenuRow(it.path, it.caption) }, ui.planPath, canSend
+    )
+    MenuSectionKind.Task -> MenuSectionModel(
+      slot.kind, slot.command, slot.label, ui.taskChoices.map { MenuRow(it.id, it.caption) }, ui.taskCurrent, historyEnabled
+    )
+    MenuSectionKind.Stub -> stubSection(slot.command, slot.label)
+  }
+}
+
+private fun stubSection(command: String, label: String): MenuSectionModel {
+  return MenuSectionModel(
+    MenuSectionKind.Stub, command, label, listOf(MenuRow(command, StubEntryCaption)), "", false, stub = true
   )
 }
 
 @Composable
 fun AppMenu(
   ui: MonitorUi,
-  openKind: MenuSectionKind?,
-  onOpenKind: (MenuSectionKind?) -> Unit,
+  openCommand: String?,
+  onOpenCommand: (String?) -> Unit,
   onClose: () -> Unit,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit,
-  onPermissions: (String) -> Unit
+  onTask: (String) -> Unit
 ) {
   Column(
     Modifier
@@ -410,17 +379,14 @@ fun AppMenu(
     appMenuSections(ui).forEach { section ->
       MenuHeading(
         section,
-        open = openKind == section.kind,
-        onToggle = { onOpenKind(menuFlyoutAfterTap(openKind, section.kind)) },
-        onDismissFlyout = { onOpenKind(null) },
+        open = openCommand == section.command,
+        onToggle = { onOpenCommand(menuFlyoutAfterTap(openCommand, section.command)) },
+        onDismissFlyout = { onOpenCommand(null) },
         onClose = onClose,
         onMode = onMode,
         onPlan = onPlan,
-        onTarget = onTarget,
         onConversation = onConversation,
-        onModel = onModel,
-        onReasoning = onReasoning,
-        onPermissions = onPermissions
+        onTask = onTask
       )
     }
   }
@@ -435,11 +401,8 @@ private fun MenuHeading(
   onClose: () -> Unit,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit,
-  onPermissions: (String) -> Unit
+  onTask: (String) -> Unit
 ) {
   val density = LocalDensity.current
   val host = LocalView.current
@@ -517,11 +480,8 @@ private fun MenuHeading(
           onClose,
           onMode,
           onPlan,
-          onTarget,
           onConversation,
-          onModel,
-          onReasoning,
-          onPermissions
+          onTask
         )
       }
     }
@@ -537,11 +497,8 @@ private fun MenuFlyout(
   onClose: () -> Unit,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit,
-  onPermissions: (String) -> Unit
+  onTask: (String) -> Unit
 ) {
   Surface(
     modifier = Modifier.width(width).heightIn(max = maxHeight).menuLeftSwipeToClose(onDismissFlyout),
@@ -574,9 +531,7 @@ private fun MenuFlyout(
             onDismissFlyout()
             onClose()
             if (tap == MenuTap.CloseAndSend) {
-              sendMenuCommand(
-                section.kind, row.id, onMode, onPlan, onTarget, onConversation, onModel, onReasoning, onPermissions
-              )
+              sendMenuCommand(section.kind, row.id, onMode, onPlan, onConversation, onTask)
             }
           }
         }
@@ -623,21 +578,15 @@ private fun sendMenuCommand(
   id: String,
   onMode: (String) -> Unit,
   onPlan: (String) -> Unit,
-  onTarget: (String) -> Unit,
   onConversation: (String) -> Unit,
-  onModel: (String) -> Unit,
-  onReasoning: (String) -> Unit,
-  onPermissions: (String) -> Unit
+  onTask: (String) -> Unit
 ) {
   when (kind) {
     MenuSectionKind.Mode -> onMode(id)
     MenuSectionKind.Plan -> onPlan(id)
-    MenuSectionKind.Target -> onTarget(id)
     MenuSectionKind.Conversation -> onConversation(id)
-    MenuSectionKind.Model -> onModel(id)
-    MenuSectionKind.Reasoning -> onReasoning(id)
-    // Footer approval mode. Do not call allowApproval or denyApproval from here.
-    MenuSectionKind.Permissions -> onPermissions(id)
+    MenuSectionKind.Task -> onTask(id)
+    MenuSectionKind.Stub -> {}
   }
 }
 

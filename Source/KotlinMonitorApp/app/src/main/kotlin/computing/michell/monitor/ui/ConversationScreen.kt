@@ -449,7 +449,7 @@ fun ActivityStatus(
       delay(1000)
     }
   }
-  val model = runtimeCaption(ui.view.model, ui.modelChoices)
+  val model = runtimeCaption(ui.view.model)
   val activity = screenActivity(ui, phase, now, pending)
   val right = if (linkLive) promptActivityRight(activity, listening, statusMessage) else heldPromptActivity(pending, phase)
   val statusStyle = MaterialTheme.typography.bodySmall

@@ -138,12 +138,7 @@ fun idleActivity(statusText: String): String {
   return text
 }
 
-fun runtimeCaption(model: String, choices: List<ModelChoice> = emptyList()): String {
-  val id = shownModel(model)
-  if (id.isEmpty()) return ""
-  val caption = choices.firstOrNull { choice -> choice.id == id }?.caption?.trim().orEmpty()
-  return caption.ifEmpty { id }
-}
+fun runtimeCaption(model: String): String = shownModel(model)
 
 fun runtimeCaption(view: WireView): String = runtimeCaption(view.model)
 
