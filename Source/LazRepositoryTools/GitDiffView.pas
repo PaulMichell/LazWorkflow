@@ -6,7 +6,7 @@ Unit GitDiffView;
 
   Size note: exceeds the 1000 line preference. The frame still owns selection,
   preview, and load paths after GitDiffPatch / GitDiffHighlighter were split out.
-  Reviewed 2026-08: remaining growth is UI surface, not another sibling unit. }
+  Reviewed 2026-11: the remaining UI responsibilities belong to the diff viewer. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -79,6 +79,7 @@ Type
     FReadHasText: Boolean;
     FStagedSide: Boolean;
     FMode: TGitDiffViewMode;
+    PanelWidthPending: Boolean;
     FShowChunkMarkers: Boolean; { Editor-only: hunk rules and click-to-select lines. }
     FBrowseSha: String;
     FUpdatingList: Boolean;
@@ -261,6 +262,7 @@ Begin
   FBrowseSha := '';
   FStagedSide := False;
   FMode := dvmStaging;
+  PanelWidthPending := True;
   FShowChunkMarkers := True;
   FUpdatingList := False;
   FScrollGeneration := 0;
@@ -1592,8 +1594,10 @@ Begin
       TreePanel.Visible := FMode <> dvmEditorOnly;
     If Assigned(Splitter) Then
       Splitter.Visible := FMode <> dvmEditorOnly;
-    If Assigned(TreePanel) Then
+    // Apply the default once per mode so refreshes retain the splitter position.
+    If PanelWidthPending And Assigned(TreePanel) Then
       Begin
+        PanelWidthPending := False;
         If FMode = dvmBrowse Then
           TreePanel.Width := ScaleDesign(240)
         Else If FMode = dvmStaging Then
@@ -1634,6 +1638,7 @@ Begin
       Exit;
     End;
   FMode := Mode;
+  PanelWidthPending := True;
   ApplyViewMode;
 End;
 
