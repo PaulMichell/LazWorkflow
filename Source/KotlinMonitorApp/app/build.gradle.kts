@@ -32,6 +32,10 @@ android {
   buildFeatures {
     compose = true
   }
+
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
+  }
 }
 
 kotlin {
@@ -57,6 +61,8 @@ dependencies {
   implementation(libs.sqlite.framework)
   ksp(libs.room.compiler)
   testImplementation(libs.junit)
+  testImplementation(libs.robolectric)
+  testImplementation(libs.asm)
   testImplementation(libs.sqlite.jdbc)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.okhttp.tls)

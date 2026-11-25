@@ -7,6 +7,7 @@ package computing.michell.monitor.ui
 
 import android.app.Application
 import android.net.ConnectivityManager
+import computing.michell.monitor.WatchBridge
 import computing.michell.monitor.data.MonitorDatabase
 import computing.michell.monitor.data.openMonitorDatabase
 import computing.michell.monitor.net.CommandSender
@@ -101,6 +102,7 @@ class MonitorSession(private val application: Application) : AutoCloseable {
 
   fun background(watching: Boolean) {
     loop?.background(watching)
+    WatchBridge.setWatching(watching)
   }
 
   fun touch() {
@@ -137,6 +139,7 @@ class MonitorSession(private val application: Application) : AutoCloseable {
     sender.noteLink(false)
     created.useToken(token)
     loop = created
+    WatchBridge.attach(created)
     sync = engine
     commands = sender
     paired = true
@@ -153,6 +156,7 @@ class MonitorSession(private val application: Application) : AutoCloseable {
         sender.onPulse(message.json)
         pulseState.value = message.json
         seenState.value = message.at
+        WatchBridge.publish(message.json)
       }
     }
     created.start()
@@ -161,7 +165,9 @@ class MonitorSession(private val application: Application) : AutoCloseable {
   private fun detach() {
     generation.cancel()
     generation = SupervisorJob(lifetime)
-    loop?.close()
+    val current = loop
+    WatchBridge.detach(current)
+    current?.close()
     loop = null
     sync?.close()
     sync = null

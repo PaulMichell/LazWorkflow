@@ -11,7 +11,9 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import computing.michell.monitor.MonitorWatchService
 import computing.michell.monitor.net.LinkState
+import computing.michell.monitor.watchSnapshotOf
 import computing.michell.monitor.ui.model.ConversationRecord
 import computing.michell.monitor.ui.model.LinkStatus
 import computing.michell.monitor.ui.model.MonitorDatabaseName
@@ -68,6 +70,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   private var editingCommandId = ""
   private var reviewedId = ""
   private var saveCommandId = ""
+  private var appVisible = false
 
   init {
     session.onSaveQuestion = { question ->
@@ -87,7 +90,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
       ).collect { publish() }
     }
     viewModelScope.launch(Dispatchers.IO) { session.link.collect { publish() } }
-    viewModelScope.launch(Dispatchers.IO) { session.pulseJson.collect { publish() } }
+    viewModelScope.launch(Dispatchers.IO) {
+      session.pulseJson.collect {
+        publish()
+        if (!appVisible) holdIfNeeded(false)
+      }
+    }
   }
 
   override fun onCleared() {
@@ -96,12 +104,15 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun enterForeground() {
+    appVisible = true
     session.foreground()
+    MonitorWatchService.stop(getApplication())
   }
 
   fun leaveForeground() {
+    appVisible = false
     prompts.leave()
-    session.background(screenClockRunning(uiState.value))
+    holdIfNeeded(true)
   }
 
   fun noteUserActivity() {
@@ -109,11 +120,24 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
   }
 
   fun noteScreenOff(@Suppress("UNUSED_PARAMETER") taskResumed: Boolean) {
-    if (!taskResumed) session.background(screenClockRunning(uiState.value))
+    if (!taskResumed) {
+      appVisible = false
+      holdIfNeeded(true)
+    }
+  }
+
+  private fun holdIfNeeded(force: Boolean) {
+    val pulse = session.pulseJson.value
+    val watch = watchSnapshotOf(pulse)?.watching == true
+    session.background(watch)
+    if (appVisible || !watch) return
+    if (force || !MonitorWatchService.running) {
+      MonitorWatchService.start(getApplication(), pulse, System.currentTimeMillis())
+    }
   }
 
   fun noteScreenOn() {
-    session.foreground()
+    enterForeground()
   }
 
   fun selectTab(tab: AppTab) {
