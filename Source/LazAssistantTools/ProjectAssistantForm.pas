@@ -690,6 +690,8 @@ Const
   { List Objects store TurnIndex+1. This marker is the in-flight turn. }
   LiveConversationMarker = -2;
 
+Function MonitorLiveTurnIndex: Integer;
+
 Procedure NotifyOpenProjectAssistantFormsProjectChanged;
 Procedure NotifyOpenProjectAssistantFormsProjectCleared;
 Procedure NotifyOpenProjectAssistantFormsPreferencesChanged;
@@ -721,6 +723,11 @@ Uses AssistantWorkTarget, PackageIntf,
 
 Var
   RegisteredAssistantForm: TProjectAssistantForm;
+
+Function MonitorLiveTurnIndex: Integer;
+Begin
+  Result := LiveConversationMarker;
+End;
 
 Function OpenProjectAssistantForm: TProjectAssistantForm;
 Var
