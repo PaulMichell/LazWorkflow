@@ -28,7 +28,7 @@ Implementation
 Uses
   Classes, Contnrs, Dialogs, LCLType, MenuIntf, IDECommands, WorkflowLog, AssistantMonitorForm, AssistantMonitorSettings,
   AssistantMonitorServer, AssistantMonitorSnapshot, AssistantSessionObserve, AssistantConversation, AssistantPlan,
-  AssistantPlanDocument, AssistantTasks, ProjectAssistantForm;
+  AssistantPlanDocument, AssistantTasks, ProjectAssistantForm, AssistantMonitorStore;
 
 Type
   TIdeSnapshotSource = Class(TMonitorSnapshotSource)
@@ -191,6 +191,8 @@ Begin
       ErrorText := 'The monitor port is not valid.';
       Exit;
     End;
+  If Assigned(ProjectAssistantConversation) Then
+    SetMonitorStoreRoot(ProjectAssistantConversation.ProjectRoot);
   StartMonitorSnapshot(TIdeSnapshotSource.Create);
   Result := StartMonitorHttps(Address, Settings.Port, ErrorText);
   If Not Result Then

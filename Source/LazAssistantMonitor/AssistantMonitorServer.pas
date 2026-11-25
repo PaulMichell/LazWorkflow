@@ -30,7 +30,7 @@ Uses
   BaseUnix, cthreads,
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
-  AssistantMonitorPulse;
+  AssistantMonitorPulse, AssistantMonitorStore;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -243,9 +243,9 @@ End;
 Procedure TMonitorHttps.HandleRequest(Sender: TObject; Var ARequest: TFPHTTPConnectionRequest;
   Var AResponse: TFPHTTPConnectionResponse);
 Var
-  Path, Method, PulseBody: String;
+  Path, Method, PulseBody, ReadBody, ReadETag: String;
   Hello: TJSONObject;
-  PulseStatus: Integer;
+  PulseStatus, ReadStatus: Integer;
 Begin
   Path := RequestPath(ARequest.URI);
   Method := UpperCase(ARequest.Method);
@@ -272,6 +272,19 @@ Begin
       AResponse.Code := PulseStatus;
       AResponse.ContentType := 'application/json; charset=utf-8';
       AResponse.Content := PulseBody;
+      Exit;
+    End;
+  If (Method = 'GET') And ServeMonitorRead(Path, ARequest.URI, ARequest.GetFieldByName('If-None-Match'),
+    ReadStatus, ReadETag, ReadBody) Then
+    Begin
+      AResponse.Code := ReadStatus;
+      If ReadETag <> '' Then
+        AResponse.SetCustomHeader('ETag', '"' + ReadETag + '"');
+      If ReadStatus <> 304 Then
+        Begin
+          AResponse.ContentType := 'application/json; charset=utf-8';
+          AResponse.Content := ReadBody;
+        End;
       Exit;
     End;
   If (Path = '/v4/hello') And (Method = 'GET') Then
