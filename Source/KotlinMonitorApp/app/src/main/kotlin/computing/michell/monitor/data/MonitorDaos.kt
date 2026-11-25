@@ -75,6 +75,9 @@ abstract class MonitorDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   abstract fun replaceImage(row: ImageRow)
 
+  @Query("SELECT * FROM image WHERE id = :id")
+  abstract fun image(id: String): ImageRow?
+
   @Query("SELECT * FROM image ORDER BY name, id")
   abstract fun imagesByName(): List<ImageRow>
 
