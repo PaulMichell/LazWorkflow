@@ -15,10 +15,10 @@
         <SmartLinkUnit Value="True"/>
       </CodeGeneration>
     </CompilerOptions>
-    <Description Value="Remote monitor catalogue, frames, and session for the Project Assistant"/>
+    <Description Value="Remote monitor shell for the Project Assistant. Catalogue 3 is removed while the listener is rebuilt."/>
     <License Value="LGPL-2.1-or-later with static linking exception"/>
     <Version Major="0" Minor="1" Release="0" Build="0"/>
-    <Files Count="22">
+    <Files Count="7">
       <Item1>
         <Filename Value="../Source/LazAssistantMonitor/RegLazAssistantMonitor.pas"/>
         <HasRegisterProc Value="True"/>
@@ -29,85 +29,25 @@
         <UnitName Value="AssistantMonitorMain"/>
       </Item2>
       <Item3>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorFrames.pas"/>
-        <UnitName Value="AssistantMonitorFrames"/>
-      </Item3>
-      <Item4>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCodec.pas"/>
-        <UnitName Value="AssistantMonitorCodec"/>
-      </Item4>
-      <Item5>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCarrier.pas"/>
-        <UnitName Value="AssistantMonitorCarrier"/>
-      </Item5>
-      <Item6>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSession.pas"/>
-        <UnitName Value="AssistantMonitorSession"/>
-      </Item6>
-      <Item14>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorMirror.pas"/>
-        <UnitName Value="AssistantMonitorMirror"/>
-      </Item14>
-      <Item15>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorOutbox.pas"/>
-        <UnitName Value="AssistantMonitorOutbox"/>
-      </Item15>
-      <Item16>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCommandIntake.pas"/>
-        <UnitName Value="AssistantMonitorCommandIntake"/>
-      </Item16>
-      <Item18>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSync.pas"/>
-        <UnitName Value="AssistantMonitorSync"/>
-      </Item18>
-      <Item19>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorPlanFetch.pas"/>
-        <UnitName Value="AssistantMonitorPlanFetch"/>
-      </Item19>
-      <Item20>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorCommands.pas"/>
-        <UnitName Value="AssistantMonitorCommands"/>
-      </Item20>
-      <Item21>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorState.pas"/>
-        <UnitName Value="AssistantMonitorState"/>
-      </Item21>
-      <Item22>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorImages.pas"/>
-        <UnitName Value="AssistantMonitorImages"/>
-      </Item22>
-      <Item7>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorSettings.pas"/>
         <UnitName Value="AssistantMonitorSettings"/>
-      </Item7>
-      <Item8>
+      </Item3>
+      <Item4>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorTls.pas"/>
         <UnitName Value="AssistantMonitorTls"/>
-      </Item8>
-      <Item9>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorLan.pas"/>
-        <UnitName Value="AssistantMonitorLan"/>
-      </Item9>
-      <Item17>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorLink.pas"/>
-        <UnitName Value="AssistantMonitorLink"/>
-      </Item17>
-      <Item10>
+      </Item4>
+      <Item5>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorApproval.pas"/>
         <UnitName Value="AssistantMonitorApproval"/>
-      </Item10>
-      <Item11>
-        <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorBridge.pas"/>
-        <UnitName Value="AssistantMonitorBridge"/>
-      </Item11>
-      <Item12>
+      </Item5>
+      <Item6>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.pas"/>
         <UnitName Value="AssistantMonitorForm"/>
-      </Item12>
-      <Item13>
+      </Item6>
+      <Item7>
         <Filename Value="../Source/LazAssistantMonitor/AssistantMonitorForm.lfm"/>
         <FileType Value="FormResource"/>
-      </Item13>
+      </Item7>
     </Files>
     <RequiredPkgs Count="4">
       <Item1>

@@ -35,14 +35,14 @@ Uses
   Classes, SysUtils, Process;
 
 Const
-  CoreTestNames: Array[0..66] Of String = (
+  CoreTestNames: Array[0..52] Of String = (
     'CanvasSmoothShapesTest', 'AssistantUtf8StreamTest', 'AssistantClaudeClientTest', 'AssistantOfferSnapshotTest',
     'AssistantCapabilityTest',
     'ClaudeCaptureTest', 'AssistantMCPProtocolTest',
     'AssistantMCPListenerTest',
     'AssistantMCPBridgeTest', 'AssistantMCPApprovalTest', 'AssistantApprovalIdTest', 'AssistantCodexGateTest',
     'WorkflowEventsLifetimeTest', 'GitStatusParseTest', 'CommitAttributesParseTest', 'RepositorySafetyTest', 'WasteBinArgsTest',
-    'AssistantArchiveRollbackTest', 'AssistantConversationIdentityTest', 'AssistantMonitorMirrorTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
+    'AssistantArchiveRollbackTest', 'AssistantConversationIdentityTest', 'AssistantPlanEolTest', 'AssistantAcceptanceTest', 'AssistantEventsTest',
     'AssistantLfmTest', 'AssistantImagesTest', 'AssistantProjectPathsTest', 'AssistantSamplerTest',
     'AssistantSearchUtilTest', 'AssistantSearchThreadTest', 'AssistantTraceTest', 'AssistantConnectionsTest', 'AssistantAccountUsageTest',
     'AssistantFileCreationTest', 'AssistantNativeEditsTest', 'AssistantCodexHandshakeTest', 'AssistantTestRunnerTest',
@@ -50,18 +50,14 @@ Const
     'AssistantGeneratedImageTest', 'AssistantWriteImageTest', 'AssistantBuildJobTest', 'AssistantGitTest',
     'IndependentInstallTest', 'RepositoryOnlyInstall', 'AssistantOnlyInstall', 'AssistantRecoveryTest',
     'AssistantTurnFinishTest', 'AssistantPlanRunTest', 'AssistantRecoverySettingsTest',
-    'AssistantTasksTest', 'AssistantMonitorAbsent', 'AssistantMonitorCodecTest', 'AssistantMonitorSessionTest',
-    'AssistantMonitorEscapeTest', 'AssistantMonitorLockupTest', 'AssistantMonitorOutboxTest',
-    'AssistantMonitorCommandIntakeTest', 'AssistantMonitorProtocolV3Test', 'AssistantMonitorSocketTest',
-    'AssistantMonitorLinkTest', 'AssistantMonitorGrainTest', 'AssistantMonitorPlanFetchTest',
-    'AssistantMonitorChaosTest', 'AssistantMonitorAcceptance');
-  GuiTestNames: Array[0..20] Of String = (
+    'AssistantTasksTest', 'AssistantMonitorAbsent');
+  GuiTestNames: Array[0..18] Of String = (
     'PluginFormLifetimeTest', 'SpellMemoInputTest', 'AssistantSubagentsTest', 'AssistantHarnessTest',
     'AssistantEditorEditsTest', 'AssistantBuildWorkspaceTest', 'AssistantBuildDependenciesTest',
     'AssistantChangeSetsTest', 'AssistantWorkspaceTest', 'AssistantCodeToolsTest', 'AssistantSettingsTest',
     'AssistantProviderTest', 'AssistantReconnectTest', 'MarkdownLayoutTest', 'AssistantTraceViewTest',
     'AssistantConversationSurfaceTest', 'AssistantMarkdownAsyncTest', 'AssistantConversationStressTest',
-    'AssistantMonitorFormLoadTest', 'AssistantMonitorBridgeTest', 'AssistantAccountRefreshTest');
+    'AssistantAccountRefreshTest');
   { Planted-fault probes run only when named with --only. Each runs twice: with ProbeCleanArg it must pass, and with
     no argument, under --heaptrc or --valgrind, the memory check must report the planted fault. }
   ProbeTestNames: Array[0..1] Of String = ('MemoryCheckProbeLeak', 'MemoryCheckProbeUseAfterFree');

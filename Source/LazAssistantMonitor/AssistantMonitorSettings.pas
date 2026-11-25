@@ -69,7 +69,31 @@ Function MonitorInterfaceAddresses: TStringList;
 Implementation
 
 Uses
-  fpjson, fphashutils, WorkflowSettings, AssistantMonitorCodec;
+  fpjson, fphashutils, WorkflowSettings, GrokOAuth;
+
+Const
+  { One above GrokOAuthRedirectPort. The implementation checks that relationship. }
+  MonitorListenPort = 56122;
+
+{$IF MonitorListenPort <> GrokOAuthRedirectPort + 1}
+  {$ERROR Listen port must stay one above GrokOAuthRedirectPort}
+{$ENDIF}
+
+Function MonitorHostIdIsValid(Const HostId: String): Boolean;
+Var
+  Index: Integer;
+  C: Char;
+Begin
+  Result := Length(HostId) = 32;
+  If Not Result Then
+    Exit;
+  For Index := 1 To 32 Do
+    Begin
+      C := HostId[Index];
+      If Not (((C >= '0') And (C <= '9')) Or ((C >= 'a') And (C <= 'f'))) Then
+        Exit(False);
+    End;
+End;
 
 Var
   SettingsRevision: LongInt = 0;

@@ -7,6 +7,7 @@ Unit AssistantMonitorForm;
   adapter such as WSL. Pairing codes are single-use and expire after two minutes.
   Require pairing code, on by default, can be turned off so any phone that reaches
   the endpoint pairs without one. The change reaches a running listener at once.
+  During the rebuild, Start does not open a socket.
   LCL has no adapter list. Adapter enumeration lives in AssistantMonitorSettings.
 
   LoadFields sets FieldsLoading while it fills the controls. Setting
@@ -90,8 +91,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantMonitorSettings, AssistantMonitorSession, AssistantMonitorBridge,
-  AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
 
 Function IsLoopback(Const Address: String): Boolean;
 Begin
@@ -112,20 +112,6 @@ Begin
     Form.ShowModal;
   Finally
     Form.Free;
-  End;
-End;
-
-Function StateCaption(State: TMonitorSessionState): String;
-Begin
-  Case State Of
-    mssStopped: Result := 'stopped';
-    mssListening: Result := 'listening';
-    mssAccepted: Result := 'accepted';
-    mssLive: Result := 'live';
-    mssBusy: Result := 'busy';
-    mssRevoked: Result := 'revoked';
-  Else
-    Result := 'unknown';
   End;
 End;
 
@@ -228,8 +214,6 @@ Begin
   If Not SaveMonitorSettings(Settings, ErrorText) Then
     StatusMemo.Text := ErrorText;
   ApplyMonitorRemoteApproval(Settings.RemoteApproval);
-  If Assigned(MonitorLiveSession) Then
-    MonitorLiveSession.PairCodeRequired := Settings.RequirePairCode;
 End;
 
 Procedure TAssistantMonitorForm.ShowBindFailure(Const Address: String; Port: Integer; Const ErrorText: String);
@@ -300,13 +284,10 @@ Begin
   EnableAction.Enabled := Not Running;
   DisableAction.Enabled := Running;
   PairAction.Enabled := Running;
-  If Running And Assigned(MonitorLiveSession) Then
-    PairCodeEdit.Text := MonitorLiveSession.PairCode
-  Else
-    PairCodeEdit.Text := '';
-  If (PairCodeEdit.Text = '') And Not RequirePairCodeCheck.Checked Then
+  PairCodeEdit.Text := '';
+  If Not RequirePairCodeCheck.Checked Then
     PairCodeEdit.Text := 'No pairing code is required. Any phone that reaches this endpoint can pair.'
-  Else If PairCodeEdit.Text = '' Then
+  Else
     PairCodeEdit.Text := 'Generate a pairing code, then enter it on the phone. Codes expire after two minutes.';
   RevokeAction.Enabled := SelectedClientId <> '';
   RevokeAllAction.Enabled := ClientIds.Count > 0;
@@ -314,19 +295,7 @@ Begin
   PortEdit.Enabled := Not Running;
   BindAllCheck.Enabled := Not Running;
   EndpointLabel.Caption := EndpointCaption;
-  If Assigned(MonitorLiveSession) Then
-    Status := 'Listener ' + StateCaption(MonitorLiveSession.State) + LineEnding +
-      'Bound ' + MonitorLiveSession.BoundAddress + ' port ' + IntToStr(MonitorLiveSession.BoundPort) + LineEnding +
-      'Client ' + MonitorLiveSession.ConnectedClientName + LineEnding +
-      'Seconds since frame ' + IntToStr(MonitorLiveSession.SecondsSinceFrame) + LineEnding +
-      'Frames sent ' + IntToStr(MonitorLiveSession.FramesSent) +
-      '  dropped ' + IntToStr(MonitorLiveSession.FramesDropped) + LineEnding +
-      'Remote approval ' + BoolToStr(MonitorLiveSession.RemoteApproval, True) + LineEnding +
-      'Pairing code required ' + BoolToStr(MonitorLiveSession.PairCodeRequired, True)
-  Else
-    Status := 'Listener stopped';
-  If Assigned(MonitorLiveSession) And (MonitorLiveSession.LastError <> '') Then
-    Status := Status + LineEnding + MonitorLiveSession.LastError;
+  Status := 'Listener stopped';
   StatusMemo.Text := Status;
 End;
 
@@ -398,9 +367,7 @@ Begin
   ClientId := SelectedClientId;
   If ClientId = '' Then
     Exit;
-  If Assigned(MonitorLiveSession) Then
-    MonitorLiveSession.RevokeClient(ClientId)
-  Else If Not RevokeMonitorClient(ClientId, ErrorText) Then
+  If Not RevokeMonitorClient(ClientId, ErrorText) Then
     Begin
       StatusMemo.Text := ErrorText;
       Exit;
@@ -414,15 +381,10 @@ Var
   Settings: TMonitorSettings;
   ErrorText: String;
 Begin
-  If Assigned(MonitorLiveSession) Then
-    MonitorLiveSession.RevokeAll
-  Else
-    Begin
-      If Not LoadMonitorSettings(Settings, ErrorText) Then
-        Exit;
-      SetLength(Settings.Clients, 0);
-      SaveMonitorSettings(Settings, ErrorText);
-    End;
+  If Not LoadMonitorSettings(Settings, ErrorText) Then
+    Exit;
+  SetLength(Settings.Clients, 0);
+  SaveMonitorSettings(Settings, ErrorText);
   RefreshClients;
   RefreshState;
 End;
@@ -466,9 +428,7 @@ End;
 
 Procedure TAssistantMonitorForm.PairActionExecute(Sender: TObject);
 Begin
-  If Not ListenerRunning Or Not Assigned(MonitorLiveSession) Then
+  If Not ListenerRunning Then
     Exit;
-  MonitorLiveSession.RequestPairCode;
-  RefreshState;
 End;
 End.
