@@ -36,7 +36,8 @@ Procedure ServeMonitorPulse(Const Token, ClientEpoch: String; AfterRev: Int64; I
 Implementation
 
 Uses
-  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot, AssistantMonitorCommands, AssistantMonitorPair;
+  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot, AssistantMonitorCommands, AssistantMonitorPair,
+  AssistantMonitorCodec;
 
 Type
   TPulseWaiter = Class
@@ -274,110 +275,18 @@ End;
 
 Function BuildPulseBody(Const Epoch: String): String;
 Var
-  Root, Status, Conversation, Plan, Lists, Approval: TJSONObject;
   Snap: TMonitorSnapshot;
 Begin
   Snap := PublishedMonitorSnapshot;
-  Root := TJSONObject.Create;
-  Try
-    Root.Add('epoch', Epoch);
-    If Assigned(Snap) Then
-      Root.Add('rev', Snap.Rev)
-    Else
-      Root.Add('rev', 0);
-    Root.Add('server_time', PulseServerTime);
-    Status := TJSONObject.Create;
-    If Assigned(Snap) Then
-      Begin
-        AddJsonBool(Status, 'available', Snap.Available);
-        AddJsonBool(Status, 'busy', Snap.Busy);
-        AddJsonBool(Status, 'sending', Snap.Sending);
-        AddJsonBool(Status, 'plan_running', Snap.PlanRunning);
-        Status.Add('mode', String(Snap.Mode));
-        Status.Add('phase', String(Snap.Phase));
-        Status.Add('status_text', String(Snap.StatusText));
-        Status.Add('activity', String(Snap.Activity));
-        Status.Add('activity_since', String(Snap.ActivitySince));
-        Status.Add('turn_started_at', String(Snap.TurnStartedAt));
-        AddJsonBool(Status, 'can_send', Snap.CanSend);
-        AddJsonBool(Status, 'can_steer', Snap.CanSteer);
-        AddJsonBool(Status, 'can_stop', Snap.CanStop);
-        AddJsonBool(Status, 'can_change_mode', Snap.CanChangeMode);
-        AddJsonBool(Status, 'stop_pending', Snap.StopPending Or MonitorCommandStopPending);
-        AddJsonBool(Status, 'remote_approval', Snap.RemoteApproval);
-        Status.Add('error_text', String(Snap.ErrorText));
-        Status.Add('usage_caption', String(Snap.UsageCaption));
-        Status.Add('usage_hint', String(Snap.UsageHint));
-      End
-    Else
-      AddJsonBool(Status, 'stop_pending', MonitorCommandStopPending);
-    Root.Add('status', Status);
-    Conversation := TJSONObject.Create;
-    If Assigned(Snap) Then
-      Begin
-        Conversation.Add('id', String(Snap.ConversationId));
-        Conversation.Add('title', String(Snap.ConversationTitle));
-        Conversation.Add('etag', String(Snap.ConversationEtag));
-        Conversation.Add('turn_count', Snap.TurnCount);
-      End
-    Else
-      Begin
-        Conversation.Add('id', '');
-        Conversation.Add('title', '');
-        Conversation.Add('etag', '');
-        Conversation.Add('turn_count', 0);
-      End;
-    Root.Add('conversation', Conversation);
-    If Assigned(Snap) Then
-      AddLive(Root, Snap)
-    Else
-      Root.Add('live', TJSONNull.Create);
-    Plan := TJSONObject.Create;
-    If Assigned(Snap) Then
-      Begin
-        Plan.Add('path', String(Snap.PlanPath));
-        Plan.Add('etag', String(Snap.PlanEtag));
-        AddJsonBool(Plan, 'running', Snap.PlanItemRunning);
-        Plan.Add('item', String(Snap.PlanItem));
-      End
-    Else
-      Begin
-        Plan.Add('path', '');
-        Plan.Add('etag', '');
-        AddJsonBool(Plan, 'running', False);
-        Plan.Add('item', '');
-      End;
-    Root.Add('plan', Plan);
-    Lists := TJSONObject.Create;
-    If Assigned(Snap) Then
-      Begin
-        Lists.Add('conversations', String(Snap.ListConversations));
-        Lists.Add('plans', String(Snap.ListPlans));
-        Lists.Add('tasks', String(Snap.ListTasks));
-      End
-    Else
-      Begin
-        Lists.Add('conversations', '');
-        Lists.Add('plans', '');
-        Lists.Add('tasks', '');
-      End;
-    Root.Add('lists', Lists);
-    If Assigned(Snap) And Snap.ApprovalActive Then
-      Begin
-        Approval := TJSONObject.Create;
-        Approval.Add('id', String(Snap.ApprovalId));
-        Approval.Add('tool_name', String(Snap.ApprovalTool));
-        Root.Add('approval', Approval);
-      End
-    Else
-      Root.Add('approval', TJSONNull.Create);
-    Result := Root.AsJSON;
-  Finally
-    Root.Free;
-    If Assigned(Snap) Then
-      Snap.Release;
-  End;
+  Result := MonitorPulseJson(Snap, Epoch, PulseServerTime, MonitorCommandStopPending);
+  If Assigned(Snap) Then
+    Snap.Release;
 End;
+
+
+
+
+
 
 Procedure ServeMonitorPulse(Const Token, ClientEpoch: String; AfterRev: Int64; IntervalMs: Integer;
   Out Status: Integer; Out Body: String);

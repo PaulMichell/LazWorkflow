@@ -1,0 +1,1 @@
+{"epoch":"epoch-1","rev":0,"capabilities":["send","steer","stop","approval","set_mode","new_conversation","select_conversation","select_plan","new_plan","close_plan","run_plan","stop_plan","work_on_plan","run_task","insert_task"]}

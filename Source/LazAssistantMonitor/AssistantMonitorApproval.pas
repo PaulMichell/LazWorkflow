@@ -27,7 +27,7 @@ Function MonitorApprovalJson: String;
 Implementation
 
 Uses
-  Classes, SyncObjs, fpjson, AssistantConfig, AssistantSessionObserve;
+  Classes, SyncObjs, fpjson, AssistantConfig, AssistantSessionObserve, AssistantMonitorCodec;
 
 Var
   ApprovalLock: TRTLCriticalSection;
@@ -152,7 +152,8 @@ Begin
     Root.Add('summary', Notice.Summary);
     Root.Add('mode_caption', Notice.ModeCaption);
     Root.Add('decisions_accepted', Notice.DecisionsAccepted And Notice.Active);
-    Result := Root.AsJSON;
+    Result := MonitorApprovalBody(Notice.ToolId, Notice.ToolName, Notice.Summary, Notice.ModeCaption,
+      Notice.DecisionsAccepted And Notice.Active);
   Finally
     Root.Free;
   End;

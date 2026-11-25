@@ -35,7 +35,8 @@ Procedure EndMonitorPairFixture;
 Implementation
 
 Uses
-  Classes, SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, GrokOAuth, AssistantMonitorTls, AssistantMonitorPulse;
+  Classes, SyncObjs, fpjson, jsonparser, fpsha256, fphashutils, GrokOAuth, AssistantMonitorTls, AssistantMonitorPulse,
+  AssistantMonitorCodec;
 
 Const
   PairAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -347,15 +348,7 @@ Begin
         Answer := ErrorJson('no_session', 'Could not store the pairing.');
         Exit;
       End;
-    Obj := TJSONObject.Create;
-    Try
-      Obj.Add('token', Token);
-      Obj.Add('host_name', HostName);
-      Obj.Add('fingerprint', Clients[Kept].Fingerprint);
-      Answer := Obj.AsJSON;
-    Finally
-      Obj.Free;
-    End;
+    Answer := MonitorPairJson(Token, HostName, Clients[Kept].Fingerprint);
     Status := 200;
   Finally
     Root.Free;

@@ -1,4 +1,4 @@
-> **Superseded.** Catalogue 3 is no longer the live monitor protocol. The replacement is the pulse-and-fetch link in `Documents/Plan-20261124-112414.md`. Do not implement new work from this document.
+> **Superseded.** Catalogue 3 is no longer the live monitor protocol. The contract is `Documents/MonitorProtocolV4.md`. Do not implement new work from this document.
 
 # Monitor protocol, catalogue 3
 

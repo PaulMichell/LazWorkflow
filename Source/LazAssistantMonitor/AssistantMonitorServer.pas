@@ -31,6 +31,7 @@ Uses
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
   AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands, AssistantMonitorPair,
+  AssistantMonitorCodec,
   AssistantMonitorApproval;
 
 Type
@@ -75,15 +76,8 @@ Begin
 End;
 
 Function ErrorJson(Const Reason, MessageText: String): String;
-Var
-  Obj: TJSONObject;
 Begin
-  Obj := TJSONObject.Create(['reason', Reason, 'message', MessageText]);
-  Try
-    Result := Obj.AsJSON;
-  Finally
-    Obj.Free;
-  End;
+  Result := MonitorErrorJson(Reason, MessageText);
 End;
 
 Procedure WriteError(Var AResponse: TFPHTTPConnectionResponse; Status: Integer; Const Reason, MessageText: String);
@@ -330,24 +324,14 @@ Begin
     End;
   If (Path = '/v4/hello') And (Method = 'GET') Then
     Begin
-      Hello := TJSONObject.Create;
+      Capabilities := TStringList.Create;
       Try
-        Hello.Add('epoch', Epoch);
-        Hello.Add('rev', 0);
-        Hello.Add('capabilities', TJSONArray.Create);
-        Capabilities := TStringList.Create;
-        Try
-          AddMonitorCommandCapabilities(Capabilities);
-          For CapabilityIndex := 0 To Capabilities.Count - 1 Do
-            Hello.Arrays['capabilities'].Add(Capabilities[CapabilityIndex]);
-        Finally
-          Capabilities.Free;
-        End;
+        AddMonitorCommandCapabilities(Capabilities);
         AResponse.Code := 200;
         AResponse.ContentType := 'application/json; charset=utf-8';
-        AResponse.Content := Hello.AsJSON;
+        AResponse.Content := MonitorHelloJson(Epoch, 0, Capabilities);
       Finally
-        Hello.Free;
+        Capabilities.Free;
       End;
       Exit;
     End;

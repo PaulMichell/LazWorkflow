@@ -53,7 +53,7 @@ Function ServeMonitorCommand(Const RequestBody: String; Out Status: Integer; Out
 Implementation
 
 Uses
-  SyncObjs, fpjson, jsonparser, AssistantSessionObserve, AssistantMonitorPulse;
+  SyncObjs, fpjson, jsonparser, AssistantSessionObserve, AssistantMonitorPulse, AssistantMonitorCodec;
 
 Type
   TCommandRecord = Record
@@ -167,22 +167,12 @@ End;
 
 Function ErrorJson(Const Reason, MessageText: String): String;
 Begin
-  Result := '{"reason":"' + Reason + '","message":"' + MessageText + '"}';
+  Result := MonitorErrorJson(Reason, MessageText);
 End;
 
 Function DoneJson(Const State, TurnId: String): String;
-Var
-  Obj: TJSONObject;
 Begin
-  Obj := TJSONObject.Create;
-  Try
-    Obj.Add('state', State);
-    If TurnId <> '' Then
-      Obj.Add('turn_id', TurnId);
-    Result := Obj.AsJSON;
-  Finally
-    Obj.Free;
-  End;
+  Result := MonitorDoneJson(State, TurnId);
 End;
 
 Function AnswerFromHost(Const HostAnswer: TMonitorHostAnswer; Out Status: Integer): String;
