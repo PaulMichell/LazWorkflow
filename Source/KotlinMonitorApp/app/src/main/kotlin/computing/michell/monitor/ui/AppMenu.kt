@@ -57,6 +57,7 @@ import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.PermissionChoice
 import computing.michell.monitor.ui.model.PlanChoice
 import computing.michell.monitor.ui.model.ReasoningChoice
+import computing.michell.monitor.ui.model.shownModel
 import computing.michell.monitor.ui.model.TargetChoice
 import kotlin.math.roundToInt
 

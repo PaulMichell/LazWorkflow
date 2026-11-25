@@ -5,6 +5,7 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.ui.model.ConnectingBanner
 import computing.michell.monitor.ui.model.IdleOfflineBanner
 import computing.michell.monitor.ui.model.OfflineBanner
+import computing.michell.monitor.ui.model.statusConnectionLabel
 import computing.michell.monitor.ui.model.statusNotice
 import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.NoSessionMessage

@@ -1,8 +1,13 @@
 package computing.michell.monitor.ui
 
-/* Page order for the main conversation and plan swipe (c) 2026 Michell Computing.
+/* Page order for the main conversation and plan swipe (c) 2026 Michell Computing. */
 
-   A horizontal swipe advances in this order. In left-to-right layout, moving
+enum class AppTab {
+  Conversation,
+  Plan
+}
+
+/* A horizontal swipe advances in this order. In left-to-right layout, moving
    the finger toward the leading edge opens Plan; the reverse returns to
    Conversation. The bottom bar uses the same order. */
 

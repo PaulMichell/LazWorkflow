@@ -78,6 +78,21 @@ fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !runn
 
 fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
 
+fun keptPlanBody(
+  previousPath: String,
+  previousBody: String,
+  nextPath: String,
+  nextBody: String,
+  nextComplete: Boolean = false
+): String {
+  val next = shownPlanBody(nextBody.toByteArray(Charsets.UTF_8).size.toLong(), nextBody)
+  val previous = shownPlanBody(previousBody.toByteArray(Charsets.UTF_8).size.toLong(), previousBody)
+  if (nextComplete) return next
+  if (next.isNotEmpty()) return next
+  if (nextPath.isNotEmpty() && nextPath == previousPath) return previous
+  return ""
+}
+
 fun shownPlanBody(total: Long, body: String): String {
   if (total > PlanInlineBytes) return ""
   if (body.toByteArray(Charsets.UTF_8).size > PlanInlineBytes) return ""

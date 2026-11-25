@@ -2,6 +2,7 @@ package computing.michell.monitor.ui
 
 /* Acknowledge a prompt from desktop content after this submission (c) 2026 Michell Computing. */
 
+import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.WireBlock
 import computing.michell.monitor.ui.model.WireTurn
 

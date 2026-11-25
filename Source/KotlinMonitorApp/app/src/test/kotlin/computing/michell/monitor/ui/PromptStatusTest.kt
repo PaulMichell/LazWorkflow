@@ -5,6 +5,7 @@ package computing.michell.monitor.ui
 import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.PhaseConnecting
 import computing.michell.monitor.ui.model.WaitingForDesktop
+import computing.michell.monitor.ui.model.actionCaption
 import computing.michell.monitor.ui.model.activityCaption
 import computing.michell.monitor.ui.model.emptyView
 import computing.michell.monitor.ui.model.heldPromptActivity

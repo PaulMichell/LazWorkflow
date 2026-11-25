@@ -6,6 +6,7 @@ import computing.michell.monitor.ui.model.ConversationRecord
 import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.OfflineCacheDocument
+import computing.michell.monitor.ui.model.OfflineReviewBanner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

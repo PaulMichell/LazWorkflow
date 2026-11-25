@@ -26,6 +26,7 @@ android {
   buildFeatures {
     compose = true
   }
+}
 
 kotlin {
   compilerOptions {
