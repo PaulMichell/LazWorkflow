@@ -39,6 +39,7 @@ private const val TailCheckBytes = 64
 
 private enum class FetchKind {
   ItemTail,
+  ItemClose,
   LiveOutline,
   StoredTurn,
   TurnPage,
@@ -125,6 +126,17 @@ class SyncEngine(
       pulses.addLast(json)
       ready.signalAll()
     }
+  }
+
+  /** Item text the follower asked for. A close is not held back by the cadence. */
+  fun pullItem(json: String, closing: Boolean = false) {
+    val pulse = parsePulse(json) ?: return
+    if (pulse.liveTurnId == null || pulse.liveItemId == null) return
+    val job = itemJob(pulse)
+    val key = if (closing) job.key + ":close" else job.key
+    val kind = if (closing) FetchKind.ItemClose else FetchKind.ItemTail
+    want(FetchJob(key, job.rank, job.url, kind, job.epoch, job.conversationId, job.turnId, job.turnIndex, job.itemId,
+      job.planPath, job.planEtag, 0L))
   }
 
   /** Older pages of a conversation. Not scheduled from a pulse. */
@@ -418,7 +430,7 @@ class SyncEngine(
     val body = httpGet(job.url) ?: return
     inTransaction {
       when (job.kind) {
-        FetchKind.ItemTail -> applyItem(job, body)
+        FetchKind.ItemTail, FetchKind.ItemClose -> applyItem(job, body)
         FetchKind.LiveOutline -> applyOutline(job, body)
         FetchKind.StoredTurn -> applyStoredTurn(job, body)
         FetchKind.TurnPage, FetchKind.History -> applyTurnPage(job, body)
