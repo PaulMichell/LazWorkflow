@@ -69,6 +69,8 @@ Function MonitorSnapshotRunning: Boolean;
 { Caller must Release the result. Nil when nothing has been published. }
 Function PublishedMonitorSnapshot: TMonitorSnapshot;
 Function MonitorSnapshotRev: Int64;
+{ Called after a snapshot is published, outside the publisher lock. }
+Procedure SetMonitorPublishWake(Wake: TProcedure);
 
 Implementation
 
@@ -103,6 +105,7 @@ Type
 
 Var
   Publisher: TMonitorSnapshotPublisher;
+  PublishWake: TProcedure;
 
 Constructor TMonitorSnapshot.Create;
 Begin
@@ -277,6 +280,13 @@ Begin
   End;
   If Assigned(Previous) Then
     Previous.Release;
+  If Assigned(PublishWake) Then
+    PublishWake;
+End;
+
+Procedure SetMonitorPublishWake(Wake: TProcedure);
+Begin
+  PublishWake := Wake;
 End;
 
 Procedure TMonitorSnapshotPublisher.Build;

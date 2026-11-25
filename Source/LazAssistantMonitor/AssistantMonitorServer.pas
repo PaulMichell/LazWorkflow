@@ -29,7 +29,8 @@ Uses
   {$IFDEF UNIX}
   BaseUnix, cthreads,
   {$ENDIF}
-  Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog;
+  Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
+  AssistantMonitorPulse;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -207,11 +208,44 @@ Begin
   End;
 End;
 
+Function QueryValue(Const Uri, Name: String): String;
+Var
+  Query, Part, Key: String;
+  At, Amp: Integer;
+Begin
+  Result := '';
+  At := Pos('?', Uri);
+  If At = 0 Then
+    Exit;
+  Query := Copy(Uri, At + 1, MaxInt);
+  While Query <> '' Do
+    Begin
+      Amp := Pos('&', Query);
+      If Amp = 0 Then
+        Begin
+          Part := Query;
+          Query := '';
+        End
+      Else
+        Begin
+          Part := Copy(Query, 1, Amp - 1);
+          Delete(Query, 1, Amp);
+        End;
+      At := Pos('=', Part);
+      If At = 0 Then
+        Continue;
+      Key := Copy(Part, 1, At - 1);
+      If SameText(Key, Name) Then
+        Exit(Copy(Part, At + 1, MaxInt));
+    End;
+End;
+
 Procedure TMonitorHttps.HandleRequest(Sender: TObject; Var ARequest: TFPHTTPConnectionRequest;
   Var AResponse: TFPHTTPConnectionResponse);
 Var
-  Path, Method: String;
+  Path, Method, PulseBody: String;
   Hello: TJSONObject;
+  PulseStatus: Integer;
 Begin
   Path := RequestPath(ARequest.URI);
   Method := UpperCase(ARequest.Method);
@@ -228,6 +262,16 @@ Begin
   If (Path = '/v4/pair') And (Method = 'POST') Then
     Begin
       WriteError(AResponse, 400, 'protocol', 'Pairing is not available yet.');
+      Exit;
+    End;
+  If (Path = '/v4/pulse') And (Method = 'GET') Then
+    Begin
+      ServeMonitorPulse(BearerToken(ARequest), QueryValue(ARequest.URI, 'epoch'),
+        StrToInt64Def(QueryValue(ARequest.URI, 'after'), 0),
+        StrToIntDef(QueryValue(ARequest.URI, 'interval'), -1), PulseStatus, PulseBody);
+      AResponse.Code := PulseStatus;
+      AResponse.ContentType := 'application/json; charset=utf-8';
+      AResponse.Content := PulseBody;
       Exit;
     End;
   If (Path = '/v4/hello') And (Method = 'GET') Then
@@ -287,6 +331,7 @@ Begin
   Host.Address := Address;
   Host.Port := Port;
   Host.Epoch := NewEpoch;
+  SetMonitorPulseEpoch(Host.Epoch);
   Host.Server := TFPHttpServer.Create(Nil);
   Host.Server.Threaded := True;
   Host.Server.UseSSL := True;
@@ -321,6 +366,8 @@ Begin
   If Host.Stopping Then
     Exit;
   Host.Stopping := True;
+  CancelMonitorPulses;
+  WaitMonitorPulses;
   Try
     If Assigned(Host.Server) Then
       Host.Server.Active := False;
