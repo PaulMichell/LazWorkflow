@@ -714,6 +714,7 @@ Begin
         { Empty message list: the report is for the user, not replayed into the model. }
         Turn.MessagesJson := '[]';
         Turn.AttachmentsJson := '';
+        Turn.ClientCommandId := '';
         Turn.TraceJson := '';
         Trace := TAssistantTrace.Create;
         Try

@@ -153,6 +153,8 @@ Begin
     DurationMs := CurrentStreamDurationMs;
     { The phone already holds this turn under the id the monitor sent while it streamed. }
     Turn.Id := InFlightTurnId;
+    Turn.ClientCommandId := LiveClientCommandId;
+    LiveClientCommandId := '';
     Turn.Mode := AssistantModeToStr(ActiveMode);
     If FLiveUser <> '' Then
       Turn.Prompt := FLiveUser

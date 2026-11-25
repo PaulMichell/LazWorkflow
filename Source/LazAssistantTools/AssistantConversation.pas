@@ -79,6 +79,8 @@ Type
     MessagesJson: String;
     { JSON array of image refs. Empty on older lines. No pixel bytes. }
     AttachmentsJson: String;
+    { Phone command that started this turn. Empty on desktop turns and older lines. }
+    ClientCommandId: String;
   End;
 
   TAssistantConversationStore = Class
@@ -119,6 +121,8 @@ Type
     Function AppendTurn(Const Turn: TConversationTurn; Out Entry: TConversationIndexEntry): Boolean;
     { O(1) memory access — no disk, no JSON parse. }
     Function GetTurn(TurnIndex: Integer; Out Turn: TConversationTurn): Boolean;
+    { Current conversation only. An empty id matches nothing. }
+    Function TurnForClientCommand(Const Id: String; Out Turn: TConversationTurn): Boolean;
     Function TurnCount: Integer;
     Function IndexCount: Integer;
     Function IndexEntry(Index: Integer): TConversationIndexEntry;
@@ -444,6 +448,8 @@ Begin
     Result := Result + ',"events_file":"' + JsonEscapeText(Turn.EventsFile) + '"';
   If (Trim(Turn.MessagesJson) <> '') And (Trim(Turn.MessagesJson)[1] = '[') Then
     Result := Result + ',"messages":' + Trim(Turn.MessagesJson);
+  If Trim(Turn.ClientCommandId) <> '' Then
+    Result := Result + ',"client_command_id":"' + JsonEscapeText(Turn.ClientCommandId) + '"';
   If Trim(Turn.TraceJson) <> '' Then
     Result := Result + ',"trace":' + Turn.TraceJson;
   If (Trim(Turn.AttachmentsJson) <> '') And (Trim(Turn.AttachmentsJson)[1] = '[') Then
@@ -512,6 +518,7 @@ Begin
   Turn.EventsFile := '';
   Turn.MessagesJson := '';
   Turn.AttachmentsJson := '';
+  Turn.ClientCommandId := '';
   If Trim(Line) = '' Then
     Exit;
   Data := Nil;
@@ -538,6 +545,7 @@ Begin
       Turn.ErrorText := Obj.Get('error', '');
       Turn.PlanFile := Obj.Get('plan_file', '');
       Turn.TodoId := Obj.Get('todo_id', '');
+      Turn.ClientCommandId := Obj.Get('client_command_id', '');
       Turn.EventsFile := Obj.Get('events_file', '');
       If Obj.Find('messages') Is TJSONArray Then
         Turn.MessagesJson := Obj.Find('messages').AsJSON;
@@ -754,6 +762,7 @@ Begin
   Turn.EventsFile := '';
   Turn.MessagesJson := '';
   Turn.AttachmentsJson := '';
+  Turn.ClientCommandId := '';
   If (TurnIndex < 0) Or (TurnIndex >= Length(FTurns)) Then
     Begin
       FLastError := 'Turn index out of range.';
@@ -761,6 +770,23 @@ Begin
     End;
   Turn := FTurns[TurnIndex];
   Result := True;
+End;
+
+Function TAssistantConversationStore.TurnForClientCommand(Const Id: String; Out Turn: TConversationTurn): Boolean;
+Var
+  Index: Integer;
+Begin
+  Result := False;
+  Turn := Default(TConversationTurn);
+  If Trim(Id) = '' Then
+    Exit;
+  For Index := High(FTurns) DownTo 0 Do
+    If FTurns[Index].ClientCommandId = Id Then
+      Begin
+        Turn := FTurns[Index];
+        Result := True;
+        Exit;
+      End;
 End;
 
 Function TAssistantConversationStore.TurnCount: Integer;

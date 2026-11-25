@@ -296,6 +296,8 @@ Type
     FTurnRecorded: Boolean; { True after this in-flight turn is written to conversation.jsonl. }
     { Id the in-flight turn is stored under, so the phone sees one turn from first token to stored row. }
     LiveTurnId: String;
+    { Phone command id for the in-flight turn. Empty after it is stored, and on a desktop start. }
+    LiveClientCommandId: String;
     { Id of the last row RecordCurrentTurn wrote. A new turn never reuses it. }
     StoredTurnId: String;
     FUserCancelled: Boolean;
@@ -621,7 +623,8 @@ Type
     Procedure FillMonitorTasks(Out Rows: TAssistantMonitorTaskRows);
     { SaveFirst is the phone's Yes to the save question. Without it, unsaved work that the turn could edit refuses
       the prompt with AssistantUnsavedEditsRefusal, and nothing is saved or started. }
-    Function RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+    Function RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String;
+      Const ClientCommandId: String = ''): Boolean;
     Function RemoteSteer(Const MessageText: String; Out ErrorText: String): Boolean;
     Function RemoteStop(Out ErrorText: String): Boolean;
     Function RemoteSelectMode(Const ModeText: String; Out ErrorText: String): Boolean;
@@ -652,7 +655,10 @@ Type
     Function RemoteWorkOnPlan(SectionIndex: Integer; Out ErrorText: String): Boolean;
     Function RemoteRunPlan(SaveFirst: Boolean; Out ErrorText: String): Boolean;
     Function RemoteStopPlan(Out ErrorText: String): Boolean;
-    Function RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+    Function RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String;
+      Const ClientCommandId: String = ''): Boolean;
+    { Stored turns and the in-flight turn. An empty id matches nothing. }
+    Function TurnForClientCommand(Const Id: String; Out Turn: TConversationTurn): Boolean;
     Function RemoteInsertTask(Const TaskId, Note: String; Out ApiText, ErrorText: String): Boolean;
     Function RemoteTurn(TurnIndex: Integer; Out Turn: TAssistantMonitorTurn; Out ErrorText: String): Boolean;
     Function RemoteImage(TurnIndex: Integer; Const ImageId: String; Out Data: TBytes; Out Mime: String;
@@ -1937,6 +1943,7 @@ Begin
   FViewingLive := True;
   FSelectedTurnIndex := -1;
   LiveTurnId := '';
+  LiveClientCommandId := '';
   ResetTraceCards;
   If Assigned(FTrace) Then
     FTrace.Clear;
@@ -5078,6 +5085,9 @@ Begin
   FUserCancelled := False;
   FTurnRecorded := False;
   LiveTurnId := '';
+  { A phone start set this before the reply began. A desktop start must not keep the previous id. }
+  If Not RemoteTurnStarting Then
+    LiveClientCommandId := '';
   FStreamingActive := True;
   FViewingLive := True;
   FSelectedTurnIndex := LiveConversationMarker;
@@ -7960,6 +7970,7 @@ Begin
       Turn.EventsFile := '';
       Turn.MessagesJson := '[]';
       Turn.AttachmentsJson := '';
+      Turn.ClientCommandId := '';
       Trace := TAssistantTrace.Create;
       Try
         Trace.AddNote(NoteText);
@@ -8622,13 +8633,17 @@ Begin
     End;
 End;
 
-Function TProjectAssistantForm.RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteSubmit(Const MessageText: String; SaveFirst: Boolean; Out ErrorText: String;
+  Const ClientCommandId: String): Boolean;
 Begin
   BeginRemoteTurn(SaveFirst);
+  LiveClientCommandId := ClientCommandId;
   Try
     Result := RemoteSubmitText(MessageText, ErrorText);
   Finally
     EndRemoteTurn(ErrorText);
+    If Not Result Then
+      LiveClientCommandId := '';
   End;
 End;
 
@@ -8981,14 +8996,41 @@ Begin
   Result := True;
 End;
 
-Function TProjectAssistantForm.RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String): Boolean;
+Function TProjectAssistantForm.RemoteRunTask(Const TaskId, Note: String; SaveFirst: Boolean; Out ErrorText: String;
+  Const ClientCommandId: String): Boolean;
 Begin
   BeginRemoteTurn(SaveFirst);
+  LiveClientCommandId := ClientCommandId;
   Try
     Result := StartRemoteTask(TaskId, Note, ErrorText);
   Finally
     EndRemoteTurn(ErrorText);
+    If Not Result Then
+      LiveClientCommandId := '';
   End;
+End;
+
+Function TProjectAssistantForm.TurnForClientCommand(Const Id: String; Out Turn: TConversationTurn): Boolean;
+Begin
+  Result := False;
+  Turn := Default(TConversationTurn);
+  If Trim(Id) = '' Then
+    Exit;
+  If (LiveClientCommandId = Id) And (Not FTurnRecorded) And (LiveTurnId <> '') Then
+    Begin
+      Turn.Id := LiveTurnId;
+      Turn.ClientCommandId := LiveClientCommandId;
+      Turn.Mode := AssistantModeToStr(ActiveMode);
+      Turn.Prompt := FLiveUser;
+      If Turn.Prompt = '' Then
+        Turn.Prompt := FDisplayUser;
+      Turn.Thinking := FLiveThinking;
+      Turn.Response := FLiveContent;
+      Result := True;
+      Exit;
+    End;
+  If Assigned(ProjectAssistantConversation) Then
+    Result := ProjectAssistantConversation.TurnForClientCommand(Id, Turn);
 End;
 
 Function TProjectAssistantForm.StartRemoteTask(Const TaskId, Note: String; Out ErrorText: String): Boolean;
