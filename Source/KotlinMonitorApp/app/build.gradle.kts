@@ -46,5 +46,8 @@ dependencies {
   implementation(libs.activity.compose)
   implementation(libs.lifecycle.viewmodel.ktx)
   implementation(libs.lifecycle.viewmodel.compose)
+  implementation(libs.okhttp)
   testImplementation(libs.junit)
+  testImplementation(libs.mockwebserver)
+  testImplementation(libs.okhttp.tls)
 }
