@@ -72,6 +72,7 @@ import computing.michell.monitor.R
 import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.NotDeliveredRetry
+import computing.michell.monitor.ui.model.PendingPromptMark
 import computing.michell.monitor.ui.model.OfflineReviewBanner
 import computing.michell.monitor.ui.model.WireBlock
 import computing.michell.monitor.ui.model.WireImage
@@ -133,7 +134,9 @@ fun ConversationScreen(
   onPermissionResult: (Boolean) -> Unit,
   onPermissionConsumed: () -> Unit,
   onRetry: () -> Unit = {},
-  stored: BoardContent? = null
+  stored: BoardContent? = null,
+  onEditPending: (String) -> Unit = {},
+  onDeletePending: (String) -> Unit = {}
 ) {
   val shown = shownConversation(ui, stored ?: BoardContent())
   val activity = LocalContext.current as? Activity
@@ -147,9 +150,12 @@ fun ConversationScreen(
   }
   val promptValue = promptFieldValue(ui.draft, dictation.selectionStart, dictation.selectionEnd)
   Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    ConversationPane(shown, phase, bitmaps, onReading, onViewWidth, Modifier.weight(1f).fillMaxWidth())
+    ConversationPane(
+      shown, phase, bitmaps, onReading, onViewWidth, onEditPending, onDeletePending,
+      Modifier.weight(1f).fillMaxWidth()
+    )
     key(ui.pendingEpoch) {
-      PromptField(promptValue, onPrompt)
+      PromptField(promptValue, ui.disconnected, onPrompt)
     }
     if (ui.banner.isNotEmpty()) {
       Text(ui.banner)
@@ -201,6 +207,8 @@ private fun ConversationPane(
   bitmaps: Map<String, Bitmap>,
   onReading: (ReadingDemand) -> Unit,
   onViewWidth: (Int) -> Unit,
+  onEditPending: (String) -> Unit,
+  onDeletePending: (String) -> Unit,
   modifier: Modifier
 ) {
   val showLive = ui.view.sending || ui.view.busy || ui.view.planRunning || ui.planRunning || ui.live != null
@@ -213,9 +221,10 @@ private fun ConversationPane(
   val reportReading = rememberUpdatedState(onReading)
   var anchorKey by remember { mutableStateOf("") }
   var anchorOffset by remember { mutableStateOf(0) }
-  // The pending bubble is drawn after the rows, so the head is one past them while it shows.
-  val pendingShown = ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)
-  val headIndex = if (pendingShown) rows.size else rows.lastIndex
+  // Pending bubbles are drawn after the rows, so the head is the last of them while any show.
+  val pendingMarks = visiblePendingMarks(ui)
+  val pendingShown = pendingMarks.isNotEmpty()
+  val headIndex = if (pendingShown) rows.size + pendingMarks.lastIndex else rows.lastIndex
   LaunchedEffect(ui.pendingEpoch) {
     if (ui.pendingEpoch <= 0) return@LaunchedEffect
     // The user's own prompt brings the reader to the head at once, wherever they had scrolled.
@@ -305,20 +314,28 @@ private fun ConversationPane(
         )
       }
     }
-    if (pendingShown) {
-      item(key = "pending") {
-        val pending = WireBlock(
-          ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", ui.pendingPrompt, false, true, 0, emptyList()
-        )
-        RoleBlock(
-          pending,
-          bitmaps,
-          ui.imageReasons,
-          ui.hostGeneration,
-          foldBlockKey(ui.conversationGeneration, "", pending.blockId, 0),
-          !ui.disconnected,
-          ui.showThinking
-        )
+    pendingMarks.forEachIndexed { index, mark ->
+      item(key = "pending:" + mark.id.ifEmpty { index.toString() }) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          val pending = WireBlock(
+            ui.pendingKind.ifEmpty { "user" }, "pending", "", "", "", mark.text, false, true, 0, emptyList()
+          )
+          RoleBlock(
+            pending,
+            bitmaps,
+            ui.imageReasons,
+            ui.hostGeneration,
+            foldBlockKey(ui.conversationGeneration, "", pending.blockId, index),
+            !ui.disconnected,
+            ui.showThinking
+          )
+          if (mark.editable && mark.id.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              TextButton(onClick = { onEditPending(mark.id) }) { Text("Edit") }
+              TextButton(onClick = { onDeletePending(mark.id) }) { Text("Delete") }
+            }
+          }
+        }
       }
     }
   }
@@ -508,13 +525,23 @@ fun ActivityStatus(
 }
 
 @Composable
-private fun PromptField(value: TextFieldValue, onPrompt: (String, Int, Int) -> Unit) {
+private fun PromptField(value: TextFieldValue, disconnected: Boolean, onPrompt: (String, Int, Int) -> Unit) {
   OutlinedTextField(
     value = value,
     onValueChange = { next -> onPrompt(next.text, next.selection.start, next.selection.end) },
     modifier = Modifier.fillMaxWidth(),
+    enabled = promptFieldEnabled(disconnected),
     label = { Text("Prompt") }
   )
+}
+
+/** The queue when the screen has one, otherwise the single pending prompt the older pages set. */
+fun visiblePendingMarks(ui: MonitorUi): List<PendingPromptMark> {
+  if (ui.pendingPrompts.isNotEmpty()) return ui.pendingPrompts
+  if (ui.pendingPrompt.isNotEmpty() && !promptShown(ui, ui.pendingPrompt)) {
+    return listOf(PendingPromptMark(ui.pendingCommandId, ui.pendingPrompt, false))
+  }
+  return emptyList()
 }
 
 @Composable

@@ -37,6 +37,7 @@ data class MonitorUi(
   val pendingPrompt: String = "",
   val pendingKind: String = "",
   val pendingCommandId: String = "",
+  val pendingPrompts: List<PendingPromptMark> = emptyList(),
   val pendingEpoch: Int = 0,
   val promptBaseline: Set<String> = emptySet(),
   val activityStartedMs: Long = 0,
@@ -91,3 +92,6 @@ fun emptyView(): WireView {
 fun shellUi(): MonitorUi {
   return MonitorUi(banner = RebuildBanner, disconnected = true, linkBanner = RebuildBanner)
 }
+
+/** One prompt waiting in the outbox, or already sent and not yet on screen. */
+data class PendingPromptMark(val id: String, val text: String, val editable: Boolean = false)

@@ -321,7 +321,7 @@ private fun MonitorShell(model: MonitorViewModel) {
                         model::noteReading, model::noteViewWidth,
                         dictation, model::toggleDictationOn, model::toggleDictationOff,
                         permissionRequest, model::dictationPermission, model::consumeDictationPermissionRequest,
-                        model::retryUndelivered, stored
+                        model::retryUndelivered, stored, model::editPending, model::deletePending
                       )
                     }
                     AppTab.Plan -> PlanScreen(

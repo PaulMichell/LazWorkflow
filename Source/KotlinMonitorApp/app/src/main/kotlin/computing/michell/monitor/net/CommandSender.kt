@@ -66,6 +66,12 @@ class CommandSender(
   private var posting = false
   private var ticks = 0L
 
+  /** A reconnect must try the outbox. Setting the flag alone does not. */
+  fun noteLink(up: Boolean) {
+    lock.withLock { linkUp = up }
+    if (up) pump()
+  }
+
   fun send(text: String): String = enqueue("send", textArgs(text, false))
 
   fun runTask(taskId: String, note: String): String = enqueue("run_task", taskArgs(taskId, note, false))

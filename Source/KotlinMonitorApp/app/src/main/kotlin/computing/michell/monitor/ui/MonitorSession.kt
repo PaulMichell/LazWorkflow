@@ -9,6 +9,7 @@ import android.app.Application
 import android.net.ConnectivityManager
 import computing.michell.monitor.data.MonitorDatabase
 import computing.michell.monitor.data.openMonitorDatabase
+import computing.michell.monitor.net.CommandSender
 import computing.michell.monitor.net.LinkState
 import computing.michell.monitor.net.MonitorHttp
 import computing.michell.monitor.net.PairingStore
@@ -46,6 +47,15 @@ class MonitorSession(private val application: Application) : AutoCloseable {
   private var generation = SupervisorJob(lifetime)
   private var loop: PulseLoop? = null
   private var sync: SyncEngine? = null
+  private var commands: CommandSender? = null
+
+  fun sendPrompt(text: String): String = commands?.send(text).orEmpty()
+
+  fun steerPrompt(text: String): String = commands?.steer(text).orEmpty()
+
+  fun editQueued(id: String, text: String): Boolean = commands?.editPrompt(id, text) ?: false
+
+  fun deleteQueued(id: String): Boolean = commands?.deletePrompt(id) ?: false
 
   fun retarget(address: String, port: Int) {
     detach()
@@ -101,16 +111,26 @@ class MonitorSession(private val application: Application) : AutoCloseable {
     val sample: WifiSample = if (connectivity == null) WifiSample { } else WifiRoute(connectivity)
     val http = MonitorHttp(pairing ?: return, WifiSocketFactory(sample))
     val created = PulseLoop(PulseSource { query -> requestPulse(http.pulse, url, query) })
-    val engine = SyncEngine(database, http.reads, url, "$address:$port", token)
+    val endpoint = "$address:$port"
+    val engine = SyncEngine(database, http.reads, url, endpoint, token)
+    val sender = CommandSender(database, http.commands, url, endpoint, token)
+    sender.noteLink(false)
     created.useToken(token)
     loop = created
     sync = engine
+    commands = sender
     paired = true
     val scope = CoroutineScope(generation + Dispatchers.IO)
-    scope.launch { created.state.collect { linkState.value = it } }
+    scope.launch {
+      created.state.collect { state ->
+        linkState.value = state
+        sender.noteLink(state is LinkState.Connected)
+      }
+    }
     scope.launch {
       created.pulses.collect { message ->
         engine.onPulse(message.json)
+        sender.onPulse(message.json)
         pulseState.value = message.json
         seenState.value = message.at
       }
@@ -125,6 +145,7 @@ class MonitorSession(private val application: Application) : AutoCloseable {
     loop = null
     sync?.close()
     sync = null
+    commands = null
     paired = false
   }
 }

@@ -14,6 +14,7 @@ import computing.michell.monitor.data.MonitorDao
 import computing.michell.monitor.data.OutboxPending
 import computing.michell.monitor.data.OutboxRow
 import computing.michell.monitor.data.OutboxSending
+import computing.michell.monitor.data.OutboxSent
 import computing.michell.monitor.data.PlanCacheRow
 import computing.michell.monitor.data.TurnRow
 import computing.michell.monitor.net.JsonValue
@@ -31,8 +32,11 @@ import computing.michell.monitor.ui.model.ApprovalNotice
 import computing.michell.monitor.ui.model.ConversationChoice
 import computing.michell.monitor.ui.model.LinkPhase
 import computing.michell.monitor.ui.model.MonitorLink
+import computing.michell.monitor.ui.model.ConversationRecord
 import computing.michell.monitor.ui.model.MonitorUi
 import computing.michell.monitor.ui.model.OfflineBanner
+import computing.michell.monitor.ui.model.PendingPromptMark
+import computing.michell.monitor.ui.model.StoredPlan
 import computing.michell.monitor.ui.model.PhaseWaiting
 import computing.michell.monitor.ui.model.PlanChoice
 import computing.michell.monitor.ui.model.PlanRow
@@ -108,36 +112,43 @@ fun projectMonitor(
   seenAtMs: Long,
   paired: Boolean,
   previous: MonitorUi = MonitorUi(),
-  @Suppress("UNUSED_PARAMETER") nowMs: Long = seenAtMs
+  @Suppress("UNUSED_PARAMETER") nowMs: Long = seenAtMs,
+  reviewedId: String = ""
 ): MonitorUi {
   val kind = monitorLinkOf(link, paired)
   val root = if (pulseJson.isEmpty()) null else parseJson(pulseJson)
   val status = pulseStatus(root)
   val pulse = if (pulseJson.isEmpty()) null else parsePulse(pulseJson)
   val conversations = dao.conversations()
-  val conversationId = pulse?.conversationId?.ifEmpty { null }
-    ?: conversations.firstOrNull { it.current }?.id
-    ?: conversations.firstOrNull()?.id
-    ?: ""
+  val conversationId = shownConversationId(conversations, pulse?.conversationId, kind, reviewedId)
   val conversation = conversations.firstOrNull { it.id == conversationId }
   val turns = if (conversationId.isEmpty()) emptyList() else dao.turns(conversationId)
   val liveId = pulse?.liveTurnId
   val images = dao.images()
-  val plans = dao.plans()
+  val host = conversation?.host.orEmpty()
+  val plans = dao.plans().filter { row -> host.isEmpty() || row.host == host }
   val planPath = pulse?.planPath?.ifEmpty { null } ?: plans.firstOrNull()?.path.orEmpty()
   val plan = plans.firstOrNull { it.path == planPath } ?: plans.firstOrNull()
   val planRows = planRowsOf(plan?.rowsJson.orEmpty())
   val planItem = root?.field("plan")?.text("item").orEmpty()
   val selectedPlan = planRows.indexOfFirst { row -> row.title == planItem || row.index.toString() == planItem }
-  val pending = pendingSend(dao.outbox())
+  val storedTurns = turns.filter { it.id != liveId }.map { row -> wireTurn(row, dao.items(row.id), images, false) }
+  val live = liveTurn(turns.firstOrNull { it.id == liveId }, liveId, pulse?.liveTurnIndex ?: 0, status.mode, dao, images)
+  val queued = queuedPrompts(dao.outbox())
+  val continuing = previous.pendingPrompts.isNotEmpty() || previous.pendingPrompt.isNotEmpty()
+  val baseline = queueBaseline(queued.isNotEmpty(), continuing, previous.promptBaseline, live, storedTurns)
+  val seenCommands = turns.map { it.clientCommandId }.filter { it.isNotEmpty() }.toSet()
+  val marks = pendingPromptMarks(queued, seenCommands, storedTurns, live, baseline)
+  val waiting = waitingPromptBanner(marks.size)
   val notice = approvalOf(root)
   val hostEpoch = pulse?.epoch ?: previous.hostEpoch
   val hostGeneration = if (hostEpoch.isNotEmpty() && hostEpoch != previous.hostEpoch) previous.hostGeneration + 1 else previous.hostGeneration
   val runningPlan = status.planRunning || root?.field("plan")?.bool("running") == true
-  return previous.copy(
+  val offline = paired && (kind == MonitorLink.Stopped || kind == MonitorLink.Retrying)
+  val projected = previous.copy(
     view = wireView(status, plan, planPath),
-    turns = turns.filter { it.id != liveId }.map { row -> wireTurn(row, dao.items(row.id), images, false) },
-    live = liveTurn(turns.firstOrNull { it.id == liveId }, liveId, pulse?.liveTurnIndex ?: 0, status.mode, dao, images),
+    turns = storedTurns,
+    live = live,
     history = emptyMap(),
     planPath = plan?.path ?: planPath,
     planTitle = plan?.title.orEmpty(),
@@ -151,15 +162,19 @@ fun projectMonitor(
     conversationCurrent = conversationId,
     approval = notice,
     approvalOpen = notice != null,
-    banner = status.errorText,
+    banner = waiting.ifEmpty { if (kind == MonitorLink.Connected) status.errorText else "" },
     disconnected = kind != MonitorLink.Connected,
     imageReasons = images.filter { it.localPath.isEmpty() }.associate { it.id to "missing" },
     reachedLive = kind == MonitorLink.Connected,
-    pendingPrompt = pending?.text.orEmpty(),
-    pendingKind = if (pending == null) "" else "user",
-    pendingCommandId = pending?.id.orEmpty(),
+    pendingPrompt = marks.firstOrNull()?.text.orEmpty(),
+    pendingKind = if (marks.isEmpty()) "" else "user",
+    pendingCommandId = marks.firstOrNull()?.id.orEmpty(),
+    pendingPrompts = marks,
+    pendingEpoch = if (marks.map { it.id } == previous.pendingPrompts.map { it.id }) previous.pendingEpoch else previous.pendingEpoch + 1,
+    promptBaseline = if (marks.isEmpty()) emptySet() else baseline,
     activityStartedMs = activityStartMs(status.activitySince, status.serverTime, seenAtMs),
     statusBusy = status.present && status.busy,
+    sendWhileOffline = offline,
     reconnectable = kind == MonitorLink.Connected || kind == MonitorLink.Retrying,
     linkBanner = linkBannerOf(kind),
     planBody = plan?.documentText.orEmpty(),
@@ -172,14 +187,50 @@ fun projectMonitor(
     generation = previous.generation + 1,
     linkKind = kind
   )
+  val storedPlan = StoredPlan(projected.planPath, projected.planTitle, projected.planRows, projected.selectedPlan, projected.planBody)
+  return withCachedPlan(projected, storedPlan)
+}
+
+/**
+ * Opens a stored conversation without a socket. Room is the only source.
+ * The chip says Offline. Send stays available only when a paired link can queue.
+ */
+fun openCachedConversation(dao: MonitorDao, row: ConversationRecord, previous: MonitorUi = MonitorUi()): MonitorUi {
+  val seeded = projectMonitor(dao, "", LinkState.Stopped, row.updatedAt, false, previous, reviewedId = row.id)
+  val document = offlineDocument(seeded).copy(planBody = seeded.planBody)
+  val browsed = applyOfflineCache(previous, document, false)
+  return withCachedPlan(
+    browsed.copy(
+      conversationId = row.id,
+      projectRoot = row.projectRoot,
+      conversationTitle = row.title.ifEmpty { seeded.conversationTitle },
+      hostEpoch = row.streamId.ifEmpty { seeded.hostEpoch },
+      hostCursor = if (row.seq > 0L) row.seq else seeded.hostCursor,
+      lastSyncMs = row.updatedAt,
+      planBody = seeded.planBody,
+      disconnected = true,
+      reachedLive = false,
+      reviewingOffline = false,
+      sendWhileOffline = seeded.sendWhileOffline,
+      banner = seeded.banner,
+      pendingPrompt = seeded.pendingPrompt,
+      pendingKind = seeded.pendingKind,
+      pendingCommandId = seeded.pendingCommandId,
+      pendingPrompts = seeded.pendingPrompts,
+      pendingEpoch = seeded.pendingEpoch,
+      promptBaseline = seeded.promptBaseline,
+      linkKind = MonitorLink.Stopped,
+      linkBanner = OfflineBanner,
+      view = seeded.view
+    ),
+    StoredPlan(seeded.planPath, seeded.planTitle, seeded.planRows, seeded.selectedPlan, seeded.planBody)
+  )
 }
 
 private fun activityClock(startedMs: Long, nowMs: Long): String {
   if (startedMs <= 0L || nowMs < startedMs) return ""
   return " ${formatActivityClock(nowMs - startedMs)}"
 }
-
-private data class PendingPrompt(val id: String, val text: String)
 
 private data class PulseStatus(
   val present: Boolean = false,
@@ -387,9 +438,26 @@ private fun approvalOf(root: JsonValue?): ApprovalNotice? {
   )
 }
 
-private fun pendingSend(rows: List<OutboxRow>): PendingPrompt? {
-  val row = rows.firstOrNull { it.type == "send" && (it.state == OutboxPending || it.state == OutboxSending) } ?: return null
-  val text = parseJson(row.argsJson)?.text("text").orEmpty()
-  if (text.isEmpty()) return null
-  return PendingPrompt(row.commandId, text)
+private fun shownConversationId(
+  conversations: List<computing.michell.monitor.data.ConversationRow>,
+  pulseId: String?,
+  kind: MonitorLink,
+  reviewedId: String
+): String {
+  val reviewed = reviewedId.takeIf { id -> id.isNotEmpty() && conversations.any { it.id == id } }
+  if (reviewed != null && kind != MonitorLink.Connected) return reviewed
+  val live = pulseId?.takeIf { it.isNotEmpty() }
+  if (live != null) return live
+  return conversations.firstOrNull { it.current }?.id ?: conversations.firstOrNull()?.id ?: reviewed.orEmpty()
+}
+
+private fun queuedPrompts(rows: List<OutboxRow>): List<PendingPromptMark> {
+  return rows.mapNotNull { row ->
+    if (row.type != "send" && row.type != "run_task") return@mapNotNull null
+    if (row.state != OutboxPending && row.state != OutboxSending && row.state != OutboxSent) return@mapNotNull null
+    val parsed = parseJson(row.argsJson)
+    val text = parsed?.text("text").orEmpty().ifEmpty { parsed?.text("note").orEmpty() }
+    if (text.isEmpty()) return@mapNotNull null
+    PendingPromptMark(row.commandId, text, row.state == OutboxPending)
+  }
 }
