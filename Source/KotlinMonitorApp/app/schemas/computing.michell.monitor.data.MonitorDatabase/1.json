@@ -2,41 +2,53 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "2146be81393875e47456570594618876",
+    "identityHash": "fcd9019e8bfcea37163c0c0450514c26",
     "entities": [
       {
         "tableName": "host",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `fingerprint` TEXT NOT NULL, `name` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`endpoint` TEXT NOT NULL, `pin` TEXT NOT NULL, `tokenRef` TEXT NOT NULL, `lastEpoch` TEXT NOT NULL, `lastRev` INTEGER NOT NULL, PRIMARY KEY(`endpoint`))",
         "fields": [
           {
-            "fieldPath": "id",
-            "columnName": "id",
+            "fieldPath": "endpoint",
+            "columnName": "endpoint",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "fingerprint",
-            "columnName": "fingerprint",
+            "fieldPath": "pin",
+            "columnName": "pin",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "name",
-            "columnName": "name",
+            "fieldPath": "tokenRef",
+            "columnName": "tokenRef",
             "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastEpoch",
+            "columnName": "lastEpoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastRev",
+            "columnName": "lastRev",
+            "affinity": "INTEGER",
             "notNull": true
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "id"
+            "endpoint"
           ]
         }
       },
       {
         "tableName": "conversation",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `host` TEXT NOT NULL, `projectRoot` TEXT NOT NULL, `title` TEXT NOT NULL, `streamId` TEXT NOT NULL, `seq` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `pinned` INTEGER NOT NULL, PRIMARY KEY(`host`, `id`), FOREIGN KEY(`host`) REFERENCES `host`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `host` TEXT NOT NULL, `title` TEXT NOT NULL, `etag` TEXT NOT NULL, `turnCount` INTEGER NOT NULL, `current` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`host`) REFERENCES `host`(`endpoint`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -51,26 +63,26 @@
             "notNull": true
           },
           {
-            "fieldPath": "projectRoot",
-            "columnName": "projectRoot",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
             "fieldPath": "title",
             "columnName": "title",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "streamId",
-            "columnName": "streamId",
+            "fieldPath": "etag",
+            "columnName": "etag",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "seq",
-            "columnName": "seq",
+            "fieldPath": "turnCount",
+            "columnName": "turnCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "current",
+            "columnName": "current",
             "affinity": "INTEGER",
             "notNull": true
           },
@@ -79,18 +91,11 @@
             "columnName": "updatedAt",
             "affinity": "INTEGER",
             "notNull": true
-          },
-          {
-            "fieldPath": "pinned",
-            "columnName": "pinned",
-            "affinity": "INTEGER",
-            "notNull": true
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "host",
             "id"
           ]
         },
@@ -123,24 +128,130 @@
               "host"
             ],
             "referencedColumns": [
-              "id"
+              "endpoint"
             ]
           }
         ]
       },
       {
         "tableName": "turn",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`host` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `turnId` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `mode` TEXT NOT NULL, `prompt` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `outcome` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `errorText` TEXT NOT NULL, PRIMARY KEY(`host`, `conversationId`, `turnId`), FOREIGN KEY(`host`, `conversationId`) REFERENCES `conversation`(`host`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `turnIndex` INTEGER NOT NULL, `etag` TEXT NOT NULL, `prompt` TEXT NOT NULL, `mode` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `outcome` TEXT NOT NULL, `duration` INTEGER NOT NULL, `errorText` TEXT NOT NULL, `clientCommandId` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `conversation`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
-            "fieldPath": "host",
-            "columnName": "host",
+            "fieldPath": "id",
+            "columnName": "id",
             "affinity": "TEXT",
             "notNull": true
           },
           {
             "fieldPath": "conversationId",
             "columnName": "conversationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "index",
+            "columnName": "turnIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "etag",
+            "columnName": "etag",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prompt",
+            "columnName": "prompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outcome",
+            "columnName": "outcome",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "duration",
+            "columnName": "duration",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorText",
+            "columnName": "errorText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clientCommandId",
+            "columnName": "clientCommandId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_turn_conversationId",
+            "unique": false,
+            "columnNames": [
+              "conversationId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_turn_conversationId` ON `${TABLE_NAME}` (`conversationId`)"
+          },
+          {
+            "name": "index_turn_conversationId_turnIndex",
+            "unique": false,
+            "columnNames": [
+              "conversationId",
+              "turnIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_turn_conversationId_turnIndex` ON `${TABLE_NAME}` (`conversationId`, `turnIndex`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "conversation",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversationId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "item",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `turnId` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `kind` TEXT NOT NULL, `state` TEXT NOT NULL, `title` TEXT NOT NULL, `toolName` TEXT NOT NULL, `body` TEXT NOT NULL, `revision` INTEGER NOT NULL, `epoch` TEXT NOT NULL, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`turnId`) REFERENCES `turn`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -157,115 +268,14 @@
             "notNull": true
           },
           {
-            "fieldPath": "mode",
-            "columnName": "mode",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "prompt",
-            "columnName": "prompt",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "createdAt",
-            "columnName": "createdAt",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "outcome",
-            "columnName": "outcome",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "durationMs",
-            "columnName": "durationMs",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "errorText",
-            "columnName": "errorText",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "host",
-            "conversationId",
-            "turnId"
-          ]
-        },
-        "indices": [
-          {
-            "name": "index_turn_host_conversationId",
-            "unique": false,
-            "columnNames": [
-              "host",
-              "conversationId"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_turn_host_conversationId` ON `${TABLE_NAME}` (`host`, `conversationId`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "conversation",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "host",
-              "conversationId"
-            ],
-            "referencedColumns": [
-              "host",
-              "id"
-            ]
-          }
-        ]
-      },
-      {
-        "tableName": "block",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`host` TEXT NOT NULL, `conversation` TEXT NOT NULL, `turn` TEXT NOT NULL, `blockId` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `kind` TEXT NOT NULL, `title` TEXT NOT NULL, `body` TEXT NOT NULL, `state` TEXT NOT NULL, PRIMARY KEY(`host`, `conversation`, `blockId`), FOREIGN KEY(`host`, `conversation`, `turn`) REFERENCES `turn`(`host`, `conversationId`, `turnId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "host",
-            "columnName": "host",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "conversation",
-            "columnName": "conversation",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "turn",
-            "columnName": "turn",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "blockId",
-            "columnName": "blockId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "ordinal",
-            "columnName": "ordinal",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
             "fieldPath": "kind",
             "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -276,47 +286,61 @@
             "notNull": true
           },
           {
+            "fieldPath": "toolName",
+            "columnName": "toolName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
             "fieldPath": "body",
             "columnName": "body",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "state",
-            "columnName": "state",
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epoch",
+            "columnName": "epoch",
             "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "byteLength",
+            "columnName": "byteLength",
+            "affinity": "INTEGER",
             "notNull": true
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "host",
-            "conversation",
-            "blockId"
+            "id"
           ]
         },
         "indices": [
           {
-            "name": "index_block_host_conversation",
+            "name": "index_item_turnId",
             "unique": false,
             "columnNames": [
-              "host",
-              "conversation"
+              "turnId"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_block_host_conversation` ON `${TABLE_NAME}` (`host`, `conversation`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_item_turnId` ON `${TABLE_NAME}` (`turnId`)"
           },
           {
-            "name": "index_block_host_conversation_turn",
+            "name": "index_item_turnId_ordinal",
             "unique": false,
             "columnNames": [
-              "host",
-              "conversation",
-              "turn"
+              "turnId",
+              "ordinal"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_block_host_conversation_turn` ON `${TABLE_NAME}` (`host`, `conversation`, `turn`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_item_turnId_ordinal` ON `${TABLE_NAME}` (`turnId`, `ordinal`)"
           }
         ],
         "foreignKeys": [
@@ -325,25 +349,190 @@
             "onDelete": "CASCADE",
             "onUpdate": "NO ACTION",
             "columns": [
-              "host",
-              "conversation",
-              "turn"
+              "turnId"
             ],
             "referencedColumns": [
-              "host",
-              "conversationId",
-              "turnId"
+              "id"
             ]
           }
         ]
       },
       {
         "tableName": "image",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `host` TEXT NOT NULL, `conversation` TEXT NOT NULL, `filePath` TEXT NOT NULL, `bytes` INTEGER NOT NULL, `mime` TEXT NOT NULL, `size` INTEGER NOT NULL, PRIMARY KEY(`host`, `conversation`, `id`), FOREIGN KEY(`host`, `conversation`) REFERENCES `conversation`(`host`, `id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `turnId` TEXT NOT NULL, `itemId` TEXT NOT NULL, `name` TEXT NOT NULL, `size` INTEGER NOT NULL, `localPath` TEXT NOT NULL, `modifiedAt` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`turnId`) REFERENCES `turn`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
             "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "turnId",
+            "columnName": "turnId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localPath",
+            "columnName": "localPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modifiedAt",
+            "columnName": "modifiedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_image_turnId",
+            "unique": false,
+            "columnNames": [
+              "turnId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_turnId` ON `${TABLE_NAME}` (`turnId`)"
+          },
+          {
+            "name": "index_image_itemId",
+            "unique": false,
+            "columnNames": [
+              "itemId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_itemId` ON `${TABLE_NAME}` (`itemId`)"
+          },
+          {
+            "name": "index_image_modifiedAt",
+            "unique": false,
+            "columnNames": [
+              "modifiedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_modifiedAt` ON `${TABLE_NAME}` (`modifiedAt`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "turn",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "turnId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "plan",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`host` TEXT NOT NULL, `path` TEXT NOT NULL, `title` TEXT NOT NULL, `etag` TEXT NOT NULL, `rowsJson` TEXT NOT NULL, `documentText` TEXT NOT NULL, PRIMARY KEY(`host`, `path`), FOREIGN KEY(`host`) REFERENCES `host`(`endpoint`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "host",
+            "columnName": "host",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "path",
+            "columnName": "path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "etag",
+            "columnName": "etag",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowsJson",
+            "columnName": "rowsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentText",
+            "columnName": "documentText",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "host",
+            "path"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_plan_host",
+            "unique": false,
+            "columnNames": [
+              "host"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_plan_host` ON `${TABLE_NAME}` (`host`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "host",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "host"
+            ],
+            "referencedColumns": [
+              "endpoint"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`commandId` TEXT NOT NULL, `host` TEXT NOT NULL, `type` TEXT NOT NULL, `argsJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `state` TEXT NOT NULL, `lastError` TEXT NOT NULL, PRIMARY KEY(`commandId`), FOREIGN KEY(`host`) REFERENCES `host`(`endpoint`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "commandId",
+            "columnName": "commandId",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -354,92 +543,21 @@
             "notNull": true
           },
           {
-            "fieldPath": "conversation",
-            "columnName": "conversation",
+            "fieldPath": "type",
+            "columnName": "type",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "filePath",
-            "columnName": "filePath",
+            "fieldPath": "argsJson",
+            "columnName": "argsJson",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "bytes",
-            "columnName": "bytes",
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
             "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "mime",
-            "columnName": "mime",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "size",
-            "columnName": "size",
-            "affinity": "INTEGER",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "host",
-            "conversation",
-            "id"
-          ]
-        },
-        "indices": [
-          {
-            "name": "index_image_host_conversation",
-            "unique": false,
-            "columnNames": [
-              "host",
-              "conversation"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_image_host_conversation` ON `${TABLE_NAME}` (`host`, `conversation`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "conversation",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "host",
-              "conversation"
-            ],
-            "referencedColumns": [
-              "host",
-              "id"
-            ]
-          }
-        ]
-      },
-      {
-        "tableName": "outbox",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`commandId` TEXT NOT NULL, `kind` TEXT NOT NULL, `json` TEXT NOT NULL, `state` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`commandId`))",
-        "fields": [
-          {
-            "fieldPath": "commandId",
-            "columnName": "commandId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "kind",
-            "columnName": "kind",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "json",
-            "columnName": "json",
-            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -449,9 +567,9 @@
             "notNull": true
           },
           {
-            "fieldPath": "createdAt",
-            "columnName": "createdAt",
-            "affinity": "INTEGER",
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT",
             "notNull": true
           }
         ],
@@ -460,12 +578,45 @@
           "columnNames": [
             "commandId"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_outbox_host",
+            "unique": false,
+            "columnNames": [
+              "host"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_outbox_host` ON `${TABLE_NAME}` (`host`)"
+          },
+          {
+            "name": "index_outbox_createdAt",
+            "unique": false,
+            "columnNames": [
+              "createdAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_outbox_createdAt` ON `${TABLE_NAME}` (`createdAt`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "host",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "host"
+            ],
+            "referencedColumns": [
+              "endpoint"
+            ]
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2146be81393875e47456570594618876')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'fcd9019e8bfcea37163c0c0450514c26')"
     ]
   }
 }
