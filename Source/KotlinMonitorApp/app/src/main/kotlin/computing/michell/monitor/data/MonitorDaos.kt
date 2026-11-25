@@ -99,6 +99,12 @@ abstract class MonitorDao {
   @Query("SELECT * FROM outbox ORDER BY createdAt, commandId")
   abstract fun outbox(): List<OutboxRow>
 
+  @Query("SELECT * FROM outbox WHERE commandId = :id")
+  abstract fun outboxItem(id: String): OutboxRow?
+
+  @Query("DELETE FROM outbox WHERE commandId = :id")
+  abstract fun deleteOutbox(id: String)
+
   @Query("DELETE FROM conversation WHERE id IN (:ids)")
   abstract fun deleteConversations(ids: List<String>)
 

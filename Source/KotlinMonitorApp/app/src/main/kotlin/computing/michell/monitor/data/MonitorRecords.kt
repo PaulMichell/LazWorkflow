@@ -140,7 +140,9 @@ data class PlanCacheRow(
 )
 
 const val OutboxPending = "pending"
+const val OutboxSending = "sending"
 const val OutboxSent = "sent"
+const val OutboxFailed = "failed"
 
 @Entity(
   tableName = "outbox",
