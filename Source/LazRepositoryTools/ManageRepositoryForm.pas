@@ -221,6 +221,8 @@ Type
     FHistoryPartial: Boolean;
     FRefreshRefs: Boolean;
     FDetailLoading: Boolean;
+    FDetailJobId: Integer;
+    FDetailStartedTick: QWord;
     FRemoteOpBusy: Boolean;
     FJobBusy: Boolean;
     FRepoGeneration: QWord;
@@ -233,6 +235,8 @@ Type
     FStatusGen: Integer;
     FStatusJobPending: Boolean;
     FProbePending: Boolean;
+    FProbeJobId: Integer;
+    FProbeStartedTick: QWord;
     FCachedGitDir, FRefsDigest: String;
     FLastPorcelain: String;
     FLastHeadAge: LongInt;
@@ -275,6 +279,9 @@ Type
     Function SubmitGitJob(Job: TGitJob): Boolean;
     Procedure SubmitChangesStatus;
     Procedure ScheduleVisibleDetails;
+    Procedure ArmDetailTimer(DelayMs: Integer);
+    Procedure ReleaseFinishedWatch(Job: TGitJob);
+    Function WatchIsStale(StartedTick: QWord): Boolean;
     Procedure StartDetailLoadIfNeeded;
     Procedure StopIndexLoad;
     Procedure StopDetailLoad;
@@ -368,6 +375,8 @@ Begin
   FHistoryPartial := False;
   FRefreshRefs := False;
   FDetailLoading := False;
+  FDetailJobId := 0;
+  FDetailStartedTick := 0;
   FRemoteOpBusy := False;
   FJobBusy := False;
   FRepoGeneration := 0;
@@ -377,6 +386,8 @@ Begin
   FStatusGen := 0;
   FStatusJobPending := False;
   FProbePending := False;
+  FProbeJobId := 0;
+  FProbeStartedTick := 0;
   FLastPorcelain := '';
   FLastHeadAge := -1;
   FLastIndexAge := -1;
@@ -709,6 +720,8 @@ Procedure TManageRepositoryForm.StopDetailLoad;
 Begin
   Inc(FDetailGen);
   FDetailLoading := False;
+  FDetailJobId := 0;
+  FDetailStartedTick := 0;
 End;
 
 Procedure TManageRepositoryForm.SetJobUiBusy(IsBusy: Boolean; Const StatusCaption: String);
@@ -770,6 +783,44 @@ End;
 
 Function StatusDigestIsClean(Const Digest: String): Boolean; Forward;
 
+{ A watch that has not heard back cannot keep the window frozen. Eight seconds is
+  longer than a local detail or probe job, and shorter than a stuck Git process. }
+Function TManageRepositoryForm.WatchIsStale(StartedTick: QWord): Boolean;
+Begin
+  Result := (StartedTick <> 0) And (GetTickCount64 - StartedTick >= 8000);
+End;
+
+Procedure TManageRepositoryForm.ArmDetailTimer(DelayMs: Integer);
+Begin
+  If (csDestroying in ComponentState) Or Not Assigned(FDetailTimer) Then
+    Exit;
+  If DelayMs < 40 Then
+    DelayMs := 40;
+  FDetailTimer.Enabled := False;
+  FDetailTimer.Interval := DelayMs;
+  FDetailTimer.Enabled := True;
+End;
+
+{ The job that set a watch flag must clear it even when its payload is ignored.
+  A later job owns the flag only after it has stored a new id. }
+Procedure TManageRepositoryForm.ReleaseFinishedWatch(Job: TGitJob);
+Begin
+  If Not Assigned(Job) Or (Job.Id = 0) Then
+    Exit;
+  If (Job.Kind = gjkFetchDetails) And (Job.Id = FDetailJobId) Then
+    Begin
+      FDetailLoading := False;
+      FDetailJobId := 0;
+      FDetailStartedTick := 0;
+    End;
+  If (Job.Kind = gjkRepoProbe) And (Job.Id = FProbeJobId) Then
+    Begin
+      FProbePending := False;
+      FProbeJobId := 0;
+      FProbeStartedTick := 0;
+    End;
+End;
+
 Procedure TManageRepositoryForm.GitJobFinished(Job: TGitJob);
 Var
   Msg: String;
@@ -778,6 +829,7 @@ Var
 Begin
   If (csDestroying in ComponentState) Or Not Assigned(Job) Then
     Exit;
+  ReleaseFinishedWatch(Job);
 
   { Follow-up intent belongs to the completed job, even if this window now
     displays another repository. Submit directly to preserve its context. }
@@ -795,7 +847,12 @@ Begin
         WorkflowLogger.Warning('ManageRepository', 'Could not queue push for ' + Job.RepoPath);
     End;
   If Not Job.MatchesRepository(FRepoPath, FRepoGeneration) Then
-    Exit;
+    Begin
+      { A rebind already owns the next fetch. If this was the only watch, ask again. }
+      If (Job.Kind = gjkFetchDetails) And (Not FDetailLoading) Then
+        ScheduleVisibleDetails;
+      Exit;
+    End;
 
   Case Job.Kind Of
     gjkFetch, gjkPull, gjkPush:
@@ -1044,10 +1101,16 @@ Begin
     gjkFetchDetails:
       Begin
         If (Job.Tag <> FDetailGen) Or (CompareFilenames(Job.RepoPath, FRepoPath) <> 0) Then
-          Exit;
+          Begin
+            If Not FDetailLoading Then
+              ScheduleVisibleDetails;
+            Exit;
+          End;
         If Job.Cancelled Then
           Begin
             FDetailLoading := False;
+            FDetailJobId := 0;
+            ScheduleVisibleDetails;
             Exit;
           End;
         ApplyDetailsResult(Job.Ok, Job.DetailsText);
@@ -1273,6 +1336,9 @@ Begin
       If Assigned(GraphPaintBox) Then
         GraphPaintBox.Invalidate;
       UpdateStatus;
+      { The graph may already be showing placeholders. A failed walk must not leave them there. }
+      If Assigned(FModel) And (FModel.Count > 0) Then
+        ScheduleVisibleDetails;
       Result := True;
       Exit;
     End;
@@ -1447,10 +1513,15 @@ Procedure TManageRepositoryForm.ScheduleVisibleDetails;
 Begin
   If (csDestroying In ComponentState) Or Not Assigned(FHistory) Or
     Not Assigned(FModel) Then Exit;
-  If FIndexing Or (FRepoPath = '') Or (FModel.Count = 0) Then
+  If (FRepoPath = '') Or (FModel.Count = 0) Then
     Exit;
-  FDetailTimer.Enabled := False;
-  FDetailTimer.Enabled := True;
+  { Indexing used to swallow this request. The timer waits and tries again. }
+  If FIndexing Then
+    Begin
+      ArmDetailTimer(250);
+      Exit;
+    End;
+  ArmDetailTimer(40);
 End;
 
 Procedure TManageRepositoryForm.DetailTimerTimer(Sender: TObject);
@@ -1475,8 +1546,25 @@ Var
   Missing: Integer;
   Job: TGitJob;
 Begin
-  If FDetailLoading Or FIndexing Or (FRepoPath = '') Then
+  If (FRepoPath = '') Or Not Assigned(FModel) Or (FModel.Count = 0) Then
     Exit;
+  If FIndexing Then
+    Begin
+      ArmDetailTimer(250);
+      Exit;
+    End;
+  If FDetailLoading Then
+    Begin
+      If Not WatchIsStale(FDetailStartedTick) Then
+        Begin
+          ArmDetailTimer(250);
+          Exit;
+        End;
+      WorkflowLogger.Warning('ManageRepository', 'Commit details did not arrive; asking again');
+      FDetailLoading := False;
+      FDetailJobId := 0;
+      FDetailStartedTick := 0;
+    End;
 
   FHistory.GetVisibleRange(First, Last);
   First := Max(0, First - GitGraphPrefetchRows);
@@ -1493,6 +1581,7 @@ Begin
     End;
 
   FDetailLoading := True;
+  FDetailStartedTick := GetTickCount64;
   Inc(FDetailGen);
   Job := TGitJob.Create(gjkFetchDetails);
   Job.RepoPath := FRepoPath;
@@ -1500,7 +1589,14 @@ Begin
   Job.Tag := FDetailGen;
   Job.TakePaths(Shas);
   If Not SubmitGitJob(Job) Then
-    FDetailLoading := False;
+    Begin
+      FDetailLoading := False;
+      FDetailJobId := 0;
+      FDetailStartedTick := 0;
+      ArmDetailTimer(250);
+    End
+  Else
+    FDetailJobId := Job.Id;
 End;
 
 Procedure TManageRepositoryForm.GraphHostResize(Sender: TObject);
@@ -1699,6 +1795,10 @@ Begin
     Begin
       If Assigned(DiffView) Then
         DiffView.RefreshOverviewGutter;
+      { A paint queued while this page was hidden can be dropped. Ask again. }
+      If Assigned(GraphPaintBox) Then
+        GraphPaintBox.Invalidate;
+      ScheduleVisibleDetails;
     End
   Else If Pages.ActivePage = FilesTabSheet Then
     Begin
@@ -2782,8 +2882,33 @@ End;
 Procedure TManageRepositoryForm.AutoRefreshTimerTimer(Sender: TObject);
 Begin
   Try
-    If (csDestroying in ComponentState) Or FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Or
-       Not Visible Then
+    If (csDestroying in ComponentState) Or Not Visible Then
+      Exit;
+    { A finished index worker that never published leaves the graph on placeholders
+      and blocks every later refresh. }
+    If FIndexing And Assigned(FHistoryIndex) And (Not FHistoryIndex.Running) Then
+      Begin
+        WorkflowLogger.Warning('ManageRepository', 'History index stopped before it published');
+        FIndexing := False;
+        StartIndexLoad;
+        Exit;
+      End;
+    If FDetailLoading And WatchIsStale(FDetailStartedTick) Then
+      Begin
+        WorkflowLogger.Warning('ManageRepository', 'Cleared a stale commit-detail watch');
+        FDetailLoading := False;
+        FDetailJobId := 0;
+        FDetailStartedTick := 0;
+        ScheduleVisibleDetails;
+      End;
+    If FProbePending And WatchIsStale(FProbeStartedTick) Then
+      Begin
+        WorkflowLogger.Warning('ManageRepository', 'Cleared a stale repository probe');
+        FProbePending := False;
+        FProbeJobId := 0;
+        FProbeStartedTick := 0;
+      End;
+    If FIndexing Or FDetailLoading Or FRemoteOpBusy Or FJobBusy Then
       Exit;
     If GitDirStampChanged Then
       QuietRefreshIfChanged
@@ -2809,8 +2934,15 @@ Begin
   Job.RepoPath := FRepoPath;
   Job.Quiet := True;
   FProbePending := True;
+  FProbeStartedTick := GetTickCount64;
   If Not SubmitGitJob(Job) Then
-    FProbePending := False;
+    Begin
+      FProbePending := False;
+      FProbeJobId := 0;
+      FProbeStartedTick := 0;
+    End
+  Else
+    FProbeJobId := Job.Id;
 End;
 
 Procedure TManageRepositoryForm.UpdateStatus;

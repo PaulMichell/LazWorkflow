@@ -51,6 +51,8 @@ Type
     { Cancels any walk already in progress, then starts one for RepoPath. }
     Procedure Start(Const RepoPath: String; Generation: Integer);
     Procedure Stop;
+    { False after Stop, or when the worker has exited before publishing. }
+    Function Running: Boolean;
     Property OnAdopt: TGitHistoryAdopt Read FOnAdopt Write FOnAdopt;
   End;
 
@@ -490,6 +492,11 @@ Begin
   If (LiveKey <> '') And (LiveKey = CachedKey) And PublishCachedFull(LiveKey) Then
     Exit;
   IndexFromGit(LiveKey, CacheShown And (LiveKey <> '') And (LiveKey <> CachedKey));
+End;
+
+Function TGitHistoryIndex.Running: Boolean;
+Begin
+  Result := Assigned(FThread) And (Not FThread.Finished) And (Not Stopping);
 End;
 
 Procedure TGitHistoryIndex.Start(Const RepoPath: String; Generation: Integer);

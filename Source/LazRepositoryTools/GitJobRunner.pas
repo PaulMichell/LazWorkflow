@@ -4,7 +4,7 @@ Unit GitJobRunner;
 
   Size note: exceeds the 1000 line preference. The queue, worker, and one
   ExecuteJob case for every Git operation are one cohesive runner.
-  Reviewed 2026-10: no hidden foundation or sibling material identified. }
+  Reviewed 2026-11: recovery notifies abandoned jobs. Still one runner, no split. }
 
 {$IFDEF FPC}
   {$MODE ObjFPC}
@@ -1065,10 +1065,29 @@ Begin
   End;
 End;
 
+Procedure FinishAbandonedJob(Job: TGitJob);
+Begin
+  If Not Assigned(Job) Then
+    Exit;
+  Job.FCancelled := True;
+  Job.FOk := False;
+  If Job.FErrorText = '' Then
+    Job.FErrorText := 'Cancelled';
+  Try
+    If Assigned(Job.OnFinished) Then
+      Job.OnFinished(Job);
+  Except
+    On E: Exception Do
+      ReportPluginException('TGitJobRunner.RecoverStoppedWorker', E);
+  End;
+  Job.Free;
+End;
+
 Function TGitJobRunner.RecoverStoppedWorker(Out AbandonedCaption: String): Boolean;
 Var
   Abandoned: TGitJob;
   Pending: TGitJob;
+  Delivered: TFPList;
   I: Integer;
 Begin
   AbandonedCaption := '';
@@ -1085,6 +1104,7 @@ Begin
       FreeAndNil(FWorker);
     End;
   Abandoned := Nil;
+  Delivered := TFPList.Create;
   EnterLock;
   Try
     Abandoned := FCurrent;
@@ -1095,24 +1115,31 @@ Begin
     For I := 0 To FDeliverQueue.Count - 1 Do
       Begin
         Pending := TGitJob(FDeliverQueue[I]);
-        If (AbandonedCaption = '') And Assigned(Pending) Then
+        If Not Assigned(Pending) Then
+          Continue;
+        If AbandonedCaption = '' Then
           AbandonedCaption := Pending.Caption;
-        FreeAndNil(Pending);
+        Delivered.Add(Pending);
       End;
     FDeliverQueue.Clear;
   Finally
     LeaveLock;
   End;
+  { The new worker must be running before callbacks resubmit, or recovery recurses.
+    Callbacks run without the lock: Submit takes it. }
+  FWorker := TGitJobWorker.Create(Self);
+  FWorker.Start;
+  WakeWorker;
+  For I := 0 To Delivered.Count - 1 Do
+    FinishAbandonedJob(TGitJob(Delivered[I]));
+  Delivered.Free;
   If Assigned(Abandoned) Then
     Begin
       If AbandonedCaption = '' Then
         AbandonedCaption := Abandoned.Caption;
       WorkflowLogger.Error('GitJobRunner', 'Abandoned ' + Abandoned.Caption);
-      Abandoned.Free;
+      FinishAbandonedJob(Abandoned);
     End;
-  FWorker := TGitJobWorker.Create(Self);
-  FWorker.Start;
-  WakeWorker;
 End;
 
 Function GitJobs: TGitJobRunner;
