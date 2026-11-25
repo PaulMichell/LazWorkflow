@@ -91,7 +91,7 @@ Implementation
 {$R *.lfm}
 
 Uses
-  AssistantMonitorSettings, AssistantMonitorApproval, AssistantMonitorMain, WorkflowLog;
+  AssistantMonitorSettings, AssistantMonitorApproval, AssistantMonitorMain, AssistantMonitorPair, WorkflowLog;
 
 Function IsLoopback(Const Address: String): Boolean;
 Begin
@@ -277,16 +277,18 @@ End;
 
 Procedure TAssistantMonitorForm.RefreshState;
 Var
-  Status: String;
+  Status, NoteError: String;
   Running: Boolean;
+  NoteSettings: TMonitorSettings;
 Begin
   Running := ListenerRunning;
   EnableAction.Enabled := Not Running;
   DisableAction.Enabled := Running;
   PairAction.Enabled := Running;
-  PairCodeEdit.Text := '';
   If Not RequirePairCodeCheck.Checked Then
     PairCodeEdit.Text := 'No pairing code is required. Any phone that reaches this endpoint can pair.'
+  Else If Running And (MonitorPairCodeText <> '') Then
+    PairCodeEdit.Text := MonitorPairCodeText
   Else
     PairCodeEdit.Text := 'Generate a pairing code, then enter it on the phone. Codes expire after two minutes.';
   RevokeAction.Enabled := SelectedClientId <> '';
@@ -297,11 +299,16 @@ Begin
   EndpointLabel.Caption := EndpointCaption;
   Status := 'Listener stopped';
   StatusMemo.Text := Status;
+  If LoadMonitorSettings(NoteSettings, NoteError) And NoteSettings.LegacyNote Then
+    StatusMemo.Text := Status + LineEnding + MonitorLegacyPairingNote;
 End;
 
 Procedure TAssistantMonitorForm.FormCreate(Sender: TObject);
+Var
+  ErrorText: String;
 Begin
   ClientIds := TStringList.Create;
+  SettleLegacyMonitorPairings(ErrorText);
   LoadFields;
   RefreshClients;
   RefreshState;
@@ -367,7 +374,7 @@ Begin
   ClientId := SelectedClientId;
   If ClientId = '' Then
     Exit;
-  If Not RevokeMonitorClient(ClientId, ErrorText) Then
+  If Not RevokeMonitorPairedClient(ClientId, ErrorText) Then
     Begin
       StatusMemo.Text := ErrorText;
       Exit;
@@ -378,13 +385,10 @@ End;
 
 Procedure TAssistantMonitorForm.RevokeAllActionExecute(Sender: TObject);
 Var
-  Settings: TMonitorSettings;
   ErrorText: String;
 Begin
-  If Not LoadMonitorSettings(Settings, ErrorText) Then
-    Exit;
-  SetLength(Settings.Clients, 0);
-  SaveMonitorSettings(Settings, ErrorText);
+  If Not RevokeAllMonitorPairedClients(ErrorText) Then
+    StatusMemo.Text := ErrorText;
   RefreshClients;
   RefreshState;
 End;
@@ -427,8 +431,22 @@ Begin
 End;
 
 Procedure TAssistantMonitorForm.PairActionExecute(Sender: TObject);
+Var
+  Code: String;
 Begin
   If Not ListenerRunning Then
     Exit;
+  If Not RequirePairCodeCheck.Checked Then
+    Begin
+      PairCodeEdit.Text := 'No pairing code is required. Any phone that reaches this endpoint can pair.';
+      Exit;
+    End;
+  If Not IssueMonitorPairCode(Code) Then
+    Begin
+      StatusMemo.Text := 'Could not generate a pairing code.';
+      Exit;
+    End;
+  PairCodeEdit.Text := Code;
+  StatusMemo.Text := 'Pairing code ready. It expires in two minutes.';
 End;
 End.

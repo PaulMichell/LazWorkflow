@@ -23,8 +23,8 @@ Type
   TMonitorClientRecord = Record
     Id: String;
     Name: String;
-    { Monitor session token. Not an OAuth access token or refresh token. }
-    Token: String;
+    { SHA-256 hex of the session token. The token itself is not stored. }
+    TokenHash: String;
     Fingerprint: String;
     PairedAt: String;
   End;
@@ -40,6 +40,8 @@ Type
     RequirePairCode: Boolean;
     { 32 lowercase hex. Stable across certificate renewal. Empty until ensured. }
     HostId: String;
+    { Set when catalogue 3 pairings were dropped. The dialog shows it once. }
+    LegacyNote: Boolean;
     Clients: TMonitorClientArray;
   End;
 
@@ -53,6 +55,9 @@ Function MonitorSettingsRevision: LongInt;
 Function SaveMonitorSettings(Const Settings: TMonitorSettings; Out ErrorText: String): Boolean;
 { Mints host_id once and keeps it in the monitor settings. }
 Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;
+{ Drops catalogue 3 clients that stored a token instead of a hash, and keeps the dialog note. }
+Function SettleLegacyMonitorPairings(Out ErrorText: String): Boolean;
+Function MonitorLegacyPairingNote: String;
 Function MonitorCertificateFile: String;
 Function MonitorKeyFile: String;
 { bind_all true returns 0.0.0.0. Otherwise one IPv4 address is required.
@@ -97,6 +102,7 @@ End;
 
 Var
   SettingsRevision: LongInt = 0;
+  LegacyPairingsDropped: Boolean = False;
 
 Function MonitorSettingsRevision: LongInt;
 Begin
@@ -171,6 +177,7 @@ Begin
   Result.RemoteApproval := False;
   Result.RequirePairCode := True;
   Result.HostId := '';
+  Result.LegacyNote := False;
   SetLength(Result.Clients, 0);
 End;
 
@@ -207,7 +214,12 @@ Begin
       Item := TJSONObject(Arr[I]);
       Clients[Kept].Id := Item.Get('id', '');
       Clients[Kept].Name := Item.Get('name', '');
-      Clients[Kept].Token := Item.Get('token', '');
+      Clients[Kept].TokenHash := Item.Get('token_hash', '');
+      If (Clients[Kept].TokenHash = '') And (Item.Get('token', '') <> '') Then
+        Begin
+          LegacyPairingsDropped := True;
+          Continue;
+        End;
       Clients[Kept].Fingerprint := Item.Get('fingerprint', '');
       Clients[Kept].PairedAt := Item.Get('paired_at', '');
       If Clients[Kept].Id = '' Then
@@ -283,6 +295,7 @@ Begin
         Exit;
       End;
     Settings.RequirePairCode := Section.Get('require_pair_code', True);
+    Settings.LegacyNote := Section.Get('legacy_note', False);
     If Assigned(Section.Find('host_id')) And (Section.Find('host_id').JSONType <> jtString) Then
       Begin
         ErrorText := 'Monitor host id must be a string.';
@@ -296,6 +309,8 @@ Begin
       End;
     If Not ReadClients(Section.Find('clients'), Settings.Clients, ErrorText) Then
       Exit;
+    If LegacyPairingsDropped Then
+      Settings.LegacyNote := True;
     Result := True;
   Finally
     Section.Free;
@@ -371,6 +386,7 @@ Begin
     Section.Add('bind_all', Settings.BindAll);
     Section.Add('remote_approval', Settings.RemoteApproval);
     Section.Add('require_pair_code', Settings.RequirePairCode);
+    Section.Add('legacy_note', Settings.LegacyNote);
     KeptHostId := Settings.HostId;
     If Not MonitorHostIdIsValid(KeptHostId) Then
       KeptHostId := StoredHostId;
@@ -383,7 +399,7 @@ Begin
         Client := TJSONObject.Create;
         Client.Add('id', Settings.Clients[I].Id);
         Client.Add('name', Settings.Clients[I].Name);
-        Client.Add('token', Settings.Clients[I].Token);
+        Client.Add('token_hash', Settings.Clients[I].TokenHash);
         Client.Add('fingerprint', Settings.Clients[I].Fingerprint);
         Client.Add('paired_at', Settings.Clients[I].PairedAt);
         Clients.Add(Client);
@@ -394,6 +410,25 @@ Begin
   Finally
     Section.Free;
   End;
+End;
+
+Function MonitorLegacyPairingNote: String;
+Begin
+  Result := 'Old pairings were cleared. Pair the phone again.';
+End;
+
+Function SettleLegacyMonitorPairings(Out ErrorText: String): Boolean;
+Var
+  Settings: TMonitorSettings;
+Begin
+  LegacyPairingsDropped := False;
+  Result := LoadMonitorSettings(Settings, ErrorText);
+  If Not Result Then
+    Exit;
+  If Not LegacyPairingsDropped Then
+    Exit;
+  Settings.LegacyNote := True;
+  Result := SaveMonitorSettings(Settings, ErrorText);
 End;
 
 Function EnsureMonitorHostId(Out HostId, ErrorText: String): Boolean;

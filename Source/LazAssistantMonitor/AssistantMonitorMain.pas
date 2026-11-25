@@ -192,6 +192,7 @@ Begin
       ErrorText := 'The monitor port is not valid.';
       Exit;
     End;
+  SettleLegacyMonitorPairings(ErrorText);
   If Assigned(ProjectAssistantConversation) Then
     SetMonitorStoreRoot(ProjectAssistantConversation.ProjectRoot);
   RegisterMonitorFormCommands;

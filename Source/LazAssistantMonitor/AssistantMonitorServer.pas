@@ -30,7 +30,7 @@ Uses
   BaseUnix, cthreads,
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
-  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands;
+  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands, AssistantMonitorPair;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -120,18 +120,10 @@ End;
 
 Function TokenAccepted(Const Token: String): Boolean;
 Var
-  Settings: TMonitorSettings;
-  ErrorText: String;
-  Index: Integer;
+  Status: Integer;
+  Body: String;
 Begin
-  Result := False;
-  If Token = '' Then
-    Exit;
-  If Not LoadMonitorSettings(Settings, ErrorText) Then
-    Exit;
-  For Index := 0 To High(Settings.Clients) Do
-    If Settings.Clients[Index].Token = Token Then
-      Exit(True);
+  Result := MonitorAuthorize(Token, Status, Body) = maAccepted;
 End;
 
 Function ReadFileBytes(Const Path: String; Out Data: TBytes; Out ErrorText: String): Boolean;
@@ -247,7 +239,8 @@ Var
   Hello: TJSONObject;
   ImageStream: TStream;
   Capabilities: TStringList;
-  PulseStatus, ReadStatus, ImageStatus, CommandStatus, CapabilityIndex: Integer;
+  PulseStatus, ReadStatus, ImageStatus, CommandStatus, CapabilityIndex, AuthStatus: Integer;
+  AuthBody: String;
 Begin
   Path := RequestPath(ARequest.URI);
   Method := UpperCase(ARequest.Method);
@@ -256,14 +249,23 @@ Begin
       WriteError(AResponse, 503, 'no_session', 'The listener is stopping.');
       Exit;
     End;
-  If (Path <> '/v4/pair') And (Not TokenAccepted(BearerToken(ARequest))) Then
+  If Path <> '/v4/pair' Then
     Begin
-      WriteError(AResponse, 401, 'auth', 'The token was not accepted.');
-      Exit;
+      MonitorAuthorize(BearerToken(ARequest), AuthStatus, AuthBody);
+      If AuthStatus <> 200 Then
+        Begin
+          AResponse.Code := AuthStatus;
+          AResponse.ContentType := 'application/json; charset=utf-8';
+          AResponse.Content := AuthBody;
+          Exit;
+        End;
     End;
   If (Path = '/v4/pair') And (Method = 'POST') Then
     Begin
-      WriteError(AResponse, 400, 'protocol', 'Pairing is not available yet.');
+      ServeMonitorPair(ARequest.Content, AuthStatus, AuthBody);
+      AResponse.Code := AuthStatus;
+      AResponse.ContentType := 'application/json; charset=utf-8';
+      AResponse.Content := AuthBody;
       Exit;
     End;
   If (Path = '/v4/pulse') And (Method = 'GET') Then

@@ -36,7 +36,7 @@ Procedure ServeMonitorPulse(Const Token, ClientEpoch: String; AfterRev: Int64; I
 Implementation
 
 Uses
-  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot, AssistantMonitorCommands;
+  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot, AssistantMonitorCommands, AssistantMonitorPair;
 
 Type
   TPulseWaiter = Class
@@ -154,6 +154,8 @@ Begin
   If Waiter.Force Then
     Exit(True);
   If MonitorCommandStopPending Then
+    Exit(True);
+  If MonitorTokenRevoked(Waiter.Token) Then
     Exit(True);
   If NowTick - StartTick >= MonitorPulseMaxWaitMs Then
     Exit(True);
@@ -429,6 +431,8 @@ Begin
       Stopping := PulseStopping;
       If Stopping Then
         Status := 503
+      Else If MonitorTokenRevoked(Token) Then
+        Status := 403
       Else
         Status := 200;
     Finally
@@ -436,6 +440,8 @@ Begin
     End;
     If Status = 503 Then
       Body := ErrorBody('no_session', 'The listener is stopping.')
+    Else If Status = 403 Then
+      Body := ErrorBody('revoked', 'This phone was revoked.')
     Else
       Body := BuildPulseBody(MonitorPulseEpoch);
   Finally
