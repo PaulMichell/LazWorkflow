@@ -1,17 +1,11 @@
 /* Android application coordinates (c) 2026 Michell Computing.
 
-   Compose Material 3 screens and the TLS session live here.
-   This module depends on the JVM protocol catalogue, not on Lazarus. */
+   Compose Material 3 screens live here. Catalogue 3 codecs were removed.
+   This module depends on the empty JVM protocol module, not on Lazarus. */
 
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
-  alias(libs.plugins.ksp)
-  alias(libs.plugins.room)
-}
-
-room3 {
-  schemaDirectory("$projectDir/schemas")
 }
 
 android {
@@ -33,11 +27,6 @@ android {
     compose = true
   }
 
-  sourceSets.getByName("test") {
-    kotlin.srcDir("${rootProject.projectDir}/protocol/src/test/kotlin/computing/michell/monitor/protocol/chaos")
-  }
-}
-
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -56,9 +45,5 @@ dependencies {
   implementation(libs.activity.compose)
   implementation(libs.lifecycle.viewmodel.ktx)
   implementation(libs.lifecycle.viewmodel.compose)
-  implementation(libs.room.runtime)
-  implementation(libs.sqlite.framework)
-  ksp(libs.room.compiler)
   testImplementation(libs.junit)
-  testImplementation(libs.sqlite.jdbc)
 }

@@ -5,7 +5,10 @@ package computing.michell.monitor.ui
    Headings stay plain. Run becomes Stop while a run is going.
    Open previews the plan document. A long press previews that section. (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.data.PlanIncompleteLabel
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.PlanIncompleteLabel
+import computing.michell.monitor.ui.model.PlanInlineBytes
+import computing.michell.monitor.ui.model.PlanRow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -39,7 +42,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import computing.michell.monitor.protocol.PlanRow
 import java.util.Locale
 
 /* Slightly rounded, not a capsule. Same 4px corner as BuildTodoListDrawItem. */
@@ -75,8 +77,6 @@ fun planHostButtonEnabled(loaded: Boolean, online: Boolean, running: Boolean): B
 fun planNewEnabled(online: Boolean, running: Boolean): Boolean = online && !running
 
 fun planOpenEnabled(loaded: Boolean, running: Boolean): Boolean = loaded && !running
-
-const val PlanInlineBytes = computing.michell.monitor.data.PlanInlineBytes
 
 fun shownPlanBody(total: Long, body: String): String {
   if (total > PlanInlineBytes) return ""

@@ -2,9 +2,10 @@ package computing.michell.monitor.ui
 
 /* Offline review list order and open mode (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.data.ConversationRecord
-import computing.michell.monitor.protocol.OfflineCacheDocument
+import computing.michell.monitor.ui.model.ConversationRecord
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.OfflineCacheDocument
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

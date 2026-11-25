@@ -4,8 +4,8 @@ package computing.michell.monitor.ui
    Recent slots are the ones filled first. (c) 2026 Michell Computing. */
 
 import androidx.compose.runtime.Immutable
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireTurn
 import kotlin.math.roundToInt
 
 const val RecentTurnWindow = 3

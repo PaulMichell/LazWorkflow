@@ -14,7 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import computing.michell.monitor.protocol.ApprovalNotice
+import computing.michell.monitor.ui.model.ApprovalNotice
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

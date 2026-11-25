@@ -2,7 +2,14 @@ package computing.michell.monitor.ui
 
 /* Prompt status and caret without a device (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.LinkPhase
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.PhaseConnecting
+import computing.michell.monitor.ui.model.WaitingForDesktop
+import computing.michell.monitor.ui.model.activityCaption
+import computing.michell.monitor.ui.model.emptyView
+import computing.michell.monitor.ui.model.heldPromptActivity
+import computing.michell.monitor.ui.model.newConversationEnabled
+import computing.michell.monitor.ui.model.sendActionEnabled
 import computing.michell.monitor.dictation.DictationListeningMessage
 import computing.michell.monitor.dictation.DictationUnavailableMessage
 import org.junit.Assert.assertEquals

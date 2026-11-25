@@ -2,13 +2,8 @@ package computing.michell.monitor
 
 /* Monitor phone shell (c) 2026 Michell Computing. */
 
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import androidx.lifecycle.Lifecycle
-import android.content.IntentFilter
 import android.os.Bundle
 import android.view.MotionEvent
 import android.widget.Toast
@@ -68,9 +63,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import computing.michell.monitor.connection.LinkPhase
-
-import computing.michell.monitor.connection.transientRestartAllowed
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.PlanInlineBytes
+import computing.michell.monitor.ui.model.PlanRow
+import computing.michell.monitor.ui.model.statusNotice
 import computing.michell.monitor.ui.ActivityStatus
 import computing.michell.monitor.ui.AppMenu
 import computing.michell.monitor.ui.AppTab
@@ -84,12 +80,9 @@ import computing.michell.monitor.ui.SaveQuestionDialog
 import computing.michell.monitor.ui.CachedListDialog
 import computing.michell.monitor.ui.ConversationScreen
 import computing.michell.monitor.ui.MainTabs
-import computing.michell.monitor.ui.MonitorViewModel
+import computing.michell.monitor.ui.ShellViewModel
 import computing.michell.monitor.ui.PlanPreviewPanel
 import computing.michell.monitor.ui.PlanScreen
-import computing.michell.monitor.ui.statusNotice
-import computing.michell.monitor.protocol.PlanRow
-import computing.michell.monitor.ui.PlanInlineBytes
 import computing.michell.monitor.ui.planLoaded
 import computing.michell.monitor.ui.planSectionCaption
 import computing.michell.monitor.ui.planSectionExcerpt
@@ -106,37 +99,15 @@ private val MonitorQuiet = Color(0xFF666666)
 
 
 class MainActivity : ComponentActivity() {
-  private val model: MonitorViewModel by viewModels()
-  private val screenWatch = object : BroadcastReceiver() {
-    override fun onReceive(context: Context?, intent: Intent?) {
-      when (intent?.action) {
-        Intent.ACTION_SCREEN_OFF -> model.noteScreenOff(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-        // onStart can be later than the backlight. The socket was kept, so this is not a new link.
-        Intent.ACTION_SCREEN_ON -> model.noteScreenOn()
-      }
-    }
-  }
+  private val model: ShellViewModel by viewModels()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    val screenFilter = IntentFilter().apply {
-      addAction(Intent.ACTION_SCREEN_OFF)
-      addAction(Intent.ACTION_SCREEN_ON)
-    }
-    if (android.os.Build.VERSION.SDK_INT >= 33)
-      registerReceiver(screenWatch, screenFilter, Context.RECEIVER_NOT_EXPORTED)
-    else
-      registerReceiver(screenWatch, screenFilter)
     setContent {
       MaterialTheme {
         MonitorShell(model)
       }
     }
-  }
-
-  override fun onDestroy() {
-    unregisterReceiver(screenWatch)
-    super.onDestroy()
   }
 
   override fun onStart() {
@@ -167,13 +138,12 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MonitorShell(model: MonitorViewModel) {
+private fun MonitorShell(model: ShellViewModel) {
   val ui by model.ui.collectAsState()
   val tab by model.tab.collectAsState()
   val dictation by model.dictation.collectAsState()
   val permissionRequest by model.dictationPermissionRequest.collectAsState()
   val link by model.link.collectAsState()
-  val incident by model.incident.collectAsState()
   val incidentRing by model.incidentRingText.collectAsState()
   val bitmaps by model.bitmaps.collectAsState()
   val address by model.pairAddress.collectAsState()
@@ -274,14 +244,7 @@ private fun MonitorShell(model: MonitorViewModel) {
           model::closeSettings,
           link.failureReason,
           incidentRing,
-          transientRestartAllowed(
-            incident.stopped,
-            incident.terminalKind,
-            incident.paused,
-            incident.armed,
-            address,
-            link.phase
-          ),
+          false,
           model::restartTransient,
           {
             val text = model.copyDiagnostics()

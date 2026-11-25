@@ -2,7 +2,7 @@ package computing.michell.monitor.ui
 
 /* Plan status tags match the assistant plan list (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.PlanRow
+import computing.michell.monitor.ui.model.PlanRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

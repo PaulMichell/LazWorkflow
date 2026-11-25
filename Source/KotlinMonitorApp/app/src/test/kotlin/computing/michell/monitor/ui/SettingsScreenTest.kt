@@ -2,8 +2,9 @@ package computing.michell.monitor.ui
 
 /* Settings status and error copy (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.ReconnectingBanner
+import computing.michell.monitor.ui.model.ConnectingBanner
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.ReconnectingBanner
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

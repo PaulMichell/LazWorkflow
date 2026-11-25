@@ -2,7 +2,7 @@ package computing.michell.monitor.ui
 
 /* Fold-block identity without Compose (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.ui.model.WireBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals

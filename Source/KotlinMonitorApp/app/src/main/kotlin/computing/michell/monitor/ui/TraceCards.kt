@@ -6,7 +6,7 @@ package computing.michell.monitor.ui
    the same as the desktop trace. Tools and subagents stay closed. A tool or
    subagent is a grey header. The assistant answer stays in its own bubble. */
 
-import computing.michell.monitor.protocol.WireBlock
+import computing.michell.monitor.ui.model.WireBlock
 import java.util.Locale
 
 fun formatThinkingClock(durationMs: Int): String {

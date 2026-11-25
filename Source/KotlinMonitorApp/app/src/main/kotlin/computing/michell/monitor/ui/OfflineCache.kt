@@ -5,18 +5,23 @@ package computing.michell.monitor.ui
    The file cache is gone. Room holds the rows. These functions still build
    the browseable screen the conversation page already knows. */
 
-import computing.michell.monitor.connection.ReconnectingBanner
-import computing.michell.monitor.data.ConversationRecord
-import computing.michell.monitor.data.StoredPlan
-import computing.michell.monitor.data.hasStoredPlan
-import computing.michell.monitor.data.hostKey
-import computing.michell.monitor.protocol.OfflineCacheDocument
-import computing.michell.monitor.protocol.WireTurn
-import computing.michell.monitor.protocol.conversationIdIsIdentity
+import computing.michell.monitor.ui.model.ConnectingBanner
+import computing.michell.monitor.ui.model.clearRemoteActions
+import computing.michell.monitor.ui.model.emptyView
+import computing.michell.monitor.ui.model.shownModel
+import computing.michell.monitor.ui.model.ConversationRecord
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.OfflineBanner
+import computing.michell.monitor.ui.model.OfflineCacheDocument
+import computing.michell.monitor.ui.model.OfflineReviewBanner
+import computing.michell.monitor.ui.model.NoAddressBanner
+import computing.michell.monitor.ui.model.ReconnectingBanner
+import computing.michell.monitor.ui.model.StoredPlan
+import computing.michell.monitor.ui.model.WireTurn
+import computing.michell.monitor.ui.model.conversationIdIsIdentity
+import computing.michell.monitor.ui.model.hasStoredPlan
+import computing.michell.monitor.ui.model.hostKey
 
-const val OfflineBanner = "Offline"
-const val OfflineReviewBanner = "Offline review. Send, Stop, and New need a live connection."
-const val NoAddressBanner = "Set the desktop address in Settings."
 const val CacheSaveDebounceMs = 1_000L
 const val ImagePlaceholder = "Image"
 const val NotCurrentLabel = "Not current"

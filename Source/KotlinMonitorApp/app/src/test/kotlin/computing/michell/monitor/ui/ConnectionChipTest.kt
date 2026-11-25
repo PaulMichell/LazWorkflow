@@ -2,13 +2,16 @@ package computing.michell.monitor.ui
 
 /* Connection chip and lazy row keys (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.IdleOfflineBanner
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.ReconnectingBanner
-import computing.michell.monitor.connection.WaitingForWifiBanner
-import computing.michell.monitor.protocol.NoSessionMessage
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.ConnectingBanner
+import computing.michell.monitor.ui.model.IdleOfflineBanner
+import computing.michell.monitor.ui.model.OfflineBanner
+import computing.michell.monitor.ui.model.statusNotice
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.NoSessionMessage
+import computing.michell.monitor.ui.model.ReconnectingBanner
+import computing.michell.monitor.ui.model.WaitingForWifiBanner
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireTurn
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

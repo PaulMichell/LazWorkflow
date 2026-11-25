@@ -2,12 +2,14 @@ package computing.michell.monitor.ui
 
 /* App menu sections: host check, empty lists, disconnect (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.ConversationChoice
-import computing.michell.monitor.protocol.ModelChoice
-import computing.michell.monitor.protocol.PermissionChoice
-import computing.michell.monitor.protocol.PlanChoice
-import computing.michell.monitor.protocol.ReasoningChoice
-import computing.michell.monitor.protocol.TargetChoice
+import computing.michell.monitor.ui.model.ConversationChoice
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.emptyView
+import computing.michell.monitor.ui.model.ModelChoice
+import computing.michell.monitor.ui.model.PermissionChoice
+import computing.michell.monitor.ui.model.PlanChoice
+import computing.michell.monitor.ui.model.ReasoningChoice
+import computing.michell.monitor.ui.model.TargetChoice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

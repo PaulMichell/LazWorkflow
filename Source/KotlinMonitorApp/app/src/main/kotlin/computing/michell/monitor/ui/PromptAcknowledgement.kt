@@ -2,8 +2,8 @@ package computing.michell.monitor.ui
 
 /* Acknowledge a prompt from desktop content after this submission (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireTurn
 
 /** Include history so an older identical prompt cannot acknowledge a new submission. */
 fun promptBaselineOf(turn: WireTurn?, turns: List<WireTurn> = emptyList()): Set<String> {

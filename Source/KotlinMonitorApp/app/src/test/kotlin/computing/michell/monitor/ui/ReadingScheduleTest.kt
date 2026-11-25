@@ -2,8 +2,8 @@ package computing.michell.monitor.ui
 
 /* Reading position and the history it is allowed to ask for (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireTurn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

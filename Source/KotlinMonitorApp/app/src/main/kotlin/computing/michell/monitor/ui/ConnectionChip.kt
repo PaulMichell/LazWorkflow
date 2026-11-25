@@ -8,10 +8,10 @@ package computing.michell.monitor.ui
    idle-until-touch and a confirmed Wi-Fi loss stay Offline.
    (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.connection.BackgroundBanner
-import computing.michell.monitor.connection.IdleOfflineBanner
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.WaitingForWifiBanner
+import computing.michell.monitor.ui.model.BackgroundBanner
+import computing.michell.monitor.ui.model.IdleOfflineBanner
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.WaitingForWifiBanner
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter

@@ -3,7 +3,8 @@ package computing.michell.monitor.ui
 /* Conversation the screen reads. The coordinator does not keep a second copy.
    (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.WireTurn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

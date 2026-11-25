@@ -2,8 +2,9 @@ package computing.michell.monitor.ui
 
 /* Prompt acknowledgement across completed-turn synchronisation (c) 2026 Michell Computing. */
 
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireTurn
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireTurn
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

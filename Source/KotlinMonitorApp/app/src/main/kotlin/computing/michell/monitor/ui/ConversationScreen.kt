@@ -69,15 +69,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import computing.michell.monitor.R
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.NotDeliveredRetry
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.NotDeliveredRetry
+import computing.michell.monitor.ui.model.OfflineReviewBanner
+import computing.michell.monitor.ui.model.WireBlock
+import computing.michell.monitor.ui.model.WireImage
+import computing.michell.monitor.ui.model.WireTurn
+import computing.michell.monitor.ui.model.actionCaption
+import computing.michell.monitor.ui.model.activityCaption
+import computing.michell.monitor.ui.model.heldPromptActivity
+import computing.michell.monitor.ui.model.ideLinkLive
+import computing.michell.monitor.ui.model.newConversationEnabled
+import computing.michell.monitor.ui.model.runtimeCaption
+import computing.michell.monitor.ui.model.sendActionEnabled
+import computing.michell.monitor.ui.model.statusConnectionLabel
+import computing.michell.monitor.ui.model.turnStillRunning
 import computing.michell.monitor.dictation.DictationListeningMessage
 import computing.michell.monitor.dictation.DictationPhase
 import computing.michell.monitor.dictation.DictationState
 import computing.michell.monitor.dictation.DictationUnavailableMessage
-import computing.michell.monitor.protocol.WireBlock
-import computing.michell.monitor.protocol.WireImage
-import computing.michell.monitor.protocol.WireTurn
+
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -140,6 +152,9 @@ fun ConversationScreen(
     ConversationPane(shown, phase, bitmaps, onReading, onViewWidth, Modifier.weight(1f).fillMaxWidth())
     key(ui.pendingEpoch) {
       PromptField(promptValue, onPrompt)
+    }
+    if (ui.banner.isNotEmpty()) {
+      Text(ui.banner)
     }
     if (ui.reviewingOffline) {
       Text(OfflineReviewBanner)

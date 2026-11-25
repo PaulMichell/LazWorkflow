@@ -1,5 +1,6 @@
-/* JVM catalogue module (c) 2026 Michell Computing.
+/* Empty plain-JVM module (c) 2026 Michell Computing.
 
+   Catalogue 3 codecs were removed. Version 4 codecs land here.
    No Android plugin and no Android UI dependency. JUnit runs on a JDK. */
 
 plugins {
@@ -25,6 +26,5 @@ java {
 }
 
 dependencies {
-  implementation(libs.kotlinx.serialization.json)
   testImplementation(libs.junit)
 }

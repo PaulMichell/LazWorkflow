@@ -36,10 +36,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import computing.michell.monitor.R
-import computing.michell.monitor.connection.HostClosedBanner
-import computing.michell.monitor.connection.LinkPhase
-import computing.michell.monitor.connection.ReconnectingBanner
-import computing.michell.monitor.protocol.MonitorLimits
+import computing.michell.monitor.ui.model.ConnectingBanner
+import computing.michell.monitor.ui.model.HostClosedBanner
+import computing.michell.monitor.ui.model.LinkPhase
+import computing.michell.monitor.ui.model.MonitorLimits
+import computing.michell.monitor.ui.model.ReconnectingBanner
 
 private const val EndpointHint = "Use the address and port shown in Assistant > Remote Monitor. An emulator cannot use 10.0.0.1; use that LAN address."
 

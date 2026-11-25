@@ -51,9 +51,13 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import computing.michell.monitor.R
-import computing.michell.monitor.protocol.ConversationChoice
-import computing.michell.monitor.protocol.PlanChoice
-import computing.michell.monitor.protocol.TargetChoice
+import computing.michell.monitor.ui.model.ConversationChoice
+import computing.michell.monitor.ui.model.ModelChoice
+import computing.michell.monitor.ui.model.MonitorUi
+import computing.michell.monitor.ui.model.PermissionChoice
+import computing.michell.monitor.ui.model.PlanChoice
+import computing.michell.monitor.ui.model.ReasoningChoice
+import computing.michell.monitor.ui.model.TargetChoice
 import kotlin.math.roundToInt
 
 /** One quiet sentence for a section that has no tappable row. */
