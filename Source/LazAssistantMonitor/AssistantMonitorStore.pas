@@ -22,6 +22,7 @@ Const
   MonitorTurnCacheLimit = 16;
 
 Procedure SetMonitorStoreRoot(Const Root: String);
+Function MonitorAssistantDirectory: String;
 Function ServeMonitorRead(Const Path, Uri, IfNoneMatch: String; Out Status: Integer; Out ETag, Body: String): Boolean;
 
 Implementation
@@ -865,6 +866,11 @@ Begin
       Exit(ServeItem(Id, FromByte, QueryValue(Uri, 'check'), Status, ETag, Body));
     End;
   Result := False;
+End;
+
+Function MonitorAssistantDirectory: String;
+Begin
+  Result := StoreDirectory;
 End;
 
 Procedure SetMonitorStoreRoot(Const Root: String);

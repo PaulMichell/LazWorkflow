@@ -30,7 +30,7 @@ Uses
   BaseUnix, cthreads,
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
-  AssistantMonitorPulse, AssistantMonitorStore;
+  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -243,9 +243,10 @@ End;
 Procedure TMonitorHttps.HandleRequest(Sender: TObject; Var ARequest: TFPHTTPConnectionRequest;
   Var AResponse: TFPHTTPConnectionResponse);
 Var
-  Path, Method, PulseBody, ReadBody, ReadETag: String;
+  Path, Method, PulseBody, ReadBody, ReadETag, ImageId, ImageMime, ImageError: String;
   Hello: TJSONObject;
-  PulseStatus, ReadStatus: Integer;
+  ImageStream: TStream;
+  PulseStatus, ReadStatus, ImageStatus: Integer;
 Begin
   Path := RequestPath(ARequest.URI);
   Method := UpperCase(ARequest.Method);
@@ -272,6 +273,26 @@ Begin
       AResponse.Code := PulseStatus;
       AResponse.ContentType := 'application/json; charset=utf-8';
       AResponse.Content := PulseBody;
+      Exit;
+    End;
+  If (Method = 'GET') And (Copy(Path, 1, 12) = '/v4/images/') And (Pos('/', Copy(Path, 13, MaxInt)) = 0) Then
+    Begin
+      ImageId := Copy(Path, 13, MaxInt);
+      ImageStream := Nil;
+      If OpenMonitorDisplayImage(ImageId, ImageStream, ImageMime, ImageStatus, ImageError) Then
+        Begin
+          AResponse.Code := 200;
+          AResponse.ContentType := ImageMime;
+          AResponse.SetCustomHeader('Cache-Control', 'immutable');
+          AResponse.ContentStream := ImageStream;
+          AResponse.FreeContentStream := True;
+        End
+      Else
+        Begin
+          AResponse.Code := ImageStatus;
+          AResponse.ContentType := 'application/json; charset=utf-8';
+          AResponse.Content := ImageError;
+        End;
       Exit;
     End;
   If (Method = 'GET') And ServeMonitorRead(Path, ARequest.URI, ARequest.GetFieldByName('If-None-Match'),
