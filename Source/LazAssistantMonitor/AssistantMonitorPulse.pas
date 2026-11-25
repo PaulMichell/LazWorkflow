@@ -27,6 +27,7 @@ Procedure SetMonitorPulseEpoch(Const Epoch: String);
 Function MonitorPulseEpoch: String;
 Procedure CancelMonitorPulses;
 Procedure WaitMonitorPulses;
+Procedure WakeMonitorPulse;
 Function MonitorPulseWaiting(Const Token: String): Integer;
 Procedure ResetMonitorPulseClients;
 Procedure ServeMonitorPulse(Const Token, ClientEpoch: String; AfterRev: Int64; IntervalMs: Integer;
@@ -35,7 +36,7 @@ Procedure ServeMonitorPulse(Const Token, ClientEpoch: String; AfterRev: Int64; I
 Implementation
 
 Uses
-  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot;
+  Classes, DateUtils, SyncObjs, fpjson, AssistantMonitorSnapshot, AssistantMonitorCommands;
 
 Type
   TPulseWaiter = Class
@@ -124,6 +125,11 @@ Begin
   SignalWaiters;
 End;
 
+Procedure WakeMonitorPulse;
+Begin
+  SignalWaiters;
+End;
+
 Function CurrentRev: Int64;
 Var
   Snap: TMonitorSnapshot;
@@ -146,6 +152,8 @@ Begin
   If ClientEpoch <> PulseEpoch Then
     Exit(True);
   If Waiter.Force Then
+    Exit(True);
+  If MonitorCommandStopPending Then
     Exit(True);
   If NowTick - StartTick >= MonitorPulseMaxWaitMs Then
     Exit(True);
@@ -293,12 +301,14 @@ Begin
         AddJsonBool(Status, 'can_steer', Snap.CanSteer);
         AddJsonBool(Status, 'can_stop', Snap.CanStop);
         AddJsonBool(Status, 'can_change_mode', Snap.CanChangeMode);
-        AddJsonBool(Status, 'stop_pending', Snap.StopPending);
+        AddJsonBool(Status, 'stop_pending', Snap.StopPending Or MonitorCommandStopPending);
         AddJsonBool(Status, 'remote_approval', Snap.RemoteApproval);
         Status.Add('error_text', String(Snap.ErrorText));
         Status.Add('usage_caption', String(Snap.UsageCaption));
         Status.Add('usage_hint', String(Snap.UsageHint));
-      End;
+      End
+    Else
+      AddJsonBool(Status, 'stop_pending', MonitorCommandStopPending);
     Root.Add('status', Status);
     Conversation := TJSONObject.Create;
     If Assigned(Snap) Then

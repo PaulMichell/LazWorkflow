@@ -28,7 +28,7 @@ Implementation
 Uses
   Classes, Contnrs, Dialogs, LCLType, MenuIntf, IDECommands, WorkflowLog, AssistantMonitorForm, AssistantMonitorSettings,
   AssistantMonitorServer, AssistantMonitorSnapshot, AssistantSessionObserve, AssistantConversation, AssistantPlan,
-  AssistantPlanDocument, AssistantTasks, ProjectAssistantForm, AssistantMonitorStore;
+  AssistantPlanDocument, AssistantTasks, ProjectAssistantForm, AssistantMonitorStore, AssistantMonitorCommandHost;
 
 Type
   TIdeSnapshotSource = Class(TMonitorSnapshotSource)
@@ -163,6 +163,7 @@ Begin
     Exit;
   StoppingListener := True;
   Try
+    UnregisterMonitorFormCommands;
     StopMonitorHttps;
     StopMonitorSnapshot;
   Finally
@@ -193,6 +194,7 @@ Begin
     End;
   If Assigned(ProjectAssistantConversation) Then
     SetMonitorStoreRoot(ProjectAssistantConversation.ProjectRoot);
+  RegisterMonitorFormCommands;
   StartMonitorSnapshot(TIdeSnapshotSource.Create);
   Result := StartMonitorHttps(Address, Settings.Port, ErrorText);
   If Not Result Then

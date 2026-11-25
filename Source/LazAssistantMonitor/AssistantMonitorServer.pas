@@ -30,7 +30,7 @@ Uses
   BaseUnix, cthreads,
   {$ENDIF}
   Classes, fpjson, fphttpserver, Sockets, AssistantHttps, AssistantMonitorSettings, AssistantMonitorTls, WorkflowLog,
-  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages;
+  AssistantMonitorPulse, AssistantMonitorStore, AssistantMonitorImages, AssistantMonitorCommands;
 
 Type
   TMonitorListenThread = Class(TThread)
@@ -243,10 +243,11 @@ End;
 Procedure TMonitorHttps.HandleRequest(Sender: TObject; Var ARequest: TFPHTTPConnectionRequest;
   Var AResponse: TFPHTTPConnectionResponse);
 Var
-  Path, Method, PulseBody, ReadBody, ReadETag, ImageId, ImageMime, ImageError: String;
+  Path, Method, PulseBody, ReadBody, ReadETag, ImageId, ImageMime, ImageError, CommandBody: String;
   Hello: TJSONObject;
   ImageStream: TStream;
-  PulseStatus, ReadStatus, ImageStatus: Integer;
+  Capabilities: TStringList;
+  PulseStatus, ReadStatus, ImageStatus, CommandStatus, CapabilityIndex: Integer;
 Begin
   Path := RequestPath(ARequest.URI);
   Method := UpperCase(ARequest.Method);
@@ -308,6 +309,14 @@ Begin
         End;
       Exit;
     End;
+  If (Path = '/v4/commands') And (Method = 'POST') Then
+    Begin
+      ServeMonitorCommand(ARequest.Content, CommandStatus, CommandBody);
+      AResponse.Code := CommandStatus;
+      AResponse.ContentType := 'application/json; charset=utf-8';
+      AResponse.Content := CommandBody;
+      Exit;
+    End;
   If (Path = '/v4/hello') And (Method = 'GET') Then
     Begin
       Hello := TJSONObject.Create;
@@ -315,6 +324,14 @@ Begin
         Hello.Add('epoch', Epoch);
         Hello.Add('rev', 0);
         Hello.Add('capabilities', TJSONArray.Create);
+        Capabilities := TStringList.Create;
+        Try
+          AddMonitorCommandCapabilities(Capabilities);
+          For CapabilityIndex := 0 To Capabilities.Count - 1 Do
+            Hello.Arrays['capabilities'].Add(Capabilities[CapabilityIndex]);
+        Finally
+          Capabilities.Free;
+        End;
         AResponse.Code := 200;
         AResponse.ContentType := 'application/json; charset=utf-8';
         AResponse.Content := Hello.AsJSON;
