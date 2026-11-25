@@ -177,7 +177,8 @@ Begin
   If (Host = '') Or (Host = MonitorBindAllAddress) Then
     Host := '127.0.0.1';
   Sock := fpSocket(AF_INET, SOCK_STREAM, 0);
-  If Sock = TSocket(INVALID_SOCKET) Then
+  // fpSocket returns cint. Failure is -1. INVALID_SOCKET is Winsock-only.
+  If Sock < 0 Then
     Exit;
   Try
     FillChar(Addr, SizeOf(Addr), 0);
