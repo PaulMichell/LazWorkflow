@@ -7,7 +7,7 @@ Unit AssistantMonitorForm;
   adapter such as WSL. Pairing codes are single-use and expire after two minutes.
   Require pairing code, on by default, can be turned off so any phone that reaches
   the endpoint pairs without one. The change reaches a running listener at once.
-  During the rebuild, Start does not open a socket.
+  Start and Stop open and close the HTTPS listener.
   LCL has no adapter list. Adapter enumeration lives in AssistantMonitorSettings.
 
   LoadFields sets FieldsLoading while it fills the controls. Setting
